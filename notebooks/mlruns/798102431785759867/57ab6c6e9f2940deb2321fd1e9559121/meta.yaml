@@ -1,0 +1,14 @@
+artifact_uri: file:///Users/liuming/Documents/trae_projects/SysQ/notebooks/mlruns/798102431785759867/57ab6c6e9f2940deb2321fd1e9559121/artifacts
+end_time: 1770479252170
+entry_point_name: ''
+experiment_id: '798102431785759867'
+lifecycle_stage: active
+run_id: 57ab6c6e9f2940deb2321fd1e9559121
+run_name: mlflow_recorder
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1770479251629
+status: 3
+tags: []
+user_id: liuming

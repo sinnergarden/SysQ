@@ -1,0 +1,160 @@
+
+import sqlite3
+import pandas as pd
+import json
+from datetime import datetime
+from typing import Dict, Optional
+from qsys.utils.logger import log
+
+class RealAccount:
+    """
+    Persistent Account State backed by SQLite.
+    Stores the 'Reality' (what we actually own at the broker).
+    Supports multiple accounts via 'account_name'.
+    """
+    def __init__(self, db_path="data/real_account.db"):
+        self.db_path = db_path
+        self._init_db()
+
+    def _init_db(self):
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        # 1. Balance History
+        # Records daily snapshot of Net Asset Value
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS balance_history (
+            date TEXT,
+            account_name TEXT,
+            cash REAL,
+            total_assets REAL,
+            frozen_cash REAL DEFAULT 0,
+            PRIMARY KEY (date, account_name)
+        )
+        ''')
+        
+        # 2. Position Snapshots
+        # Records what we held at the end of each day
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS position_history (
+            date TEXT,
+            account_name TEXT,
+            symbol TEXT,
+            amount INTEGER,
+            price REAL,  -- Market price at snapshot
+            cost_basis REAL, -- Avg cost
+            PRIMARY KEY (date, account_name, symbol)
+        )
+        ''')
+        
+        # 3. Trade Log (Optional, for reconciliation)
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS trade_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT,
+            account_name TEXT,
+            symbol TEXT,
+            side TEXT,
+            amount INTEGER,
+            price REAL,
+            fee REAL,
+            tax REAL DEFAULT 0.0,
+            total_cost REAL,
+            order_id TEXT
+        )
+        ''')
+        
+        conn.commit()
+        conn.close()
+
+    def sync_broker_state(self, date: str, cash: float, positions: pd.DataFrame, 
+                         total_assets: Optional[float] = None, account_name: str = "default"):
+        """
+        Sync state from Broker (The Source of Truth).
+        """
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        # 1. Calculate Assets if not provided
+        pos_value = 0.0
+        if not positions.empty:
+            if 'price' not in positions.columns:
+                 raise ValueError("Positions DataFrame must have 'price' column")
+            pos_value = (positions['amount'] * positions['price']).sum()
+            
+        if total_assets is None:
+            total_assets = cash + pos_value
+            
+        # 2. Update Balance
+        cursor.execute('''
+        INSERT OR REPLACE INTO balance_history (date, account_name, cash, total_assets)
+        VALUES (?, ?, ?, ?)
+        ''', (date, account_name, cash, total_assets))
+        
+        # 3. Update Positions (Delete old for this date+account, insert new)
+        cursor.execute('DELETE FROM position_history WHERE date = ? AND account_name = ?', (date, account_name))
+        
+        if not positions.empty:
+            for _, row in positions.iterrows():
+                cost = row.get('cost_basis', 0.0)
+                cursor.execute('''
+                INSERT INTO position_history (date, account_name, symbol, amount, price, cost_basis)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ''', (date, account_name, row['symbol'], row['amount'], row['price'], cost))
+                
+        conn.commit()
+        conn.close()
+        log.info(f"Synced broker state for {date} (Account: {account_name}). Total Assets: {total_assets:,.2f}")
+
+    def get_state(self, date: str = None, account_name: str = "default"):
+        """
+        Get account state for a specific date (or latest if None).
+        """
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        if date is None:
+            # Get latest date for this account
+            cursor.execute('SELECT date FROM balance_history WHERE account_name = ? ORDER BY date DESC LIMIT 1', (account_name,))
+            res = cursor.fetchone()
+            if not res:
+                return None
+            date = res[0]
+            
+        # Get Balance
+        cursor.execute('SELECT cash, total_assets FROM balance_history WHERE date = ? AND account_name = ?', (date, account_name))
+        bal_res = cursor.fetchone()
+        if not bal_res:
+            return None
+            
+        cash, total_assets = bal_res
+        
+        # Get Positions
+        cursor.execute('SELECT symbol, amount, price FROM position_history WHERE date = ? AND account_name = ?', (date, account_name))
+        pos_rows = cursor.fetchall()
+        
+        positions = {}
+        for sym, amt, prc in pos_rows:
+            positions[sym] = {
+                'total_amount': amt,
+                'amount': amt, # Alias
+                'price': prc
+            }
+            
+        conn.close()
+        
+        return {
+            'date': date,
+            'account_name': account_name,
+            'cash': cash,
+            'total_assets': total_assets,
+            'positions': positions
+        }
+
+    def get_latest_date(self, account_name: str = "default"):
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('SELECT max(date) FROM balance_history WHERE account_name = ?', (account_name,))
+        res = cursor.fetchone()
+        conn.close()
+        return res[0] if res else None

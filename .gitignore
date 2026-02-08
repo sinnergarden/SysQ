@@ -1,0 +1,11 @@
+# Data
+data/
+*.db
+*.feather
+*.parquet
+*.bin
+__pycache__/
+*.pyc
+.DS_Store
+.env
+.vscode/
