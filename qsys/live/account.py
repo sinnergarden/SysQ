@@ -12,8 +12,9 @@ class RealAccount:
     Stores the 'Reality' (what we actually own at the broker).
     Supports multiple accounts via 'account_name'.
     """
-    def __init__(self, db_path="data/real_account.db"):
+    def __init__(self, db_path="data/real_account.db", account_name="default"):
         self.db_path = db_path
+        self.account_name = account_name
         self._init_db()
 
     def _init_db(self):
@@ -67,11 +68,12 @@ class RealAccount:
         conn.commit()
         conn.close()
 
-    def sync_broker_state(self, date: str, cash: float, positions: pd.DataFrame, 
-                         total_assets: Optional[float] = None, account_name: str = "default"):
+    def sync_broker_state(self, date: str, cash: float, positions: pd.DataFrame,
+                         total_assets: Optional[float] = None, account_name: Optional[str] = None):
         """
         Sync state from Broker (The Source of Truth).
         """
+        account_name = account_name or self.account_name
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
@@ -106,10 +108,11 @@ class RealAccount:
         conn.close()
         log.info(f"Synced broker state for {date} (Account: {account_name}). Total Assets: {total_assets:,.2f}")
 
-    def get_state(self, date: str = None, account_name: str = "default"):
+    def get_state(self, date: Optional[str] = None, account_name: Optional[str] = None):
         """
         Get account state for a specific date (or latest if None).
         """
+        account_name = account_name or self.account_name
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
@@ -130,15 +133,16 @@ class RealAccount:
         cash, total_assets = bal_res
         
         # Get Positions
-        cursor.execute('SELECT symbol, amount, price FROM position_history WHERE date = ? AND account_name = ?', (date, account_name))
+        cursor.execute('SELECT symbol, amount, price, cost_basis FROM position_history WHERE date = ? AND account_name = ?', (date, account_name))
         pos_rows = cursor.fetchall()
         
         positions = {}
-        for sym, amt, prc in pos_rows:
+        for sym, amt, prc, cost in pos_rows:
             positions[sym] = {
                 'total_amount': amt,
                 'amount': amt, # Alias
-                'price': prc
+                'price': prc,
+                'cost_basis': cost
             }
             
         conn.close()
@@ -151,10 +155,14 @@ class RealAccount:
             'positions': positions
         }
 
-    def get_latest_date(self, account_name: str = "default"):
+    def get_latest_date(self, account_name: Optional[str] = None, before_date: Optional[str] = None):
+        account_name = account_name or self.account_name
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        cursor.execute('SELECT max(date) FROM balance_history WHERE account_name = ?', (account_name,))
+        if before_date:
+            cursor.execute('SELECT max(date) FROM balance_history WHERE account_name = ? AND date < ?', (account_name, before_date))
+        else:
+            cursor.execute('SELECT max(date) FROM balance_history WHERE account_name = ?', (account_name,))
         res = cursor.fetchone()
         conn.close()
         return res[0] if res else None

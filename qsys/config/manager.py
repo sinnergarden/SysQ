@@ -26,7 +26,8 @@ class ConfigManager:
         self._init_directories()
 
     def _init_directories(self):
-        data_root = self.project_root / self._config.get("data_root", "data")
+        config = self._config or {}
+        data_root = self.project_root / config.get("data_root", "data")
         
         # Define required subdirectories
         self.dirs = {
@@ -45,7 +46,8 @@ class ConfigManager:
             path.mkdir(parents=True, exist_ok=True)
 
     def get(self, key, default=None):
-        return self._config.get(key, default)
+        config = self._config or {}
+        return config.get(key, default)
 
     @property
     def data_root(self):
@@ -53,6 +55,17 @@ class ConfigManager:
 
     def get_path(self, key):
         return self.dirs.get(key)
+
+    def get_tushare_feature_config(self):
+        config = self._config or {}
+        value = config.get("tushare_feature_config")
+        if isinstance(value, dict):
+            return value
+        return {
+            "adapter": {
+                "qlib_fields": ["open", "high", "low", "close", "volume", "amount", "factor"]
+            }
+        }
 
 # Global instance
 cfg = ConfigManager()
