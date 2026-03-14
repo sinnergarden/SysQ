@@ -1,4 +1,3 @@
-import pandas as pd
 import sys
 from pathlib import Path
 # Add project root to sys.path
@@ -8,15 +7,18 @@ sys.path.append(str(project_root))
 from qsys.config import cfg
 from qsys.utils.logger import log
 from qsys.trader.broker import BrokerAdapter
-from qsys.trader.notifier import WeChatNotifier
+from qsys.trader.notifier import Notifier
 import datetime
 
 def main():
     log.info("Starting Daily Reconciliation...")
+    log.warning("Legacy entrypoint detected: scripts/run_reconcile.py. Recommended entrypoint is scripts/run_daily_trading.py.")
     
-    # Config
-    order_file = cfg.get_path("root") / "broker" / "orders.csv" # Export from Broker
-    plan_file = cfg.get_path("root") / "plans" / f"plan_{datetime.date.today()}.csv" # Today's plan
+    root_path = cfg.get_path("root")
+    if root_path is None:
+        log.error("Root path not configured.")
+        return
+    order_file = root_path / "broker" / "orders.csv"
     webhook_url = cfg.get("wechat_webhook")
     
     if not order_file.exists():
@@ -56,7 +58,7 @@ def main():
     print(summary)
     
     if webhook_url:
-        WeChatNotifier(webhook_url).send_message(summary)
+        Notifier(webhook_url).send_markdown(summary)
         
     # TODO: Save to DB (Shadow Ledger)
     

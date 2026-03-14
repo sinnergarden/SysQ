@@ -17,6 +17,7 @@ from qlib.data import D
 
 def main():
     log.info("Starting Daily Plan Generation...")
+    log.warning("Legacy entrypoint detected: scripts/run_plan.py. Recommended entrypoint is scripts/run_daily_trading.py.")
     
     # Config
     root_path = cfg.get_path("root")

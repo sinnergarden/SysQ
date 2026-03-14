@@ -9,3 +9,9 @@ __pycache__/
 .DS_Store
 .env
 .vscode/
+mlruns/
+Users/
+notebooks/mlruns/
+notebooks/Users/
+logs/
+*.log
