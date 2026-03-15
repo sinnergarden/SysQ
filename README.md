@@ -89,13 +89,20 @@ SysQ/
 5. [TESTING.md](file:///Users/liuming/Documents/trae_projects/SysQ/docs/TESTING.md)
 6. [RUNBOOK.md](file:///Users/liuming/Documents/trae_projects/SysQ/docs/RUNBOOK.md)
 7. [DECISIONS.md](file:///Users/liuming/Documents/trae_projects/SysQ/docs/DECISIONS.md)
-8. [ROADMAP.md](file:///Users/liuming/Documents/trae_projects/SysQ/ROADMAP.md)
+8. [DOCS.md](file:///Users/liuming/Documents/trae_projects/SysQ/docs/README.md)
+9. [ROADMAP.md](file:///Users/liuming/Documents/trae_projects/SysQ/ROADMAP.md)
 
 ## 功能文档规范
 
 - 每个新功能必须先写：`docs/features/<feature_name>.md`。
 - 模板文件是 [new_feature.md](file:///Users/liuming/Documents/trae_projects/SysQ/docs/features/new_feature.md)。
 - 架构文档只保留大结构，功能细节统一放在 `docs/features/`。
+
+## ADR 与 Feature 的关系
+
+- Feature 文档：描述“这次要做什么”。
+- ADR 文档：描述“为什么长期这么做”。
+- 如果功能改动引入了长期规则变化，除功能文档外，必须补 ADR。
 
 ## 要做新功能时先看什么
 
