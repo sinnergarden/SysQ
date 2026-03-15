@@ -15,4 +15,5 @@ notebooks/mlruns/
 notebooks/Users/
 logs/
 *.log
+config/settings.yaml
 !qsys/data

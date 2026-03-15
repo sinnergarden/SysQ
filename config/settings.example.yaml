@@ -2,10 +2,10 @@
 # Copy this file to settings.yaml and fill in your values
 
 # 1. Data Sources
-tushare_token: "51c671938fbfe44ac112f8d25fc7636510eb524881a971d2dce5539d"
+tushare_token: "YOUR_TUSHARE_TOKEN"
 
 # 2. Notifications
-webhook_url: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=98d8c6cb-4414-46cb-bfbd-9573ae78911c"  # Enterprise WeChat / DingTalk / Slack Webhook
+webhook_url: "https://example.com/webhook"  # Enterprise WeChat / DingTalk / Slack Webhook
 
 # 3. Paths (Relative to Project Root)
 data_root: "data"

@@ -16,9 +16,12 @@ class ConfigManager:
         # Determine project root (assuming this file is in qsys/config/)
         self.project_root = Path(__file__).resolve().parent.parent.parent
         config_path = self.project_root / "config" / "settings.yaml"
+        example_path = self.project_root / "config" / "settings.example.yaml"
 
         if not config_path.exists():
-            raise FileNotFoundError(f"Config file not found at {config_path}")
+            raise FileNotFoundError(
+                f"Config file not found at {config_path}. Copy {example_path} to settings.yaml and fill in your local secrets."
+            )
 
         with open(config_path, 'r', encoding='utf-8') as f:
             self._config = yaml.safe_load(f) or {}
