@@ -1,61 +1,90 @@
-# 贡献指南
+# CONTRIBUTING
 
-感谢您有兴趣为 SysQ 做出贡献！本文档概述了开发标准、工作流和最佳实践。
+本文档定义本仓库的协作流程。它既面向开发者，也面向 AI 助手。
 
-在开始前，建议先阅读：
-- [PROJECT_TARGETS.md](file:///Users/liuming/Documents/trae_projects/SysQ/docs/PROJECT_TARGETS.md)
-- [ENVIRONMENT.md](file:///Users/liuming/Documents/trae_projects/SysQ/docs/ENVIRONMENT.md)
-- [context.md](file:///Users/liuming/Documents/trae_projects/SysQ/context.md)
+## 开发流程
 
-## 开发工作流
+1. 在本地拉取最新代码并创建分支。
+2. 先阅读 [AGENTS.md](file:///Users/liuming/Documents/trae_projects/SysQ/AGENTS.md) 与 [ARCHITECTURE.md](file:///Users/liuming/Documents/trae_projects/SysQ/docs/ARCHITECTURE.md)。
+3. 若是新功能，先创建 `docs/features/<feature_name>.md`。
+4. 做小步修改，避免一次混入多个目标。
+5. 为非平凡改动补充测试与文档。
+6. 本地通过检查后再提交。
 
-SysQ 强调 `tutorial.ipynb` 作为**单一事实来源**（Single Source of Truth）。
+## 新功能文档要求
 
-1.  **单一事实来源**：`tutorial.ipynb` 是主要参考。调试脚本是允许的，但使用后必须删除。
-2.  **简单性**：`tutorial.ipynb` 应专注于 API 调用。复杂的逻辑必须封装在 `qsys` 包中。
-3.  **验证**：在任何代码更改后，运行 `tests/test_tutorial_flow.py`（使用 50 只股票的小样本）以确保核心流程保持完整。
+- 路径：`docs/features/<feature_name>.md`
+- 模板：`docs/features/new_feature.md`
+- 必填项：
+  - Goal
+  - Use Cases
+  - API Change
+  - UI（若有）
+  - Constraints
+  - Done Criteria
+- 没有功能文档的新功能改动，不进入合并。
 
-## 代码标准
+## 分支与 PR 规则
 
-### 1. 类型检查与 Lint
-在提交之前，请确保代码可以通过 Python 编译检查：
+- 分支命名建议：`feat/*`、`fix/*`、`refactor/*`、`docs/*`、`test/*`。
+- 一个分支只解决一个主题。
+- PR 描述必须包含：背景、改动点、验证方式、风险与回滚方式。
+- 涉及架构边界调整时，先补 ADR 再合并代码。
 
-```bash
-python -m compileall qsys scripts tests
+## Commit Message 规范
+
+建议采用以下前缀：
+
+- `feat`: 新功能
+- `fix`: 缺陷修复
+- `refactor`: 重构
+- `test`: 测试相关
+- `docs`: 文档相关
+- `chore`: 工程维护
+
+示例：
+
+```text
+fix: 修复影子账户在重复执行时的幂等问题
+docs: 新增 AGENTS 与架构说明文档
 ```
 
-### 2. 单元测试
-SysQ 有严格的 API 契约。请确保所有测试通过：
+## 测试要求
+
+- 默认全量测试命令：
 
 ```bash
 python -m unittest discover tests
 ```
 
-建议按改动范围执行最小回归：
-- 改动 `qsys/data`：`python -m unittest tests/test_data_quality.py`
-- 改动 `qsys/live`：`python -m unittest tests/test_live_trading.py`
-- 改动核心 API：`python -m unittest tests/test_core_api_contracts.py`
+- 按改动范围做最小回归：
+  - 改动 `qsys/live`：`python -m unittest tests/test_live_trading.py`
+  - 改动 `qsys/data`：`python -m unittest tests/test_data_quality.py`
+  - 改动核心契约：`python -m unittest tests/test_core_api_contracts.py`
 
-### 3. 文档
-- 所有公共 API（尤其是 `context.md` 中列出的）必须有清晰的文档字符串。
-- 如果更改了核心架构，请更新 `README.md` 和 `context.md`。
+## Lint 与格式要求
 
-## 提交规范
+当前基线检查：
 
-请使用清晰的提交信息：
+```bash
+python -m compileall qsys scripts tests
+```
 
-- `feat`: 新功能
-- `fix`: 修复 bug
-- `docs`: 文档更改
-- `style`: 代码格式（不影响逻辑）
-- `refactor`: 代码重构
-- `test`: 添加或修改测试
-- `chore`: 构建过程或辅助工具更改
+后续若引入 ruff 或 mypy，以仓库规则文件为准。
 
-## 如何添加新特性
+## 哪些改动需要先开 Issue 或先讨论
 
-1.  在 `qsys` 中实现逻辑。
-2.  在 `tests/` 中添加单元测试。
-3.  如果它是核心流程的一部分，请更新 `tutorial.ipynb` 进行演示。
-4.  运行完整测试套件。
-5.  提交 Pull Request。
+- 公共 API 变更
+- 数据库 schema 变更
+- 交易执行规则变更
+- 架构分层与依赖方向变更
+- 删除核心模块或核心脚本
+
+## 文档同步要求
+
+当行为发生变化时，至少更新以下之一：
+
+- [README.md](file:///Users/liuming/Documents/trae_projects/SysQ/README.md)
+- [RUNBOOK.md](file:///Users/liuming/Documents/trae_projects/SysQ/docs/RUNBOOK.md)
+- [TESTING.md](file:///Users/liuming/Documents/trae_projects/SysQ/docs/TESTING.md)
+- 对应 ADR 文档
