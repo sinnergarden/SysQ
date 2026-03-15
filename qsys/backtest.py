@@ -37,7 +37,7 @@ class BacktestEngine:
     def prepare(self):
         log.info("Preparing Backtest...")
         # Ensure Qlib
-        # QlibAdapter().init_qlib() # Removed duplicate init
+        QlibAdapter().init_qlib()
         
         # Get Calendar
         cal = D.calendar(start_time=self.start_date, end_time=self.end_date)

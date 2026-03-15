@@ -143,8 +143,29 @@ class QlibAdapter:
                     continue
                 
                 # Standardize columns
-                rename_map = adapter_cfg.get("rename_map", {})
+                rename_map = dict(adapter_cfg.get("rename_map", {}) or {})
+                fallback_rename = {
+                    "trade_date": "date",
+                    "adj_factor": "factor",
+                    "vol": "volume",
+                }
+                for src, dst in fallback_rename.items():
+                    if src in df.columns and dst not in df.columns:
+                        rename_map[src] = dst
                 df = df.rename(columns=rename_map)
+
+                # Resolve duplicated market columns produced by merges
+                if "close" not in df.columns:
+                    if "close_x" in df.columns:
+                        df["close"] = df["close_x"]
+                    elif "close_y" in df.columns:
+                        df["close"] = df["close_y"]
+                if "date" not in df.columns and "trade_date" in df.columns:
+                    df["date"] = df["trade_date"]
+                if "factor" not in df.columns and "adj_factor" in df.columns:
+                    df["factor"] = df["adj_factor"]
+                if "volume" not in df.columns and "vol" in df.columns:
+                    df["volume"] = df["vol"]
                 
                 # Unit Conversion (Tushare -> Qlib Standard)
                 # Tushare vol is in lots (100 shares), Qlib expects shares
