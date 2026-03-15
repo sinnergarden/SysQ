@@ -87,5 +87,8 @@ class PlanGenerator:
     def to_markdown(self, df_plan):
         if df_plan.empty:
             return "No trades planned."
-            
-        return df_plan.to_markdown(index=False, floatfmt=".2f")
+
+        try:
+            return df_plan.to_markdown(index=False, floatfmt=".2f")
+        except ImportError:
+            return df_plan.to_string(index=False)
