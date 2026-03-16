@@ -22,7 +22,7 @@ class DummyPro:
         dates = pd.date_range(start=pd.to_datetime(start_date), end=pd.to_datetime(end_date), freq="D")
         return [d.strftime("%Y%m%d") for d in dates]
 
-    def daily(self, ts_code, start_date, end_date):
+    def daily(self, ts_code, start_date, end_date, fields=None):
         self.calls.append(("daily", start_date, end_date))
         trade_dates = self._date_range(start_date, end_date)
         n = len(trade_dates)
@@ -36,7 +36,7 @@ class DummyPro:
             "vol": np.arange(n) + 100.0
         })
 
-    def adj_factor(self, ts_code, start_date, end_date):
+    def adj_factor(self, ts_code, start_date, end_date, fields=None):
         self.calls.append(("adj_factor", start_date, end_date))
         trade_dates = self._date_range(start_date, end_date)
         n = len(trade_dates)
@@ -68,6 +68,66 @@ class DummyPro:
             "trade_date": trade_dates,
             "up_limit": np.zeros(n),
             "down_limit": np.zeros(n)
+        })
+
+    def moneyflow(self, ts_code, start_date, end_date, fields=None):
+        self.calls.append(("moneyflow", start_date, end_date))
+        trade_dates = self._date_range(start_date, end_date)
+        n = len(trade_dates)
+        return pd.DataFrame({
+            "ts_code": [ts_code] * n,
+            "trade_date": trade_dates,
+            "buy_sm_amount": np.zeros(n),
+            "buy_md_amount": np.zeros(n),
+            "buy_lg_amount": np.zeros(n),
+            "buy_elg_amount": np.zeros(n),
+            "sell_sm_amount": np.zeros(n),
+            "sell_md_amount": np.zeros(n),
+            "sell_lg_amount": np.zeros(n),
+            "sell_elg_amount": np.zeros(n),
+            "net_mf_amount": np.zeros(n),
+            "net_mf_vol": np.zeros(n)
+        })
+
+    def income(self, ts_code, start_date, end_date, fields=None):
+        self.calls.append(("income", start_date, end_date))
+        return pd.DataFrame({
+            "ts_code": [ts_code],
+            "end_date": [end_date],
+            "n_income": [0.0],
+            "revenue": [0.0]
+        })
+
+    def balancesheet(self, ts_code, start_date, end_date, fields=None):
+        self.calls.append(("balancesheet", start_date, end_date))
+        return pd.DataFrame({
+            "ts_code": [ts_code],
+            "end_date": [end_date],
+            "total_hldr_eqy_exc_min_int": [0.0],
+            "total_assets": [0.0]
+        })
+
+    def cashflow(self, ts_code, start_date, end_date, fields=None):
+        self.calls.append(("cashflow", start_date, end_date))
+        return pd.DataFrame({
+            "ts_code": [ts_code],
+            "end_date": [end_date],
+            "n_cashflow_act": [0.0]
+        })
+
+    def fina_indicator(self, ts_code, start_date, end_date, fields=None):
+        self.calls.append(("fina_indicator", start_date, end_date))
+        return pd.DataFrame({
+            "ts_code": [ts_code],
+            "ann_date": [end_date],
+            "end_date": [end_date],
+            "roe": [0.0],
+            "roe_ttm": [0.0],
+            "grossprofit_margin": [0.0],
+            "debt_to_assets": [0.0],
+            "current_ratio": [0.0],
+            "q_dt_profit": [0.0],
+            "q_gr_yoy": [0.0]
         })
 
 
