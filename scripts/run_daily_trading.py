@@ -151,13 +151,19 @@ def main():
         sync_real_account_from_csv(real_account, real_account_name, args.real_sync, args.date)
     
     log.info("Generating Plan for Shadow Account...")
-    manager_shadow = LiveManager(model_path=model_path, account_name=shadow_account_name, top_k=args.top_k, min_trade_amount=args.min_trade)
+    manager_shadow = LiveManager(model_path=model_path)
+    manager_shadow.strategy.top_k = args.top_k
+    manager_shadow.planner.min_trade_amount = args.min_trade
+    manager_shadow.real_account = shadow_sim.account
     plan_shadow = manager_shadow.run_daily_plan(args.date)
     print_plan_summary(plan_shadow, shadow_account_name)
 
     log.info("Generating Plan for Real Account...")
     if real_account.get_latest_date() or args.real_sync:
-        manager_real = LiveManager(model_path=model_path, account_name=real_account_name, top_k=args.top_k, min_trade_amount=args.min_trade)
+        manager_real = LiveManager(model_path=model_path)
+        manager_real.strategy.top_k = args.top_k
+        manager_real.planner.min_trade_amount = args.min_trade
+        manager_real.real_account = real_account
         plan_real = manager_real.run_daily_plan(args.date)
         print_plan_summary(plan_real, real_account_name)
     else:
