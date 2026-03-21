@@ -11,6 +11,10 @@ import tempfile
 from qsys.live.account import RealAccount
 from qsys.live.simulation import ShadowSimulator
 from qsys.live.scheduler import ModelScheduler
+from qsys.live.reconciliation import (
+    build_reconciliation_result,
+    sync_real_account_from_csv,
+)
 
 class TestLiveTrading(unittest.TestCase):
     
@@ -129,6 +133,66 @@ class TestLiveTrading(unittest.TestCase):
         # Should match exactly
         self.assertEqual(pos2, pos1, "Positions changed after 2nd run (Idempotency Fail)")
         self.assertEqual(cash2, cash1, "Cash changed after 2nd run (Idempotency Fail)")
+
+        trade_log = sim.account.get_trade_log(date=sim_date, account_name="shadow_test")
+        self.assertEqual(len(trade_log), 1, "Trade log should be idempotent for repeated simulation")
+
+    def test_reconciliation_sync_and_diff(self):
+        """Test syncing a real CSV and reconciling it against shadow state."""
+        shadow_account = RealAccount(db_path=self.db_path, account_name="shadow")
+        real_account = RealAccount(db_path=self.db_path, account_name="real")
+
+        shadow_positions = pd.DataFrame([
+            {"symbol": "SH600519", "amount": 100, "price": 100.0, "cost_basis": 95.0}
+        ])
+        shadow_account.sync_broker_state(
+            "2025-01-02",
+            cash=90000.0,
+            positions=shadow_positions,
+            total_assets=100000.0,
+            account_name="shadow",
+        )
+
+        csv_path = os.path.join(self.test_dir, "real_sync.csv")
+        pd.DataFrame([
+            {
+                "symbol": "SH600519",
+                "amount": 80,
+                "price": 101.0,
+                "cost_basis": 94.5,
+                "cash": 92000.0,
+                "total_assets": 100080.0,
+                "side": "buy",
+                "filled_amount": 80,
+                "filled_price": 99.5,
+                "fee": 12.0,
+                "tax": 0.0,
+                "total_cost": 7972.0,
+                "order_id": "ord-1",
+            }
+        ]).to_csv(csv_path, index=False)
+
+        normalized = sync_real_account_from_csv(
+            real_account,
+            account_name="real",
+            sync_path=csv_path,
+            date="2025-01-02",
+            persist_trade_log=True,
+        )
+        self.assertEqual(len(normalized), 1)
+
+        result = build_reconciliation_result(
+            real_account,
+            date="2025-01-02",
+            real_account_name="real",
+            shadow_account_name="shadow",
+        )
+
+        cash_diff = result.summary.loc[result.summary["metric"] == "cash", "diff"].iloc[0]
+        self.assertEqual(cash_diff, 2000.0)
+        self.assertEqual(len(result.real_trades), 1)
+        self.assertEqual(result.real_trades.iloc[0]["order_id"], "ord-1")
+        self.assertEqual(int(result.positions.iloc[0]["amount_diff"]), -20)
 
     def test_scheduler_find_latest(self):
         """Test finding latest model"""
