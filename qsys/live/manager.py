@@ -1,11 +1,10 @@
 
 import pandas as pd
-import os
-from datetime import datetime
 from qsys.utils.logger import log
 from qsys.strategy.engine import StrategyEngine
 from qsys.trader.plan import PlanGenerator
 from qsys.live.account import RealAccount
+from qsys.live.reconciliation import export_plan_bundle
 from qlib.data import D
 from qsys.data.adapter import QlibAdapter
 
@@ -34,7 +33,7 @@ class LiveManager:
             self.model = SignalGenerator(self.model_path)
             log.info(f"Model loaded from {self.model_path}")
 
-    def run_daily_plan(self, date, market_data=None):
+    def run_daily_plan(self, date, market_data=None, account_name="real", execution_date=None):
         """
         Generate Plan for `date` (usually Tomorrow, using Today's data).
         
@@ -107,9 +106,15 @@ class LiveManager:
                 current_prices
             )
 
-            out_file = f"data/plan_{date}.csv"
-            plan_df.to_csv(out_file, index=False)
-            log.info(f"Plan saved to {out_file}")
+            outputs = export_plan_bundle(
+                plan_df,
+                output_dir="data",
+                plan_date=date,
+                account_name=account_name,
+                execution_date=execution_date or date,
+            )
+            log.info(f"Plan saved to {outputs['plan']}")
+            log.info(f"Real sync template saved to {outputs['real_sync_template']}")
             log.info(f"\n{self.planner.to_markdown(plan_df)}")
 
             return plan_df

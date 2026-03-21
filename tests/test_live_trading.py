@@ -13,6 +13,7 @@ from qsys.live.simulation import ShadowSimulator
 from qsys.live.scheduler import ModelScheduler
 from qsys.live.reconciliation import (
     build_reconciliation_result,
+    export_plan_bundle,
     sync_real_account_from_csv,
 )
 
@@ -136,6 +137,40 @@ class TestLiveTrading(unittest.TestCase):
 
         trade_log = sim.account.get_trade_log(date=sim_date, account_name="shadow_test")
         self.assertEqual(len(trade_log), 1, "Trade log should be idempotent for repeated simulation")
+
+    def test_plan_bundle_export(self):
+        """Test standard pre-market plan export and post-close template generation."""
+        output_dir = os.path.join(self.test_dir, "exports")
+        plan_df = pd.DataFrame([
+            {
+                "symbol": "SH600519",
+                "side": "buy",
+                "amount": 100,
+                "price": 123.45,
+                "est_value": 12345.0,
+                "weight": 0.1,
+            }
+        ])
+
+        written = export_plan_bundle(
+            plan_df,
+            output_dir=output_dir,
+            plan_date="2025-01-02",
+            account_name="real",
+            execution_date="2025-01-03",
+        )
+
+        self.assertTrue(os.path.exists(written["plan"]))
+        self.assertTrue(os.path.exists(written["real_sync_template"]))
+
+        exported_plan = pd.read_csv(written["plan"])
+        exported_template = pd.read_csv(written["real_sync_template"])
+        self.assertEqual(exported_plan.iloc[0]["account_name"], "real")
+        self.assertEqual(exported_plan.iloc[0]["execution_date"], "2025-01-03")
+        self.assertIn("cash", exported_template.columns)
+        self.assertIn("total_assets", exported_template.columns)
+        self.assertIn("filled_amount", exported_template.columns)
+        self.assertIn("order_id", exported_template.columns)
 
     def test_reconciliation_sync_and_diff(self):
         """Test syncing a real CSV and reconciling it against shadow state."""

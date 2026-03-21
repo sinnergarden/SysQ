@@ -28,6 +28,11 @@ PY
 python scripts/run_daily_trading.py --date 2026-03-20
 ```
 
+盘前脚本会额外生成两类文件（按账户分别输出，例如 `real` / `shadow`）：
+
+- `data/plan_2026-03-20_real.csv`：标准化计划文件
+- `data/real_sync_template_2026-03-20_real.csv`：盘后回填模板
+
 盘后 / 回填真实账户并生成 real vs shadow 对账：
 
 ```bash
@@ -35,6 +40,8 @@ python scripts/run_post_close.py --date 2026-03-20 --real_sync broker/real_sync_
 ```
 
 ### 盘后 CSV 格式
+
+建议直接以盘前生成的 `real_sync_template_日期_real.csv` 为模板填写。
 
 当前最小必填列：
 

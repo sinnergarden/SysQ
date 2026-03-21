@@ -19,6 +19,26 @@ REQUIRED_REAL_SYNC_COLUMNS = {
     "total_assets",
 }
 
+STANDARD_PLAN_COLUMNS = [
+    "symbol",
+    "side",
+    "amount",
+    "price",
+    "est_value",
+    "weight",
+    "account_name",
+    "plan_date",
+    "execution_date",
+    "status",
+    "filled_amount",
+    "filled_price",
+    "fee",
+    "tax",
+    "total_cost",
+    "order_id",
+    "note",
+]
+
 OPTIONAL_REAL_SYNC_COLUMNS = {
     "side",
     "filled_amount",
@@ -244,6 +264,52 @@ def write_reconciliation_outputs(
         written["real_sync_snapshot"] = str(snapshot_path)
 
     return written
+
+
+def export_plan_bundle(
+    plan_df: pd.DataFrame,
+    *,
+    output_dir: str | Path,
+    plan_date: str,
+    account_name: str,
+    execution_date: Optional[str] = None,
+) -> dict[str, str]:
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    execution_date = execution_date or plan_date
+
+    normalized = plan_df.copy()
+    if normalized.empty:
+        normalized = pd.DataFrame(columns=STANDARD_PLAN_COLUMNS)
+    else:
+        normalized["account_name"] = account_name
+        normalized["plan_date"] = plan_date
+        normalized["execution_date"] = execution_date
+        normalized["status"] = "planned"
+        normalized["filled_amount"] = pd.NA
+        normalized["filled_price"] = pd.NA
+        normalized["fee"] = pd.NA
+        normalized["tax"] = pd.NA
+        normalized["total_cost"] = pd.NA
+        normalized["order_id"] = ""
+        normalized["note"] = ""
+        normalized = normalized[STANDARD_PLAN_COLUMNS]
+
+    execution_template = normalized.copy()
+    execution_template["cash"] = pd.NA
+    execution_template["total_assets"] = pd.NA
+    execution_template["cost_basis"] = execution_template["price"]
+
+    plan_path = output_dir / f"plan_{plan_date}_{account_name}.csv"
+    normalized.to_csv(plan_path, index=False)
+
+    template_path = output_dir / f"real_sync_template_{plan_date}_{account_name}.csv"
+    execution_template.to_csv(template_path, index=False)
+
+    return {
+        "plan": str(plan_path),
+        "real_sync_template": str(template_path),
+    }
 
 
 def reconciliation_to_markdown(result: ReconciliationResult, *, top_n_positions: int = 10) -> str:

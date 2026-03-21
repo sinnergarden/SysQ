@@ -1,7 +1,6 @@
 
 import argparse
 import sys
-import pandas as pd
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -14,6 +13,7 @@ from qsys.live.manager import LiveManager
 from qsys.live.simulation import ShadowSimulator
 from qsys.live.account import RealAccount
 from qsys.live.scheduler import ModelScheduler
+from qsys.live.reconciliation import sync_real_account_from_csv
 from qsys.utils.logger import log
 
 def update_data(force=True):
@@ -155,7 +155,7 @@ def main():
     manager_shadow.strategy.top_k = args.top_k
     manager_shadow.planner.min_trade_amount = args.min_trade
     manager_shadow.real_account = shadow_sim.account
-    plan_shadow = manager_shadow.run_daily_plan(args.date)
+    plan_shadow = manager_shadow.run_daily_plan(args.date, account_name=shadow_account_name)
     print_plan_summary(plan_shadow, shadow_account_name)
 
     log.info("Generating Plan for Real Account...")
@@ -164,7 +164,7 @@ def main():
         manager_real.strategy.top_k = args.top_k
         manager_real.planner.min_trade_amount = args.min_trade
         manager_real.real_account = real_account
-        plan_real = manager_real.run_daily_plan(args.date)
+        plan_real = manager_real.run_daily_plan(args.date, account_name=real_account_name)
         print_plan_summary(plan_real, real_account_name)
     else:
         log.warning("Real Account has no state. Skipping plan generation. Please sync broker state first.")
