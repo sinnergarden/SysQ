@@ -21,7 +21,8 @@ from qsys.utils.logger import log
 @click.option('--run_backtest', is_flag=True, help='Run minimal backtest after training')
 @click.option('--backtest_start', default=None, help='Backtest start date; defaults to last 40 trading days window start')
 @click.option('--backtest_end', default=None, help='Backtest end date; defaults to training end date')
-def main(model, universe, start, end, run_backtest, backtest_start, backtest_end):
+@click.option('--feature_set', type=click.Choice(['alpha158', 'extended'], case_sensitive=False), default='extended', show_default=True, help='Feature set to train with')
+def main(model, universe, start, end, run_backtest, backtest_start, backtest_end, feature_set):
     log.info(f"Starting training for {model}")
 
     if universe == 'csi300':
@@ -52,9 +53,15 @@ def main(model, universe, start, end, run_backtest, backtest_start, backtest_end
         }
     }
 
-    feature_config = FeatureLibrary.get_alpha158_config()
+    if feature_set == 'extended':
+        feature_config = FeatureLibrary.get_alpha158_extended_config()
+    else:
+        feature_config = FeatureLibrary.get_alpha158_config()
+
+    model_name = model if feature_set == 'alpha158' else f"{model}_extended"
+    log.info(f"Using feature_set={feature_set} with {len(feature_config)} features")
     model_instance = QlibNativeModel(
-        name=model,
+        name=model_name,
         model_config=qlib_config,
         feature_config=feature_config,
     )
@@ -70,7 +77,7 @@ def main(model, universe, start, end, run_backtest, backtest_start, backtest_end
         root_path = cfg.get_path("root")
         if root_path is None:
             raise ValueError("Root path not configured")
-        save_path = root_path / "models" / model
+        save_path = root_path / "models" / model_name
         model_instance.save(save_path)
 
         training_summary = model_instance.training_summary or {}
