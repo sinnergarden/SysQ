@@ -65,8 +65,46 @@ class ConfigManager:
         if isinstance(value, dict):
             return value
         return {
+            "collector": {
+                "expected_extra_cols": ["paused"],
+                "numeric_extra_cols": ["paused"],
+                "non_numeric_cols": ["trade_status"],
+                "non_negative_cols": [
+                    "open", "high", "low", "close", "vol", "amount",
+                    "turnover_rate", "total_share", "float_share", "free_share",
+                    "total_mv", "circ_mv", "adj_factor", "up_limit", "down_limit",
+                ],
+                "financial_cols": [
+                    "net_income", "revenue", "total_assets", "equity", "roe", "op_cashflow",
+                    "q_dt_profit", "q_gr_yoy", "roe_ttm", "grossprofit_margin",
+                    "debt_to_assets", "current_ratio",
+                ],
+                "moneyflow_fields": [
+                    "buy_sm_amount", "buy_md_amount", "buy_lg_amount", "buy_elg_amount",
+                    "sell_sm_amount", "sell_md_amount", "sell_lg_amount", "sell_elg_amount",
+                    "net_mf_amount",
+                ],
+                "derived_fields": {
+                    "moneyflow": ["big_inflow", "net_inflow"]
+                },
+            },
             "adapter": {
-                "qlib_fields": ["open", "high", "low", "close", "volume", "amount", "factor"]
+                "rename_map": {
+                    "trade_date": "date",
+                    "adj_factor": "factor",
+                    "vol": "volume",
+                    "up_limit": "high_limit",
+                    "down_limit": "low_limit",
+                },
+                "qlib_fields": [
+                    "open", "high", "low", "close", "volume", "amount", "factor",
+                    "vwap", "paused", "high_limit", "low_limit",
+                    "turnover_rate", "pe", "pb", "total_mv", "circ_mv",
+                    "net_inflow", "big_inflow",
+                    "net_income", "revenue", "total_assets", "equity", "roe", "op_cashflow",
+                    "q_dt_profit", "q_gr_yoy", "roe_ttm", "grossprofit_margin",
+                    "debt_to_assets", "current_ratio",
+                ]
             }
         }
 

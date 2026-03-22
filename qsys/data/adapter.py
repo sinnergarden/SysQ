@@ -244,6 +244,10 @@ class QlibAdapter:
                     df["factor"] = df["adj_factor"]
                 if "volume" not in df.columns and "vol" in df.columns:
                     df["volume"] = df["vol"]
+                if "high_limit" not in df.columns and "up_limit" in df.columns:
+                    df["high_limit"] = df["up_limit"]
+                if "low_limit" not in df.columns and "down_limit" in df.columns:
+                    df["low_limit"] = df["down_limit"]
                 
                 # Unit Conversion (Tushare -> Qlib Standard)
                 # Tushare vol is in lots (100 shares), Qlib expects shares
@@ -253,6 +257,13 @@ class QlibAdapter:
                 # Tushare amount is in thousands (1000 RMB), Qlib expects RMB
                 if 'amount' in df.columns:
                     df['amount'] = df['amount'] * 1000
+
+                # Derive VWAP explicitly for Alpha158/Alpha360 families.
+                if 'amount' in df.columns and 'volume' in df.columns:
+                    amount_num = pd.to_numeric(df['amount'], errors='coerce')
+                    volume_num = pd.to_numeric(df['volume'], errors='coerce')
+                    volume_safe = volume_num.replace(0, np.nan)
+                    df['vwap'] = amount_num / volume_safe
                 
                 # Scaling Check: Convert Wan to Yuan for Market Value (Tushare returns Wan)
                 # Tushare strictly returns total_mv/circ_mv in 10,000 Yuan (Wan).
