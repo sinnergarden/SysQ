@@ -13,6 +13,24 @@ class FeatureLibrary:
     """
     Predefined feature sets.
     """
+
+    EXTENDED_RAW_FIELDS = [
+        "$pe",
+        "$pb",
+        "$total_mv",
+        "$circ_mv",
+        "$net_inflow",
+        "$big_inflow",
+        "$roe",
+        "$grossprofit_margin",
+        "$debt_to_assets",
+        "$current_ratio",
+        "$net_income",
+        "$revenue",
+        "$total_assets",
+        "$equity",
+        "$op_cashflow",
+    ]
     
     @staticmethod
     def get_alpha158_config():
@@ -28,6 +46,15 @@ class FeatureLibrary:
         if isinstance(config, list):
             return config
         return list(config)
+
+    @classmethod
+    def get_alpha158_extended_config(cls):
+        base = cls.get_alpha158_config()
+        merged = list(base)
+        for field in cls.EXTENDED_RAW_FIELDS:
+            if field not in merged:
+                merged.append(field)
+        return merged
 
 class Alpha158(DataHandlerLP):
     def __init__(
