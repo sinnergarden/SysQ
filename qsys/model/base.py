@@ -87,13 +87,23 @@ class IModel(ABC):
         # 1. Calc Features
         feat_df = FeatureCalculator.calculate(df, self.feature_config)
         
-        # 2. Preprocess (Simple Z-Score)
+        # 2. Preprocess
         if self.preprocess_params:
-            mean = self.preprocess_params.get("mean")
-            std = self.preprocess_params.get("std")
-            if mean is not None and std is not None:
-                feat_df = (feat_df - mean) / std
-                
+            method = self.preprocess_params.get("method")
+            if method == "qlib_robust_zscore":
+                center = pd.Series(self.preprocess_params.get("center", {}), dtype=float).reindex(feat_df.columns)
+                scale = pd.Series(self.preprocess_params.get("scale", {}), dtype=float).reindex(feat_df.columns).replace(0, 1.0)
+                if not center.isna().any() and not scale.isna().any():
+                    feat_df = (feat_df.astype(float) - center) / scale
+                    if self.preprocess_params.get("clip_outlier", True):
+                        feat_df = feat_df.clip(-3, 3)
+                feat_df = feat_df.fillna(self.preprocess_params.get("fillna", 0.0))
+            else:
+                mean = self.preprocess_params.get("mean")
+                std = self.preprocess_params.get("std")
+                if mean is not None and std is not None:
+                    feat_df = (feat_df - mean) / std
+        
         # Fill NaNs
         feat_df = feat_df.fillna(0)
         

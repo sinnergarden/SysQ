@@ -6,6 +6,11 @@ import pandas as pd
 import numpy as np
 from qsys.utils.logger import log
 
+
+class MissingPreprocessParamsError(ValueError):
+    pass
+
+
 class QlibNativeModel(IModel):
     def __init__(self, name, model_config, feature_config, label_config=None):
         """
@@ -42,6 +47,18 @@ class QlibNativeModel(IModel):
             return list(fields)
         return list(label_config)
 
+    def _normalize_processor_columns(self, cols):
+        normalized = []
+        for col in cols:
+            if isinstance(col, tuple):
+                if len(col) == 2 and col[0] == "feature":
+                    normalized.append(col[1])
+                else:
+                    normalized.append("__".join(map(str, col)))
+            else:
+                normalized.append(col)
+        return normalized
+
     def fit(self, universe, start_date, end_date):
         log.info(f"Training Qlib Native Model: {self.name}")
         
@@ -68,7 +85,14 @@ class QlibNativeModel(IModel):
                         "fit_start_time": start_date,
                         "fit_end_time": end_date
                     }
-                }
+                },
+                {
+                    "class": "Fillna",
+                    "kwargs": {
+                        "fields_group": "feature",
+                        "fill_value": 0,
+                    },
+                },
             ],
             "learn_processors": [
                 {"class": "DropnaLabel"},
@@ -132,81 +156,87 @@ class QlibNativeModel(IModel):
             f"mse={self.training_summary['mse']:.6f} rank_ic={self.training_summary['rank_ic']:.6f}"
         )
         
-        # 5. Extract Preprocess Params (RobustZScoreNorm)
-        # We need these to replicate preprocessing during inference (Pure Python)
+        # 5. Extract preprocessing contract from fitted Qlib processors.
+        self.preprocess_params = self._extract_preprocess_params(ds)
+
+    def _extract_preprocess_params(self, ds):
         try:
             handler = ds.handler
-            
-            # Debug: Inspect handler properties
-            # log.info(f"Handler keys: {handler.__dict__.keys()}")
-            
-            proc = None
-            
-            # Strategy 1: Look into _infer_processors (Qlib standard)
-            infer_processors = getattr(handler, "_infer_processors", [])
-            if infer_processors:
-                for p in infer_processors:
-                    if p.__class__.__name__ == 'RobustZScoreNorm':
-                        proc = p
-                        break
-            
-            # Strategy 2: Look into data_loader (if configured there) - Unlikely for ZScoreNorm
-            
-            # Strategy 3: Check fetch_kwargs (sometimes Qlib stores it here?)
-            
-            if proc and hasattr(proc, 'mean') and hasattr(proc, 'std'):
-                self.preprocess_params = {
-                    "mean": proc.mean.to_dict() if hasattr(proc.mean, 'to_dict') else proc.mean,
-                    "std": proc.std.to_dict() if hasattr(proc.std, 'to_dict') else proc.std
-                }
-                log.info("Extracted preprocessing parameters from Qlib handler.")
+            infer_processors = list(getattr(handler, "_infer_processors", []) or [])
+            if not infer_processors and hasattr(handler, "infer_processors"):
+                infer_processors = list(getattr(handler, "infer_processors", []) or [])
+
+            robust_proc = None
+            fillna_proc = None
+            for proc in infer_processors:
+                name = proc.__class__.__name__
+                if name == "RobustZScoreNorm":
+                    robust_proc = proc
+                elif name == "Fillna":
+                    fillna_proc = proc
+
+            if robust_proc is None:
+                raise MissingPreprocessParamsError("RobustZScoreNorm processor not found on fitted handler")
+
+            center = getattr(robust_proc, "mean_train", None)
+            scale = getattr(robust_proc, "std_train", None)
+            cols_obj = getattr(robust_proc, "cols", None)
+            if cols_obj is None:
+                cols = list(self.feature_config)
             else:
-                log.warning("Could not extract mean/std from processor. Using Identity preprocessing.")
-                # Fallback to Identity to avoid crash
-                self.preprocess_params = {"mean": 0.0, "std": 1.0}
-                
+                cols = self._normalize_processor_columns(list(cols_obj))
+            if center is None or scale is None:
+                raise MissingPreprocessParamsError("RobustZScoreNorm fitted stats missing mean_train/std_train")
+
+            center_arr = np.asarray(center, dtype=float).reshape(-1)
+            scale_arr = np.asarray(scale, dtype=float).reshape(-1)
+            if len(center_arr) != len(cols) or len(scale_arr) != len(cols):
+                raise MissingPreprocessParamsError("RobustZScoreNorm stats shape does not match feature columns")
+
+            clip_outlier = bool(getattr(robust_proc, "clip_outlier", True))
+            fill_value = float(getattr(fillna_proc, "fill_value", 0.0)) if fillna_proc is not None else 0.0
+            params = {
+                "method": "qlib_robust_zscore",
+                "center": dict(zip(cols, center_arr.tolist())),
+                "scale": dict(zip(cols, scale_arr.tolist())),
+                "fillna": fill_value,
+                "clip_outlier": clip_outlier,
+            }
+            log.info("Extracted fitted RobustZScoreNorm params from Qlib handler.")
+            return params
         except Exception as e:
-            log.warning(f"Failed to extract preprocess params: {e}")
-            self.preprocess_params = {"mean": 0.0, "std": 1.0}
+            raise MissingPreprocessParamsError(f"Failed to extract preprocessing contract: {e}") from e
+
+    def _apply_preprocess(self, X: pd.DataFrame) -> pd.DataFrame:
+        params = getattr(self, "preprocess_params", None) or {}
+        method = params.get("method")
+        if method != "qlib_robust_zscore":
+            raise MissingPreprocessParamsError("Missing or unsupported preprocessing contract for inference")
+
+        center = pd.Series(params.get("center", {}), dtype=float).reindex(X.columns)
+        scale = pd.Series(params.get("scale", {}), dtype=float).reindex(X.columns)
+        if center.isna().any() or scale.isna().any():
+            missing = sorted(set(X.columns[center.isna() | scale.isna()]))
+            raise MissingPreprocessParamsError(f"Preprocessing params missing for columns: {missing}")
+
+        scale = scale.replace(0, 1.0)
+        X = X.astype(float)
+        X = (X - center) / scale
+        if params.get("clip_outlier", True):
+            X = X.clip(-3, 3)
+        X = X.fillna(float(params.get("fillna", 0.0)))
+        return X
 
     def predict(self, df):
         """
         Pure Python Inference.
         """
-        # 1. Feature Calc & Preprocess (using extracted params)
-        # If df already contains feature columns (from D.features), we just preprocess.
-        # If df contains raw columns (open, close), we calculate first.
-        
-        # Check if first feature name exists in columns
         first_feat = self.feature_config[0] if self.feature_config else None
-        
+
         if not first_feat or first_feat not in df.columns:
             raise ValueError("Feature columns missing. Provide precomputed features.")
-        X = df[self.feature_config]
-            
-        # Apply RobustZScoreNorm manually
-        if getattr(self, 'preprocess_params', None) is not None:
-            mean = self.preprocess_params.get('mean')
-            std = self.preprocess_params.get('std')
-            
-            if mean is None or std is None:
-                mean = 0.0
-                std = 1.0
+        X = self._apply_preprocess(df[self.feature_config].copy())
 
-            # Convert to float to avoid object type issues
-            X = X.astype(float)
-            
-            # If mean/std are scalars (Identity fallback)
-            if isinstance(mean, (int, float)) and isinstance(std, (int, float)):
-                X = (X - mean) / std
-            else:
-                try:
-                    mean_series = pd.Series(mean).reindex(X.columns).fillna(0.0)
-                    std_series = pd.Series(std).reindex(X.columns).fillna(1.0).replace(0, 1.0)
-                    X = (X - mean_series) / std_series
-                except Exception as e:
-                     log.warning(f"Preprocessing failed during predict: {e}")
-        
         # 2. Predict
         # We need to access the underlying booster to predict on DataFrame/Numpy
         # Qlib's LGBModel stores booster in self.model (which is lightgbm.Booster)
