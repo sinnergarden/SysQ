@@ -1,3 +1,17 @@
+"""
+Research comparison utility.
+
+Purpose:
+- compare alternative strategy implementations or backtest behaviors
+- exploratory tool; not a production daily-ops entrypoint
+
+Typical usage:
+- python scripts/run_compare.py
+
+Note:
+- keep for research/debug use; do not treat as production workflow.
+"""
+
 import pandas as pd
 import matplotlib.pyplot as plt
 import sys

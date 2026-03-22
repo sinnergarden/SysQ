@@ -1,3 +1,13 @@
+"""
+Universe bootstrap utility for CSI300.
+
+Purpose:
+- build or refresh `csi300.txt` instrument membership from index constituents
+- used when universe definition needs initialization or repair
+
+Typical usage:
+- python scripts/create_instrument_csi300.py
+"""
 
 import sys
 from pathlib import Path

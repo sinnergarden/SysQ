@@ -1,3 +1,23 @@
+"""
+Primary incremental data update entrypoint.
+
+Purpose:
+- initialize metadata
+- update a single code, a universe, or a given trading date range
+- serve as the narrow/targeted data refresh tool
+
+Typical usage:
+- python scripts/run_update.py --init
+- python scripts/run_update.py --universe csi300 --start 20230101
+- python scripts/run_update.py --history 000001.SZ --start 20240101
+
+Key args:
+- --init: refresh stock list + calendar
+- --history: update one code
+- --universe: update a universe or comma-separated codes
+- --date / --start: date controls (accept YYYYMMDD or YYYY-MM-DD)
+"""
+
 import click
 import datetime
 import sys

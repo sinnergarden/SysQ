@@ -1,18 +1,20 @@
 #!/usr/bin/env python3
 """
-Strict factor comparison: Alpha158 baseline vs Extended features.
+Primary strict evaluation entrypoint.
 
-This script uses the unified StrictEvaluator from qsys.evaluation.
-Defaults (from ROADMAP consensus):
-- Main window: 2025-01-01 to latest available
-- Auxiliary window: 2026 YTD (style-shift inspection)
-- top_k=5 for all backtests
-- Explicit train/valid/test separation
+Purpose:
+- compare baseline vs extended model artifacts under the unified evaluation contract
+- use roadmap defaults for main/aux windows and `top_k=5`
+- emit structured strict-eval report
 
-Usage:
-    python scripts/run_strict_eval.py \
-        --baseline data/models/qlib_lgbm \
-        --extended data/models/qlib_lgbm_extended
+Typical usage:
+- python scripts/run_strict_eval.py --baseline data/models/qlib_lgbm --extended data/models/qlib_lgbm_extended
+
+Key args:
+- --baseline / --extended: model paths to compare
+- --end: evaluation end date override
+- --top_k: portfolio breadth (default 5)
+- --no_report: skip JSON run report
 """
 import sys
 import time
