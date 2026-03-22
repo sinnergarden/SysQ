@@ -94,9 +94,28 @@ def ensure_real_account_seeded(real_account: RealAccount, signal_date: str, init
     return signal_date
 
 
+def resolve_signal_and_execution_date(date_arg: str | None, execution_date_arg: str | None):
+    if execution_date_arg:
+        signal_date = pd.Timestamp(date_arg).strftime("%Y-%m-%d") if date_arg else pd.Timestamp(datetime.now()).strftime("%Y-%m-%d")
+        execution_date = pd.Timestamp(execution_date_arg).strftime("%Y-%m-%d")
+        return signal_date, execution_date
+
+    if date_arg:
+        normalized = pd.Timestamp(date_arg).strftime("%Y-%m-%d")
+        today = pd.Timestamp(datetime.now().strftime("%Y-%m-%d"))
+        target = pd.Timestamp(normalized)
+        if target > today:
+            signal_date = previous_trading_day(normalized)
+            return signal_date, normalized
+        return normalized, next_trading_day(normalized)
+
+    today = pd.Timestamp(datetime.now().strftime("%Y-%m-%d")).strftime("%Y-%m-%d")
+    return today, next_trading_day(today)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Run Daily Trading Workflow (Real + Shadow)")
-    parser.add_argument("--date", type=str, default=datetime.now().strftime("%Y-%m-%d"), help="Signal Date / market data date (YYYY-MM-DD)")
+    parser.add_argument("--date", type=str, default=datetime.now().strftime("%Y-%m-%d"), help="Signal date or target execution date. If a future trading day is given without --execution_date, it is treated as execution date and the previous trading day is used as signal_date.")
     parser.add_argument("--execution_date", type=str, help="Execution Date (YYYY-MM-DD). Defaults to next trading day after signal date")
     parser.add_argument("--model_path", type=str, help="Path to model directory")
     parser.add_argument("--real_sync", type=str, help="Path to CSV file with Real Account state (cash, positions)")
@@ -108,14 +127,12 @@ def main():
     parser.add_argument("--min_trade", type=int, default=5000, help="Minimum trade amount in RMB")
     args = parser.parse_args()
 
-    signal_date = pd.Timestamp(args.date).strftime("%Y-%m-%d")
-    log.info(f"=== Starting Daily Trading Workflow for signal_date={signal_date} ===")
-
     if not args.skip_update:
         update_data()
 
     QlibAdapter().init_qlib()
-    execution_date = pd.Timestamp(args.execution_date).strftime("%Y-%m-%d") if args.execution_date else next_trading_day(signal_date)
+    signal_date, execution_date = resolve_signal_and_execution_date(args.date, args.execution_date)
+    log.info(f"=== Starting Daily Trading Workflow for signal_date={signal_date}, execution_date={execution_date} ===")
 
     model_path = args.model_path
     if not model_path:

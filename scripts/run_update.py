@@ -6,8 +6,16 @@ from pathlib import Path
 project_root = Path(__file__).resolve().parent.parent
 sys.path.append(str(project_root))
 
+import pandas as pd
+
 from qsys.data.collector import TushareCollector
 from qsys.utils.logger import log
+
+def _normalize_date(value):
+    if not value:
+        return value
+    return pd.Timestamp(value).strftime('%Y%m%d')
+
 
 @click.command()
 @click.option('--date', help='Trading date to update (YYYYMMDD). Defaults to today.')
@@ -18,7 +26,9 @@ from qsys.utils.logger import log
 def main(date, init, history, universe, start):
     try:
         collector = TushareCollector()
-        
+        start = _normalize_date(start)
+        date = _normalize_date(date)
+
         if init:
             log.info("Initializing metadata...")
             collector.update_stock_list()

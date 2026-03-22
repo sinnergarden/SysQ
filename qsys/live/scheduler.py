@@ -27,18 +27,19 @@ class ModelScheduler:
         if meta_path.exists():
             try:
                 with open(meta_path) as f:
-                    # Use UnsafeLoader to handle python tags like !!python/tuple
-                    meta = yaml.load(f, Loader=yaml.UnsafeLoader)
+                    meta = yaml.safe_load(f) or {}
                     train_period = meta.get("train_period")
-                    if train_period:
-                        # train_period is likely a tuple/list of strings or dates
+                    if train_period and len(train_period) >= 2:
                         train_end_str = str(train_period[1])
-                        # Try parsing date
                         try:
-                            # Handle potential datetime format or just date
                             train_end_date = datetime.strptime(train_end_str.split()[0], "%Y-%m-%d")
                         except ValueError:
-                            pass
+                            train_end_date = None
+                    if train_end_date is None:
+                        training_summary = meta.get("training_summary") or {}
+                        train_end_str = training_summary.get("train_end")
+                        if train_end_str:
+                            train_end_date = datetime.strptime(str(train_end_str).split()[0], "%Y-%m-%d")
             except Exception as e:
                 log.warning(f"Failed to read model metadata: {e}")
 

@@ -857,9 +857,12 @@ class TushareCollector:
         return [key]
 
     def update_universe_history(self, universe='csi300', start_date='20100101', end_date=None, incremental=True, include_basic=True, include_limit=True, include_adj=True, batch_size=50, include_moneyflow=True):
+        start_ts = time.time()
+        start_date = self._normalize_date(start_date)
         if end_date is None:
             end_date = datetime.now().strftime('%Y%m%d')
-        log.info(f"Fetching universe {universe}...")
+        end_date = self._normalize_date(end_date)
+        log.info(f"Fetching universe {universe} from {start_date} to {end_date}...")
         codes = self.get_universe(universe)
         if not codes:
             log.warning("No codes found for universe.")
@@ -867,9 +870,12 @@ class TushareCollector:
         log.info(f"Found {len(codes)} stocks in universe {universe}. Starting update...")
         batch_size = batch_size or self.batch_size
         code_batches = [codes[i:i + batch_size] for i in range(0, len(codes), batch_size)]
+        total_batches = len(code_batches)
         for i, batch_codes in enumerate(code_batches):
+            batch_no = i + 1
             batch_str = ",".join(batch_codes)
-            log.info(f"Processing batch {i+1}/{len(code_batches)} ({len(batch_codes)} stocks)...")
+            batch_start_ts = time.time()
+            log.info(f"Processing batch {batch_no}/{total_batches} ({len(batch_codes)} stocks)...")
             self._update_batch_by_year(
                 batch_codes,
                 batch_str,
@@ -880,7 +886,14 @@ class TushareCollector:
                 include_adj=include_adj,
                 include_moneyflow=include_moneyflow,
             )
-        log.info(f"Universe {universe} update completed.")
+            batch_elapsed = time.time() - batch_start_ts
+            avg_elapsed = (time.time() - start_ts) / batch_no
+            eta_seconds = max(int(avg_elapsed * (total_batches - batch_no)), 0)
+            log.info(
+                f"Finished batch {batch_no}/{total_batches} in {batch_elapsed:.1f}s | ETA ~{eta_seconds}s"
+            )
+        total_elapsed = time.time() - start_ts
+        log.info(f"Universe {universe} update completed in {total_elapsed:.1f}s.")
 
     # def _fetch_financials_batch(self, code_str, start_date, end_date, span_years=5):
     #     start_date = self._normalize_date(start_date)
