@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 import json
 from pathlib import Path
+from typing import Optional
 from qsys.config import cfg
 from qsys.utils.logger import log
 from qsys.data.storage import StockDataStore
@@ -36,6 +37,82 @@ class QlibAdapter:
             return pd.Timestamp(str(val))
         except Exception:
             return None
+
+    def refresh_qlib_date(self):
+        """
+        Explicitly refresh Qlib bin by checking for new raw data and updating.
+        Should be called after raw data updates to close the loop.
+        """
+        raw_latest = self._get_raw_latest_date()
+        if raw_latest is None:
+            log.info("No raw data found, skipping qlib refresh.")
+            return
+
+        log.info(f"Raw data latest date: {raw_latest}")
+        self.check_and_update(force=False)
+
+        # Verify the update
+        qlib_latest = self.get_last_qlib_date()
+        if qlib_latest:
+            log.info(f"Qlib bin latest date after refresh: {qlib_latest.date()}")
+        else:
+            log.warning("Failed to get qlib latest date after refresh")
+
+    def _get_raw_latest_date(self) -> Optional[pd.Timestamp]:
+        """Get the latest date from raw feather data"""
+        try:
+            store = StockDataStore()
+            return store.get_global_latest_date()
+        except Exception as e:
+            log.warning(f"Failed to get raw latest date: {e}")
+            return None
+
+    def get_data_status_report(self, target_date: str = None) -> dict:
+        """
+        Get a comprehensive status report of data alignment.
+        
+        Returns dict with:
+        - raw_latest: latest date in raw feather data
+        - qlib_latest: latest date in qlib bin
+        - target_signal_date: the date we want data to be available for
+        - aligned: whether raw and qlib are aligned
+        - gap: days between raw and qlib
+        """
+        store = StockDataStore()
+        raw_latest_str = store.get_global_latest_date()
+        raw_latest = pd.Timestamp(raw_latest_str) if raw_latest_str else None
+
+        qlib_latest_ts = self.get_last_qlib_date()
+        qlib_latest = qlib_latest_ts.date() if qlib_latest_ts else None
+
+        # Determine target signal date
+        if target_date:
+            target_signal = pd.Timestamp(target_date)
+        else:
+            # Default: yesterday (assuming today might not have data yet)
+            target_signal = pd.Timestamp.now() - pd.Timedelta(days=1)
+            # Adjust to last trading day if needed
+            try:
+                from qlib.data import D
+                cal = D.calendar(start_time=target_signal - pd.Timedelta(days=7), end_time=target_signal)
+                if cal:
+                    target_signal = pd.Timestamp(cal[-1])
+            except Exception:
+                pass
+
+        gap = None
+        aligned = False
+        if raw_latest and qlib_latest:
+            gap = (raw_latest - qlib_latest_ts).days
+            aligned = raw_latest.date() == qlib_latest
+
+        return {
+            "raw_latest": raw_latest.date() if raw_latest else None,
+            "qlib_latest": qlib_latest,
+            "target_signal_date": target_signal.strftime("%Y-%m-%d") if target_signal else None,
+            "aligned": aligned,
+            "gap_days": gap,
+        }
 
     def check_and_update(self, force=False):
         """

@@ -7,11 +7,13 @@ import pandas as pd
 from qlib.data import D
 
 from qsys.data.adapter import QlibAdapter
+from qsys.data.storage import StockDataStore
 
 
 @dataclass
 class DataHealthReport:
     requested_date: str
+    raw_latest: Optional[str]
     last_qlib_date: Optional[str]
     trading_calendar_last_date: Optional[str]
     expected_latest_date: Optional[str]
@@ -21,6 +23,7 @@ class DataHealthReport:
     missing_ratio: float
     has_data_for_requested_date: bool
     gap_days: int
+    aligned: bool
     issues: list[str]
 
     @property
@@ -30,6 +33,7 @@ class DataHealthReport:
     def to_dict(self) -> dict:
         return {
             "requested_date": self.requested_date,
+            "raw_latest": self.raw_latest,
             "last_qlib_date": self.last_qlib_date,
             "trading_calendar_last_date": self.trading_calendar_last_date,
             "expected_latest_date": self.expected_latest_date,
@@ -39,6 +43,7 @@ class DataHealthReport:
             "missing_ratio": self.missing_ratio,
             "has_data_for_requested_date": self.has_data_for_requested_date,
             "gap_days": self.gap_days,
+            "aligned": self.aligned,
             "issues": list(self.issues),
         }
 
@@ -46,8 +51,10 @@ class DataHealthReport:
         lines = ["## Data Health Check"]
         lines.append(f"- requested_date: {self.requested_date}")
         lines.append(f"- expected_latest_date: {self.expected_latest_date}")
+        lines.append(f"- raw_latest: {self.raw_latest}")
         lines.append(f"- last_qlib_date: {self.last_qlib_date}")
         lines.append(f"- trading_calendar_last_date: {self.trading_calendar_last_date}")
+        lines.append(f"- aligned: {self.aligned}")
         lines.append(f"- feature_rows: {self.feature_rows}")
         lines.append(f"- feature_cols: {self.feature_cols}")
         lines.append(f"- missing_ratio: {self.missing_ratio:.2%}")
@@ -93,8 +100,18 @@ def inspect_qlib_data_health(
     requested_date = _normalize_date(requested_date)
     expected_latest_date, trading_calendar_last_date = _resolve_expected_latest_date(requested_date)
 
+    # Get raw latest date
+    store = StockDataStore()
+    raw_latest_str = store.get_global_latest_date()
+    raw_latest = _normalize_date(raw_latest_str) if raw_latest_str else None
+
     last_qlib_ts = adapter.get_last_qlib_date()
     last_qlib_date = _normalize_date(last_qlib_ts) if last_qlib_ts is not None else None
+
+    # Check alignment
+    aligned = False
+    if raw_latest and last_qlib_date:
+        aligned = raw_latest == last_qlib_date
 
     issues: list[str] = []
     gap_days = 0
@@ -130,6 +147,7 @@ def inspect_qlib_data_health(
 
     return DataHealthReport(
         requested_date=requested_date,
+        raw_latest=raw_latest,
         last_qlib_date=last_qlib_date,
         trading_calendar_last_date=trading_calendar_last_date,
         expected_latest_date=expected_latest_date,
@@ -139,5 +157,6 @@ def inspect_qlib_data_health(
         missing_ratio=missing_ratio,
         has_data_for_requested_date=has_data,
         gap_days=gap_days,
+        aligned=aligned,
         issues=issues,
     )
