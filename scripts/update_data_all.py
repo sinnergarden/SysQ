@@ -1,3 +1,18 @@
+"""
+Broad data maintenance entrypoint.
+
+Purpose:
+- run a fuller raw -> qlib alignment workflow
+- print/emit data status and update report
+- useful for repair or scheduled maintenance, not the lightest daily refresh path
+
+Typical usage:
+- python scripts/update_data_all.py
+
+Key outputs:
+- data status report
+- structured data-update report
+"""
 
 import sys
 import logging

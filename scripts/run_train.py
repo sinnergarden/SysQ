@@ -1,3 +1,23 @@
+"""
+Primary training entrypoint.
+
+Purpose:
+- train the selected model on a chosen universe/window
+- optionally run a minimal post-train backtest
+- emit structured training report
+
+Typical usage:
+- python scripts/run_train.py --model qlib_lgbm --start 2020-01-01 --end 2026-03-20 --feature_set extended
+
+Key args:
+- --model: currently qlib_lgbm
+- --universe: csi300 / all
+- --start / --end: training window
+- --feature_set: alpha158 | extended
+- --run_backtest: run a minimal validation backtest after training
+- --no_report: skip JSON run report
+"""
+
 import sys
 import time
 from pathlib import Path

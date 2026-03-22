@@ -1,3 +1,7 @@
+"""
+DEPRECATED: Use run_post_close.py instead.
+This script is kept for backward compatibility only.
+"""
 import sys
 from pathlib import Path
 # Add project root to sys.path

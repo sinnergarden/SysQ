@@ -1,3 +1,24 @@
+"""
+Primary daily ops entrypoint (pre-open).
+
+Purpose:
+- validate data/model readiness
+- build shadow + real trading plans
+- emit structured daily pre-open report
+
+Typical usage:
+- python scripts/run_daily_trading.py --date 2026-03-20 --execution_date 2026-03-23
+- python scripts/run_daily_trading.py --date 2026-03-23  # future date is treated as execution_date
+
+Key args:
+- --date: signal date or future execution date
+- --execution_date: explicit execution date
+- --model_path: override production model manifest resolution
+- --skip_update: skip qlib refresh
+- --top_k / --min_trade: plan construction knobs
+- --no_report: skip JSON run report
+"""
+
 import argparse
 import sys
 import time

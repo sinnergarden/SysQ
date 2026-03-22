@@ -1,3 +1,21 @@
+"""
+Primary daily ops entrypoint (post-close).
+
+Purpose:
+- sync broker-exported real account state
+- reconcile real vs shadow
+- emit structured post-close report
+
+Typical usage:
+- python scripts/run_post_close.py --date 2026-03-20 --real_sync broker/real_sync_2026-03-20.csv
+
+Key args:
+- --date: trading date being reconciled
+- --real_sync: broker/account CSV after market close
+- --execution_date: optional execution date override
+- --no_report: skip JSON run report
+"""
+
 import argparse
 import sys
 import time
