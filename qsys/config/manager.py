@@ -87,6 +87,25 @@ class ConfigManager:
                 "derived_fields": {
                     "moneyflow": ["big_inflow", "net_inflow"]
                 },
+                "interfaces": {
+                    "margin": {
+                        "interface": "margin",
+                        "fields": "ts_code,trade_date,rzye,rzmre,rzche,rzrqye,rqyl,rqmcl,rqrchl",
+                        "rename": {
+                            "rzye": "margin_balance",
+                            "rzmre": "margin_buy_amount",
+                            "rzche": "margin_repay_amount",
+                            "rzrqye": "margin_total_balance",
+                            "rqyl": "lend_volume",
+                            "rqmcl": "lend_sell_volume",
+                            "rqrchl": "lend_repay_volume",
+                        }
+                    }
+                },
+                "margin_cols": [
+                    "margin_balance", "margin_buy_amount", "margin_repay_amount",
+                    "margin_total_balance", "lend_volume", "lend_sell_volume", "lend_repay_volume"
+                ]
             },
             "adapter": {
                 "rename_map": {
@@ -95,6 +114,14 @@ class ConfigManager:
                     "vol": "volume",
                     "up_limit": "high_limit",
                     "down_limit": "low_limit",
+                    # Margin financing (两融) - already renamed in collector, but ensure consistency
+                    "margin_balance": "margin_balance",
+                    "margin_buy_amount": "margin_buy_amount",
+                    "margin_repay_amount": "margin_repay_amount",
+                    "margin_total_balance": "margin_total_balance",
+                    "lend_volume": "lend_volume",
+                    "lend_sell_volume": "lend_sell_volume",
+                    "lend_repay_volume": "lend_repay_volume",
                 },
                 "qlib_fields": [
                     "open", "high", "low", "close", "volume", "amount", "factor",
@@ -104,6 +131,9 @@ class ConfigManager:
                     "net_income", "revenue", "total_assets", "equity", "roe", "op_cashflow",
                     "q_dt_profit", "q_gr_yoy", "roe_ttm", "grossprofit_margin",
                     "debt_to_assets", "current_ratio",
+                    # Margin financing (两融) - first batch
+                    "margin_balance", "margin_buy_amount", "margin_repay_amount",
+                    "margin_total_balance", "lend_volume", "lend_sell_volume", "lend_repay_volume",
                 ]
             }
         }

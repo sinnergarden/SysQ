@@ -3,6 +3,7 @@ import pandas as pd
 import time
 import json
 from datetime import datetime, timedelta
+from typing import Optional
 from qsys.config import cfg
 from qsys.utils.logger import log
 from qsys.data.storage import StockDataStore
@@ -73,12 +74,25 @@ class TushareCollector:
             "non_numeric_cols",
             ["trade_status"],
         )
+        # Margin financing (两融) - first batch
+        self.margin_cols = collector_cfg.get(
+            "margin_cols",
+            [
+                "margin_balance", "margin_buy_amount", "margin_repay_amount",
+                "margin_total_balance", "lend_volume", "lend_sell_volume", "lend_repay_volume",
+            ],
+        )
+        self._margin_interfaces = collector_cfg.get("interfaces", {}).get("margin", {})
+        
         self._non_negative_cols = collector_cfg.get(
             "non_negative_cols",
             [
                 "open", "high", "low", "close", "vol", "amount",
                 "turnover_rate", "total_share", "float_share",
                 "free_share", "total_mv", "circ_mv", "adj_factor", "up_limit", "down_limit",
+                # Margin financing (两融) - first batch
+                "margin_balance", "margin_buy_amount", "margin_repay_amount",
+                "margin_total_balance", "lend_volume", "lend_sell_volume", "lend_repay_volume",
             ],
         )
 
@@ -719,6 +733,25 @@ class TushareCollector:
                 df_moneyflow = df_moneyflow[keep_cols]
                 df_daily = pd.merge(df_daily, df_moneyflow, on=["ts_code", "trade_date"], how="left")
 
+            # Margin financing (两融) - fetch and merge
+            margin_df = self._fetch_with_retry(
+                self._get_interface_api("margin"),
+                trade_date=date,
+                fields=self._get_interface_fields("margin"),
+            )
+            if margin_df is not None and not margin_df.empty:
+                # Rename columns according to config
+                rename_map = self._get_interface_rename("margin")
+                if rename_map:
+                    margin_df = margin_df.rename(columns=rename_map)
+                # Keep only needed columns
+                keep_cols = ["ts_code", "trade_date"] + self.margin_cols
+                keep_cols = [c for c in keep_cols if c in margin_df.columns]
+                margin_df = margin_df[keep_cols]
+                df_daily = pd.merge(df_daily, margin_df, on=["ts_code", "trade_date"], how="left")
+            else:
+                log.warning(f"{date} margin data empty")
+
             fin_df = self._fetch_financials(date, date)
             if fin_df is None or fin_df.empty:
                 log.warning(f"{date} financials empty")
@@ -736,6 +769,8 @@ class TushareCollector:
                 ignore_columns += self._get_interface_feature_fields("stk_limit")
             if df_moneyflow is None or df_moneyflow.empty:
                 ignore_columns += self.moneyflow_fields + self._moneyflow_derived
+            if margin_df is None or margin_df.empty:
+                ignore_columns += self.margin_cols
             if fin_df is None or fin_df.empty:
                 ignore_columns += self.financial_cols
             df_daily = self._validate_and_clean(df_daily, "ALL", ignore_columns=ignore_columns)
@@ -790,6 +825,78 @@ class TushareCollector:
         df = self._fetch_with_retry(self.pro.trade_cal, exchange='', start_date='20000101', end_date='20301231')
         self.store.save_meta_calendar(df)
         log.info("Updated trading calendar")
+
+    # === Dragon-Tiger List (龙虎榜) Batch 1 Integration ===
+
+    def get_top_inst(self, trade_date: str) -> Optional[pd.DataFrame]:
+        """
+        Fetch institution seat data (机构席位).
+        Batch 1: Best for first integration - daily level, few fields, good for PIT.
+        """
+        if "top_inst" not in self._collector_interfaces:
+            log.warning("top_inst not configured in interfaces")
+            return None
+        
+        try:
+            df = self._fetch_with_retry(
+                self.pro.top_inst,
+                trade_date=trade_date,
+                fields=self._get_interface_fields("top_inst"),
+            )
+            if df is not None and not df.empty:
+                # Convert numeric fields
+                for col in ["buy", "sell", "net_buy"]:
+                    if col in df.columns:
+                        df[col] = pd.to_numeric(df[col], errors="coerce")
+                log.info(f"Fetched top_inst: {len(df)} records for {trade_date}")
+            return df
+        except Exception as e:
+            log.error(f"Failed to fetch top_inst for {trade_date}: {e}")
+            return None
+
+    def get_top_list(self, trade_date: str) -> Optional[pd.DataFrame]:
+        """
+        Fetch dragon-tiger list (龙虎榜列表).
+        Core龙虎榜数据: 股票当日是否上榜.
+        """
+        if "top_list" not in self._collector_interfaces:
+            log.warning("top_list not configured in interfaces")
+            return None
+        
+        try:
+            df = self._fetch_with_retry(
+                self.pro.top_list,
+                trade_date=trade_date,
+                fields=self._get_interface_fields("top_list"),
+            )
+            if df is not None and not df.empty:
+                # Convert numeric fields
+                for col in ["close", "pct_chg", "turnover_rate", "amount", 
+                            "buyer_sum", "seller_sum", "net_amount"]:
+                    if col in df.columns:
+                        df[col] = pd.to_numeric(df[col], errors="coerce")
+                log.info(f"Fetched top_list: {len(df)} records for {trade_date}")
+            return df
+        except Exception as e:
+            log.error(f"Failed to fetch top_list for {trade_date}: {e}")
+            return None
+
+    def get_daily(self, trade_date: str) -> Optional[pd.DataFrame]:
+        """
+        Fetch daily K-line data.
+        """
+        try:
+            df = self._fetch_with_retry(
+                self.pro.daily,
+                trade_date=trade_date,
+                fields=self._get_interface_fields("daily"),
+            )
+            if df is not None and not df.empty:
+                log.info(f"Fetched daily: {len(df)} records for {trade_date}")
+            return df
+        except Exception as e:
+            log.error(f"Failed to fetch daily for {trade_date}: {e}")
+            return None
 
     def get_index_daily(self, index_code="000300.SH", start_date=None, end_date=None):
         df = self._fetch_with_retry(

@@ -44,7 +44,7 @@ from qsys.utils.logger import log
 @click.option('--run_backtest', is_flag=True, help='Run minimal backtest after training')
 @click.option('--backtest_start', default=None, help='Backtest start date; defaults to last 40 trading days window start')
 @click.option('--backtest_end', default=None, help='Backtest end date; defaults to training end date')
-@click.option('--feature_set', type=click.Choice(['alpha158', 'extended'], case_sensitive=False), default='extended', show_default=True, help='Feature set to train with')
+@click.option('--feature_set', type=click.Choice(['alpha158', 'extended', 'margin_extended'], case_sensitive=False), default='extended', show_default=True, help='Feature set: alpha158 | extended | margin_extended (with margin financing)')
 @click.option('--no_report', is_flag=True, help='Skip generating the structured report')
 def main(model, universe, start, end, run_backtest, backtest_start, backtest_end, feature_set, no_report):
     start_time = time.time()
@@ -83,10 +83,17 @@ def main(model, universe, start, end, run_backtest, backtest_start, backtest_end
 
     if feature_set == 'extended':
         feature_config = FeatureLibrary.get_alpha158_extended_config()
+    elif feature_set == 'margin_extended':
+        feature_config = FeatureLibrary.get_alpha158_margin_extended_config()
     else:
         feature_config = FeatureLibrary.get_alpha158_config()
 
-    model_name = model if feature_set == 'alpha158' else f"{model}_extended"
+    if feature_set == 'alpha158':
+        model_name = model
+    elif feature_set == 'margin_extended':
+        model_name = f"{model}_margin_extended"
+    else:
+        model_name = f"{model}_extended"
     log.info(f"Using feature_set={feature_set} with {len(feature_config)} features")
     model_instance = QlibNativeModel(
         name=model_name,
