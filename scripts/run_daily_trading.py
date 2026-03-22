@@ -1,5 +1,6 @@
 import argparse
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -17,6 +18,8 @@ from qsys.live.manager import LiveManager
 from qsys.live.reconciliation import sync_real_account_from_csv
 from qsys.live.scheduler import ModelScheduler
 from qsys.live.simulation import ShadowSimulator
+from qsys.reports.base import ReportStatus
+from qsys.reports.daily import DailyOpsReport
 from qsys.utils.logger import log
 
 
@@ -114,6 +117,9 @@ def resolve_signal_and_execution_date(date_arg: str | None, execution_date_arg: 
 
 
 def main():
+    start_time = time.time()
+    blockers = []
+    
     parser = argparse.ArgumentParser(description="Run Daily Trading Workflow (Real + Shadow)")
     parser.add_argument("--date", type=str, default=datetime.now().strftime("%Y-%m-%d"), help="Signal date or target execution date. If a future trading day is given without --execution_date, it is treated as execution date and the previous trading day is used as signal_date.")
     parser.add_argument("--execution_date", type=str, help="Execution Date (YYYY-MM-DD). Defaults to next trading day after signal date")
@@ -125,8 +131,14 @@ def main():
     parser.add_argument("--retrain_days", type=int, default=7, help="Model max age in days before retraining")
     parser.add_argument("--top_k", type=int, default=30, help="Number of stocks to select in strategy")
     parser.add_argument("--min_trade", type=int, default=5000, help="Minimum trade amount in RMB")
+    parser.add_argument("--no_report", action="store_true", help="Skip generating the structured report")
     args = parser.parse_args()
 
+    # Data status tracking for report
+    data_status = {}
+    model_info = {}
+    health_ok = False
+    
     if not args.skip_update:
         update_data()
 
@@ -156,13 +168,51 @@ def main():
 
     model_path = ModelScheduler.check_and_retrain(model_path, signal_date, retrain_freq_days=args.retrain_days)
     log.info(f"Using Model: {model_path}")
+    
+    # Record model info for report
+    model_info = {
+        "model_path": model_path,
+        "model_name": Path(model_path).name,
+    }
 
     preview_manager = LiveManager(model_path=model_path)
     preview_manager.load_model()
-    health = inspect_qlib_data_health(signal_date, preview_manager.model.model.feature_config, universe="csi300")
+    
+    # Track feature set for report
+    feature_config = preview_manager.model.model.feature_config
+    model_info["feature_set"] = feature_config.get("name", "unknown") if isinstance(feature_config, dict) else "alpha158"
+    
+    health = inspect_qlib_data_health(signal_date, feature_config, universe="csi300")
+    health_ok = health.ok
+    data_status = {
+        "raw_latest": health.raw_latest,
+        "qlib_latest": health.last_qlib_date,
+        "aligned": health.aligned,
+        "health_ok": health.ok,
+        "expected_latest_date": health.expected_latest_date,
+        "feature_rows": health.feature_rows,
+        "feature_cols": health.feature_cols,
+        "missing_ratio": health.missing_ratio,
+    }
+    
     if not health.ok:
         log.error("\n" + health.to_markdown())
         log.error("Data health check failed. Aborting daily workflow.")
+        blockers.append("Data health check failed")
+        
+        if not args.no_report:
+            report = DailyOpsReport.generate_pre_open_report(
+                signal_date=signal_date,
+                execution_date=execution_date,
+                data_status=data_status,
+                model_info=model_info,
+                shadow_plan_summary={"status": "skipped"},
+                real_plan_summary={"status": "skipped"},
+                duration_seconds=time.time() - start_time,
+                blockers=blockers,
+            )
+            report_path = DailyOpsReport.save(report)
+            log.info(f"Report saved to: {report_path}")
         return
     log.info("\n" + health.to_markdown())
 
@@ -204,7 +254,52 @@ def main():
     plan_real = manager_real.run_daily_plan(signal_date, account_name=real_account_name, execution_date=execution_date)
     print_plan_summary(plan_real, real_account_name, signal_date, execution_date)
 
-    log.info("Daily Trading Workflow Completed.")
+    # Generate structured report
+    duration = time.time() - start_time
+    
+    def extract_plan_summary(plan_df, account_name):
+        if plan_df is None or plan_df.empty:
+            return {"account": account_name, "trades": 0, "symbols": []}
+        trades = plan_df[plan_df["amount"] > 0] if "amount" in plan_df.columns else plan_df
+        return {
+            "account": account_name,
+            "trades": len(trades),
+            "symbols": trades["symbol"].tolist() if "symbol" in trades.columns else [],
+            "total_value": float(trades["est_value"].sum()) if "est_value" in trades.columns else 0.0,
+        }
+    
+    shadow_summary = extract_plan_summary(plan_shadow, shadow_account_name)
+    real_summary = extract_plan_summary(plan_real, real_account_name)
+    
+    if not args.no_report:
+        report = DailyOpsReport.generate_pre_open_report(
+            signal_date=signal_date,
+            execution_date=execution_date,
+            data_status=data_status,
+            model_info=model_info,
+            shadow_plan_summary=shadow_summary,
+            real_plan_summary=real_summary,
+            duration_seconds=duration,
+            blockers=blockers,
+            notes=[
+                f"top_k={args.top_k}",
+                f"min_trade={args.min_trade}",
+                f"shadow_cash={args.shadow_cash}",
+                f"real_cash={args.real_cash}",
+            ],
+        )
+        report.artifacts["shadow_plan"] = f"data/plan_{signal_date}_{shadow_account_name}.csv"
+        report.artifacts["real_plan"] = f"data/plan_{signal_date}_{real_account_name}.csv"
+        
+        report_path = DailyOpsReport.save(report)
+        log.info(f"Report saved to: {report_path}")
+        
+        # Also print markdown summary
+        print("\n" + "=" * 60)
+        print(report.to_markdown())
+        print("=" * 60)
+    
+    log.info(f"Daily Trading Workflow Completed. Duration: {duration:.1f}s")
 
 
 if __name__ == "__main__":

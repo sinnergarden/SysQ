@@ -15,6 +15,7 @@ Usage:
         --extended data/models/qlib_lgbm_extended
 """
 import sys
+import time
 from pathlib import Path
 
 project_root = Path(__file__).resolve().parent.parent
@@ -22,6 +23,7 @@ sys.path.append(str(project_root))
 
 from qsys.evaluation import StrictEvaluator
 from qsys.config import cfg
+from qsys.reports.strict_eval import StrictEvalReport
 from qsys.utils.logger import log
 
 
@@ -57,8 +59,15 @@ def main():
         default=str(project_root / "experiments" / "strict_eval_results.csv"),
         help="Output CSV path"
     )
+    parser.add_argument(
+        "--no_report",
+        action="store_true",
+        help="Skip generating structured JSON report"
+    )
     
     args = parser.parse_args()
+    
+    start_time = time.time()
     
     log.info(f"=== Strict Evaluation ===")
     log.info(f"Baseline: {args.baseline}")
@@ -67,20 +76,43 @@ def main():
     
     evaluator = StrictEvaluator(top_k=args.top_k)
     
-    report = evaluator.run_comparison(
+    eval_report = evaluator.run_comparison(
         baseline_model_path=args.baseline,
         extended_model_path=args.extended,
         end_date=args.end
     )
     
-    print("\n" + report.to_markdown())
-    evaluator.save_report(report, args.output)
+    print("\n" + eval_report.to_markdown())
+    evaluator.save_report(eval_report, args.output)
     
     # Print summary comparison
     print("\n=== Summary Comparison ===")
-    summary = report.summary_table()
+    summary = eval_report.summary_table()
     if not summary.empty:
         print(summary.to_string())
+    
+    # Generate structured JSON report
+    duration = time.time() - start_time
+    
+    if not args.no_report:
+        json_report = StrictEvalReport.from_evaluation_report(
+            eval_report,
+            baseline_path=args.baseline,
+            extended_path=args.extended,
+            top_k=args.top_k,
+            duration_seconds=duration,
+            notes=[f"Output CSV: {args.output}"],
+        )
+        
+        report_path = StrictEvalReport.save(json_report)
+        log.info(f"Structured report saved to {report_path}")
+        
+        # Print markdown summary
+        print("\n" + "=" * 60)
+        print(json_report.to_markdown())
+        print("=" * 60)
+    
+    log.info(f"Strict Evaluation Completed. Duration: {duration:.1f}s")
 
 
 if __name__ == "__main__":

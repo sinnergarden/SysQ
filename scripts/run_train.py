@@ -1,4 +1,5 @@
 import sys
+import time
 from pathlib import Path
 
 # Add project root to sys.path
@@ -9,7 +10,9 @@ import click
 import pandas as pd
 
 from qsys.config import cfg
+from qsys.data.adapter import QlibAdapter
 from qsys.data.health import inspect_qlib_data_health
+from qsys.reports.train import TrainingReport
 from qsys.utils.logger import log
 
 
@@ -22,7 +25,12 @@ from qsys.utils.logger import log
 @click.option('--backtest_start', default=None, help='Backtest start date; defaults to last 40 trading days window start')
 @click.option('--backtest_end', default=None, help='Backtest end date; defaults to training end date')
 @click.option('--feature_set', type=click.Choice(['alpha158', 'extended'], case_sensitive=False), default='extended', show_default=True, help='Feature set to train with')
-def main(model, universe, start, end, run_backtest, backtest_start, backtest_end, feature_set):
+@click.option('--no_report', is_flag=True, help='Skip generating the structured report')
+def main(model, universe, start, end, run_backtest, backtest_start, backtest_end, feature_set, no_report):
+    start_time = time.time()
+    blockers = []
+    notes = []
+    
     log.info(f"Starting training for {model}")
 
     if universe == 'csi300':
@@ -71,6 +79,29 @@ def main(model, universe, start, end, run_backtest, backtest_start, backtest_end
     if not health.ok:
         raise ValueError(f"Data health check failed before training: {health.issues}")
 
+    # Data status for report
+    data_status = {}
+    try:
+        adapter = QlibAdapter()
+        adapter.init_qlib()
+        status_report = adapter.get_data_status_report()
+        data_status = {
+            "raw_latest": status_report.get("raw_latest"),
+            "qlib_latest": status_report.get("qlib_latest"),
+            "aligned": status_report.get("aligned", False),
+            "health_ok": True,
+        }
+    except Exception as e:
+        log.warning(f"Could not get data status: {e}")
+        data_status = {"health_ok": False}
+
+    model_info = {
+        "model_name": model_name,
+        "feature_set": feature_set,
+        "train_window": f"{start} to {end}",
+        "universe": universe,
+    }
+
     try:
         model_instance.fit(codes, start, end)
 
@@ -89,7 +120,11 @@ def main(model, universe, start, end, run_backtest, backtest_start, backtest_end
                 f"Training metrics | mse={training_summary.get('mse')} "
                 f"rank_ic={training_summary.get('rank_ic')} samples={training_summary.get('sample_count')}"
             )
+            model_info["sample_count"] = training_summary.get("sample_count")
 
+        notes.append(f"Feature count: {len(feature_config)}")
+        
+        backtest_info = None
         if run_backtest:
             import subprocess
 
@@ -115,7 +150,52 @@ def main(model, universe, start, end, run_backtest, backtest_start, backtest_end
 
     except Exception as e:
         log.error(f"Training failed: {e}")
+        blockers.append(f"Training failed: {str(e)}")
+        
+        if not no_report:
+            report = TrainingReport.generate(
+                signal_date=end,
+                data_status=data_status,
+                model_info=model_info,
+                training_metrics={},
+                feature_count=len(feature_config),
+                duration_seconds=time.time() - start_time,
+                blockers=blockers,
+                notes=notes,
+            )
+            report_path = TrainingReport.save(report)
+            log.info(f"Training report (failure) saved to: {report_path}")
+        
         raise e
+    
+    # Generate training report on success
+    duration = time.time() - start_time
+    
+    if not no_report:
+        report = TrainingReport.generate(
+            signal_date=end,
+            data_status=data_status,
+            model_info=model_info,
+            training_metrics=training_summary,
+            feature_count=len(feature_config),
+            sample_count=training_summary.get("sample_count", 0),
+            duration_seconds=duration,
+            backtest_info=backtest_info,
+            blockers=blockers,
+            notes=notes,
+        )
+        report.artifacts["training_summary"] = str(save_path / "training_summary.csv")
+        report.artifacts["model_path"] = str(save_path)
+        
+        report_path = TrainingReport.save(report)
+        log.info(f"Training report saved to: {report_path}")
+        
+        # Also print markdown summary
+        print("\n" + "=" * 60)
+        print(report.to_markdown())
+        print("=" * 60)
+    
+    log.info(f"Training completed. Duration: {duration:.1f}s")
 
 
 if __name__ == '__main__':

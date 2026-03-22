@@ -63,10 +63,10 @@
 - 让盘前 / 盘后流程从"能跑"进化到"可运营"
 
 待办：
-- [ ] 盘前 checklist 结构化
-- [ ] 盘后 checklist 结构化
-- [ ] 生成 daily plan 时附带模型版本 / 数据状态
-- [ ] real/shadow reconciliation 结果结构化输出
+- [x] 盘前 checklist 结构化
+- [x] 盘后 checklist 结构化
+- [x] 生成 daily plan 时附带模型版本 / 数据状态
+- [x] real/shadow reconciliation 结果结构化输出
 - [ ] 明确空 plan、账户异常、数据不齐时的处理策略
 
 ### P0.4 统一 run report
@@ -76,10 +76,10 @@
 
 待办：
 - [ ] 数据更新 report
-- [ ] 训练 report
+- [x] 训练 report
 - [ ] 回测 report
 - [ ] strict evaluation report
-- [ ] daily ops report
+- [x] daily ops report
 
 ---
 
