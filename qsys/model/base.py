@@ -14,6 +14,7 @@ class IModel(ABC):
         self.model = None
         self.feature_config = None # List of expressions
         self.preprocess_params = None # Mean/Std
+        self.training_summary = None
 
     @abstractmethod
     def fit(self, universe, start_date, end_date) -> None:
@@ -45,7 +46,8 @@ class IModel(ABC):
             "name": self.name,
             "params": self.params,
             "feature_config": self.feature_config,
-            "preprocess_params": self.preprocess_params
+            "preprocess_params": self.preprocess_params,
+            "training_summary": self.training_summary,
         }
         with open(path / "meta.yaml", 'w') as f:
             yaml.dump(meta, f)
@@ -69,6 +71,7 @@ class IModel(ABC):
                 self.params = meta.get("params", {})
                 self.feature_config = meta.get("feature_config", [])
                 self.preprocess_params = meta.get("preprocess_params", {})
+                self.training_summary = meta.get("training_summary")
         
         log.info(f"Model loaded from {path}")
 

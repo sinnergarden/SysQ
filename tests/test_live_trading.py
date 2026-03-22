@@ -16,6 +16,7 @@ from qsys.live.reconciliation import (
     export_plan_bundle,
     sync_real_account_from_csv,
 )
+from qsys.trader.plan import PlanGenerator
 
 class TestLiveTrading(unittest.TestCase):
     
@@ -149,12 +150,19 @@ class TestLiveTrading(unittest.TestCase):
                 "price": 123.45,
                 "est_value": 12345.0,
                 "weight": 0.1,
+                "score": 0.88,
+                "score_rank": 1,
+                "target_value": 12345.0,
+                "current_value": 0.0,
+                "diff_value": 12345.0,
+                "weight_method": "equal_weight",
             }
         ])
 
         written = export_plan_bundle(
             plan_df,
             output_dir=output_dir,
+            signal_date="2025-01-02",
             plan_date="2025-01-02",
             account_name="real",
             execution_date="2025-01-03",
@@ -166,7 +174,9 @@ class TestLiveTrading(unittest.TestCase):
         exported_plan = pd.read_csv(written["plan"])
         exported_template = pd.read_csv(written["real_sync_template"])
         self.assertEqual(exported_plan.iloc[0]["account_name"], "real")
+        self.assertEqual(exported_plan.iloc[0]["signal_date"], "2025-01-02")
         self.assertEqual(exported_plan.iloc[0]["execution_date"], "2025-01-03")
+        self.assertEqual(exported_plan.iloc[0]["score_rank"], 1)
         self.assertIn("cash", exported_template.columns)
         self.assertIn("total_assets", exported_template.columns)
         self.assertIn("filled_amount", exported_template.columns)
@@ -228,6 +238,25 @@ class TestLiveTrading(unittest.TestCase):
         self.assertEqual(len(result.real_trades), 1)
         self.assertEqual(result.real_trades.iloc[0]["order_id"], "ord-1")
         self.assertEqual(int(result.positions.iloc[0]["amount_diff"]), -20)
+
+    def test_plan_generator_keeps_clean_symbol_and_scores(self):
+        planner = PlanGenerator(min_trade_amount=1000)
+        current_positions = {}
+        target_weights = {"600000.SH": 0.5}
+        current_prices = {"600000.SH": 10.0}
+        plan = planner.generate_plan(
+            target_weights,
+            current_positions,
+            total_assets=20000.0,
+            current_prices=current_prices,
+            score_lookup={"600000.SH": 0.321},
+            score_rank_lookup={"600000.SH": 1},
+            weight_method="equal_weight",
+        )
+        self.assertEqual(plan.iloc[0]["symbol"], "600000.SH")
+        self.assertEqual(plan.iloc[0]["score_rank"], 1)
+        self.assertAlmostEqual(plan.iloc[0]["score"], 0.321)
+        self.assertEqual(plan.iloc[0]["target_value"], 10000.0)
 
     def test_scheduler_find_latest(self):
         """Test finding latest model"""

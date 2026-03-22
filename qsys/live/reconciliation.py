@@ -26,7 +26,14 @@ STANDARD_PLAN_COLUMNS = [
     "price",
     "est_value",
     "weight",
+    "score",
+    "score_rank",
+    "target_value",
+    "current_value",
+    "diff_value",
+    "weight_method",
     "account_name",
+    "signal_date",
     "plan_date",
     "execution_date",
     "status",
@@ -270,6 +277,7 @@ def export_plan_bundle(
     plan_df: pd.DataFrame,
     *,
     output_dir: str | Path,
+    signal_date: str,
     plan_date: str,
     account_name: str,
     execution_date: Optional[str] = None,
@@ -282,7 +290,9 @@ def export_plan_bundle(
     if normalized.empty:
         normalized = pd.DataFrame(columns=STANDARD_PLAN_COLUMNS)
     else:
+        normalized["symbol"] = normalized["symbol"].astype(str)
         normalized["account_name"] = account_name
+        normalized["signal_date"] = signal_date
         normalized["plan_date"] = plan_date
         normalized["execution_date"] = execution_date
         normalized["status"] = "planned"
@@ -293,6 +303,9 @@ def export_plan_bundle(
         normalized["total_cost"] = pd.NA
         normalized["order_id"] = ""
         normalized["note"] = ""
+        for column in STANDARD_PLAN_COLUMNS:
+            if column not in normalized.columns:
+                normalized[column] = pd.NA
         normalized = normalized[STANDARD_PLAN_COLUMNS]
 
     execution_template = normalized.copy()
