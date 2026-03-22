@@ -2,7 +2,7 @@
 
 ## 当前阶段目标
 
-当前阶段的目标，不再只是“把链路跑通一次”，而是把 Qsys 收敛成一个：
+当前阶段的目标，不再只是"把链路跑通一次"，而是把 Qsys 收敛成一个：
 
 - 能稳定做周一到周五运营的系统
 - 能持续做投研与回测的系统
@@ -39,10 +39,10 @@
 - production 只认明确批准的模型版本
 
 待办：
-- [ ] 定义 production model manifest 结构
+- [x] 定义 production model manifest 结构
 - [ ] 明确 candidate artifact 的目录与元信息要求
-- [ ] 明确 production 切换与回滚规则
-- [ ] 在 daily ops 中去掉“默认拿最新模型目录”的隐式假设
+- [x] 明确 production 切换与回滚规则
+- [x] 在 daily ops 中去掉"默认拿最新模型目录"的隐式假设
 
 ### P0.2 统一 evaluator / strict evaluation contract
 
@@ -50,17 +50,17 @@
 - 把当前口头共识固化成系统默认
 
 待办：
-- [ ] 统一 baseline / extended 的评估入口
-- [ ] 明确 train / valid / test 切法
-- [ ] 固化主评估窗口：`2025 -> 最近`
-- [ ] 固化辅评估窗口：`2026 YTD`
-- [ ] 固化回测默认参数：`top_k=5`
-- [ ] 统一输出 evaluation report
+- [x] 统一 baseline / extended 的评估入口
+- [x] 明确 train / valid / test 切法
+- [x] 固化主评估窗口：`2025 -> 最近`
+- [x] 固化辅评估窗口：`2026 YTD`
+- [x] 固化回测默认参数：`top_k=5`
+- [x] 统一输出 evaluation report
 
 ### P0.3 Daily Ops checklist 产品化
 
 目标：
-- 让盘前 / 盘后流程从“能跑”进化到“可运营”
+- 让盘前 / 盘后流程从"能跑"进化到"可运营"
 
 待办：
 - [ ] 盘前 checklist 结构化
@@ -98,7 +98,7 @@
 ### P1.2 特征体系收束
 
 目标：
-- 让 feature set 从“脚本里拼”变成“系统内可管理对象”
+- 让 feature set 从"脚本里拼"变成"系统内可管理对象"
 
 待办：
 - [x] 增加 `extended` feature set
@@ -158,4 +158,4 @@
 - 当前阶段不接入自动实盘下单
 - 当前阶段不做跨市场多资产统一引擎
 - 当前阶段不做大规模框架重写
-- 当前阶段不为了“看起来先进”而继续无约束增加脚本入口
+- 当前阶段不为了"看起来先进"而继续无约束增加脚本入口

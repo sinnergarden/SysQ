@@ -136,13 +136,19 @@ def main():
 
     model_path = args.model_path
     if not model_path:
-        latest_model = ModelScheduler.find_latest_model()
-        if latest_model:
-            model_path = str(latest_model)
-            log.info(f"Auto-detected latest model: {model_path}")
-        else:
-            log.error("No model path provided and none found in data/models or data/experiments.")
-            return
+        # P0.1: Prefer production manifest resolution for daily ops
+        try:
+            model_path = ModelScheduler.resolve_production_model()
+            log.info(f"Using production model from manifest: {model_path}")
+        except Exception as e:
+            log.warning(f"Could not resolve from manifest: {e}. Falling back to latest model.")
+            latest_model = ModelScheduler.find_latest_model()
+            if latest_model:
+                model_path = str(latest_model)
+                log.info(f"Auto-detected latest model: {model_path}")
+            else:
+                log.error("No model path provided and none found in data/models or data/experiments.")
+                return
 
     if not Path(model_path).exists():
         log.error(f"Model path does not exist: {model_path}")
