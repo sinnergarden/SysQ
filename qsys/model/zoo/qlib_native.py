@@ -104,6 +104,33 @@ class QlibNativeModel(IModel):
         
         # 4. Fit
         self.model.fit(ds)
+
+        train_df = ds.prepare("train", col_set=["feature", "label"], data_key=DataHandlerLP.DK_L)
+        feature_frame = train_df["feature"] if isinstance(train_df.columns, pd.MultiIndex) else train_df[self.feature_config]
+        label_frame = train_df["label"] if isinstance(train_df.columns, pd.MultiIndex) else train_df[self.label_config]
+        label_series = label_frame.iloc[:, 0] if isinstance(label_frame, pd.DataFrame) else label_frame
+        booster = self.model.model if hasattr(self.model, "model") else self.model
+        raw_predictions = booster.predict(feature_frame.values)
+        prediction_series = pd.Series(raw_predictions, index=feature_frame.index, name="score")
+        aligned = pd.concat([prediction_series, pd.Series(label_series, name="label")], axis=1).dropna()
+        rank_ic = float(aligned["score"].corr(aligned["label"], method="spearman")) if not aligned.empty else float("nan")
+        mse = float(((aligned["score"] - aligned["label"]) ** 2).mean()) if not aligned.empty else float("nan")
+        self.training_summary = {
+            "train_start": start_date,
+            "train_end": end_date,
+            "sample_count": int(len(aligned)),
+            "feature_count": int(len(self.feature_config)),
+            "label_name": self.label_config[0] if self.label_config else None,
+            "mse": mse,
+            "rank_ic": rank_ic,
+            "score_mean": float(aligned["score"].mean()) if not aligned.empty else float("nan"),
+            "label_mean": float(aligned["label"].mean()) if not aligned.empty else float("nan"),
+        }
+        log.info(
+            f"Training summary | samples={self.training_summary['sample_count']} "
+            f"features={self.training_summary['feature_count']} "
+            f"mse={self.training_summary['mse']:.6f} rank_ic={self.training_summary['rank_ic']:.6f}"
+        )
         
         # 5. Extract Preprocess Params (RobustZScoreNorm)
         # We need these to replicate preprocessing during inference (Pure Python)
@@ -158,7 +185,7 @@ class QlibNativeModel(IModel):
         X = df[self.feature_config]
             
         # Apply RobustZScoreNorm manually
-        if hasattr(self, 'preprocess_params'):
+        if getattr(self, 'preprocess_params', None) is not None:
             mean = self.preprocess_params.get('mean')
             std = self.preprocess_params.get('std')
             

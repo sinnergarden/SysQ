@@ -11,6 +11,12 @@ import tempfile
 from qsys.live.account import RealAccount
 from qsys.live.simulation import ShadowSimulator
 from qsys.live.scheduler import ModelScheduler
+from qsys.live.reconciliation import (
+    build_reconciliation_result,
+    export_plan_bundle,
+    sync_real_account_from_csv,
+)
+from qsys.trader.plan import PlanGenerator
 
 class TestLiveTrading(unittest.TestCase):
     
@@ -129,6 +135,128 @@ class TestLiveTrading(unittest.TestCase):
         # Should match exactly
         self.assertEqual(pos2, pos1, "Positions changed after 2nd run (Idempotency Fail)")
         self.assertEqual(cash2, cash1, "Cash changed after 2nd run (Idempotency Fail)")
+
+        trade_log = sim.account.get_trade_log(date=sim_date, account_name="shadow_test")
+        self.assertEqual(len(trade_log), 1, "Trade log should be idempotent for repeated simulation")
+
+    def test_plan_bundle_export(self):
+        """Test standard pre-market plan export and post-close template generation."""
+        output_dir = os.path.join(self.test_dir, "exports")
+        plan_df = pd.DataFrame([
+            {
+                "symbol": "SH600519",
+                "side": "buy",
+                "amount": 100,
+                "price": 123.45,
+                "est_value": 12345.0,
+                "weight": 0.1,
+                "score": 0.88,
+                "score_rank": 1,
+                "target_value": 12345.0,
+                "current_value": 0.0,
+                "diff_value": 12345.0,
+                "weight_method": "equal_weight",
+            }
+        ])
+
+        written = export_plan_bundle(
+            plan_df,
+            output_dir=output_dir,
+            signal_date="2025-01-02",
+            plan_date="2025-01-02",
+            account_name="real",
+            execution_date="2025-01-03",
+        )
+
+        self.assertTrue(os.path.exists(written["plan"]))
+        self.assertTrue(os.path.exists(written["real_sync_template"]))
+
+        exported_plan = pd.read_csv(written["plan"])
+        exported_template = pd.read_csv(written["real_sync_template"])
+        self.assertEqual(exported_plan.iloc[0]["account_name"], "real")
+        self.assertEqual(exported_plan.iloc[0]["signal_date"], "2025-01-02")
+        self.assertEqual(exported_plan.iloc[0]["execution_date"], "2025-01-03")
+        self.assertEqual(exported_plan.iloc[0]["score_rank"], 1)
+        self.assertIn("cash", exported_template.columns)
+        self.assertIn("total_assets", exported_template.columns)
+        self.assertIn("filled_amount", exported_template.columns)
+        self.assertIn("order_id", exported_template.columns)
+
+    def test_reconciliation_sync_and_diff(self):
+        """Test syncing a real CSV and reconciling it against shadow state."""
+        shadow_account = RealAccount(db_path=self.db_path, account_name="shadow")
+        real_account = RealAccount(db_path=self.db_path, account_name="real")
+
+        shadow_positions = pd.DataFrame([
+            {"symbol": "SH600519", "amount": 100, "price": 100.0, "cost_basis": 95.0}
+        ])
+        shadow_account.sync_broker_state(
+            "2025-01-02",
+            cash=90000.0,
+            positions=shadow_positions,
+            total_assets=100000.0,
+            account_name="shadow",
+        )
+
+        csv_path = os.path.join(self.test_dir, "real_sync.csv")
+        pd.DataFrame([
+            {
+                "symbol": "SH600519",
+                "amount": 80,
+                "price": 101.0,
+                "cost_basis": 94.5,
+                "cash": 92000.0,
+                "total_assets": 100080.0,
+                "side": "buy",
+                "filled_amount": 80,
+                "filled_price": 99.5,
+                "fee": 12.0,
+                "tax": 0.0,
+                "total_cost": 7972.0,
+                "order_id": "ord-1",
+            }
+        ]).to_csv(csv_path, index=False)
+
+        normalized = sync_real_account_from_csv(
+            real_account,
+            account_name="real",
+            sync_path=csv_path,
+            date="2025-01-02",
+            persist_trade_log=True,
+        )
+        self.assertEqual(len(normalized), 1)
+
+        result = build_reconciliation_result(
+            real_account,
+            date="2025-01-02",
+            real_account_name="real",
+            shadow_account_name="shadow",
+        )
+
+        cash_diff = result.summary.loc[result.summary["metric"] == "cash", "diff"].iloc[0]
+        self.assertEqual(cash_diff, 2000.0)
+        self.assertEqual(len(result.real_trades), 1)
+        self.assertEqual(result.real_trades.iloc[0]["order_id"], "ord-1")
+        self.assertEqual(int(result.positions.iloc[0]["amount_diff"]), -20)
+
+    def test_plan_generator_keeps_clean_symbol_and_scores(self):
+        planner = PlanGenerator(min_trade_amount=1000)
+        current_positions = {}
+        target_weights = {"600000.SH": 0.5}
+        current_prices = {"600000.SH": 10.0}
+        plan = planner.generate_plan(
+            target_weights,
+            current_positions,
+            total_assets=20000.0,
+            current_prices=current_prices,
+            score_lookup={"600000.SH": 0.321},
+            score_rank_lookup={"600000.SH": 1},
+            weight_method="equal_weight",
+        )
+        self.assertEqual(plan.iloc[0]["symbol"], "600000.SH")
+        self.assertEqual(plan.iloc[0]["score_rank"], 1)
+        self.assertAlmostEqual(plan.iloc[0]["score"], 0.321)
+        self.assertEqual(plan.iloc[0]["target_value"], 10000.0)
 
     def test_scheduler_find_latest(self):
         """Test finding latest model"""

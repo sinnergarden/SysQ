@@ -46,6 +46,7 @@ class ShadowSimulator:
             }
 
         plan_df = pd.read_csv(plan_csv)
+        self.account.clear_trade_log(date=date, account_name=self.account_name)
         if plan_df.empty:
             self._sync_state(date, cash, positions)
             return
@@ -91,6 +92,17 @@ class ShadowSimulator:
                     "price": trade_price,
                     "cost_basis": float(new_cost_basis),
                 }
+                self.account.record_trade(
+                    date=date,
+                    account_name=self.account_name,
+                    symbol=symbol,
+                    side="buy",
+                    amount=amount,
+                    price=trade_price,
+                    fee=fee,
+                    tax=0.0,
+                    total_cost=total_cost,
+                )
             elif side == "sell":
                 sell_amount = min(pos["amount"], amount)
                 if sell_amount <= 0:
@@ -107,6 +119,17 @@ class ShadowSimulator:
                     }
                 else:
                     positions.pop(symbol, None)
+                self.account.record_trade(
+                    date=date,
+                    account_name=self.account_name,
+                    symbol=symbol,
+                    side="sell",
+                    amount=sell_amount,
+                    price=trade_price,
+                    fee=fee,
+                    tax=tax,
+                    total_cost=sell_value - fee - tax,
+                )
 
         self._sync_state(date, cash, positions)
         state = self.account.get_state(date, self.account_name)

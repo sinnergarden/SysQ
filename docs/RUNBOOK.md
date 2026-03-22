@@ -22,15 +22,66 @@ PY
 
 ### 日常主流程
 
+运营要求（默认遵守）：
+
+- 每次触发每日流程前，先检查数据日期、缺口、字段完整性与空值异常。
+- 训练完成后，必须查看训练指标摘要，而不是只确认模型文件存在。
+- 回测完成后，必须查看关键指标，并保留足够的中间交易日志供排障。
+- 盘前候选输出必须包含：标的、分数/排序依据、权重、股数、参考价格。
+
+
+盘前 / 生成次日计划：
+
 ```bash
-python scripts/run_daily_trading.py
+python scripts/run_daily_trading.py --date 2026-03-20
 ```
+
+盘前脚本会额外生成两类文件（按账户分别输出，例如 `real` / `shadow`）：
+
+- `data/plan_2026-03-20_real.csv`：标准化计划文件
+- `data/real_sync_template_2026-03-20_real.csv`：盘后回填模板
+
+盘后 / 回填真实账户并生成 real vs shadow 对账：
+
+```bash
+python scripts/run_post_close.py --date 2026-03-20 --real_sync broker/real_sync_2026-03-20.csv
+```
+
+### 盘后 CSV 格式
+
+建议直接以盘前生成的 `real_sync_template_日期_real.csv` 为模板填写。
+
+当前最小必填列：
+
+- `symbol`：证券代码
+- `amount`：收盘后真实持仓股数
+- `price`：收盘快照价格
+- `cost_basis`：持仓成本价
+- `cash`：账户现金
+- `total_assets`：账户总资产
+
+建议补充列（若当天有真实成交）：
+
+- `side`：`buy` / `sell` / `hold`
+- `filled_amount`：真实成交股数
+- `filled_price`：真实成交均价
+- `fee`：手续费
+- `tax`：税费
+- `total_cost`：成交净额
+- `order_id`：订单编号
+
+说明：
+
+- `cash` 与 `total_assets` 可以在每行重复填写，脚本默认取首个非空值。
+- 无成交的持仓行可填 `side=hold`。
+- 若未提供 `filled_amount` / `filled_price`，会退回使用 `amount` / `price`。
 
 ### 常用运行命令
 
 ```bash
 python scripts/run_train.py --model qlib_lgbm --start 2023-01-01 --end 2026-02-28
 python scripts/run_backtest.py
+python scripts/run_post_close.py --date 2026-03-20 --real_sync broker/real_sync_2026-03-20.csv
 python -m unittest discover tests
 ```
 

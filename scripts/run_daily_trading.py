@@ -1,20 +1,24 @@
-
 import argparse
 import sys
-import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
+
+import pandas as pd
+from qlib.data import D
 
 # Add project root to sys.path
 project_root = Path(__file__).parent.parent
 sys.path.append(str(project_root))
 
 from qsys.data.adapter import QlibAdapter
-from qsys.live.manager import LiveManager
-from qsys.live.simulation import ShadowSimulator
+from qsys.data.health import inspect_qlib_data_health
 from qsys.live.account import RealAccount
+from qsys.live.manager import LiveManager
+from qsys.live.reconciliation import sync_real_account_from_csv
 from qsys.live.scheduler import ModelScheduler
+from qsys.live.simulation import ShadowSimulator
 from qsys.utils.logger import log
+
 
 def update_data(force=True):
     log.info("Updating Qlib Data...")
@@ -23,94 +27,90 @@ def update_data(force=True):
     except Exception as e:
         log.error(f"Failed to update data: {e}")
 
-def print_plan_summary(plan_df, account_name):
+
+def next_trading_day(signal_date: str) -> str:
+    ts = pd.Timestamp(signal_date)
+    calendar = D.calendar(start_time=ts, end_time=ts + pd.Timedelta(days=10))
+    future_days = [pd.Timestamp(x) for x in calendar if pd.Timestamp(x) > ts]
+    if not future_days:
+        return ts.strftime("%Y-%m-%d")
+    return min(future_days).strftime("%Y-%m-%d")
+
+
+def previous_trading_day(signal_date: str) -> str:
+    ts = pd.Timestamp(signal_date)
+    calendar = D.calendar(start_time=ts - pd.Timedelta(days=10), end_time=ts)
+    past_days = [pd.Timestamp(x) for x in calendar if pd.Timestamp(x) < ts]
+    if not past_days:
+        return (ts - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+    return max(past_days).strftime("%Y-%m-%d")
+
+
+def print_plan_summary(plan_df, account_name, signal_date, execution_date):
     if plan_df is None or plan_df.empty:
         log.info(f"No trades planned for {account_name}.")
         return
 
-    log.info(f"=== Trading Plan for {account_name} ===")
-    if 'amount' not in plan_df.columns:
-        log.warning(f"Plan format invalid for {account_name}. Missing 'amount' column.")
+    log.info(f"=== Trading Plan for {account_name} | signal_date={signal_date} execution_date={execution_date} ===")
+    required_cols = {"amount", "symbol", "side", "price"}
+    missing_cols = required_cols - set(plan_df.columns)
+    if missing_cols:
+        log.warning(f"Plan format invalid for {account_name}. Missing columns: {sorted(missing_cols)}")
         return
 
-    trades = plan_df[plan_df['amount'] > 0]
-    
+    trades = plan_df[plan_df["amount"] > 0]
     if trades.empty:
         log.info("No active trades required (Portfolio balanced).")
         return
-        
+
     for _, row in trades.iterrows():
-        action = row['side'].upper()
-        amount = int(row['amount'])
-        symbol = row['symbol']
-        price = row['price']
-        log.info(f"{action} {amount} shares of {symbol} @ {price:.2f}")
-        
+        log.info(
+            f"{row['side'].upper()} {int(row['amount'])} shares of {row['symbol']} @ {float(row['price']):.2f} "
+            f"| weight={float(row.get('weight', 0.0)):.4f} score={row.get('score')} rank={row.get('score_rank')}"
+        )
     log.info(f"Total Trades: {len(trades)}")
 
-def sync_real_account_from_csv(real_account, account_name, sync_path, date):
-    csv_path = Path(sync_path)
-    if not csv_path.exists():
-        log.error(f"Real sync file not found: {sync_path}")
-        return False
 
-    df = pd.read_csv(csv_path)
-    required_cols = {"symbol", "amount", "price"}
-    missing_cols = required_cols - set(df.columns)
-    if missing_cols:
-        log.error(f"Real sync file missing required columns: {sorted(list(missing_cols))}")
-        return False
+def ensure_real_account_seeded(real_account: RealAccount, signal_date: str, initial_cash: float, account_name: str):
+    latest_date = real_account.get_latest_date(before_date=signal_date, account_name=account_name)
+    if latest_date:
+        return latest_date
 
-    if "cost_basis" not in df.columns:
-        df["cost_basis"] = df["price"]
-    df_positions = df[["symbol", "amount", "price", "cost_basis"]].copy()
-    df_positions["amount"] = df_positions["amount"].fillna(0).astype(int)
-    df_positions["price"] = df_positions["price"].astype(float)
-    df_positions["cost_basis"] = df_positions["cost_basis"].fillna(df_positions["price"]).astype(float)
-
-    latest_state = real_account.get_state(account_name=account_name)
-    cash = latest_state["cash"] if latest_state else 0.0
-    if "cash" in df.columns:
-        cash_values = df["cash"].dropna()
-        if not cash_values.empty:
-            cash = float(cash_values.iloc[0])
-
-    total_assets = None
-    if "total_assets" in df.columns:
-        total_assets_values = df["total_assets"].dropna()
-        if not total_assets_values.empty:
-            total_assets = float(total_assets_values.iloc[0])
-
+    empty_positions = pd.DataFrame(columns=["symbol", "amount", "price", "cost_basis"])
     real_account.sync_broker_state(
-        date=date,
-        cash=cash,
-        positions=df_positions,
-        total_assets=total_assets,
-        account_name=account_name
+        date=signal_date,
+        cash=initial_cash,
+        positions=empty_positions,
+        total_assets=initial_cash,
+        account_name=account_name,
     )
-    log.info(f"Synced Real Account from {sync_path}. Positions: {len(df_positions)}")
-    return True
+    log.info(f"Seeded real account '{account_name}' with initial cash {initial_cash:,.2f} on {signal_date}")
+    return signal_date
+
 
 def main():
     parser = argparse.ArgumentParser(description="Run Daily Trading Workflow (Real + Shadow)")
-    parser.add_argument("--date", type=str, default=datetime.now().strftime("%Y-%m-%d"), help="Trading Date (YYYY-MM-DD)")
+    parser.add_argument("--date", type=str, default=datetime.now().strftime("%Y-%m-%d"), help="Signal Date / market data date (YYYY-MM-DD)")
+    parser.add_argument("--execution_date", type=str, help="Execution Date (YYYY-MM-DD). Defaults to next trading day after signal date")
     parser.add_argument("--model_path", type=str, help="Path to model directory")
     parser.add_argument("--real_sync", type=str, help="Path to CSV file with Real Account state (cash, positions)")
     parser.add_argument("--skip_update", action="store_true", help="Skip data update")
     parser.add_argument("--shadow_cash", type=float, default=1_000_000.0, help="Initial cash for Shadow Account")
+    parser.add_argument("--real_cash", type=float, default=20_000.0, help="Initial cash for Real Account if no state exists")
     parser.add_argument("--retrain_days", type=int, default=7, help="Model max age in days before retraining")
     parser.add_argument("--top_k", type=int, default=30, help="Number of stocks to select in strategy")
     parser.add_argument("--min_trade", type=int, default=5000, help="Minimum trade amount in RMB")
-    
     args = parser.parse_args()
-    
-    log.info(f"=== Starting Daily Trading Workflow for {args.date} ===")
-    
+
+    signal_date = pd.Timestamp(args.date).strftime("%Y-%m-%d")
+    log.info(f"=== Starting Daily Trading Workflow for signal_date={signal_date} ===")
+
     if not args.skip_update:
         update_data()
-    
+
     QlibAdapter().init_qlib()
-    
+    execution_date = pd.Timestamp(args.execution_date).strftime("%Y-%m-%d") if args.execution_date else next_trading_day(signal_date)
+
     model_path = args.model_path
     if not model_path:
         latest_model = ModelScheduler.find_latest_model()
@@ -125,51 +125,58 @@ def main():
         log.error(f"Model path does not exist: {model_path}")
         return
 
-    # 1.1 Check Model Freshness & Retrain if needed
-    model_path = ModelScheduler.check_and_retrain(model_path, args.date, retrain_freq_days=args.retrain_days)
+    model_path = ModelScheduler.check_and_retrain(model_path, signal_date, retrain_freq_days=args.retrain_days)
     log.info(f"Using Model: {model_path}")
+
+    preview_manager = LiveManager(model_path=model_path)
+    preview_manager.load_model()
+    health = inspect_qlib_data_health(signal_date, preview_manager.model.model.feature_config, universe="csi300")
+    if not health.ok:
+        log.error("\n" + health.to_markdown())
+        log.error("Data health check failed. Aborting daily workflow.")
+        return
+    log.info("\n" + health.to_markdown())
 
     shadow_account_name = "shadow"
     shadow_sim = ShadowSimulator(account_name=shadow_account_name, initial_cash=args.shadow_cash)
-    
-    if shadow_sim.initialize_if_needed(args.date):
+
+    # Seed and init accounts BEFORE creating managers
+    if shadow_sim.initialize_if_needed(signal_date):
         log.info("Shadow Account Initialized.")
     else:
-        yesterday = (datetime.strptime(args.date, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
-        plan_path = f"data/plan_{yesterday}_{shadow_account_name}.csv"
-        
+        previous_signal_date = previous_trading_day(signal_date)
+        plan_path = f"data/plan_{previous_signal_date}_{shadow_account_name}.csv"
         if Path(plan_path).exists():
             log.info(f"Simulating execution for Shadow Account using {plan_path}...")
-            shadow_sim.simulate_execution(plan_path, args.date)
+            shadow_sim.simulate_execution(plan_path, signal_date)
         else:
-            log.warning(f"No plan found for yesterday ({yesterday}) at {plan_path}. Skipping shadow simulation.")
+            log.warning(f"No plan found for previous signal_date ({previous_signal_date}) at {plan_path}. Skipping shadow simulation.")
 
     real_account_name = "real"
     real_account = RealAccount(account_name=real_account_name)
-    
     if args.real_sync:
-        sync_real_account_from_csv(real_account, real_account_name, args.real_sync, args.date)
-    
+        sync_real_account_from_csv(real_account, real_account_name, args.real_sync, signal_date)
+    ensure_real_account_seeded(real_account, signal_date, args.real_cash, real_account_name)
+
+    # Now managers can see seeded accounts
     log.info("Generating Plan for Shadow Account...")
     manager_shadow = LiveManager(model_path=model_path)
     manager_shadow.strategy.top_k = args.top_k
     manager_shadow.planner.min_trade_amount = args.min_trade
     manager_shadow.real_account = shadow_sim.account
-    plan_shadow = manager_shadow.run_daily_plan(args.date)
-    print_plan_summary(plan_shadow, shadow_account_name)
+    plan_shadow = manager_shadow.run_daily_plan(signal_date, account_name=shadow_account_name, execution_date=execution_date)
+    print_plan_summary(plan_shadow, shadow_account_name, signal_date, execution_date)
 
     log.info("Generating Plan for Real Account...")
-    if real_account.get_latest_date() or args.real_sync:
-        manager_real = LiveManager(model_path=model_path)
-        manager_real.strategy.top_k = args.top_k
-        manager_real.planner.min_trade_amount = args.min_trade
-        manager_real.real_account = real_account
-        plan_real = manager_real.run_daily_plan(args.date)
-        print_plan_summary(plan_real, real_account_name)
-    else:
-        log.warning("Real Account has no state. Skipping plan generation. Please sync broker state first.")
-    
+    manager_real = LiveManager(model_path=model_path)
+    manager_real.strategy.top_k = args.top_k
+    manager_real.planner.min_trade_amount = args.min_trade
+    manager_real.real_account = real_account
+    plan_real = manager_real.run_daily_plan(signal_date, account_name=real_account_name, execution_date=execution_date)
+    print_plan_summary(plan_real, real_account_name, signal_date, execution_date)
+
     log.info("Daily Trading Workflow Completed.")
+
 
 if __name__ == "__main__":
     main()

@@ -34,9 +34,16 @@
 
 ## 核心流程
 
-1. 训练流程：`run_train -> feature/model -> model artifact`。
-2. 回测流程：`run_backtest -> model/strategy/backtest -> report`。
-3. 每日流程：`run_daily_trading -> live/trader -> plan/account`。
+1. 训练流程：`run_train -> feature/model -> 训练指标摘要 -> model artifact`。
+2. 回测流程：`run_backtest -> model/strategy/backtest -> report + 关键交易日志`。
+3. 每日流程：`数据检查 -> run_daily_trading -> plan export -> 人工执行 -> run_post_close -> reconciliation/account`。
+
+## 运营约束
+
+- 数据检查是每日流程与训练流程的前置步骤，不通过则不进入后续主流程。
+- `scripts/` 只做编排；数据校验、计划标准化、对账、指标汇总等逻辑应下沉到 `qsys/`。
+- 计划输出必须可运营：除 `symbol/side/amount` 外，还应包含参考价格、权重/仓位信息，以及模型排序依据（至少分数或 rank 信息）。
+- 训练产物必须伴随指标摘要；回测产物必须伴随关键指标，且支持按日期/标的追踪中间交易细节。
 
 ## 架构不变量
 

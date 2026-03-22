@@ -1,9 +1,7 @@
 
 import sqlite3
 import pandas as pd
-import json
-from datetime import datetime
-from typing import Dict, Optional
+from typing import Optional
 from qsys.utils.logger import log
 
 class RealAccount:
@@ -166,3 +164,61 @@ class RealAccount:
         res = cursor.fetchone()
         conn.close()
         return res[0] if res else None
+
+    def record_trade(
+        self,
+        *,
+        date: str,
+        symbol: str,
+        side: str,
+        amount: int,
+        price: float,
+        fee: float = 0.0,
+        tax: float = 0.0,
+        total_cost: Optional[float] = None,
+        order_id: str = "",
+        account_name: Optional[str] = None,
+    ):
+        account_name = account_name or self.account_name
+        amount = int(amount)
+        if amount <= 0:
+            return
+        price = float(price)
+        fee = float(fee)
+        tax = float(tax)
+        if total_cost is None:
+            gross = price * amount
+            total_cost = gross + fee + tax if side == "buy" else gross - fee - tax
+
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute(
+            '''
+            INSERT INTO trade_log (date, account_name, symbol, side, amount, price, fee, tax, total_cost, order_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''',
+            (date, account_name, symbol, side, amount, price, fee, tax, float(total_cost), order_id),
+        )
+        conn.commit()
+        conn.close()
+
+    def clear_trade_log(self, *, date: str, account_name: Optional[str] = None):
+        account_name = account_name or self.account_name
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('DELETE FROM trade_log WHERE date = ? AND account_name = ?', (date, account_name))
+        conn.commit()
+        conn.close()
+
+    def get_trade_log(self, *, date: Optional[str] = None, account_name: Optional[str] = None) -> pd.DataFrame:
+        account_name = account_name or self.account_name
+        conn = sqlite3.connect(self.db_path)
+        query = 'SELECT date, account_name, symbol, side, amount, price, fee, tax, total_cost, order_id FROM trade_log WHERE account_name = ?'
+        params = [account_name]
+        if date is not None:
+            query += ' AND date = ?'
+            params.append(date)
+        query += ' ORDER BY date, id'
+        df = pd.read_sql_query(query, conn, params=params)
+        conn.close()
+        return df

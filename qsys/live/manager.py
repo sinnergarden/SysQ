@@ -1,117 +1,139 @@
+from __future__ import annotations
 
 import pandas as pd
-import os
-from datetime import datetime
-from qsys.utils.logger import log
+from qlib.data import D
+
+from qsys.data.adapter import QlibAdapter
+from qsys.live.account import RealAccount
+from qsys.live.reconciliation import export_plan_bundle
 from qsys.strategy.engine import StrategyEngine
 from qsys.trader.plan import PlanGenerator
-from qsys.live.account import RealAccount
-from qlib.data import D
-from qsys.data.adapter import QlibAdapter
+from qsys.utils.logger import log
+
 
 class LiveManager:
     """
-    Orchestrates the Daily Live Trading Process:
-    1. Load Real Account State (Yesterday's close or Today's sync).
-    2. Load Market Data & Predictions (Today's Pre-Market or Close).
-    3. Generate Target Weights.
-    4. Generate Trading Plan (Orders).
+    Orchestrates the Daily Live Trading Process.
+
+    signal_date: the market data date used to generate signals.
+    execution_date: the date the human/shadow account is expected to execute the plan.
     """
+
     def __init__(self, model_path, db_path="data/real_account.db"):
         self.real_account = RealAccount(db_path)
         self.strategy = StrategyEngine(top_k=30)
         self.planner = PlanGenerator()
-        
-        # We need a model wrapper that can predict for a single day
-        # Assuming SignalGenerator or similar is passed/loaded
         self.model_path = model_path
-        # Lazy load model
         self.model = None
 
     def load_model(self):
         if self.model is None:
             from qsys.strategy.generator import SignalGenerator
+
             self.model = SignalGenerator(self.model_path)
             log.info(f"Model loaded from {self.model_path}")
 
-    def run_daily_plan(self, date, market_data=None):
-        """
-        Generate Plan for `date` (usually Tomorrow, using Today's data).
-        
-        Args:
-            date: str "YYYY-MM-DD". The date we are making decisions ON.
-                  (Usually T, to trade on T+1, or T open).
-            market_data: Optional DataFrame. If None, fetch from Qlib.
-        """
+    @staticmethod
+    def _normalize_score_series(scores: pd.Series | pd.DataFrame) -> pd.Series:
+        if isinstance(scores, pd.DataFrame):
+            if "score" in scores.columns:
+                scores = scores["score"]
+            else:
+                scores = scores.iloc[:, 0]
+        if isinstance(scores.index, pd.MultiIndex):
+            if scores.index.nlevels >= 2:
+                scores.index = scores.index.get_level_values(0)
+        return pd.Series(scores).groupby(level=0).last().sort_values(ascending=False)
+
+    @staticmethod
+    def _normalize_price_lookup(prices_df: pd.DataFrame) -> dict:
+        normalized = prices_df.copy()
+        if isinstance(normalized.index, pd.MultiIndex):
+            normalized.index = normalized.index.get_level_values(0)
+        normalized = normalized.groupby(level=0).last()
+        return normalized["close"].to_dict()
+
+    def run_daily_plan(self, date, market_data=None, account_name="real", execution_date=None):
         self.load_model()
         if self.model is None:
             log.error("Model not loaded.")
             return None
-        
-        # 1. Get Real State
-        # We need the LATEST state available.
-        # If we are running this on T night, we should have synced T's close.
-        latest_date = self.real_account.get_latest_date()
-        if not latest_date:
-            log.error("No account state date found! Please sync broker state first.")
-            return None
-        state = self.real_account.get_state(latest_date)
-        
+
+        signal_date = pd.Timestamp(date).strftime("%Y-%m-%d")
+        execution_date = pd.Timestamp(execution_date or date).strftime("%Y-%m-%d")
+
+        state = self.real_account.get_state(signal_date, account_name=account_name)
+        if state is None:
+            latest_date = self.real_account.get_latest_date(account_name=account_name, before_date=signal_date)
+            if not latest_date:
+                log.error("No account state date found! Please sync broker state first.")
+                return None
+            state = self.real_account.get_state(latest_date, account_name=account_name)
         if not state:
             log.error("No account state found! Please sync broker state first.")
             return None
-            
-        log.info(f"Generating plan based on Account State from {state['date']}")
+
+        log.info(f"Generating plan using signal_date={signal_date}, execution_date={execution_date}")
+        log.info(f"Using account state from {state['date']}")
         log.info(f"Total Assets: {state['total_assets']:,.2f}, Cash: {state['cash']:,.2f}")
-        
-        # 2. Get Data & Predict
-        # We need features for `date`.
-        # Note: If date is "Today", ensure Qlib has data updated.
+
         try:
-            instruments = D.instruments('csi300')
+            instruments = D.instruments("csi300")
             if market_data is None:
                 features = QlibAdapter().get_features(
-                    instruments, 
-                    self.model.model.feature_config, 
-                    start_time=date, 
-                    end_time=date
+                    instruments,
+                    self.model.model.feature_config,
+                    start_time=signal_date,
+                    end_time=signal_date,
                 )
             else:
                 features = market_data
 
             if features is None or features.empty:
-                log.error(f"No features found for {date}!")
+                log.error(f"No features found for signal_date={signal_date}!")
                 return None
 
-            scores = self.model.predict(features)
+            raw_scores = self.model.predict(features)
+            scores = self._normalize_score_series(raw_scores)
+            ranked_scores = scores.reset_index()
+            ranked_scores.columns = ["symbol", "score"]
+            ranked_scores["score_rank"] = ranked_scores["score"].rank(ascending=False, method="first").astype(int)
 
-            price_fields = ['$close', '$factor']
+            price_fields = ["$close", "$factor"]
             prices_df = QlibAdapter().get_features(
-                instruments, 
-                price_fields, 
-                start_time=date, 
-                end_time=date
+                instruments,
+                price_fields,
+                start_time=signal_date,
+                end_time=signal_date,
             )
-            prices_df = prices_df.rename(columns={'$close': 'close', '$factor': 'factor'})
+            prices_df = prices_df.rename(columns={"$close": "close", "$factor": "factor"})
 
+            current_prices = self._normalize_price_lookup(prices_df)
             target_weights = self.strategy.generate_target_weights(scores, market_status=None)
 
-            current_positions = state['positions']
-            total_assets = state['total_assets']
-            current_prices = prices_df['close'].to_dict()
-
+            current_positions = state["positions"]
+            total_assets = state["total_assets"]
             plan_df = self.planner.generate_plan(
-                target_weights, 
-                current_positions, 
-                total_assets, 
-                current_prices
+                target_weights,
+                current_positions,
+                total_assets,
+                current_prices,
+                score_lookup=ranked_scores.set_index("symbol")["score"].to_dict(),
+                score_rank_lookup=ranked_scores.set_index("symbol")["score_rank"].to_dict(),
+                weight_method=self.strategy.method,
             )
 
-            out_file = f"data/plan_{date}.csv"
-            plan_df.to_csv(out_file, index=False)
-            log.info(f"Plan saved to {out_file}")
+            outputs = export_plan_bundle(
+                plan_df,
+                output_dir="data",
+                signal_date=signal_date,
+                plan_date=signal_date,
+                account_name=account_name,
+                execution_date=execution_date,
+            )
+            log.info(f"Plan saved to {outputs['plan']}")
+            log.info(f"Real sync template saved to {outputs['real_sync_template']}")
             log.info(f"\n{self.planner.to_markdown(plan_df)}")
-
             return plan_df
         except Exception as e:
             log.error(f"Failed to run live plan: {e}")
