@@ -81,9 +81,10 @@ class QlibAdapter:
         store = StockDataStore()
         raw_latest_str = store.get_global_latest_date()
         raw_latest = pd.Timestamp(raw_latest_str) if raw_latest_str else None
+        raw_latest_fmt = raw_latest.strftime("%Y-%m-%d") if raw_latest is not None else None
 
         qlib_latest_ts = self.get_last_qlib_date()
-        qlib_latest = qlib_latest_ts.date() if qlib_latest_ts else None
+        qlib_latest = qlib_latest_ts.strftime("%Y-%m-%d") if qlib_latest_ts else None
 
         # Determine target signal date
         if target_date:
@@ -104,10 +105,10 @@ class QlibAdapter:
         aligned = False
         if raw_latest and qlib_latest:
             gap = (raw_latest - qlib_latest_ts).days
-            aligned = raw_latest.date() == qlib_latest
+            aligned = raw_latest_fmt == qlib_latest
 
         return {
-            "raw_latest": raw_latest.date() if raw_latest else None,
+            "raw_latest": raw_latest_fmt,
             "qlib_latest": qlib_latest,
             "target_signal_date": target_signal.strftime("%Y-%m-%d") if target_signal else None,
             "aligned": aligned,
