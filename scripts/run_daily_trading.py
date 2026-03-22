@@ -23,7 +23,13 @@ from qsys.utils.logger import log
 def update_data(force=True):
     log.info("Updating Qlib Data...")
     try:
-        QlibAdapter().check_and_update(force=force)
+        adapter = QlibAdapter()
+        # Use the explicit refresh to close the raw->qlib loop
+        adapter.refresh_qlib_date()
+        
+        # Print status report
+        report = adapter.get_data_status_report()
+        log.info(f"Data status: raw={report.get('raw_latest')}, qlib={report.get('qlib_latest')}, aligned={report.get('aligned')}")
     except Exception as e:
         log.error(f"Failed to update data: {e}")
 

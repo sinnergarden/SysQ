@@ -214,3 +214,24 @@ class TestDataUpdateIntegration(unittest.TestCase):
             self.fail("No data saved after update")
         updated_df = cast(pd.DataFrame, updated)
         self.assertNotIn("20230102", updated_df["trade_date"].tolist())
+
+    def test_adapter_get_data_status_report(self):
+        """Test the new status report method returns raw vs qlib info"""
+        # Seed some raw data
+        self._seed_existing("000001.SZ", "20230101", "20230105")
+        self._seed_existing("000002.SZ", "20230101", "20230105")
+        
+        from qsys.data.adapter import QlibAdapter
+        adapter = QlibAdapter()
+        
+        # Test the report generation
+        # Note: without qlib initialized, we can still check raw data
+        report = adapter.get_data_status_report()
+        
+        self.assertIn('raw_latest', report)
+        self.assertIn('qlib_latest', report)
+        self.assertIn('target_signal_date', report)
+        self.assertIn('aligned', report)
+        
+        # Raw should have data
+        self.assertEqual(report['raw_latest'], "2023-01-05")
