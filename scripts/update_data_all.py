@@ -1,6 +1,7 @@
 
 import sys
 import logging
+import time
 from pathlib import Path
 from datetime import datetime
 
@@ -15,6 +16,7 @@ sys.path.append(str(project_root))
 from qsys.data.collector import TushareCollector
 from qsys.data.adapter import QlibAdapter
 from qsys.data.storage import StockDataStore
+from qsys.reports.data_update import DataUpdateReport
 
 def print_status_report(adapter: QlibAdapter):
     """Print a clear status report of raw vs qlib data alignment"""
@@ -40,6 +42,9 @@ def print_status_report(adapter: QlibAdapter):
     log.info("=" * 50)
 
 def main():
+    start_time = time.time()
+    blockers = []
+    
     log.info("Starting Full Market Data Update (All A-Shares)...")
     
     # Get initial status
@@ -47,29 +52,63 @@ def main():
     log.info("Initial status:")
     print_status_report(adapter)
     
+    initial_status = adapter.get_data_status_report()
+    collector_stats = {}
+    
     # 1. Fetch Raw Data
     try:
         collector = TushareCollector()
         log.info("Fetching history for ALL stocks from 2010-01-01 to today...")
         # universe='all' triggers fetching the full list
         collector.update_universe_history(universe='all', start_date='20100101')
+        collector_stats = {"stocks_updated": "all", "start_date": "20100101"}
     except Exception as e:
         log.error(f"Data collection failed: {e}")
-        return
+        blockers.append(f"Data collection failed: {e}")
+        collector_stats = {"error": str(e)}
 
     # 2. Sync to Qlib Bin (Incremental) - with explicit refresh
+    adapter_stats = {}
     try:
         adapter = QlibAdapter()
         log.info("Syncing new data to Qlib bin (Incremental)...")
         # This now explicitly checks raw vs qlib and updates
         adapter.refresh_qlib_date()
+        adapter_stats = {"sync_type": "incremental"}
     except Exception as e:
         log.error(f"Qlib sync failed: {e}")
-        return
+        blockers.append(f"Qlib sync failed: {e}")
+        adapter_stats = {"error": str(e)}
 
     # 3. Final status report
     log.info("\nFinal status after update:")
     print_status_report(adapter)
+    
+    duration = time.time() - start_time
+    
+    # Get final status for report
+    final_status = adapter.get_data_status_report()
+    
+    # Generate structured report
+    report = DataUpdateReport.generate(
+        raw_latest=final_status.get('raw_latest', 'N/A'),
+        qlib_latest=final_status.get('qlib_latest', 'N/A'),
+        aligned=final_status.get('aligned', False),
+        gap_days=final_status.get('gap_days'),
+        collector_stats=collector_stats,
+        adapter_stats=adapter_stats,
+        duration_seconds=duration,
+        blockers=blockers,
+        notes=["Full market data update (all A-shares)"],
+    )
+    
+    report_path = DataUpdateReport.save(report)
+    log.info(f"Structured report saved to: {report_path}")
+    
+    # Print markdown summary
+    print("\n" + "=" * 60)
+    print(report.to_markdown())
+    print("=" * 60)
 
     log.info("✅ Full market data update completed successfully!")
 

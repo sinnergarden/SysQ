@@ -32,11 +32,26 @@ class DailyOpsReport:
         notes: list = None,
     ) -> RunReport:
         """Generate a pre-open daily trading report"""
+        # Determine overall status based on blockers and plan anomalies
+        has_blockers = bool(blockers)
+        shadow_empty = not shadow_plan_summary or shadow_plan_summary.get("trades", 0) == 0
+        real_empty = not real_plan_summary or real_plan_summary.get("trades", 0) == 0
+        
+        # Status logic: failed if blockers, partial if empty plans
+        if has_blockers:
+            status = ReportStatus.PARTIAL
+        elif shadow_empty and real_empty:
+            status = ReportStatus.SKIPPED  # Both empty = nothing to do
+        elif shadow_empty or real_empty:
+            status = ReportStatus.PARTIAL  # One empty = partial
+        else:
+            status = ReportStatus.SUCCESS
+        
         report = RunReport(
             workflow="daily_ops_pre_open",
             signal_date=signal_date,
             execution_date=execution_date,
-            status=ReportStatus.SUCCESS if not blockers else ReportStatus.PARTIAL,
+            status=status,
             duration_seconds=duration_seconds,
         )
         
@@ -44,17 +59,42 @@ class DailyOpsReport:
         report.data_status = data_status
         report.model_info = model_info
         
-        # Add plan summaries
+        # Add plan summaries with appropriate status
+        if shadow_empty:
+            shadow_status = ReportStatus.SKIPPED
+            if not shadow_plan_summary:
+                shadow_plan_summary = {"status": "no_plan", "trades": 0, "symbols": []}
+            else:
+                shadow_plan_summary["status"] = "empty_plan"
+        else:
+            shadow_status = ReportStatus.SUCCESS
+            
         report.add_section(
             name="Shadow Account Plan",
-            status=ReportStatus.SUCCESS,
+            status=shadow_status,
             metrics=shadow_plan_summary,
         )
+        
+        if real_empty:
+            real_status = ReportStatus.SKIPPED
+            if not real_plan_summary:
+                real_plan_summary = {"status": "no_plan", "trades": 0, "symbols": []}
+            else:
+                real_plan_summary["status"] = "empty_plan"
+        else:
+            real_status = ReportStatus.SUCCESS
+            
         report.add_section(
             name="Real Account Plan", 
-            status=ReportStatus.SUCCESS,
+            status=real_status,
             metrics=real_plan_summary,
         )
+        
+        # Add anomaly detection notes
+        if data_status.get("health_ok") is False:
+            report.add_note("⚠️ Data health check reported issues")
+        if data_status.get("aligned") is False:
+            report.add_note("⚠️ Raw/qlib data not aligned")
         
         # Add blockers and notes
         for blocker in (blockers or []):
