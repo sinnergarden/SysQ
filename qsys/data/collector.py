@@ -189,7 +189,8 @@ class TushareCollector:
             # Full market fetch -> Loop by Date
             return self._fetch_by_date_loop(api, fields, start_date, end_date)
             
-        if interface_name in ["daily_basic", "stk_limit"]:
+        if interface_name in ["daily_basic", "stk_limit", "margin"]:
+            # margin interface doesn't support ts_code list well, needs stock loop like daily_basic/stk_limit
             if isinstance(ts_codes, str):
                 code_list = ts_codes.split(",")
             else:
@@ -1063,7 +1064,7 @@ class TushareCollector:
         return merged
 
 
-    def _update_batch_by_year(self, code_list, code_str, start_date, end_date, include_basic=True, include_limit=True, include_adj=True, include_moneyflow=True):
+    def _update_batch_by_year(self, code_list, code_str, start_date, end_date, include_basic=True, include_limit=True, include_adj=True, include_moneyflow=True, include_margin=True):
         """
         [Optimization] 
         1. Fetch Financials, DailyBasic, StkLimit for the FULL period (per stock loop or batch period).
@@ -1167,6 +1168,13 @@ class TushareCollector:
                         fields=self._get_interface_fields("moneyflow"),
                     )
 
+                # 3.5 Margin (Batch by date range)
+                df_margin = pd.DataFrame()
+                if include_margin:
+                    df_margin = self._fetch_by_date_range("margin", valid_codes, chunk_start, chunk_end)
+                    if df_margin is not None and not df_margin.empty and "trade_date" in df_margin.columns:
+                        df_margin["trade_date"] = df_margin["trade_date"].astype(str)
+
                 # 4. Filter Basic/Limit from All
                 df_basic = pd.DataFrame()
                 if not df_basic_all.empty:
@@ -1202,6 +1210,15 @@ class TushareCollector:
                     keep_cols = [c for c in keep_cols if c in df_moneyflow.columns]
                     df_daily = pd.merge(df_daily, df_moneyflow[keep_cols], on=['ts_code', 'trade_date'], how='left')
 
+                if include_margin and df_margin is not None and not df_margin.empty:
+                    rename_map = self._get_interface_rename("margin")
+                    if rename_map:
+                        df_margin = df_margin.rename(columns=rename_map)
+                    keep_cols = ["ts_code", "trade_date"] + self.margin_cols
+                    keep_cols = [c for c in keep_cols if c in df_margin.columns]
+                    df_margin = df_margin[keep_cols]
+                    df_daily = pd.merge(df_daily, df_margin, on=['ts_code', 'trade_date'], how='left')
+
                 # Merge Financials
                 if fin_df_all is not None and not fin_df_all.empty:
                     df_daily = self._merge_financials(df_daily, fin_df_all)
@@ -1216,6 +1233,8 @@ class TushareCollector:
                     ignore_columns += self._get_interface_feature_fields("stk_limit")
                 if include_moneyflow and df_moneyflow.empty:
                     ignore_columns += self.moneyflow_fields + self._moneyflow_derived
+                if include_margin and (df_margin is None or df_margin.empty):
+                    ignore_columns += self.margin_cols
                 if fin_df_all is None or fin_df_all.empty:
                     ignore_columns += self.financial_cols
 
@@ -1244,7 +1263,7 @@ class TushareCollector:
                 df_part = df_part.sort_values('trade_date').reset_index(drop=True)
             self.store.save_daily(df_part, code, existing_df=None)
 
-    def update_history(self, code: str, start_date='20100101', end_date=None, incremental=True, include_basic=True, include_limit=True, include_adj=True, include_moneyflow=True):
+    def update_history(self, code: str, start_date='20100101', end_date=None, incremental=True, include_basic=True, include_limit=True, include_adj=True, include_moneyflow=True, include_margin=True):
         """
         Fetch history for a single stock.
         """
@@ -1271,6 +1290,8 @@ class TushareCollector:
         ignore_columns = set()
         if not include_moneyflow:
             ignore_columns.update(self.moneyflow_fields + self._moneyflow_derived)
+        if not include_margin:
+            ignore_columns.update(self.margin_cols)
         chunks = []
         while current_start <= end_date:
             current_end_dt = min(datetime.strptime(current_start, '%Y%m%d').replace(year=int(current_start[:4])+1), datetime.strptime(end_date, '%Y%m%d'))
@@ -1312,6 +1333,12 @@ class TushareCollector:
                     end_date=current_end,
                     fields=self._get_interface_fields("moneyflow"),
                 ) if include_moneyflow else pd.DataFrame()
+                df_margin = self._fetch_by_date_range(
+                    "margin",
+                    [code],
+                    current_start,
+                    current_end,
+                ) if include_margin else pd.DataFrame()
 
                 if not df_daily.empty:
                     if include_basic and (df_basic is None or df_basic.empty):
@@ -1328,6 +1355,9 @@ class TushareCollector:
                     if include_moneyflow and (df_moneyflow is None or df_moneyflow.empty):
                         log.warning(f"{code} {current_start}-{current_end} moneyflow empty")
                         ignore_columns.update(self.moneyflow_fields + self._moneyflow_derived)
+                    if include_margin and (df_margin is None or df_margin.empty):
+                        log.warning(f"{code} {current_start}-{current_end} margin empty")
+                        ignore_columns.update(self.margin_cols)
                     # Merge
                     if "amount" in df_daily.columns:
                         df_daily["amount"] = pd.to_numeric(df_daily["amount"], errors="coerce") * 1000
@@ -1348,6 +1378,14 @@ class TushareCollector:
                         keep_cols = [c for c in keep_cols if c in df_moneyflow.columns]
                         df_moneyflow = df_moneyflow[keep_cols]
                         df_daily = pd.merge(df_daily, df_moneyflow, on=['ts_code', 'trade_date'], how='left')
+                    if include_margin and df_margin is not None and not df_margin.empty:
+                        rename_map = self._get_interface_rename("margin")
+                        if rename_map:
+                            df_margin = df_margin.rename(columns=rename_map)
+                        keep_cols = ["ts_code", "trade_date"] + self.margin_cols
+                        keep_cols = [c for c in keep_cols if c in df_margin.columns]
+                        df_margin = df_margin[keep_cols]
+                        df_daily = pd.merge(df_daily, df_margin, on=['ts_code', 'trade_date'], how='left')
                     fin_df = self._fetch_financials(current_start, current_end, ts_code=code)
                     if fin_df is None or fin_df.empty:
                         log.warning(f"{code} {current_start}-{current_end} financials empty")
