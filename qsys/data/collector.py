@@ -1217,7 +1217,14 @@ class TushareCollector:
                     keep_cols = ["ts_code", "trade_date"] + self.margin_cols
                     keep_cols = [c for c in keep_cols if c in df_margin.columns]
                     df_margin = df_margin[keep_cols]
-                    df_daily = pd.merge(df_daily, df_margin, on=['ts_code', 'trade_date'], how='left')
+                    merge_keys = {"ts_code", "trade_date"}
+                    if not merge_keys.issubset(df_margin.columns):
+                        log.warning(
+                            f"Skip margin merge for {chunk_start}-{chunk_end}: missing keys {sorted(merge_keys - set(df_margin.columns))}"
+                        )
+                        df_margin = pd.DataFrame()
+                    else:
+                        df_daily = pd.merge(df_daily, df_margin, on=['ts_code', 'trade_date'], how='left')
 
                 # Merge Financials
                 if fin_df_all is not None and not fin_df_all.empty:
@@ -1385,7 +1392,14 @@ class TushareCollector:
                         keep_cols = ["ts_code", "trade_date"] + self.margin_cols
                         keep_cols = [c for c in keep_cols if c in df_margin.columns]
                         df_margin = df_margin[keep_cols]
-                        df_daily = pd.merge(df_daily, df_margin, on=['ts_code', 'trade_date'], how='left')
+                        merge_keys = {"ts_code", "trade_date"}
+                        if not merge_keys.issubset(df_margin.columns):
+                            log.warning(
+                                f"{code} {current_start}-{current_end} skip margin merge: missing keys {sorted(merge_keys - set(df_margin.columns))}"
+                            )
+                            ignore_columns.update(self.margin_cols)
+                        else:
+                            df_daily = pd.merge(df_daily, df_margin, on=['ts_code', 'trade_date'], how='left')
                     fin_df = self._fetch_financials(current_start, current_end, ts_code=code)
                     if fin_df is None or fin_df.empty:
                         log.warning(f"{code} {current_start}-{current_end} financials empty")
