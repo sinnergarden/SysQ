@@ -33,7 +33,7 @@ project_root = Path(__file__).parent.parent
 sys.path.append(str(project_root))
 
 from qsys.data.adapter import QlibAdapter
-from qsys.data.health import inspect_qlib_data_health
+from qsys.data.health import DataReadinessError, assert_qlib_data_ready
 from qsys.live.account import RealAccount
 from qsys.live.manager import LiveManager
 from qsys.live.reconciliation import sync_real_account_from_csv
@@ -203,20 +203,26 @@ def main():
     feature_config = preview_manager.model.model.feature_config
     model_info["feature_set"] = feature_config.get("name", "unknown") if isinstance(feature_config, dict) else "alpha158"
     
-    health = inspect_qlib_data_health(signal_date, feature_config, universe="csi300")
-    health_ok = health.ok
+    try:
+        health = assert_qlib_data_ready(signal_date, feature_config, universe="csi300")
+        health_ok = True
+    except DataReadinessError as readiness_error:
+        health = readiness_error.report
+        health_ok = False
+        log.error(str(readiness_error))
+
     data_status = {
         "raw_latest": health.raw_latest,
         "qlib_latest": health.last_qlib_date,
         "aligned": health.aligned,
-        "health_ok": health.ok,
+        "health_ok": health_ok,
         "expected_latest_date": health.expected_latest_date,
         "feature_rows": health.feature_rows,
         "feature_cols": health.feature_cols,
         "missing_ratio": health.missing_ratio,
     }
     
-    if not health.ok:
+    if not health_ok:
         log.error("\n" + health.to_markdown())
         log.error("Data health check failed. Aborting daily workflow.")
         blockers.append("Data health check failed")

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Iterable, Optional
 
 import pandas as pd
@@ -8,6 +9,10 @@ from qlib.data import D
 
 from qsys.data.adapter import QlibAdapter
 from qsys.data.storage import StockDataStore
+
+
+DEFAULT_REQUIRED_FIELDS = ("$open", "$high", "$low", "$close", "$volume", "$factor")
+RAW_FIELD_PATTERN = re.compile(r"\$[A-Za-z_][A-Za-z0-9_]*")
 
 
 @dataclass
@@ -24,6 +29,11 @@ class DataHealthReport:
     has_data_for_requested_date: bool
     gap_days: int
     aligned: bool
+    required_fields: list[str]
+    monitored_fields: list[str]
+    column_missing_ratio: dict[str, float]
+    unusable_required_fields: list[str]
+    unusable_optional_fields: list[str]
     issues: list[str]
 
     @property
@@ -44,6 +54,11 @@ class DataHealthReport:
             "has_data_for_requested_date": self.has_data_for_requested_date,
             "gap_days": self.gap_days,
             "aligned": self.aligned,
+            "required_fields": list(self.required_fields),
+            "monitored_fields": list(self.monitored_fields),
+            "column_missing_ratio": dict(self.column_missing_ratio),
+            "unusable_required_fields": list(self.unusable_required_fields),
+            "unusable_optional_fields": list(self.unusable_optional_fields),
             "issues": list(self.issues),
         }
 
@@ -60,6 +75,10 @@ class DataHealthReport:
         lines.append(f"- missing_ratio: {self.missing_ratio:.2%}")
         lines.append(f"- has_data_for_requested_date: {self.has_data_for_requested_date}")
         lines.append(f"- gap_days: {self.gap_days}")
+        if self.unusable_required_fields:
+            lines.append(f"- unusable_required_fields: {self.unusable_required_fields}")
+        if self.unusable_optional_fields:
+            lines.append(f"- unusable_optional_fields: {self.unusable_optional_fields}")
         if self.issues:
             lines.append("- issues:")
             for issue in self.issues:
@@ -71,6 +90,44 @@ class DataHealthReport:
 
 def _normalize_date(value: str | pd.Timestamp) -> str:
     return pd.Timestamp(value).strftime("%Y-%m-%d")
+
+
+def _normalize_feature_fields(feature_fields: Iterable[str] | dict | tuple | None) -> list[str]:
+    if feature_fields is None:
+        return []
+    if isinstance(feature_fields, tuple) and len(feature_fields) == 2:
+        return list(feature_fields[0])
+    if isinstance(feature_fields, dict):
+        fields = feature_fields.get("feature") or feature_fields.get("fields") or []
+        if isinstance(fields, tuple) and len(fields) == 2:
+            return list(fields[0])
+        return list(fields)
+    return list(feature_fields)
+
+
+def _extract_probe_fields(feature_fields: Iterable[str], required_fields: Iterable[str]) -> list[str]:
+    fields = set(required_fields)
+    for item in feature_fields:
+        if not isinstance(item, str):
+            continue
+        stripped = item.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("$"):
+            fields.add(stripped)
+            continue
+        fields.update(RAW_FIELD_PATTERN.findall(stripped))
+    return sorted(fields)
+
+
+class DataReadinessError(RuntimeError):
+    def __init__(self, report: DataHealthReport):
+        self.report = report
+        message = (
+            f"Data readiness check failed for {report.requested_date}: "
+            + "; ".join(report.issues)
+        )
+        super().__init__(message)
 
 
 def _resolve_expected_latest_date(requested_date: str) -> tuple[str | None, str | None]:
@@ -93,6 +150,9 @@ def inspect_qlib_data_health(
     *,
     universe: str = "csi300",
     missing_ratio_threshold: float = 0.4,
+    required_fields: Iterable[str] = DEFAULT_REQUIRED_FIELDS,
+    required_field_missing_threshold: float = 0.2,
+    optional_field_missing_threshold: float = 0.95,
 ) -> DataHealthReport:
     adapter = QlibAdapter()
     adapter.init_qlib()
@@ -126,10 +186,16 @@ def inspect_qlib_data_health(
                 f"Qlib data is stale: last_qlib_date={last_qlib_date}, expected_latest_date={expected_latest_date}"
             )
 
-    fields = list(feature_fields)
+    fields = _normalize_feature_fields(feature_fields)
+    required_fields_list = [f for f in required_fields if isinstance(f, str) and f.strip()]
+    probe_fields = _extract_probe_fields(fields, required_fields_list)
     features = adapter.get_features(universe, fields, start_time=requested_date, end_time=requested_date)
     if features is None:
         features = pd.DataFrame()
+
+    probe_features = adapter.get_features(universe, probe_fields, start_time=requested_date, end_time=requested_date)
+    if probe_features is None:
+        probe_features = pd.DataFrame()
 
     has_data = not features.empty
     feature_rows = len(features)
@@ -141,6 +207,53 @@ def inspect_qlib_data_health(
     elif missing_ratio > missing_ratio_threshold:
         issues.append(
             f"Feature missing ratio too high on {requested_date}: {missing_ratio:.2%} > {missing_ratio_threshold:.2%}"
+        )
+
+    column_missing_ratio: dict[str, float] = {}
+    unusable_required_fields: list[str] = []
+    unusable_optional_fields: list[str] = []
+    if probe_features.empty:
+        issues.append(f"No probe rows available for requested_date={requested_date} using fields={probe_fields}")
+    else:
+        for field in probe_fields:
+            if field not in probe_features.columns:
+                column_missing_ratio[field] = 1.0
+                if field in required_fields_list:
+                    unusable_required_fields.append(field)
+                else:
+                    unusable_optional_fields.append(field)
+                continue
+            miss_ratio = float(probe_features[field].isna().mean())
+            column_missing_ratio[field] = miss_ratio
+            if field in required_fields_list and miss_ratio > required_field_missing_threshold:
+                unusable_required_fields.append(field)
+            elif field not in required_fields_list and miss_ratio > optional_field_missing_threshold:
+                unusable_optional_fields.append(field)
+
+    if unusable_required_fields:
+        details = ", ".join(
+            f"{field}={column_missing_ratio.get(field, 1.0):.2%}"
+            for field in sorted(set(unusable_required_fields))
+        )
+        issues.append(
+            "Required qlib columns unusable "
+            f"(missing ratio > {required_field_missing_threshold:.0%}): {details}"
+        )
+
+    if unusable_optional_fields:
+        details = ", ".join(
+            f"{field}={column_missing_ratio.get(field, 1.0):.2%}"
+            for field in sorted(set(unusable_optional_fields))
+        )
+        issues.append(
+            "Monitored qlib columns mostly unusable "
+            f"(missing ratio > {optional_field_missing_threshold:.0%}): {details}"
+        )
+
+    if features.empty and not probe_features.empty:
+        issues.append(
+            "Requested feature expressions yielded zero rows while probe fields have data; "
+            "check expression dependencies and column usability"
         )
 
     date_ok = expected_latest_date == last_qlib_date if expected_latest_date and last_qlib_date else False
@@ -158,5 +271,21 @@ def inspect_qlib_data_health(
         has_data_for_requested_date=has_data,
         gap_days=gap_days,
         aligned=aligned,
+        required_fields=required_fields_list,
+        monitored_fields=probe_fields,
+        column_missing_ratio=column_missing_ratio,
+        unusable_required_fields=sorted(set(unusable_required_fields)),
+        unusable_optional_fields=sorted(set(unusable_optional_fields)),
         issues=issues,
     )
+
+
+def assert_qlib_data_ready(
+    requested_date: str,
+    feature_fields: Iterable[str],
+    **kwargs,
+) -> DataHealthReport:
+    report = inspect_qlib_data_health(requested_date, feature_fields, **kwargs)
+    if not report.ok:
+        raise DataReadinessError(report)
+    return report

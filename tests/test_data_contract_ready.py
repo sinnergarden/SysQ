@@ -37,7 +37,8 @@ class TestDataContractReady(unittest.TestCase):
                 "open": [10.0],
                 "high": [11.0],
                 "low": [9.5],
-                "close": [10.5],
+                "close": [float("nan")],
+                "close_x": [10.5],
                 "vol": [2.0],
                 "amount": [3.0],  # thousand RMB from tushare
                 "adj_factor": [1.0],
@@ -59,6 +60,7 @@ class TestDataContractReady(unittest.TestCase):
         self.assertIn("paused", out.columns)
         self.assertAlmostEqual(out.loc[0, "volume"], 200.0)
         self.assertAlmostEqual(out.loc[0, "amount"], 3000.0)
+        self.assertAlmostEqual(out.loc[0, "close"], 10.5)
         self.assertAlmostEqual(out.loc[0, "vwap"], 15.0)
         self.assertAlmostEqual(out.loc[0, "high_limit"], 11.55)
         self.assertAlmostEqual(out.loc[0, "low_limit"], 9.45)

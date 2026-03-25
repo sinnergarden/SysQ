@@ -233,21 +233,27 @@ class QlibAdapter:
                 df = df.rename(columns=rename_map)
 
                 # Resolve duplicated market columns produced by merges
-                if "close" not in df.columns:
-                    if "close_x" in df.columns:
-                        df["close"] = df["close_x"]
-                    elif "close_y" in df.columns:
-                        df["close"] = df["close_y"]
-                if "date" not in df.columns and "trade_date" in df.columns:
-                    df["date"] = df["trade_date"]
-                if "factor" not in df.columns and "adj_factor" in df.columns:
-                    df["factor"] = df["adj_factor"]
-                if "volume" not in df.columns and "vol" in df.columns:
-                    df["volume"] = df["vol"]
-                if "high_limit" not in df.columns and "up_limit" in df.columns:
-                    df["high_limit"] = df["up_limit"]
-                if "low_limit" not in df.columns and "down_limit" in df.columns:
-                    df["low_limit"] = df["down_limit"]
+                def _coalesce_column(target_col: str, candidates: list[str]) -> None:
+                    existing = df[target_col] if target_col in df.columns else None
+                    if existing is not None and existing.notna().any():
+                        return
+                    merged = existing.copy() if existing is not None else None
+                    for candidate in candidates:
+                        if candidate not in df.columns:
+                            continue
+                        merged = df[candidate] if merged is None else merged.combine_first(df[candidate])
+                    if merged is not None:
+                        df[target_col] = merged
+
+                _coalesce_column("close", ["close_x", "close_y"])
+                _coalesce_column("open", ["open_x", "open_y"])
+                _coalesce_column("high", ["high_x", "high_y"])
+                _coalesce_column("low", ["low_x", "low_y"])
+                _coalesce_column("date", ["trade_date"])
+                _coalesce_column("factor", ["adj_factor"])
+                _coalesce_column("volume", ["vol"])
+                _coalesce_column("high_limit", ["up_limit"])
+                _coalesce_column("low_limit", ["down_limit"])
                 
                 # Unit Conversion (Tushare -> Qlib Standard)
                 # Tushare vol is in lots (100 shares), Qlib expects shares

@@ -31,7 +31,7 @@ import pandas as pd
 
 from qsys.config import cfg
 from qsys.data.adapter import QlibAdapter
-from qsys.data.health import inspect_qlib_data_health
+from qsys.data.health import assert_qlib_data_ready
 from qsys.reports.train import TrainingReport
 from qsys.utils.logger import log
 
@@ -101,10 +101,8 @@ def main(model, universe, start, end, run_backtest, backtest_start, backtest_end
         feature_config=feature_config,
     )
 
-    health = inspect_qlib_data_health(end, model_instance.feature_config, universe=universe)
+    health = assert_qlib_data_ready(end, model_instance.feature_config, universe=universe)
     log.info("\n" + health.to_markdown())
-    if not health.ok:
-        raise ValueError(f"Data health check failed before training: {health.issues}")
 
     # Data status for report
     data_status = {}
