@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import pandas as pd
 
@@ -64,6 +65,29 @@ class TestDataContractReady(unittest.TestCase):
         self.assertAlmostEqual(out.loc[0, "vwap"], 15.0)
         self.assertAlmostEqual(out.loc[0, "high_limit"], 11.55)
         self.assertAlmostEqual(out.loc[0, "low_limit"], 9.45)
+
+    def test_incremental_no_new_rows_rebuilds_when_aligned_core_fields_unusable(self):
+        adapter = QlibAdapter()
+
+        with patch.object(adapter, "_prepare_csvs", return_value=(self.root / "tmp_csv", 0)), \
+             patch.object(adapter, "_should_rebuild_corrupted_aligned_data", return_value=True), \
+             patch.object(adapter, "convert_all") as mock_convert_all, \
+             patch("qsys.data.adapter.os.utime") as mock_utime:
+            adapter.convert_incremental(pd.Timestamp("2026-03-25"))
+
+        mock_convert_all.assert_called_once()
+        mock_utime.assert_not_called()
+
+    def test_run_dump_script_refreshes_csi300_instruments(self):
+        adapter = QlibAdapter()
+        csv_dir = self.root / "csvs"
+        csv_dir.mkdir(parents=True, exist_ok=True)
+
+        with patch("qsys.data.adapter.subprocess.run") as mock_run, \
+             patch.object(adapter, "_clean_artifacts"):
+            adapter._run_dump_script(csv_dir, mode="dump_all")
+
+        self.assertGreaterEqual(mock_run.call_count, 2)
 
 
 if __name__ == "__main__":
