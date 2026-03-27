@@ -31,8 +31,9 @@ class TestLiveTrading(unittest.TestCase):
         
     def test_real_account_init(self):
         """Test RealAccount database initialization"""
-        account = RealAccount(db_path=self.db_path, account_name="test_acc")
-        conn = sqlite3.connect(self.db_path)
+        nested_db_path = os.path.join(self.test_dir, "nested", "state", "test_account.db")
+        account = RealAccount(db_path=nested_db_path, account_name="test_acc")
+        conn = sqlite3.connect(nested_db_path)
         cursor = conn.cursor()
         
         # Check tables exist
@@ -176,7 +177,14 @@ class TestLiveTrading(unittest.TestCase):
         self.assertEqual(exported_plan.iloc[0]["account_name"], "real")
         self.assertEqual(exported_plan.iloc[0]["signal_date"], "2025-01-02")
         self.assertEqual(exported_plan.iloc[0]["execution_date"], "2025-01-03")
+        self.assertEqual(exported_plan.iloc[0]["price_basis_date"], "2025-01-02")
+        self.assertEqual(exported_plan.iloc[0]["price_basis_field"], "close")
+        self.assertIn("2025-01-02", exported_plan.iloc[0]["price_basis_label"])
         self.assertEqual(exported_plan.iloc[0]["score_rank"], 1)
+        self.assertEqual(exported_plan.iloc[0]["plan_role"], "target_portfolio_delta")
+        self.assertEqual(exported_plan.iloc[0]["execution_bucket"], "after_sell_cash")
+        self.assertEqual(exported_plan.iloc[0]["cash_dependency"], "requires_available_cash")
+        self.assertEqual(exported_plan.iloc[0]["t1_rule"], "new_buy_not_sellable_until_next_session")
         self.assertIn("cash", exported_template.columns)
         self.assertIn("total_assets", exported_template.columns)
         self.assertIn("filled_amount", exported_template.columns)

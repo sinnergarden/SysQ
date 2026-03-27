@@ -19,12 +19,13 @@ class LiveManager:
     execution_date: the date the human/shadow account is expected to execute the plan.
     """
 
-    def __init__(self, model_path, db_path="data/real_account.db"):
+    def __init__(self, model_path, db_path="data/real_account.db", output_dir="data"):
         self.real_account = RealAccount(db_path)
         self.strategy = StrategyEngine(top_k=30)
         self.planner = PlanGenerator()
         self.model_path = model_path
         self.model = None
+        self.output_dir = output_dir
 
     def load_model(self):
         if self.model is None:
@@ -125,12 +126,23 @@ class LiveManager:
 
             outputs = export_plan_bundle(
                 plan_df,
-                output_dir="data",
+                output_dir=self.output_dir,
                 signal_date=signal_date,
                 plan_date=signal_date,
                 account_name=account_name,
                 execution_date=execution_date,
             )
+            if plan_df is None:
+                return None
+            plan_df = plan_df.copy()
+            plan_df["account_name"] = account_name
+            plan_df["signal_date"] = signal_date
+            plan_df["plan_date"] = signal_date
+            plan_df["execution_date"] = execution_date
+            plan_df["price_basis_date"] = signal_date
+            plan_df["price_basis_field"] = "close"
+            plan_df["price_basis_label"] = f"close@{signal_date} -> next-session execution plan"
+            plan_df["plan_role"] = "target_portfolio_delta"
             log.info(f"Plan saved to {outputs['plan']}")
             log.info(f"Real sync template saved to {outputs['real_sync_template']}")
             log.info(f"\n{self.planner.to_markdown(plan_df)}")
