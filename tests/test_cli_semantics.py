@@ -6,6 +6,7 @@ from qsys.data.adapter import QlibAdapter
 import scripts.run_daily_trading as run_daily_trading
 from scripts.run_daily_trading import (
     _resolve_cli_path,
+    extract_plan_summary,
     next_trading_day,
     previous_trading_day,
     resolve_signal_and_execution_date,
@@ -40,6 +41,22 @@ class TestCliSemantics(unittest.TestCase):
         self.assertTrue(resolved.is_absolute())
         self.assertEqual(resolved.name, "reports")
         self.assertIn("SysQ", str(resolved))
+
+    def test_extract_plan_summary_is_structured_and_low_noise(self):
+        plan = run_daily_trading.pd.DataFrame(
+            [
+                {"symbol": "000001.SZ", "side": "buy", "amount": 100, "est_value": 1200.0},
+                {"symbol": "000002.SZ", "side": "sell", "amount": 200, "est_value": 2300.0},
+                {"symbol": "000003.SZ", "side": "buy", "amount": 0, "est_value": 999.0},
+            ]
+        )
+        summary = extract_plan_summary(plan, "shadow", "2026-03-20", "2026-03-23")
+        self.assertEqual(summary["status"], "ready")
+        self.assertEqual(summary["trades"], 2)
+        self.assertEqual(summary["buy_trades"], 1)
+        self.assertEqual(summary["sell_trades"], 1)
+        self.assertEqual(summary["total_value"], 3500.0)
+        self.assertEqual(summary["symbols"], ["000001.SZ", "000002.SZ"])
 
     @patch("scripts.run_daily_trading.log")
     @patch("scripts.run_daily_trading.DailyOpsReport.save", return_value="/tmp/custom/daily_ops_pre_open_1.json")
