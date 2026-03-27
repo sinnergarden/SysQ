@@ -140,3 +140,84 @@ class StockDataStore:
     def get_calendar(self):
         with sqlite3.connect(self.meta_db_path) as conn:
             return pd.read_sql("SELECT * FROM trade_cal", conn)
+
+    # === Dragon-Tiger List (龙虎榜) Storage ===
+
+    def save_top_inst(self, df: pd.DataFrame, trade_date: str):
+        """Save top_inst (机构席位) data to SQLite."""
+        if df is None or df.empty:
+            return
+        table = "top_inst"
+        try:
+            with sqlite3.connect(self.meta_db_path) as conn:
+                conn.execute(f"""
+                    CREATE TABLE IF NOT EXISTS {table} (
+                        trade_date TEXT,
+                        ts_code TEXT,
+                        exalter TEXT,
+                        buy REAL,
+                        sell REAL,
+                        net_buy REAL,
+                        PRIMARY KEY (trade_date, ts_code, exalter)
+                    )
+                """)
+                df.to_sql(table, conn, if_exists='append', index=False, 
+                          method='multi', chunksize=1000)
+            log.info(f"Saved top_inst: {len(df)} records for {trade_date}")
+        except Exception as e:
+            log.error(f"Failed to save top_inst: {e}")
+
+    def save_top_list(self, df: pd.DataFrame, trade_date: str):
+        """Save top_list (龙虎榜列表) data to SQLite."""
+        if df is None or df.empty:
+            return
+        table = "top_list"
+        try:
+            with sqlite3.connect(self.meta_db_path) as conn:
+                conn.execute(f"""
+                    CREATE TABLE IF NOT EXISTS {table} (
+                        trade_date TEXT,
+                        ts_code TEXT,
+                        name TEXT,
+                        close REAL,
+                        pct_chg REAL,
+                        turnover_rate REAL,
+                        amount REAL,
+                        buyer_sum REAL,
+                        seller_sum REAL,
+                        net_amount REAL,
+                        reason TEXT,
+                        PRIMARY KEY (trade_date, ts_code)
+                    )
+                """)
+                df.to_sql(table, conn, if_exists='append', index=False,
+                          method='multi', chunksize=1000)
+            log.info(f"Saved top_list: {len(df)} records for {trade_date}")
+        except Exception as e:
+            log.error(f"Failed to save top_list: {e}")
+
+    def load_top_inst(self, trade_date: str = None) -> Optional[pd.DataFrame]:
+        """Load top_inst data, optionally filtered by trade_date."""
+        try:
+            with sqlite3.connect(self.meta_db_path) as conn:
+                if trade_date:
+                    return pd.read_sql(
+                        f"SELECT * FROM top_inst WHERE trade_date = '{trade_date}'", conn
+                    )
+                return pd.read_sql("SELECT * FROM top_inst", conn)
+        except Exception as e:
+            log.error(f"Failed to load top_inst: {e}")
+            return None
+
+    def load_top_list(self, trade_date: str = None) -> Optional[pd.DataFrame]:
+        """Load top_list data, optionally filtered by trade_date."""
+        try:
+            with sqlite3.connect(self.meta_db_path) as conn:
+                if trade_date:
+                    return pd.read_sql(
+                        f"SELECT * FROM top_list WHERE trade_date = '{trade_date}'", conn
+                    )
+                return pd.read_sql("SELECT * FROM top_list", conn)
+        except Exception as e:
+            log.error(f"Failed to load top_list: {e}")
+            return None

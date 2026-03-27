@@ -1,7 +1,10 @@
 
 import sqlite3
-import pandas as pd
+from pathlib import Path
 from typing import Optional
+
+import pandas as pd
+
 from qsys.utils.logger import log
 
 class RealAccount:
@@ -11,11 +14,12 @@ class RealAccount:
     Supports multiple accounts via 'account_name'.
     """
     def __init__(self, db_path="data/real_account.db", account_name="default"):
-        self.db_path = db_path
+        self.db_path = str(db_path)
         self.account_name = account_name
         self._init_db()
 
     def _init_db(self):
+        Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         

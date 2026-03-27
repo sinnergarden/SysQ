@@ -86,6 +86,18 @@ class TestRunReports(unittest.TestCase):
         self.assertEqual(report.status, ReportStatus.PARTIAL)
         self.assertIn("Data health check failed", report.blockers)
 
+    def test_daily_report_rejects_stale_plan_summary(self):
+        with self.assertRaises(ValueError):
+            DailyOpsReport.generate_pre_open_report(
+                signal_date="2026-03-20",
+                execution_date="2026-03-23",
+                data_status={"aligned": True},
+                model_info={"model_path": "data/models/qlib_lgbm"},
+                shadow_plan_summary={"trades": 5, "signal_date": "2026-03-13"},
+                real_plan_summary={"trades": 2, "signal_date": "2026-03-20"},
+                blockers=[],
+            )
+
     def test_daily_report_data_anomaly(self):
         """Test that data anomalies are captured in notes"""
         report = DailyOpsReport.generate_pre_open_report(

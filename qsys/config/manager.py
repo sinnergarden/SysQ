@@ -75,7 +75,8 @@ class ConfigManager:
                     "total_mv", "circ_mv", "adj_factor", "up_limit", "down_limit",
                 ],
                 "financial_cols": [
-                    "net_income", "revenue", "total_assets", "equity", "roe", "op_cashflow",
+                    "net_income", "revenue", "oper_cost", "total_assets", "equity",
+                    "total_cur_assets", "total_cur_liab", "roe", "op_cashflow",
                     "q_dt_profit", "q_gr_yoy", "roe_ttm", "grossprofit_margin",
                     "debt_to_assets", "current_ratio",
                 ],
@@ -87,6 +88,44 @@ class ConfigManager:
                 "derived_fields": {
                     "moneyflow": ["big_inflow", "net_inflow"]
                 },
+                "interfaces": {
+                    "margin": {
+                        "interface": "margin_detail",
+                        "fields": "ts_code,trade_date,rzye,rzmre,rzche,rzrqye,rqyl,rqmcl,rqchl",
+                        "rename": {
+                            "rzye": "margin_balance",
+                            "rzmre": "margin_buy_amount",
+                            "rzche": "margin_repay_amount",
+                            "rzrqye": "margin_total_balance",
+                            "rqyl": "lend_volume",
+                            "rqmcl": "lend_sell_volume",
+                            "rqchl": "lend_repay_volume",
+                        }
+                    },
+                    "income": {
+                        "interface": "income",
+                        "fields": "ts_code,ann_date,end_date,n_income,revenue,oper_cost",
+                    },
+                    "balancesheet": {
+                        "interface": "balancesheet",
+                        "fields": "ts_code,ann_date,end_date,total_assets,total_hldr_eqy_exc_min_int,total_cur_assets,total_cur_liab",
+                    },
+                    "cashflow": {
+                        "interface": "cashflow",
+                        "fields": "ts_code,ann_date,end_date,n_cashflow_act",
+                    },
+                    "fina_indicator": {
+                        "interface": "fina_indicator",
+                        "fields": "ts_code,ann_date,end_date,roe,roe_waa,grossprofit_margin,debt_to_assets,current_ratio,q_dtprofit,q_gr_yoy",
+                        "rename": {
+                            "q_dtprofit": "q_dt_profit",
+                        },
+                    }
+                },
+                "margin_cols": [
+                    "margin_balance", "margin_buy_amount", "margin_repay_amount",
+                    "margin_total_balance", "lend_volume", "lend_sell_volume", "lend_repay_volume"
+                ]
             },
             "adapter": {
                 "rename_map": {
@@ -95,6 +134,14 @@ class ConfigManager:
                     "vol": "volume",
                     "up_limit": "high_limit",
                     "down_limit": "low_limit",
+                    # Margin financing (两融) - already renamed in collector, but ensure consistency
+                    "margin_balance": "margin_balance",
+                    "margin_buy_amount": "margin_buy_amount",
+                    "margin_repay_amount": "margin_repay_amount",
+                    "margin_total_balance": "margin_total_balance",
+                    "lend_volume": "lend_volume",
+                    "lend_sell_volume": "lend_sell_volume",
+                    "lend_repay_volume": "lend_repay_volume",
                 },
                 "qlib_fields": [
                     "open", "high", "low", "close", "volume", "amount", "factor",
@@ -104,6 +151,9 @@ class ConfigManager:
                     "net_income", "revenue", "total_assets", "equity", "roe", "op_cashflow",
                     "q_dt_profit", "q_gr_yoy", "roe_ttm", "grossprofit_margin",
                     "debt_to_assets", "current_ratio",
+                    # Margin financing (两融) - first batch
+                    "margin_balance", "margin_buy_amount", "margin_repay_amount",
+                    "margin_total_balance", "lend_volume", "lend_sell_volume", "lend_repay_volume",
                 ]
             }
         }

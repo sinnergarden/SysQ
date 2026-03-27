@@ -61,7 +61,7 @@ PY
 ```bash
 python scripts/run_update.py --universe csi300 --start 20230101
 python scripts/create_instrument_csi300.py
-python scripts/run_daily_trading.py --date 2026-03-20 --skip_update
+python scripts/run_daily_trading.py --date 2026-03-20 --require_update_success
 ```
 
 成功标准：
@@ -71,6 +71,8 @@ python scripts/run_daily_trading.py --date 2026-03-20 --skip_update
 
 失败处理：
 - 优先修数据，不跳过数据问题直接出计划
+- `--skip_update` 只用于 debug / 回放 / 已确认数据完整的补跑，不应作为长期盘前默认
+- 生产盘前建议加 `--require_update_success`，显式刷新失败或 raw/qlib 仍未对齐时直接阻断
 
 #### Step B. 生产模型检查
 
@@ -93,9 +95,32 @@ python scripts/run_daily_trading.py --date 2026-03-20 --skip_update
 python scripts/run_daily_trading.py --date 2026-03-20 --execution_date 2026-03-23
 ```
 
+小账户生产路径（20k，top_k=5，min_trade=1000，运营产物不写入 `SysQ/data/**`）建议直接用：
+
+```bash
+/home/liuming/.openclaw/workspace/.mamba/envs/dl/bin/python scripts/run_daily_trading.py \
+  --date 2026-03-23 \
+  --require_update_success \
+  --db_path /home/liuming/.openclaw/workspace/positions/qsys_real_account.db \
+  --output_dir /home/liuming/.openclaw/workspace/orders \
+  --report_dir /home/liuming/.openclaw/workspace/daily
+```
+
+说明：
+- `--date` 传未来交易日时，会自动回退上一交易日作为 `signal_date`
+- 以上命令默认已使用 `top_k=5`、`min_trade=1000`、`real_cash=20000`
+- 如需显式覆盖，也可追加 `--top_k 5 --min_trade 1000 --real_cash 20000`
+
 当前语义：
-- `signal_date`：可用市场数据日期
+- `signal_date`：可用市场数据日期，用于生成目标组合
 - `execution_date`：计划执行日期
+- `plan_*.csv` 本质是 **target portfolio delta**，不是“保证能全部成交的委托回报”
+- `price` / `price_basis_*` 表示生成该计划时使用的信号日价格基准（默认 `close@signal_date`），不是盘中实时价，也不是已成交价格
+- 对 A 股默认基线执行语义：
+  - 先卖旧持仓，优先集合竞价 / 开盘阶段处理
+  - 待现金回流后再买入目标新增仓位
+  - 接受滑点、未成交、部分成交，因此真实结果要以盘后回填为准
+  - 当日新买入仓位遵守 T+1，需到下一交易日才可卖出
 
 成功标准：
 - 生成 `plan_*.csv`
@@ -115,6 +140,8 @@ python scripts/run_daily_trading.py --date 2026-03-20 --execution_date 2026-03-2
 - 是否有大量不可交易标的
 - 小账户是否因为最小成交额约束导致 plan 为空或失真
 - real / shadow 是否严重偏离
+- `plan_*.csv` 中 sell 是否基本覆盖旧仓退出、buy 是否明显依赖卖出回款
+- 若连续 shadow 多日运行，检查前一日盘后回填是否已完成，否则第二天 real plan continuity 会失真
 
 ---
 
@@ -126,6 +153,18 @@ python scripts/run_daily_trading.py --date 2026-03-20 --execution_date 2026-03-2
 
 ```bash
 python scripts/run_post_close.py --date 2026-03-20 --real_sync broker/real_sync_2026-03-20.csv
+```
+
+若运营写边界不允许落到 `SysQ/data/**`，则改用：
+
+```bash
+/home/liuming/.openclaw/workspace/.mamba/envs/dl/bin/python scripts/run_post_close.py \
+  --date 2026-03-23 \
+  --real_sync /home/liuming/.openclaw/workspace/orders/real_sync_2026-03-23.csv \
+  --db_path /home/liuming/.openclaw/workspace/positions/qsys_real_account.db \
+  --plan_dir /home/liuming/.openclaw/workspace/orders \
+  --output_dir /home/liuming/.openclaw/workspace/runs/reconciliation \
+  --report_dir /home/liuming/.openclaw/workspace/daily
 ```
 
 盘后必须完成：
@@ -155,6 +194,19 @@ python scripts/run_post_close.py --date 2026-03-20 --real_sync broker/real_sync_
 - 真实账户状态已落盘
 - 对账结果可追踪
 - 下一交易日可继续接续运行
+
+### 3.3 连续数日 shadow trial 的最小纪律
+
+每天只抓三件事：
+- 盘前：显式刷新数据并通过健康检查，再出 next-day plan
+- 盘中/执行后：按 `plan_*.csv` 的 sell -> buy 基线语义记录真实执行，不把 target portfolio 误当成已成交结果
+- 盘后：完成真实 CSV 回填与 reconciliation，确保第二天 real/shadow continuity 依赖的是最新状态
+
+建议连续观察：
+- 数据更新是否稳定对齐到上一交易日
+- shadow 与 real 的现金/持仓偏差是否日积月累
+- 小账户在 `top_k=5`、`min_trade=1000` 下是否长期出现“有目标但买不进去/卖不干净”
+- T+1 与部分成交是否导致第二天计划出现连续残留仓位
 
 ---
 
