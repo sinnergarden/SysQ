@@ -9,6 +9,16 @@
 - **FEATURES（功能）**：每个新功能一份文档，描述目标、用例、约束、验收标准。
 - **ADR（决策）**：记录跨功能、长期有效的架构与工程决策。
 - **TESTING / RUNBOOK / STYLEGUIDE（执行规范）**：测试、运维、代码风格规则。
+- **ops/**：中文运营 SOP，给人和 agent 共用，包含盘前、数据链路、模型操作、盘后、readiness 口径。
+
+当前运营文档入口：
+
+- `RUNBOOK.md`
+- `ops/PRE_OPEN_SOP.md`
+- `ops/DATA_PIPELINE_SOP.md`
+- `ops/MODEL_OPS_SOP.md`
+- `ops/POST_CLOSE_SOP.md`
+- `ops/READINESS.md`
 
 ## ADR 与 FEATURES 的关系
 

@@ -1,429 +1,297 @@
-# RUNBOOK
+# SysQ 运行总手册（RUNBOOK）
 
-本文档描述 Qsys 的**日常运营流程、周级投研流程、候选晋级流程与异常处理流程**。
-目标不是“列命令”，而是定义一套可稳定执行、可审计、可回滚的操作规程。
+本文档是 SysQ 的中文总运行手册。目标不是教人“背命令”，而是把日常运营、异常处理、目录边界、日期语义、产物契约写成一套**人也能独立执行、agent 改代码后也不能轻易破坏**的规则。
 
----
+## 1. 适用范围
 
-## 1. 操作原则
+本手册覆盖：
 
-默认遵守：
+- 盘前计划生成
+- 数据链路检查与修复分流
+- 模型日常运营与周级维护
+- 收盘后真实账户回填与对账
+- readiness 口径说明
+- 开发侧必须遵守的 CLI / 报告 / 路径契约
 
-- 先确认数据 ready，再训练、回测、出计划
-- 生产与研究分离，不拿研究产物直接上线
-- 每次运行必须能回答：
-  - 做了什么
-  - 用了什么数据
-  - 用了哪个模型
-  - 得到了什么结果
-  - 下一步是什么
-- 新功能优先收束到现有入口脚本，不轻易新增脚本
-- 脚本变更必须同步补文档与测试
+不覆盖：
 
----
+- 无关实验记录
+- 临时研究草稿
+- 运营账本细节
 
-## 2. 环境准备
+## 2. 文档入口
 
-```bash
-pip install -r requirements.txt
-export PYTHONPATH=$PYTHONPATH:$(pwd)
-cp config/settings.example.yaml config/settings.yaml
-```
+当前以这几份文档为准：
 
-最小配置校验：
+- `docs/RUNBOOK.md`：总手册，定义原则、边界、统一口径
+- `docs/ops/PRE_OPEN_SOP.md`：盘前 SOP
+- `docs/ops/DATA_PIPELINE_SOP.md`：数据链路 SOP
+- `docs/ops/MODEL_OPS_SOP.md`：模型操作 SOP
+- `docs/ops/POST_CLOSE_SOP.md`：收盘后 SOP
+- `docs/ops/READINESS.md`：readiness 分层口径说明
 
-```bash
-python - <<'PY'
-from qsys.config.manager import cfg
-print('data_root=', cfg.data_root)
-print('qlib_bin=', cfg.get_path('qlib_bin'))
-PY
-```
+旧文档处理原则：
 
----
+- `docs/SOP_DAILY_OPS.md`、`docs/SOP_DAILY_OPS_v1.0.md` 保留作历史参考，不再作为当前执行依据
+- 后续如与本手册冲突，以本手册及 `docs/ops/*.md` 为准
 
-## 3. Daily Ops（周一到周五）
+## 3. 目录约定
 
-### 3.1 盘前 checklist
+### 3.1 仓库内开发目录
 
-目标：为下一个交易日生成可执行计划。
+这些路径属于 SysQ 仓库内可被代码直接管理的开发产物：
 
-#### Step A. 数据 readiness 检查
+- `qsys/`：核心代码
+- `scripts/`：标准 CLI 入口
+- `tests/`：回归测试
+- `docs/`：规范文档
+- `data/models/`：模型产物
+- `data/reports/`：结构化 JSON 报告
+- `data/`：仓库内默认计划与模板产物
 
-必须确认：
-- raw 已更新到上一交易日
-- qlib 已对齐到上一交易日
-- universe/instrument 可用
-- 关键字段缺失不异常
+### 3.2 仓库外运营目录
 
-典型入口：
+真实运营时，建议把以下内容重定向到仓库外运营目录：
 
-```bash
-python scripts/run_update.py --universe csi300 --start 20230101
-python scripts/create_instrument_csi300.py
-python scripts/run_daily_trading.py --date 2026-03-20 --require_update_success
-```
+- 账户数据库：`--db_path`
+- 盘前产物目录：`--output_dir`
+- 报告目录：`--report_dir`
+- 盘后对账输出目录：`run_post_close.py --output_dir`
 
-成功标准：
-- `raw_latest == last_qlib_date`
-- `aligned == True`
-- requested date 有 feature rows
+原因：
 
-失败处理：
-- 优先修数据，不跳过数据问题直接出计划
-- `--skip_update` 只用于 debug / 回放 / 已确认数据完整的补跑，不应作为长期盘前默认
-- 生产盘前建议加 `--require_update_success`，显式刷新失败或 raw/qlib 仍未对齐时直接阻断
+- 运营产物与开发仓库分离
+- 避免测试或 agent 改代码时覆盖真实运行数据
+- 更容易审计与回滚
 
-#### Step B. 生产模型检查
+## 4. 核心状态定义
 
-必须确认：
-- production model 存在
-- model metadata 完整
-- 模型未过期，或已按周级流程完成重训
+### 4.1 日期语义
 
-当前入口：
-- `qsys.live.scheduler.ModelScheduler`
+必须固定以下含义：
 
-目标状态：
-- production model 应由 manifest 明确指定，而不是只靠“最新目录”
+- `signal_date`：信号来源日期，即用于生成计划的收盘日
+- `execution_date`：计划执行日期，即下一交易日的人类/实盘执行日
+- `plan_date`：当前与 `signal_date` 同义，用于产物命名
 
-#### Step C. 生成次日计划
+硬规则：
 
-当前主入口：
+- 盘前推荐默认基于 **T-1 收盘**
+- 若用户直接传未来交易日给 `run_daily_trading.py --date`，该日期视为 `execution_date`，脚本必须回退上一交易日作为 `signal_date`
+- 不允许把 `signal_date` 与 `execution_date` 混写
+- 盘后报告若读取盘前计划，应优先以计划里的 `signal_date` 为准
 
-```bash
-python scripts/run_daily_trading.py --date 2026-03-20 --execution_date 2026-03-23
-```
+### 4.2 readiness 分层
 
-小账户生产路径（20k，top_k=5，min_trade=1000，运营产物不写入 `SysQ/data/**`）建议直接用：
+SysQ 当前把 readiness 分为三层：
 
-```bash
-/home/liuming/.openclaw/workspace/.mamba/envs/dl/bin/python scripts/run_daily_trading.py \
-  --date 2026-03-23 \
-  --require_update_success \
-  --db_path /home/liuming/.openclaw/workspace/positions/qsys_real_account.db \
-  --output_dir /home/liuming/.openclaw/workspace/orders \
-  --report_dir /home/liuming/.openclaw/workspace/daily
-```
+- `core_daily_status`：日常交易主链路，阻断级
+- `pit_status`：基本面 PIT 层，告警级
+- `margin_status`：融资融券层，告警级
 
-说明：
-- `--date` 传未来交易日时，会自动回退上一交易日作为 `signal_date`
-- 以上命令默认已使用 `top_k=5`、`min_trade=1000`、`real_cash=20000`
-- 如需显式覆盖，也可追加 `--top_k 5 --min_trade 1000 --real_cash 20000`
+解释见 `docs/ops/READINESS.md`。
 
-当前语义：
-- `signal_date`：可用市场数据日期，用于生成目标组合
-- `execution_date`：计划执行日期
-- `plan_*.csv` 本质是 **target portfolio delta**，不是“保证能全部成交的委托回报”
-- `price` / `price_basis_*` 表示生成该计划时使用的信号日价格基准（默认 `close@signal_date`），不是盘中实时价，也不是已成交价格
-- 对 A 股默认基线执行语义：
-  - 先卖旧持仓，优先集合竞价 / 开盘阶段处理
-  - 待现金回流后再买入目标新增仓位
-  - 接受滑点、未成交、部分成交，因此真实结果要以盘后回填为准
-  - 当日新买入仓位遵守 T+1，需到下一交易日才可卖出
+### 4.3 运行状态
 
-成功标准：
-- 生成 `plan_*.csv`
-- 生成 `real_sync_template_*.csv`
-- 计划包含：
-  - symbol
-  - side
-  - amount
-  - price
-  - weight
-  - score / score_rank
+结构化报告统一使用：
 
-#### Step D. 人工复核
+- `success`
+- `partial`
+- `failed`
+- `skipped`
+- `pending`
 
-盘前人工复核至少看：
-- 当日 top picks 是否异常集中
-- 是否有大量不可交易标的
-- 小账户是否因为最小成交额约束导致 plan 为空或失真
-- real / shadow 是否严重偏离
-- `plan_*.csv` 中 sell 是否基本覆盖旧仓退出、buy 是否明显依赖卖出回款
-- 若连续 shadow 多日运行，检查前一日盘后回填是否已完成，否则第二天 real plan continuity 会失真
+建议理解：
 
----
+- `success`：流程完成且契约满足
+- `partial`：流程产出不完整或存在 blocker / 单侧空计划 / 对账异常
+- `failed`：运行直接失败，无法继续
+- `skipped`：因空计划或明确跳过而无实际执行
 
-### 3.2 盘后 checklist
+## 5. 标准输入输出契约
 
-目标：回写真实状态并完成 real vs shadow 对账。
+### 5.1 盘前 CLI：`scripts/run_daily_trading.py`
 
-主入口：
+输入至少包括：
 
-```bash
-python scripts/run_post_close.py --date 2026-03-20 --real_sync broker/real_sync_2026-03-20.csv
-```
+- `--date`
+- 可选 `--execution_date`
+- 可选 `--model_path`
+- 可选 `--db_path`
+- 可选 `--output_dir`
+- 可选 `--report_dir`
+- 可选 `--require_update_success`
 
-若运营写边界不允许落到 `SysQ/data/**`，则改用：
+输出必须至少包括：
 
-```bash
-/home/liuming/.openclaw/workspace/.mamba/envs/dl/bin/python scripts/run_post_close.py \
-  --date 2026-03-23 \
-  --real_sync /home/liuming/.openclaw/workspace/orders/real_sync_2026-03-23.csv \
-  --db_path /home/liuming/.openclaw/workspace/positions/qsys_real_account.db \
-  --plan_dir /home/liuming/.openclaw/workspace/orders \
-  --output_dir /home/liuming/.openclaw/workspace/runs/reconciliation \
-  --report_dir /home/liuming/.openclaw/workspace/daily
-```
+- `plan_<signal_date>_shadow.csv`
+- `plan_<signal_date>_real.csv`
+- `real_sync_template_<signal_date>_shadow.csv`
+- `real_sync_template_<signal_date>_real.csv`
+- `daily_ops_pre_open_*.json`
 
-盘后必须完成：
-- 回填真实持仓 / 现金 / 总资产
-- 若有成交，补成交信息
-- 完成 reconciliation
-- 检查 real vs shadow 偏差
+计划 CSV 必须保留关键字段：
 
-当前最小必填列：
 - `symbol`
+- `side`
 - `amount`
 - `price`
-- `cost_basis`
-- `cash`
-- `total_assets`
+- `weight`
+- `score`
+- `score_rank`
+- `signal_date`
+- `execution_date`
+- `plan_role`
+- `price_basis_date`
+- `price_basis_field`
+- `price_basis_label`
 
-建议补充列：
-- `side`
-- `filled_amount`
-- `filled_price`
-- `fee`
-- `tax`
-- `total_cost`
-- `order_id`
+### 5.2 盘后 CLI：`scripts/run_post_close.py`
 
-成功标准：
-- 真实账户状态已落盘
-- 对账结果可追踪
-- 下一交易日可继续接续运行
+输入至少包括：
 
-### 3.3 连续数日 shadow trial 的最小纪律
+- `--date`
+- `--real_sync`
+- 可选 `--db_path`
+- 可选 `--plan_dir`
+- 可选 `--output_dir`
+- 可选 `--report_dir`
 
-每天只抓三件事：
-- 盘前：显式刷新数据并通过健康检查，再出 next-day plan
-- 盘中/执行后：按 `plan_*.csv` 的 sell -> buy 基线语义记录真实执行，不把 target portfolio 误当成已成交结果
-- 盘后：完成真实 CSV 回填与 reconciliation，确保第二天 real/shadow continuity 依赖的是最新状态
+输出必须至少包括：
 
-建议连续观察：
-- 数据更新是否稳定对齐到上一交易日
-- shadow 与 real 的现金/持仓偏差是否日积月累
-- 小账户在 `top_k=5`、`min_trade=1000` 下是否长期出现“有目标但买不进去/卖不干净”
-- T+1 与部分成交是否导致第二天计划出现连续残留仓位
+- reconciliation 汇总产物
+- 结构化 `daily_ops_post_close_*.json`
+- 对账结果中的 real / shadow 差异摘要
 
----
+### 5.3 报告契约
 
-## 4. Weekly Model Ops（周级模型运营）
+所有关键流程都应能回答：
 
-目标：维持模型新鲜度，同时避免把研究噪音直接带进生产。
+- 用了什么数据
+- 用了哪个模型
+- `signal_date` / `execution_date` 是什么
+- 产物落在哪里
+- blocker 是什么
+- 下一步怎么做
 
-### 周级流程建议
+## 6. 成功标准
 
-1. 确认数据已更新到最近交易日
-2. 运行周级重训
-3. 运行固定口径回测
-4. 与当前 baseline / production 比较
-5. 判断是否进入 candidate
-6. 通过后再人工批准进 production
+### 6.1 盘前成功
 
-当前主入口：
+- 数据 readiness 通过
+- 模型可加载
+- real / shadow 都能生成计划，或空计划有明确原因
+- 报告中日期语义与计划日期一致
+- 产物路径与 CLI 指定目录一致
 
-```bash
-python scripts/run_train.py --model qlib_lgbm --start 2020-01-01 --end 2026-03-20 --feature_set extended
-python scripts/run_strict_eval.py --test_start 2025-01-01 --test_end 2026-03-20 --top_k 5
-```
+### 6.2 数据链路成功
 
-### 周级评估口径（当前共识）
+- `raw_latest == last_qlib_date == expected_latest_date`
+- 请求日有可用特征行
+- 核心日线字段可用
+- PIT / margin 异常只作为告警，不冒充主链路 ready
 
-默认：
-- train 窗口足够长
-- 避免 train/test overlap
-- 主看 `2025 -> 最近`
-- 辅看 `2026 YTD`
-- 回测默认 `top_k=5`
+### 6.3 模型运营成功
 
-评估必须至少包含：
-- 总收益
-- 年化收益
-- Sharpe
-- 最大回撤
-- 交易次数 / 换手 / 费用
-- baseline 对比
+- 生产模型可解析
+- 训练/评估结果可追溯
+- 替换生产模型前有明确对比和回滚点
 
----
+### 6.4 盘后成功
 
-## 5. Research Runbook（不固定投研流程）
+- 真实账户现金/持仓/总资产已回填
+- real trade log 可追溯
+- real vs shadow 已对账
+- 次日可以继续接续运行
 
-目标：研究新因子、新模型、新策略，但不污染生产。
+## 7. 常见故障
 
-### 5.1 立项规则
-
-每个研究任务至少回答：
-- 研究什么
-- 相对 baseline 的假设是什么
-- 用什么评估口径证明有效
-- 如果有效，准备如何晋级
-
-### 5.2 当前研究优先级共识
-
-- 不做 feature selection
-- 优先引入一组保守的资金流 / 基本面 / 估值因子
-- 季度字段谨慎对待，不默认并主线
-- 评估优先看严格 out-of-sample，而不是训练内漂亮指标
-
-### 5.3 研究产物要求
-
-至少包括：
-- feature set 定义
-- train window
-- test window
-- backtest 参数
-- 指标表
-- 是否值得晋级的结论
-
-### 5.4 晋级条件（从 research 到 candidate）
-
-至少满足：
-- 比 baseline 有明确增量
-- 不是靠 train/test 泄漏
-- 风险指标不恶化太多
-- 可复现
-- 数据质量没有明显作弊/未来函数风险
-
----
-
-## 6. Promotion Runbook（candidate -> production）
-
-当前这部分仍偏人工，但流程应先明确：
-
-1. 研究结果整理为 candidate 报告
-2. 与当前 production 对比
-3. 明确替换理由与风险
-4. 保留回滚目标
-5. 人工批准
-6. 切换 production model / manifest
-
-当前 repo 中这块尚未完全产品化，是近期优先任务之一。
-
----
-
-## 7. 标准运行报告（所有重要流程都应产出）
-
-后续统一要求以下字段：
-
-- task_name
-- run_time
-- input_params
-- data_status
-- universe
-- model_version
-- feature_set
-- metrics
-- decision
-- blocker
-- next_action
-
-适用流程：
-- 数据更新
-- 训练
-- 回测
-- 严格评估
-- 每日计划
-- 盘后对账
-
----
-
-## 8. 常用命令
-
-### 数据
-
-```bash
-python scripts/run_update.py --universe csi300 --start 20230101
-python scripts/create_instrument_csi300.py
-python scripts/update_data_all.py
-```
-
-### 训练与评估
-
-```bash
-python scripts/run_train.py --model qlib_lgbm --start 2020-01-01 --end 2026-03-20 --feature_set alpha158
-python scripts/run_train.py --model qlib_lgbm --start 2020-01-01 --end 2026-03-20 --feature_set extended
-python scripts/run_backtest.py --model_path data/models/qlib_lgbm_extended --start 2025-01-01 --end 2026-03-20 --top_k 5
-python scripts/run_strict_eval.py --test_start 2025-01-01 --test_end 2026-03-20 --top_k 5
-```
-
-### 日常运营
-
-```bash
-python scripts/run_daily_trading.py --date 2026-03-20 --execution_date 2026-03-23
-python scripts/run_post_close.py --date 2026-03-20 --real_sync broker/real_sync_2026-03-20.csv
-```
-
-### 测试
-
-```bash
-python -m unittest discover tests
-python -m compileall qsys scripts tests
-```
-
----
-
-## 9. 常见故障与处理
-
-### 9.1 数据未对齐
+### 7.1 数据不齐
 
 表现：
-- `raw_latest != last_qlib_date`
-- requested_date 无数据
+
+- `last_qlib_date < expected_latest_date`
+- `feature_rows == 0`
+- `No probe rows available`
 
 处理：
-- 先修 raw -> qlib 闭环
-- 再重跑训练 / plan
-- 不允许带着错数据继续
 
-### 9.2 模型元信息不完整
+- 先走 `DATA_PIPELINE_SOP`
+- 不允许带着 stale 数据继续盘前生成
+
+### 7.2 计划产物写错目录
 
 表现：
-- scheduler 读不出 model age
-- retrain check 失效
+
+- 文档要求写运营目录，实际却落到 `SysQ/data/`
+- 报告中的 artifact path 与实际 CLI 配置不一致
 
 处理：
-- 检查 `meta.yaml` 与 `training_summary.csv`
-- 补齐产物元信息
 
-### 9.3 plan 为空
+- 检查 `--db_path` / `--output_dir` / `--report_dir`
+- 检查报告中的 artifact path 是否为绝对路径且指向指定目录
+
+### 7.3 日期语义混乱
 
 表现：
-- No trades planned
 
-可能原因：
-- 小账户受最小交易额约束
-- 候选标的不满足交易条件
-- 账户状态不正确
+- `signal_date` 与 `execution_date` 被写成同一天
+- 盘后对账把执行日误当信号日
 
 处理：
-- 先看账户资产规模与 `min_trade`
-- 再看标的是否可交易
-- 再看 real / shadow 状态是否失真
 
-### 9.4 回测看起来很好，但不可信
+- 先核对计划 CSV 中两个字段
+- 再核对结构化报告中的两个字段
+- 若不一致，视为开发缺陷，必须补测试再修
 
-优先检查：
-- 是否 train/test overlap
-- 回测窗口是否太短
-- 是否只看训练内指标
-- 是否存在未来函数 / 数据泄漏
+### 7.4 readiness 误用
 
----
+表现：
 
-## 10. 当前待补强处
+- PIT / margin 缺失被当成主链路阻断
+- 或核心日线 stale 却仍显示 ready
 
-这份 runbook 落地后，下一阶段重点是：
+处理：
 
-- production manifest / candidate promotion 正式化
-- 统一 evaluator / run report
-- 盘前与盘后 checklist 产品化
-- 脚本收束与 legacy 入口淘汰
+- 以 `core_daily_status` 为主链路阻断口径
+- PIT / margin 仅为分层告警，不能掩盖核心 stale
 
-Runbook 负责回答：
-- 每天怎么跑
-- 每周怎么评估和替换模型
-- 研究结果怎么进入生产
-- 出问题先查哪
+## 8. 人工接管方式
+
+当自动链路失败时，人工应按以下顺序接管：
+
+1. 先确认数据是否 ready
+2. 再确认模型是否可用
+3. 再确认账户数据库与昨日状态是否连续
+4. 最后决定是否继续生成计划或直接阻断
+
+人工接管必须留下：
+
+- 原因
+- 接管人
+- 接管时间
+- 使用的输入文件/目录
+- 是否恢复自动运行
+
+## 9. 对开发的硬约束
+
+后续任何 agent / 开发者改动以下内容时，必须同步更新测试或文档：
+
+- `run_daily_trading.py` / `run_post_close.py` CLI 语义
+- 关键报告字段
+- `signal_date` / `execution_date` 契约
+- `plan_*.csv` 与 `real_sync_template_*.csv` 命名与路径契约
+- readiness 分层口径
+
+最低要求：
+
+- 现有回归测试必须继续通过
+- 新增契约必须先写文档，再补最小测试
+
+## 10. 建议执行顺序
+
+- 盘前：看 `PRE_OPEN_SOP.md`
+- 数据异常：看 `DATA_PIPELINE_SOP.md`
+- 模型切换/重训：看 `MODEL_OPS_SOP.md`
+- 收盘后：看 `POST_CLOSE_SOP.md`
+- 不确定 readiness 判断：看 `READINESS.md`

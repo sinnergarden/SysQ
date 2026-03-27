@@ -50,12 +50,14 @@ def update_data(force=True):
         adapter = QlibAdapter()
         # Use the explicit refresh to close the raw->qlib loop
         adapter.refresh_qlib_date()
-        
+
         # Print status report
         report = adapter.get_data_status_report()
         log.info(f"Data status: raw={report.get('raw_latest')}, qlib={report.get('qlib_latest')}, aligned={report.get('aligned')}")
+        return True, report
     except Exception as e:
         log.error(f"Failed to update data: {e}")
+        return False, {"error": str(e), "aligned": False}
 
 
 def next_trading_day(signal_date: str) -> str:
@@ -137,16 +139,27 @@ def resolve_signal_and_execution_date(date_arg: str | None, execution_date_arg: 
     return today, next_trading_day(today)
 
 
+def _resolve_cli_path(path_str: str) -> str:
+    path = Path(path_str).expanduser()
+    if not path.is_absolute():
+        path = project_root / path
+    return str(path)
+
+
 def main():
     start_time = time.time()
     blockers = []
-    
+
     parser = argparse.ArgumentParser(description="Run Daily Trading Workflow (Real + Shadow)")
     parser.add_argument("--date", type=str, default=datetime.now().strftime("%Y-%m-%d"), help="Signal date or target execution date. If a future trading day is given without --execution_date, it is treated as execution date and the previous trading day is used as signal_date.")
     parser.add_argument("--execution_date", type=str, help="Execution Date (YYYY-MM-DD). Defaults to next trading day after signal date")
     parser.add_argument("--model_path", type=str, help="Path to model directory")
     parser.add_argument("--real_sync", type=str, help="Path to CSV file with Real Account state (cash, positions)")
+    parser.add_argument("--db_path", default="data/real_account.db", help="SQLite account database path")
+    parser.add_argument("--output_dir", default="data", help="Directory to write plan and sync-template artifacts")
+    parser.add_argument("--report_dir", default="data/reports", help="Directory to write structured JSON reports")
     parser.add_argument("--skip_update", action="store_true", help="Skip data update")
+    parser.add_argument("--require_update_success", action="store_true", help="Abort if the explicit data refresh step fails")
     parser.add_argument("--shadow_cash", type=float, default=1_000_000.0, help="Initial cash for Shadow Account")
     parser.add_argument("--real_cash", type=float, default=20_000.0, help="Initial cash for Real Account if no state exists")
     parser.add_argument("--retrain_days", type=int, default=7, help="Model max age in days before retraining")
@@ -154,14 +167,43 @@ def main():
     parser.add_argument("--min_trade", type=int, default=5000, help="Minimum trade amount in RMB")
     parser.add_argument("--no_report", action="store_true", help="Skip generating the structured report")
     args = parser.parse_args()
+    args.db_path = _resolve_cli_path(args.db_path)
+    args.output_dir = _resolve_cli_path(args.output_dir)
+    args.report_dir = _resolve_cli_path(args.report_dir)
+    if args.real_sync:
+        args.real_sync = _resolve_cli_path(args.real_sync)
 
     # Data status tracking for report
     data_status = {}
     model_info = {}
     health_ok = False
-    
+
     if not args.skip_update:
-        update_data()
+        update_ok, update_report = update_data()
+        if args.require_update_success and not update_ok:
+            blockers.append("Explicit data refresh failed")
+            data_status = {
+                "raw_latest": update_report.get("raw_latest"),
+                "qlib_latest": update_report.get("qlib_latest"),
+                "aligned": update_report.get("aligned", False),
+                "health_ok": False,
+            }
+            if not args.no_report:
+                signal_date, execution_date = resolve_signal_and_execution_date(args.date, args.execution_date)
+                report = DailyOpsReport.generate_pre_open_report(
+                    signal_date=signal_date,
+                    execution_date=execution_date,
+                    data_status=data_status,
+                    model_info=model_info,
+                    shadow_plan_summary={"status": "skipped"},
+                    real_plan_summary={"status": "skipped"},
+                    duration_seconds=time.time() - start_time,
+                    blockers=blockers,
+                )
+                report.artifacts["account_db"] = args.db_path
+                report_path = DailyOpsReport.save(report, output_dir=args.report_dir)
+                log.info(f"Report saved to: {report_path}")
+            return
 
     QlibAdapter().init_qlib()
     signal_date, execution_date = resolve_signal_and_execution_date(args.date, args.execution_date)
@@ -244,29 +286,29 @@ def main():
     log.info("\n" + health.to_markdown())
 
     shadow_account_name = "shadow"
-    shadow_sim = ShadowSimulator(account_name=shadow_account_name, initial_cash=args.shadow_cash)
+    shadow_sim = ShadowSimulator(account_name=shadow_account_name, initial_cash=args.shadow_cash, db_path=args.db_path)
 
     # Seed and init accounts BEFORE creating managers
     if shadow_sim.initialize_if_needed(signal_date):
         log.info("Shadow Account Initialized.")
     else:
         previous_signal_date = previous_trading_day(signal_date)
-        plan_path = f"data/plan_{previous_signal_date}_{shadow_account_name}.csv"
-        if Path(plan_path).exists():
+        plan_path = Path(args.output_dir) / f"plan_{previous_signal_date}_{shadow_account_name}.csv"
+        if plan_path.exists():
             log.info(f"Simulating execution for Shadow Account using {plan_path}...")
-            shadow_sim.simulate_execution(plan_path, signal_date)
+            shadow_sim.simulate_execution(str(plan_path), signal_date)
         else:
             log.warning(f"No plan found for previous signal_date ({previous_signal_date}) at {plan_path}. Skipping shadow simulation.")
 
     real_account_name = "real"
-    real_account = RealAccount(account_name=real_account_name)
+    real_account = RealAccount(db_path=args.db_path, account_name=real_account_name)
     if args.real_sync:
         sync_real_account_from_csv(real_account, real_account_name, args.real_sync, signal_date)
     ensure_real_account_seeded(real_account, signal_date, args.real_cash, real_account_name)
 
     # Now managers can see seeded accounts
     log.info("Generating Plan for Shadow Account...")
-    manager_shadow = LiveManager(model_path=model_path)
+    manager_shadow = LiveManager(model_path=model_path, db_path=args.db_path, output_dir=args.output_dir)
     manager_shadow.strategy.top_k = args.top_k
     manager_shadow.planner.min_trade_amount = args.min_trade
     manager_shadow.real_account = shadow_sim.account
@@ -274,7 +316,7 @@ def main():
     print_plan_summary(plan_shadow, shadow_account_name, signal_date, execution_date)
 
     log.info("Generating Plan for Real Account...")
-    manager_real = LiveManager(model_path=model_path)
+    manager_real = LiveManager(model_path=model_path, db_path=args.db_path, output_dir=args.output_dir)
     manager_real.strategy.top_k = args.top_k
     manager_real.planner.min_trade_amount = args.min_trade
     manager_real.real_account = real_account
@@ -286,13 +328,21 @@ def main():
     
     def extract_plan_summary(plan_df, account_name):
         if plan_df is None or plan_df.empty:
-            return {"account": account_name, "trades": 0, "symbols": []}
+            return {
+                "account": account_name,
+                "trades": 0,
+                "symbols": [],
+                "signal_date": signal_date,
+                "execution_date": execution_date,
+            }
         trades = plan_df[plan_df["amount"] > 0] if "amount" in plan_df.columns else plan_df
         return {
             "account": account_name,
             "trades": len(trades),
             "symbols": trades["symbol"].tolist() if "symbol" in trades.columns else [],
             "total_value": float(trades["est_value"].sum()) if "est_value" in trades.columns else 0.0,
+            "signal_date": signal_date,
+            "execution_date": execution_date,
         }
     
     shadow_summary = extract_plan_summary(plan_shadow, shadow_account_name)
@@ -315,10 +365,13 @@ def main():
                 f"real_cash={args.real_cash}",
             ],
         )
-        report.artifacts["shadow_plan"] = f"data/plan_{signal_date}_{shadow_account_name}.csv"
-        report.artifacts["real_plan"] = f"data/plan_{signal_date}_{real_account_name}.csv"
-        
-        report_path = DailyOpsReport.save(report)
+        report.artifacts["shadow_plan"] = str(Path(args.output_dir) / f"plan_{signal_date}_{shadow_account_name}.csv")
+        report.artifacts["real_plan"] = str(Path(args.output_dir) / f"plan_{signal_date}_{real_account_name}.csv")
+        report.artifacts["shadow_real_sync_template"] = str(Path(args.output_dir) / f"real_sync_template_{signal_date}_{shadow_account_name}.csv")
+        report.artifacts["real_real_sync_template"] = str(Path(args.output_dir) / f"real_sync_template_{signal_date}_{real_account_name}.csv")
+        report.artifacts["account_db"] = args.db_path
+
+        report_path = DailyOpsReport.save(report, output_dir=args.report_dir)
         log.info(f"Report saved to: {report_path}")
         
         # Also print markdown summary
