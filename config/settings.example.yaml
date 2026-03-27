@@ -14,3 +14,130 @@ data_root: "data"
 account_name: "sim_account_001"
 fee_rate: 0.0005 # 0.05%
 tax_rate: 0.001  # 0.1% (Sell only)
+
+# 5. Tushare Feature Configuration
+tushare_feature_config:
+  collector:
+    interfaces:
+      top_inst:
+        interface: top_inst
+        fields: "trade_date,ts_code,exalter,buy,sell,net_buy"
+      top_list:
+        interface: top_list
+        fields: "trade_date,ts_code,name,close,pct_chg,turnover_rate,amount,buyer_sum,seller_sum,net_amount,reason"
+      margin:
+        interface: margin_detail
+        fields: "ts_code,trade_date,rzye,rzmre,rzche,rzrqye,rqyl,rqmcl,rqchl"
+        rename:
+          rzye: margin_balance
+          rzmre: margin_buy_amount
+          rzche: margin_repay_amount
+          rzrqye: margin_total_balance
+          rqyl: lend_volume
+          rqmcl: lend_sell_volume
+          rqchl: lend_repay_volume
+      income:
+        interface: income
+        fields: "ts_code,ann_date,end_date,n_income,revenue,oper_cost"
+      balancesheet:
+        interface: balancesheet
+        fields: "ts_code,ann_date,end_date,total_assets,total_hldr_eqy_exc_min_int,total_cur_assets,total_cur_liab"
+      cashflow:
+        interface: cashflow
+        fields: "ts_code,ann_date,end_date,n_cashflow_act"
+      fina_indicator:
+        interface: fina_indicator
+        fields: "ts_code,ann_date,end_date,roe,roe_waa,grossprofit_margin,debt_to_assets,current_ratio,q_dtprofit,q_gr_yoy"
+        rename:
+          q_dtprofit: q_dt_profit
+    margin_cols:
+      - margin_balance
+      - margin_buy_amount
+      - margin_repay_amount
+      - margin_total_balance
+      - lend_volume
+      - lend_sell_volume
+      - lend_repay_volume
+    non_numeric_cols:
+      - trade_status
+      - name
+      - reason
+      - exalter
+    non_negative_cols:
+      - open
+      - high
+      - low
+      - close
+      - vol
+      - amount
+      - turnover_rate
+      - buy
+      - sell
+      - net_buy
+      - buyer_sum
+      - seller_sum
+      - net_amount
+      - pct_chg
+      - margin_balance
+      - margin_buy_amount
+      - margin_repay_amount
+      - margin_total_balance
+      - lend_volume
+      - lend_sell_volume
+      - lend_repay_volume
+
+  adapter:
+    rename_map:
+      trade_date: date
+      vol: volume
+      amount: amount
+      buyer_sum: l1_buy_amount
+      seller_sum: l1_sell_amount
+      net_amount: l1_net_amount
+      margin_balance: margin_balance
+      margin_buy_amount: margin_buy_amount
+      margin_repay_amount: margin_repay_amount
+      margin_total_balance: margin_total_balance
+      lend_volume: lend_volume
+      lend_sell_volume: lend_sell_volume
+      lend_repay_volume: lend_repay_volume
+    qlib_fields:
+      - date
+      - open
+      - high
+      - low
+      - close
+      - volume
+      - amount
+      - factor
+      - vwap
+      - paused
+      - high_limit
+      - low_limit
+      - turnover_rate
+      - pe
+      - pb
+      - total_mv
+      - circ_mv
+      - l1_buy_amount
+      - l1_sell_amount
+      - l1_net_amount
+      - l1_institution_exalter
+      - margin_balance
+      - margin_buy_amount
+      - margin_repay_amount
+      - margin_total_balance
+      - lend_volume
+      - lend_sell_volume
+      - lend_repay_volume
+      - net_inflow
+      - big_inflow
+      - net_income
+      - revenue
+      - total_assets
+      - equity
+      - op_cashflow
+      - roe
+      - grossprofit_margin
+      - debt_to_assets
+      - current_ratio

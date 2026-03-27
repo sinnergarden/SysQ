@@ -89,28 +89,50 @@ class DummyPro:
             "net_mf_vol": np.zeros(n)
         })
 
+    def margin_detail(self, ts_code, start_date, end_date, fields=None):
+        self.calls.append(("margin_detail", start_date, end_date))
+        trade_dates = self._date_range(start_date, end_date)
+        n = len(trade_dates)
+        return pd.DataFrame({
+            "ts_code": [ts_code] * n,
+            "trade_date": trade_dates,
+            "rzye": np.zeros(n),
+            "rzmre": np.zeros(n),
+            "rzche": np.zeros(n),
+            "rzrqye": np.zeros(n),
+            "rqyl": np.zeros(n),
+            "rqmcl": np.zeros(n),
+            "rqchl": np.zeros(n),
+        })
+
     def income(self, ts_code, start_date, end_date, fields=None):
         self.calls.append(("income", start_date, end_date))
         return pd.DataFrame({
             "ts_code": [ts_code],
+            "ann_date": [end_date],
             "end_date": [end_date],
             "n_income": [0.0],
-            "revenue": [0.0]
+            "revenue": [0.0],
+            "oper_cost": [0.0],
         })
 
     def balancesheet(self, ts_code, start_date, end_date, fields=None):
         self.calls.append(("balancesheet", start_date, end_date))
         return pd.DataFrame({
             "ts_code": [ts_code],
+            "ann_date": [end_date],
             "end_date": [end_date],
             "total_hldr_eqy_exc_min_int": [0.0],
-            "total_assets": [0.0]
+            "total_assets": [0.0],
+            "total_cur_assets": [0.0],
+            "total_cur_liab": [1.0],
         })
 
     def cashflow(self, ts_code, start_date, end_date, fields=None):
         self.calls.append(("cashflow", start_date, end_date))
         return pd.DataFrame({
             "ts_code": [ts_code],
+            "ann_date": [end_date],
             "end_date": [end_date],
             "n_cashflow_act": [0.0]
         })

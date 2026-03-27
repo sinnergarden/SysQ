@@ -294,12 +294,41 @@ class QlibAdapter:
                         denom = ocf.replace(0, np.nan)
                         df["pcf"] = (price * share) / denom
                 if "roe" in target_fields:
+                    existing_roe = pd.to_numeric(df["roe"], errors="coerce") if "roe" in df.columns else None
                     if "roe_waa" in df.columns:
-                        df["roe"] = df["roe_waa"]
-                    elif "roe" not in df.columns and {"net_income", "equity"}.issubset(df.columns):
+                        roe_waa = pd.to_numeric(df["roe_waa"], errors="coerce")
+                        df["roe"] = roe_waa if existing_roe is None else existing_roe.combine_first(roe_waa)
+                    elif existing_roe is not None:
+                        df["roe"] = existing_roe
+                    if {"net_income", "equity"}.issubset(df.columns):
                         ni = pd.to_numeric(df["net_income"], errors="coerce")
                         eq = pd.to_numeric(df["equity"], errors="coerce")
-                        df["roe"] = ni / eq.replace(0, np.nan)
+                        derived = ni / eq.replace(0, np.nan)
+                        df["roe"] = derived if "roe" not in df.columns else pd.to_numeric(df["roe"], errors="coerce").combine_first(derived)
+                if "grossprofit_margin" in target_fields and {"revenue", "oper_cost"}.issubset(df.columns):
+                    revenue = pd.to_numeric(df["revenue"], errors="coerce")
+                    oper_cost = pd.to_numeric(df["oper_cost"], errors="coerce")
+                    derived = (revenue - oper_cost) / revenue.replace(0, np.nan)
+                    if "grossprofit_margin" in df.columns:
+                        df["grossprofit_margin"] = pd.to_numeric(df["grossprofit_margin"], errors="coerce").combine_first(derived)
+                    else:
+                        df["grossprofit_margin"] = derived
+                if "debt_to_assets" in target_fields and {"total_assets", "equity"}.issubset(df.columns):
+                    total_assets = pd.to_numeric(df["total_assets"], errors="coerce")
+                    equity = pd.to_numeric(df["equity"], errors="coerce")
+                    derived = (total_assets - equity) / total_assets.replace(0, np.nan)
+                    if "debt_to_assets" in df.columns:
+                        df["debt_to_assets"] = pd.to_numeric(df["debt_to_assets"], errors="coerce").combine_first(derived)
+                    else:
+                        df["debt_to_assets"] = derived
+                if "current_ratio" in target_fields and {"total_cur_assets", "total_cur_liab"}.issubset(df.columns):
+                    total_cur_assets = pd.to_numeric(df["total_cur_assets"], errors="coerce")
+                    total_cur_liab = pd.to_numeric(df["total_cur_liab"], errors="coerce")
+                    derived = total_cur_assets / total_cur_liab.replace(0, np.nan)
+                    if "current_ratio" in df.columns:
+                        df["current_ratio"] = pd.to_numeric(df["current_ratio"], errors="coerce").combine_first(derived)
+                    else:
+                        df["current_ratio"] = derived
                 if "ps" in target_fields and "ps" not in df.columns:
                     if {"total_mv", "revenue"}.issubset(df.columns):
                         total_mv = pd.to_numeric(df["total_mv"], errors="coerce")

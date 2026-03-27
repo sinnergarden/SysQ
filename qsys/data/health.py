@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import re
 from typing import Iterable, Optional
 
@@ -13,6 +13,16 @@ from qsys.data.storage import StockDataStore
 
 DEFAULT_REQUIRED_FIELDS = ("$open", "$high", "$low", "$close", "$volume", "$factor")
 RAW_FIELD_PATTERN = re.compile(r"\$[A-Za-z_][A-Za-z0-9_]*")
+PIT_FIELDS = ("$roe", "$grossprofit_margin", "$debt_to_assets", "$current_ratio")
+MARGIN_FIELDS = (
+    "$margin_balance",
+    "$margin_buy_amount",
+    "$margin_repay_amount",
+    "$margin_total_balance",
+    "$lend_volume",
+    "$lend_sell_volume",
+    "$lend_repay_volume",
+)
 
 
 @dataclass
@@ -35,10 +45,17 @@ class DataHealthReport:
     unusable_required_fields: list[str]
     unusable_optional_fields: list[str]
     issues: list[str]
+    blocking_issues: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+    core_daily_status: str = "unknown"
+    pit_status: str = "unknown"
+    margin_status: str = "unknown"
+    pit_missing_ratio: dict[str, float] = field(default_factory=dict)
+    margin_missing_ratio: dict[str, float] = field(default_factory=dict)
 
     @property
     def ok(self) -> bool:
-        return not self.issues
+        return not self.blocking_issues
 
     def to_dict(self) -> dict:
         return {
@@ -60,32 +77,55 @@ class DataHealthReport:
             "unusable_required_fields": list(self.unusable_required_fields),
             "unusable_optional_fields": list(self.unusable_optional_fields),
             "issues": list(self.issues),
+            "blocking_issues": list(self.blocking_issues),
+            "warnings": list(self.warnings),
+            "core_daily_status": self.core_daily_status,
+            "pit_status": self.pit_status,
+            "margin_status": self.margin_status,
+            "pit_missing_ratio": dict(self.pit_missing_ratio),
+            "margin_missing_ratio": dict(self.margin_missing_ratio),
         }
 
     def to_markdown(self) -> str:
         lines = ["## Data Health Check"]
-        lines.append(f"- requested_date: {self.requested_date}")
-        lines.append(f"- expected_latest_date: {self.expected_latest_date}")
-        lines.append(f"- raw_latest: {self.raw_latest}")
-        lines.append(f"- last_qlib_date: {self.last_qlib_date}")
-        lines.append(f"- trading_calendar_last_date: {self.trading_calendar_last_date}")
-        lines.append(f"- aligned: {self.aligned}")
-        lines.append(f"- feature_rows: {self.feature_rows}")
-        lines.append(f"- feature_cols: {self.feature_cols}")
+        for key in [
+            "requested_date",
+            "expected_latest_date",
+            "raw_latest",
+            "last_qlib_date",
+            "trading_calendar_last_date",
+            "aligned",
+            "feature_rows",
+            "feature_cols",
+            "has_data_for_requested_date",
+            "gap_days",
+            "core_daily_status",
+            "pit_status",
+            "margin_status",
+        ]:
+            lines.append(f"- {key}: {getattr(self, key)}")
         lines.append(f"- missing_ratio: {self.missing_ratio:.2%}")
-        lines.append(f"- has_data_for_requested_date: {self.has_data_for_requested_date}")
-        lines.append(f"- gap_days: {self.gap_days}")
-        if self.unusable_required_fields:
-            lines.append(f"- unusable_required_fields: {self.unusable_required_fields}")
-        if self.unusable_optional_fields:
-            lines.append(f"- unusable_optional_fields: {self.unusable_optional_fields}")
-        if self.issues:
-            lines.append("- issues:")
-            for issue in self.issues:
+        if self.blocking_issues:
+            lines.append("- blocking_issues:")
+            for issue in self.blocking_issues:
                 lines.append(f"  - {issue}")
-        else:
+        if self.warnings:
+            lines.append("- warnings:")
+            for item in self.warnings:
+                lines.append(f"  - {item}")
+        if not self.blocking_issues and not self.warnings:
             lines.append("- issues: none")
         return "\n".join(lines)
+
+
+class DataReadinessError(RuntimeError):
+    def __init__(self, report: DataHealthReport):
+        self.report = report
+        message = (
+            f"Data readiness check failed for {report.requested_date}: "
+            + "; ".join(report.blocking_issues or report.issues)
+        )
+        super().__init__(message)
 
 
 def _normalize_date(value: str | pd.Timestamp) -> str:
@@ -120,16 +160,6 @@ def _extract_probe_fields(feature_fields: Iterable[str], required_fields: Iterab
     return sorted(fields)
 
 
-class DataReadinessError(RuntimeError):
-    def __init__(self, report: DataHealthReport):
-        self.report = report
-        message = (
-            f"Data readiness check failed for {report.requested_date}: "
-            + "; ".join(report.issues)
-        )
-        super().__init__(message)
-
-
 def _resolve_expected_latest_date(requested_date: str) -> tuple[str | None, str | None]:
     ts = pd.Timestamp(requested_date)
     calendar = D.calendar(start_time=ts - pd.Timedelta(days=31), end_time=ts)
@@ -144,6 +174,18 @@ def _resolve_expected_latest_date(requested_date: str) -> tuple[str | None, str 
     return expected.strftime("%Y-%m-%d"), trading_calendar_last_date.strftime("%Y-%m-%d")
 
 
+def _classify_layer(fields: list[str], ratios: dict[str, float], threshold: float, *, empty_ok: bool = True) -> tuple[str, list[str]]:
+    present = {field: ratios[field] for field in fields if field in ratios}
+    if not present:
+        return ("not_requested" if empty_ok else "warning"), []
+    bad = [f"{field}={value:.2%}" for field, value in present.items() if value > threshold]
+    if not bad:
+        return "ok", []
+    if len(bad) == len(present):
+        return "warning", bad
+    return "partial", bad
+
+
 def inspect_qlib_data_health(
     requested_date: str,
     feature_fields: Iterable[str],
@@ -153,6 +195,8 @@ def inspect_qlib_data_health(
     required_fields: Iterable[str] = DEFAULT_REQUIRED_FIELDS,
     required_field_missing_threshold: float = 0.2,
     optional_field_missing_threshold: float = 0.95,
+    pit_optional_field_missing_threshold: float = 0.97,
+    margin_optional_field_missing_threshold: float = 0.995,
 ) -> DataHealthReport:
     adapter = QlibAdapter()
     adapter.init_qlib()
@@ -160,39 +204,35 @@ def inspect_qlib_data_health(
     requested_date = _normalize_date(requested_date)
     expected_latest_date, trading_calendar_last_date = _resolve_expected_latest_date(requested_date)
 
-    # Get raw latest date
     store = StockDataStore()
     raw_latest_str = store.get_global_latest_date()
     raw_latest = _normalize_date(raw_latest_str) if raw_latest_str else None
 
     last_qlib_ts = adapter.get_last_qlib_date()
     last_qlib_date = _normalize_date(last_qlib_ts) if last_qlib_ts is not None else None
+    aligned = bool(raw_latest and last_qlib_date and raw_latest == last_qlib_date)
 
-    # Check alignment
-    aligned = False
-    if raw_latest and last_qlib_date:
-        aligned = raw_latest == last_qlib_date
-
-    issues: list[str] = []
+    blocking_issues: list[str] = []
+    warnings: list[str] = []
     gap_days = 0
     if expected_latest_date is None:
-        issues.append("Failed to resolve expected latest trading date from calendar")
+        blocking_issues.append("Failed to resolve expected latest trading date from calendar")
     elif last_qlib_date is None:
-        issues.append("Qlib calendar is empty or unreadable")
+        blocking_issues.append("Qlib calendar is empty or unreadable")
     else:
         gap_days = max((pd.Timestamp(expected_latest_date) - pd.Timestamp(last_qlib_date)).days, 0)
         if pd.Timestamp(last_qlib_date) < pd.Timestamp(expected_latest_date):
-            issues.append(
+            blocking_issues.append(
                 f"Qlib data is stale: last_qlib_date={last_qlib_date}, expected_latest_date={expected_latest_date}"
             )
 
     fields = _normalize_feature_fields(feature_fields)
     required_fields_list = [f for f in required_fields if isinstance(f, str) and f.strip()]
     probe_fields = _extract_probe_fields(fields, required_fields_list)
+
     features = adapter.get_features(universe, fields, start_time=requested_date, end_time=requested_date)
     if features is None:
         features = pd.DataFrame()
-
     probe_features = adapter.get_features(universe, probe_fields, start_time=requested_date, end_time=requested_date)
     if probe_features is None:
         probe_features = pd.DataFrame()
@@ -203,60 +243,63 @@ def inspect_qlib_data_health(
     missing_ratio = float(features.isna().mean().mean()) if has_data and feature_cols > 0 else 1.0
 
     if not has_data:
-        issues.append(f"No feature rows available for requested_date={requested_date}")
+        blocking_issues.append(f"No feature rows available for requested_date={requested_date}")
     elif missing_ratio > missing_ratio_threshold:
-        issues.append(
-            f"Feature missing ratio too high on {requested_date}: {missing_ratio:.2%} > {missing_ratio_threshold:.2%}"
+        warnings.append(
+            f"Feature missing ratio high on {requested_date}: {missing_ratio:.2%} > {missing_ratio_threshold:.2%}"
         )
 
     column_missing_ratio: dict[str, float] = {}
     unusable_required_fields: list[str] = []
     unusable_optional_fields: list[str] = []
     if probe_features.empty:
-        issues.append(f"No probe rows available for requested_date={requested_date} using fields={probe_fields}")
+        blocking_issues.append(f"No probe rows available for requested_date={requested_date} using fields={probe_fields}")
     else:
         for field in probe_fields:
             if field not in probe_features.columns:
                 column_missing_ratio[field] = 1.0
-                if field in required_fields_list:
-                    unusable_required_fields.append(field)
-                else:
-                    unusable_optional_fields.append(field)
-                continue
-            miss_ratio = float(probe_features[field].isna().mean())
-            column_missing_ratio[field] = miss_ratio
+            else:
+                column_missing_ratio[field] = float(probe_features[field].isna().mean())
+            miss_ratio = column_missing_ratio[field]
             if field in required_fields_list and miss_ratio > required_field_missing_threshold:
                 unusable_required_fields.append(field)
             elif field not in required_fields_list and miss_ratio > optional_field_missing_threshold:
                 unusable_optional_fields.append(field)
 
     if unusable_required_fields:
-        details = ", ".join(
-            f"{field}={column_missing_ratio.get(field, 1.0):.2%}"
-            for field in sorted(set(unusable_required_fields))
-        )
-        issues.append(
+        details = ", ".join(f"{field}={column_missing_ratio.get(field, 1.0):.2%}" for field in sorted(set(unusable_required_fields)))
+        blocking_issues.append(
             "Required qlib columns unusable "
             f"(missing ratio > {required_field_missing_threshold:.0%}): {details}"
         )
 
-    if unusable_optional_fields:
-        details = ", ".join(
-            f"{field}={column_missing_ratio.get(field, 1.0):.2%}"
-            for field in sorted(set(unusable_optional_fields))
+    core_daily_status = "ok" if not blocking_issues else "blocked"
+
+    requested_set = set(probe_fields)
+    pit_requested = [field for field in PIT_FIELDS if field in requested_set]
+    margin_requested = [field for field in MARGIN_FIELDS if field in requested_set]
+    pit_missing_ratio = {field: column_missing_ratio[field] for field in pit_requested if field in column_missing_ratio}
+    margin_missing_ratio = {field: column_missing_ratio[field] for field in margin_requested if field in column_missing_ratio}
+
+    pit_status, pit_bad = _classify_layer(pit_requested, pit_missing_ratio, pit_optional_field_missing_threshold)
+    if pit_bad:
+        warnings.append(
+            "PIT fundamentals coverage weak but non-blocking: " + ", ".join(pit_bad)
         )
-        issues.append(
-            "Monitored qlib columns mostly unusable "
-            f"(missing ratio > {optional_field_missing_threshold:.0%}): {details}"
+
+    margin_status, margin_bad = _classify_layer(margin_requested, margin_missing_ratio, margin_optional_field_missing_threshold)
+    if margin_bad:
+        warnings.append(
+            "Margin layer coverage weak but non-blocking: " + ", ".join(margin_bad)
         )
 
     if features.empty and not probe_features.empty:
-        issues.append(
-            "Requested feature expressions yielded zero rows while probe fields have data; "
-            "check expression dependencies and column usability"
+        blocking_issues.append(
+            "Requested feature expressions yielded zero rows while probe fields have data; check expression dependencies and column usability"
         )
 
     date_ok = expected_latest_date == last_qlib_date if expected_latest_date and last_qlib_date else False
+    issues = blocking_issues + warnings
 
     return DataHealthReport(
         requested_date=requested_date,
@@ -277,6 +320,13 @@ def inspect_qlib_data_health(
         unusable_required_fields=sorted(set(unusable_required_fields)),
         unusable_optional_fields=sorted(set(unusable_optional_fields)),
         issues=issues,
+        blocking_issues=blocking_issues,
+        warnings=warnings,
+        core_daily_status=core_daily_status,
+        pit_status=pit_status,
+        margin_status=margin_status,
+        pit_missing_ratio=pit_missing_ratio,
+        margin_missing_ratio=margin_missing_ratio,
     )
 
 

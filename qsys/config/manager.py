@@ -75,7 +75,8 @@ class ConfigManager:
                     "total_mv", "circ_mv", "adj_factor", "up_limit", "down_limit",
                 ],
                 "financial_cols": [
-                    "net_income", "revenue", "total_assets", "equity", "roe", "op_cashflow",
+                    "net_income", "revenue", "oper_cost", "total_assets", "equity",
+                    "total_cur_assets", "total_cur_liab", "roe", "op_cashflow",
                     "q_dt_profit", "q_gr_yoy", "roe_ttm", "grossprofit_margin",
                     "debt_to_assets", "current_ratio",
                 ],
@@ -89,8 +90,8 @@ class ConfigManager:
                 },
                 "interfaces": {
                     "margin": {
-                        "interface": "margin",
-                        "fields": "ts_code,trade_date,rzye,rzmre,rzche,rzrqye,rqyl,rqmcl,rqrchl",
+                        "interface": "margin_detail",
+                        "fields": "ts_code,trade_date,rzye,rzmre,rzche,rzrqye,rqyl,rqmcl,rqchl",
                         "rename": {
                             "rzye": "margin_balance",
                             "rzmre": "margin_buy_amount",
@@ -98,8 +99,27 @@ class ConfigManager:
                             "rzrqye": "margin_total_balance",
                             "rqyl": "lend_volume",
                             "rqmcl": "lend_sell_volume",
-                            "rqrchl": "lend_repay_volume",
+                            "rqchl": "lend_repay_volume",
                         }
+                    },
+                    "income": {
+                        "interface": "income",
+                        "fields": "ts_code,ann_date,end_date,n_income,revenue,oper_cost",
+                    },
+                    "balancesheet": {
+                        "interface": "balancesheet",
+                        "fields": "ts_code,ann_date,end_date,total_assets,total_hldr_eqy_exc_min_int,total_cur_assets,total_cur_liab",
+                    },
+                    "cashflow": {
+                        "interface": "cashflow",
+                        "fields": "ts_code,ann_date,end_date,n_cashflow_act",
+                    },
+                    "fina_indicator": {
+                        "interface": "fina_indicator",
+                        "fields": "ts_code,ann_date,end_date,roe,roe_waa,grossprofit_margin,debt_to_assets,current_ratio,q_dtprofit,q_gr_yoy",
+                        "rename": {
+                            "q_dtprofit": "q_dt_profit",
+                        },
                     }
                 },
                 "margin_cols": [

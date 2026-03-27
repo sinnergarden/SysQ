@@ -32,8 +32,11 @@ class TushareCollector:
             [
                 "net_income",
                 "revenue",
+                "oper_cost",
                 "total_assets",
                 "equity",
+                "total_cur_assets",
+                "total_cur_liab",
                 "roe",
                 "op_cashflow",
                 "q_dt_profit",
@@ -438,8 +441,11 @@ class TushareCollector:
         balancesheet = balancesheet.rename(columns={"total_hldr_eqy_exc_min_int": "equity"})
         cashflow = cashflow.rename(columns={"n_cashflow_act": "op_cashflow"})
         
-        income = self._prepare_financial_frame(income, ["net_income", "revenue"])
-        balancesheet = self._prepare_financial_frame(balancesheet, ["total_assets", "equity"])
+        income = self._prepare_financial_frame(income, ["net_income", "revenue", "oper_cost"])
+        balancesheet = self._prepare_financial_frame(
+            balancesheet,
+            ["total_assets", "equity", "total_cur_assets", "total_cur_liab"],
+        )
         cashflow = self._prepare_financial_frame(cashflow, ["op_cashflow"])
         
         if not fina_indicator.empty:
@@ -481,6 +487,41 @@ class TushareCollector:
                 merge_keys.append("end_date")
             merged = pd.merge(merged, frame, on=merge_keys, how="outer")
         merged["ann_date"] = merged["ann_date"].astype(str)
+
+        for col in ["net_income", "equity", "total_assets", "revenue", "oper_cost", "total_cur_assets", "total_cur_liab"]:
+            if col in merged.columns:
+                merged[col] = pd.to_numeric(merged[col], errors="coerce")
+
+        if "roe" not in merged.columns:
+            merged["roe"] = np.nan
+        roe_missing = merged["roe"].isna()
+        if roe_missing.any() and {"net_income", "equity"}.issubset(merged.columns):
+            denom = merged["equity"].replace(0, np.nan)
+            merged.loc[roe_missing, "roe"] = merged.loc[roe_missing, "net_income"] / denom[roe_missing]
+
+        if "grossprofit_margin" not in merged.columns:
+            merged["grossprofit_margin"] = np.nan
+        gpm_missing = merged["grossprofit_margin"].isna()
+        if gpm_missing.any() and {"revenue", "oper_cost"}.issubset(merged.columns):
+            revenue = merged["revenue"].replace(0, np.nan)
+            gross_profit = merged["revenue"] - merged["oper_cost"]
+            merged.loc[gpm_missing, "grossprofit_margin"] = gross_profit[gpm_missing] / revenue[gpm_missing]
+
+        if "debt_to_assets" not in merged.columns:
+            merged["debt_to_assets"] = np.nan
+        dta_missing = merged["debt_to_assets"].isna()
+        if dta_missing.any() and {"total_assets", "equity"}.issubset(merged.columns):
+            assets = merged["total_assets"].replace(0, np.nan)
+            liabilities = merged["total_assets"] - merged["equity"]
+            merged.loc[dta_missing, "debt_to_assets"] = liabilities[dta_missing] / assets[dta_missing]
+
+        if "current_ratio" not in merged.columns:
+            merged["current_ratio"] = np.nan
+        cr_missing = merged["current_ratio"].isna()
+        if cr_missing.any() and {"total_cur_assets", "total_cur_liab"}.issubset(merged.columns):
+            denom = merged["total_cur_liab"].replace(0, np.nan)
+            merged.loc[cr_missing, "current_ratio"] = merged.loc[cr_missing, "total_cur_assets"] / denom[cr_missing]
+
         return merged
 
 
@@ -543,6 +584,20 @@ class TushareCollector:
         else:
             merged = merged_valid
         merged = merged.drop(columns=["trade_date_dt", "ann_date_dt", "ann_date"], errors="ignore")
+        for col in ["net_income", "revenue", "oper_cost", "total_assets", "equity", "total_cur_assets", "total_cur_liab", "roe", "grossprofit_margin", "debt_to_assets", "current_ratio"]:
+            if col in merged.columns:
+                merged[col] = pd.to_numeric(merged[col], errors="coerce")
+        if {"net_income", "equity"}.issubset(merged.columns):
+            merged["roe"] = merged.get("roe").combine_first(merged["net_income"] / merged["equity"].replace(0, np.nan)) if "roe" in merged.columns else merged["net_income"] / merged["equity"].replace(0, np.nan)
+        if {"revenue", "oper_cost"}.issubset(merged.columns):
+            derived = (merged["revenue"] - merged["oper_cost"]) / merged["revenue"].replace(0, np.nan)
+            merged["grossprofit_margin"] = merged.get("grossprofit_margin").combine_first(derived) if "grossprofit_margin" in merged.columns else derived
+        if {"total_assets", "equity"}.issubset(merged.columns):
+            derived = (merged["total_assets"] - merged["equity"]) / merged["total_assets"].replace(0, np.nan)
+            merged["debt_to_assets"] = merged.get("debt_to_assets").combine_first(derived) if "debt_to_assets" in merged.columns else derived
+        if {"total_cur_assets", "total_cur_liab"}.issubset(merged.columns):
+            derived = merged["total_cur_assets"] / merged["total_cur_liab"].replace(0, np.nan)
+            merged["current_ratio"] = merged.get("current_ratio").combine_first(derived) if "current_ratio" in merged.columns else derived
         for col in self.financial_cols:
             if col not in merged.columns:
                 merged[col] = np.nan

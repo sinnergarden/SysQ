@@ -121,9 +121,9 @@ class TestMarginBatch1:
         # Fetch margin data for a specific date
         try:
             margin_df = collector._fetch_with_retry(
-                collector.pro.margin,
+                collector.pro.margin_detail,
                 trade_date="20240301",
-                fields="ts_code,trade_date,rzye,rzmre,rzche,rzrqye,rqyl,rqmcl,rqrchl"
+                fields="ts_code,trade_date,rzye,rzmre,rzche,rzrqye,rqyl,rqmcl,rqchl"
             )
         except Exception as e:
             pytest.skip(f"Margin API not available: {e}")
