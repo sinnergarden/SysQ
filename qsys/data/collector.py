@@ -98,6 +98,16 @@ class TushareCollector:
                 "margin_total_balance", "lend_volume", "lend_sell_volume", "lend_repay_volume",
             ],
         )
+        self._sparse_event_cols = {
+            'exalter', 'buy', 'sell', 'net_buy', 'name', 'buyer_sum', 'seller_sum', 'net_amount', 'reason'
+        }
+        self._financial_sparse_by_industry = {
+            '银行': {'grossprofit_margin', 'current_ratio', 'oper_cost', 'total_cur_assets', 'total_cur_liab'},
+            '保险': {'grossprofit_margin', 'current_ratio', 'oper_cost', 'total_cur_assets', 'total_cur_liab'},
+            '证券': {'grossprofit_margin', 'current_ratio', 'oper_cost', 'total_cur_assets', 'total_cur_liab'},
+            '多元金融': {'grossprofit_margin', 'current_ratio', 'oper_cost', 'total_cur_assets', 'total_cur_liab'},
+        }
+        self._industry_cache = None
 
     def _normalize_date(self, date_str):
         if date_str is None:
@@ -143,12 +153,14 @@ class TushareCollector:
         for name in self._collector_interfaces:
             if name in self._financial_interfaces:
                 continue
+            rename_map = self._get_interface_rename(name)
             for f in self._get_interface_field_list(name):
                 if f in {"ts_code", "trade_date", "ann_date", "end_date"}:
                     continue
-                if f not in seen:
-                    seen.add(f)
-                    fields.append(f)
+                mapped = rename_map.get(f, f)
+                if mapped not in seen:
+                    seen.add(mapped)
+                    fields.append(mapped)
         return fields
 
     def _get_expected_columns(self):
@@ -169,6 +181,18 @@ class TushareCollector:
         cfg_item = self._get_interface_config(name)
         api_name = cfg_item.get("interface", name)
         return getattr(self.pro, api_name)
+
+    def _get_stock_industry(self, code: str) -> str | None:
+        if self._industry_cache is None:
+            try:
+                basic = self.store.load_meta_stock_basic()
+                if basic is not None and not basic.empty and {'ts_code', 'industry'}.issubset(basic.columns):
+                    self._industry_cache = dict(zip(basic['ts_code'], basic['industry']))
+                else:
+                    self._industry_cache = {}
+            except Exception:
+                self._industry_cache = {}
+        return self._industry_cache.get(code)
 
     def _get_interface_rename(self, name):
         cfg_item = self._get_interface_config(name)
@@ -610,10 +634,28 @@ class TushareCollector:
         ignore_columns = set(ignore_columns or [])
         df = df.copy()
         df['trade_date'] = df['trade_date'].astype(str)
+
+        # Repair common merge artifacts before validation.
+        repair_map = {
+            'close': ['close_x', 'close_y'],
+            'high_limit': ['up_limit'],
+            'low_limit': ['down_limit'],
+            'volume': ['vol'],
+        }
+        for target, sources in repair_map.items():
+            if target not in df.columns:
+                df[target] = np.nan
+            base = pd.to_numeric(df[target], errors='coerce')
+            for src in sources:
+                if src in df.columns:
+                    base = base.combine_first(pd.to_numeric(df[src], errors='coerce'))
+            df[target] = base
+
         if "paused" not in df.columns and "vol" in df.columns:
             df["paused"] = (pd.to_numeric(df["vol"], errors="coerce").fillna(0) <= 0).astype(int)
         expected_columns = self._get_expected_columns()
         missing_columns = [c for c in expected_columns if c not in df.columns and c not in ignore_columns]
+        missing_columns = [c for c in missing_columns if c not in self._sparse_event_cols]
         if missing_columns:
             log.warning(f"{code} missing columns: {missing_columns}")
         for col in expected_columns:
@@ -673,16 +715,19 @@ class TushareCollector:
         present_cols = [c for c in numeric_cols if c in df.columns and c not in ignore_columns]
         if present_cols:
             miss_ratio = df[present_cols].isna().mean()
-            # Relax threshold to 0.95 (allow 5% data presence) or make it stricter
-            high_missing = miss_ratio[miss_ratio > 0.95] 
-            
-            # Special handling for banking/insurance sectors which legitimately lack some fields
-            # e.g., Banks don't have standard 'revenue' or 'grossprofit_margin' in some contexts
-            # 600000.SH (Pudong Bank), 601318.SH (Ping An)
-            
+            high_missing = miss_ratio[miss_ratio > 0.95]
+
+            industry = self._get_stock_industry(code)
+            allowed_sparse = set(self._sparse_event_cols)
+            allowed_sparse.update({'roe_ttm'})
+            if industry in self._financial_sparse_by_industry:
+                allowed_sparse.update(self._financial_sparse_by_industry[industry])
+
             if not high_missing.empty:
-                items = [f"{k}={v:.2%}" for k, v in high_missing.sort_values(ascending=False).items()]
-                log.warning(f"{code} high missing ratio: {items}")
+                high_missing = high_missing[~high_missing.index.isin(allowed_sparse)]
+                if not high_missing.empty:
+                    items = [f"{k}={v:.2%}" for k, v in high_missing.sort_values(ascending=False).items()]
+                    log.warning(f"{code} high missing ratio: {items}")
         if 'adj_factor' in df.columns:
             df['adj_factor'] = df['adj_factor'].fillna(1.0)
         if 'circ_mv' in df.columns:
