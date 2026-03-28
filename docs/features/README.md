@@ -18,4 +18,5 @@
 
 ## 当前文件
 
+- `feature_system.md`：Qsys 特征系统长期说明，定义 raw / feature engineering / bin / model 的工程边界与推进方式
 - [new_feature.md](file:///Users/liuming/Documents/trae_projects/SysQ/docs/features/new_feature.md)

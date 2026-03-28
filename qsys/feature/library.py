@@ -12,6 +12,7 @@ from typing import Any, cast
 class FeatureLibrary:
     """
     Predefined feature sets.
+    Research-only feature sets should not implicitly change production manifest behavior.
     """
 
     # Extended raw fields - A-share fundamentals and margin financing
@@ -82,6 +83,21 @@ class FeatureLibrary:
             if field not in merged:
                 merged.append(field)
         return merged
+
+    @classmethod
+    def get_research_phase1_config(cls):
+        """Research config placeholder: current minimum uses extended raw feature base."""
+        return cls.get_alpha158_extended_config()
+
+    @classmethod
+    def get_research_phase12_config(cls):
+        """Research config placeholder: current minimum uses extended raw feature base until custom qlib build is wired."""
+        return cls.get_alpha158_extended_config()
+
+    @classmethod
+    def get_research_phase123_config(cls):
+        """Research config placeholder: current minimum uses margin_extended raw feature base until custom qlib build is wired."""
+        return cls.get_alpha158_margin_extended_config()
 
 class Alpha158(DataHandlerLP):
     def __init__(

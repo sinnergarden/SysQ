@@ -13,6 +13,14 @@ class TestExtendedFeatureConfig(unittest.TestCase):
             self.assertIn(field, extended)
         self.assertEqual(len(extended), len(set(extended)))
 
+    def test_research_feature_sets_exist(self):
+        phase1 = FeatureLibrary.get_research_phase1_config()
+        phase12 = FeatureLibrary.get_research_phase12_config()
+        phase123 = FeatureLibrary.get_research_phase123_config()
+        self.assertGreaterEqual(len(phase1), len(FeatureLibrary.get_alpha158_extended_config()))
+        self.assertGreaterEqual(len(phase12), len(phase1))
+        self.assertGreaterEqual(len(phase123), len(phase12))
+
 
 if __name__ == '__main__':
     unittest.main()
