@@ -9,6 +9,7 @@ from qsys.feature.groups.tradability import build_tradability_features
 from qsys.feature.groups.relative_strength import build_relative_strength_features
 from qsys.feature.groups.regime import build_regime_features
 from qsys.feature.groups.industry_context import build_industry_context_features
+from qsys.feature.groups.index_context import attach_index_context
 from qsys.feature.groups.fundamental_context import build_fundamental_context_features
 from qsys.feature.transforms import apply_cross_sectional_standardization
 
@@ -42,6 +43,8 @@ def build_phase1_features(df: pd.DataFrame, flags: dict | None = None) -> pd.Dat
         out = build_liquidity_features(out)
     if flags.get("enable_tradability_features", False):
         out = build_tradability_features(out)
+    if flags.get("enable_regime_features", False) or flags.get("enable_relative_strength_features", False):
+        out = attach_index_context(out, index_name='hs300')
     if flags.get("enable_relative_strength_features", False):
         out = build_relative_strength_features(out)
     if flags.get("enable_industry_context_features", False):
