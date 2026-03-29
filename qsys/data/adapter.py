@@ -232,16 +232,26 @@ class QlibAdapter:
                         rename_map[src] = dst
                 df = df.rename(columns=rename_map)
 
-                # Resolve duplicated market columns produced by merges
+                # Resolve duplicated columns produced by merges
+                def _collapse_column(name: str):
+                    if name not in df.columns:
+                        return None
+                    obj = df.loc[:, name]
+                    if isinstance(obj, pd.DataFrame):
+                        series = None
+                        for i in range(obj.shape[1]):
+                            cur = pd.to_numeric(obj.iloc[:, i], errors='coerce')
+                            series = cur if series is None else series.combine_first(cur)
+                        return series
+                    return pd.to_numeric(obj, errors='coerce')
+
                 def _coalesce_column(target_col: str, candidates: list[str]) -> None:
-                    existing = df[target_col] if target_col in df.columns else None
-                    if existing is not None and existing.notna().any():
-                        return
-                    merged = existing.copy() if existing is not None else None
+                    merged = _collapse_column(target_col)
                     for candidate in candidates:
-                        if candidate not in df.columns:
+                        cur = _collapse_column(candidate)
+                        if cur is None:
                             continue
-                        merged = df[candidate] if merged is None else merged.combine_first(df[candidate])
+                        merged = cur if merged is None else merged.combine_first(cur)
                     if merged is not None:
                         df[target_col] = merged
 
@@ -254,6 +264,20 @@ class QlibAdapter:
                 _coalesce_column("volume", ["vol"])
                 _coalesce_column("high_limit", ["up_limit"])
                 _coalesce_column("low_limit", ["down_limit"])
+
+                # Collapse any remaining duplicated columns so downstream numeric ops always see Series.
+                deduped = {}
+                for col_name in list(dict.fromkeys(df.columns.tolist())):
+                    collapsed = _collapse_column(col_name)
+                    if collapsed is None:
+                        obj = df.loc[:, col_name]
+                        if isinstance(obj, pd.DataFrame):
+                            deduped[col_name] = obj.iloc[:, 0]
+                        else:
+                            deduped[col_name] = obj
+                    else:
+                        deduped[col_name] = collapsed
+                df = pd.DataFrame(deduped)
                 
                 # Unit Conversion (Tushare -> Qlib Standard)
                 # Tushare vol is in lots (100 shares), Qlib expects shares
@@ -345,9 +369,17 @@ class QlibAdapter:
                     industry_id = industry_map.get(industry_name, 0) if industry_name is not None else 0
                     df["industry"] = industry_id
 
-                # Ensure date format
-                if not pd.api.types.is_datetime64_any_dtype(df['date']):
-                    df['date'] = pd.to_datetime(df['date'])
+                # Ensure date format with explicit YYYYMMDD handling.
+                date_series = df['date']
+                if not pd.api.types.is_datetime64_any_dtype(date_series):
+                    date_as_str = date_series.astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
+                    ymd_mask = date_as_str.str.fullmatch(r'\d{8}')
+                    converted = pd.Series(pd.NaT, index=df.index, dtype='datetime64[ns]')
+                    if ymd_mask.any():
+                        converted.loc[ymd_mask] = pd.to_datetime(date_as_str.loc[ymd_mask], format='%Y%m%d', errors='coerce')
+                    if (~ymd_mask).any():
+                        converted.loc[~ymd_mask] = pd.to_datetime(date_as_str.loc[~ymd_mask], errors='coerce')
+                    df['date'] = converted
                 
                 # Incremental Filter
                 if since_date:

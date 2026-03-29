@@ -112,6 +112,13 @@ Qsys 的特征系统不能只支持 float 标量。
 - 先做覆盖率与 readiness 审计，再进训练
 - train / test 默认不 overlap
 - 研究结果必须说明特征实际有没有进入训练矩阵
+- 日常运维也按同一套口径执行：raw 更新、feature engineering、bin、readiness audit、训练/推理，不能只在研究阶段检查填充率与对齐
+
+## 6.1 日常运维最低检查项
+- 核心行情列不得出现系统性缺失
+- qlib/bin 必须实际可读，不接受“日期对齐但无 feature rows”
+- 训练前至少保留一份 feature readiness audit 结果
+- 对 fake warning（旧字段名、事件稀疏列、行业天然缺列）与真实缺失要区分处理
 
 ## 7. 文档关系
 

@@ -49,9 +49,11 @@ class TestFeaturePhase1(unittest.TestCase):
         self.assertIn("amount_log", out.columns)
 
     def test_phase2_flags(self):
-        out = build_phase1_features(self.df, flags={"enable_industry_context_features": True})
+        out = build_phase1_features(self.df, flags={"enable_industry_context_features": True, "enable_regime_features": True})
         self.assertIn("industry_ret_1d", out.columns)
         self.assertIn("stock_minus_industry_ret", out.columns)
+        self.assertIn("market_breadth", out.columns)
+        self.assertIn("stock_minus_index_ret_3d", out.columns)
 
     def test_phase3_fundamental_features(self):
         df = self.df.copy()

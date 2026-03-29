@@ -29,6 +29,7 @@
 - `docs/ops/MODEL_OPS_SOP.md`：模型操作 SOP
 - `docs/ops/POST_CLOSE_SOP.md`：收盘后 SOP
 - `docs/ops/READINESS.md`：readiness 分层口径说明
+- `docs/ops/FEATURE_PIPELINE_SOP.md`：特征链路 SOP，定义 raw / feature engineering / bin / 填充率审计 / 训练前检查
 - `docs/features/feature_system.md`：Qsys 特征系统长期说明，定义 raw / feature engineering / bin / 研究与生产分层
 
 旧文档处理原则：
