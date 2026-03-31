@@ -33,6 +33,7 @@ project_root = Path(__file__).parent.parent
 sys.path.append(str(project_root))
 
 from qsys.data.adapter import QlibAdapter
+from qsys.data.collector import TushareCollector
 from qsys.data.health import DataReadinessError, assert_qlib_data_ready
 from qsys.live.account import RealAccount
 from qsys.live.manager import LiveManager
@@ -43,11 +44,13 @@ from qsys.reports.daily import DailyOpsReport
 from qsys.utils.logger import log, log_event, log_stage
 
 
-def update_data(force=True):
-    log_stage("data_update", "start")
+def update_data(signal_date: str, force=True, universe: str = "csi300"):
+    log_stage("data_update", "start", signal_date=signal_date, universe=universe)
     try:
+        collector = TushareCollector()
+        collector.update_universe_history(universe, start_date=pd.Timestamp(signal_date).strftime("%Y%m%d"))
+
         adapter = QlibAdapter()
-        # Use the explicit refresh to close the raw->qlib loop
         adapter.refresh_qlib_date()
 
         report = adapter.get_data_status_report()
@@ -222,7 +225,7 @@ def main():
     )
 
     if not args.skip_update:
-        update_ok, update_report = update_data()
+        update_ok, update_report = update_data(signal_date=signal_date)
         if args.require_update_success and not update_ok:
             blockers.append("Explicit data refresh failed")
             data_status = {
