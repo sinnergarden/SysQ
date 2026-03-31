@@ -1,7 +1,8 @@
 import unittest
 import pandas as pd
 
-from qsys.feature.builder import build_phase1_features
+from qsys.feature.builder import build_phase1_features, build_research_features
+from qsys.feature.registry import resolve_feature_selection
 from qsys.feature.groups.fundamental_context import build_fundamental_context_features
 from qsys.feature.transforms import apply_cross_sectional_standardization
 
@@ -73,6 +74,38 @@ class TestFeaturePhase1(unittest.TestCase):
         self.assertIn('roa', out.columns)
         self.assertIn('net_margin', out.columns)
         self.assertIn('operating_cf_to_profit', out.columns)
+
+    def test_new_group_preset_builder(self):
+        out = build_research_features(
+            self.df,
+            groups=["daily_price_state", "execution_state", "market_regime"],
+        )
+        self.assertIn("close_to_open_gap_1d", out.columns)
+        self.assertIn("tradability_score", out.columns)
+        self.assertIn("market_breadth", out.columns)
+        self.assertNotIn("amount_log", out.columns)
+
+    def test_build_from_feature_set(self):
+        out = build_research_features(
+            self.df,
+            feature_set="short_horizon_state_core_v1",
+            select_only=True,
+        )
+        self.assertIn("close_to_open_gap_1d", out.columns)
+        self.assertIn("tradability_score", out.columns)
+        self.assertIn("ret_3d_rank", out.columns)
+        self.assertNotIn("market_breadth", out.columns)
+
+    def test_hybrid_feature_set_only_requires_custom_groups(self):
+        selection = resolve_feature_selection(feature_set="mixed_provider_demo_v1")
+        self.assertEqual(selection.required_groups, ["execution_state"])
+
+        out = build_research_features(
+            self.df,
+            feature_set="mixed_provider_demo_v1",
+            select_only=True,
+        )
+        self.assertEqual(list(out.columns), ["trade_date", "ts_code", "tradability_score"])
 
 
 if __name__ == "__main__":

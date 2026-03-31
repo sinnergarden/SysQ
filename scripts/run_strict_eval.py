@@ -26,6 +26,7 @@ sys.path.append(str(project_root))
 from qsys.evaluation import StrictEvaluator
 from qsys.config import cfg
 from qsys.reports.strict_eval import StrictEvalReport
+from qsys.strategy.generator import load_model_artifact_metadata
 from qsys.utils.logger import log
 
 
@@ -101,6 +102,8 @@ def main():
             eval_report,
             baseline_path=args.baseline,
             extended_path=args.extended,
+            baseline_meta=load_model_artifact_metadata(args.baseline),
+            extended_meta=load_model_artifact_metadata(args.extended),
             top_k=args.top_k,
             duration_seconds=duration,
             notes=[f"Output CSV: {args.output}"],

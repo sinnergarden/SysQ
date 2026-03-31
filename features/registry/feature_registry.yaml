@@ -1,0 +1,5554 @@
+version: 2
+description: Qsys 正式 feature registry。正式特征按通用建模语义分组，Qlib 内置与自定义实现统一登记在同一套身份体系中。
+identity_policy:
+  id_rule: F0001 递增编号，一经分配不复用。
+  implementation_rule: feature id 与 name 表示稳定身份；provider_expression 与 qlib_column_name 表示当前实现。
+providers:
+  qlib_raw_field:
+    description: Qlib 已落库的原始日频字段，通过 Qlib DataLoader 直接按表达式读取。
+    provider_ref: qsys.feature.library.FeatureLibrary
+  qlib_alpha158:
+    description: Qlib Alpha158 内置表达式因子集合。
+    provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  custom_python:
+    description: Qsys 自定义 Python builder，在 panel-friendly DataFrame 上增量补列。
+    provider_ref: qsys.feature.builder.build_research_features
+feature_groups:
+  price:
+    description: 原生价格字段与价格比例类正式特征，强调单日价格状态与连续价格路径。
+    order: 10
+  liquidity:
+    description: 成交量、成交额、换手与量能冲击特征。
+    order: 20
+  microstructure:
+    description: K 线结构、区间位置与日内形态表达。
+    order: 30
+  tradability:
+    description: 停牌、涨跌停与可交易性约束特征。
+    order: 40
+  cross_section:
+    description: 横截面分位、相对强弱、行业相对位置与比较型特征。
+    order: 50
+  regime:
+    description: 市场环境、风格代理与系统性波动状态。
+    order: 60
+  fundamental:
+    description: 估值、规模、财务质量与慢变量背景特征。
+    order: 70
+  event:
+    description: 资金流、两融与其他行为/事件驱动特征。
+    order: 80
+features:
+- name: open_raw
+  group: price
+  business_meaning: 开盘价原始字段
+  modeling_role: atomic
+  temporal_type: dynamic
+  source_type: qlib_raw_field
+  provider_ref: qsys.feature.library.FeatureLibrary
+  dependencies:
+  - qlib_bin::$open
+  generation_method: 通过 Qlib 原始字段表达式 `$open` 直接读取。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.library
+  qlib_column_name: $open
+  provider_expression: $open
+  notes: 属于 panel-friendly 原生输入。
+  id: F0001
+  tabular_fit: true
+  sequence_fit: true
+- name: high_raw
+  group: price
+  business_meaning: 最高价原始字段
+  modeling_role: atomic
+  temporal_type: dynamic
+  source_type: qlib_raw_field
+  provider_ref: qsys.feature.library.FeatureLibrary
+  dependencies:
+  - qlib_bin::$high
+  generation_method: 通过 Qlib 原始字段表达式 `$high` 直接读取。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.library
+  qlib_column_name: $high
+  provider_expression: $high
+  notes: 属于 panel-friendly 原生输入。
+  id: F0002
+  tabular_fit: true
+  sequence_fit: true
+- name: low_raw
+  group: price
+  business_meaning: 最低价原始字段
+  modeling_role: atomic
+  temporal_type: dynamic
+  source_type: qlib_raw_field
+  provider_ref: qsys.feature.library.FeatureLibrary
+  dependencies:
+  - qlib_bin::$low
+  generation_method: 通过 Qlib 原始字段表达式 `$low` 直接读取。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.library
+  qlib_column_name: $low
+  provider_expression: $low
+  notes: 属于 panel-friendly 原生输入。
+  id: F0003
+  tabular_fit: true
+  sequence_fit: true
+- name: close_raw
+  group: price
+  business_meaning: 收盘价原始字段
+  modeling_role: atomic
+  temporal_type: dynamic
+  source_type: qlib_raw_field
+  provider_ref: qsys.feature.library.FeatureLibrary
+  dependencies:
+  - qlib_bin::$close
+  generation_method: 通过 Qlib 原始字段表达式 `$close` 直接读取。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.library
+  qlib_column_name: $close
+  provider_expression: $close
+  notes: 属于 panel-friendly 原生输入。
+  id: F0004
+  tabular_fit: true
+  sequence_fit: true
+- name: volume_raw
+  group: liquidity
+  business_meaning: 成交量原始字段
+  modeling_role: atomic
+  temporal_type: dynamic
+  source_type: qlib_raw_field
+  provider_ref: qsys.feature.library.FeatureLibrary
+  dependencies:
+  - qlib_bin::$volume
+  generation_method: 通过 Qlib 原始字段表达式 `$volume` 直接读取。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.library
+  qlib_column_name: $volume
+  provider_expression: $volume
+  notes: 属于 panel-friendly 原生输入。
+  id: F0005
+  tabular_fit: true
+  sequence_fit: true
+- name: amount_raw
+  group: liquidity
+  business_meaning: 成交额原始字段
+  modeling_role: atomic
+  temporal_type: dynamic
+  source_type: qlib_raw_field
+  provider_ref: qsys.feature.library.FeatureLibrary
+  dependencies:
+  - qlib_bin::$amount
+  generation_method: 通过 Qlib 原始字段表达式 `$amount` 直接读取。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.library
+  qlib_column_name: $amount
+  provider_expression: $amount
+  notes: 属于 panel-friendly 原生输入。
+  id: F0006
+  tabular_fit: true
+  sequence_fit: true
+- name: factor_raw
+  group: price
+  business_meaning: 复权因子原始字段
+  modeling_role: atomic
+  temporal_type: dynamic
+  source_type: qlib_raw_field
+  provider_ref: qsys.feature.library.FeatureLibrary
+  dependencies:
+  - qlib_bin::$factor
+  generation_method: 通过 Qlib 原始字段表达式 `$factor` 直接读取。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.library
+  qlib_column_name: $factor
+  provider_expression: $factor
+  notes: 属于 panel-friendly 原生输入。
+  id: F0007
+  tabular_fit: true
+  sequence_fit: true
+- name: vwap_raw
+  group: price
+  business_meaning: 成交均价原始字段
+  modeling_role: atomic
+  temporal_type: dynamic
+  source_type: qlib_raw_field
+  provider_ref: qsys.feature.library.FeatureLibrary
+  dependencies:
+  - qlib_bin::$vwap
+  generation_method: 通过 Qlib 原始字段表达式 `$vwap` 直接读取。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.library
+  qlib_column_name: $vwap
+  provider_expression: $vwap
+  notes: 属于 panel-friendly 原生输入。
+  id: F0008
+  tabular_fit: true
+  sequence_fit: true
+- name: turnover_rate_raw
+  group: liquidity
+  business_meaning: 换手率原始字段
+  modeling_role: atomic
+  temporal_type: dynamic
+  source_type: qlib_raw_field
+  provider_ref: qsys.feature.library.FeatureLibrary
+  dependencies:
+  - qlib_bin::$turnover_rate
+  generation_method: 通过 Qlib 原始字段表达式 `$turnover_rate` 直接读取。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.library
+  qlib_column_name: $turnover_rate
+  provider_expression: $turnover_rate
+  notes: 属于 panel-friendly 原生输入。
+  id: F0009
+  tabular_fit: true
+  sequence_fit: true
+- name: paused_raw
+  group: tradability
+  business_meaning: 停牌状态原始字段
+  modeling_role: atomic
+  temporal_type: dynamic
+  source_type: qlib_raw_field
+  provider_ref: qsys.feature.library.FeatureLibrary
+  dependencies:
+  - qlib_bin::$paused
+  generation_method: 通过 Qlib 原始字段表达式 `$paused` 直接读取。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.library
+  qlib_column_name: $paused
+  provider_expression: $paused
+  notes: 属于 panel-friendly 原生输入。
+  id: F0010
+  tabular_fit: true
+  sequence_fit: true
+- name: high_limit_raw
+  group: tradability
+  business_meaning: 涨停价原始字段
+  modeling_role: atomic
+  temporal_type: dynamic
+  source_type: qlib_raw_field
+  provider_ref: qsys.feature.library.FeatureLibrary
+  dependencies:
+  - qlib_bin::$high_limit
+  generation_method: 通过 Qlib 原始字段表达式 `$high_limit` 直接读取。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.library
+  qlib_column_name: $high_limit
+  provider_expression: $high_limit
+  notes: 属于 panel-friendly 原生输入。
+  id: F0011
+  tabular_fit: true
+  sequence_fit: true
+- name: low_limit_raw
+  group: tradability
+  business_meaning: 跌停价原始字段
+  modeling_role: atomic
+  temporal_type: dynamic
+  source_type: qlib_raw_field
+  provider_ref: qsys.feature.library.FeatureLibrary
+  dependencies:
+  - qlib_bin::$low_limit
+  generation_method: 通过 Qlib 原始字段表达式 `$low_limit` 直接读取。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.library
+  qlib_column_name: $low_limit
+  provider_expression: $low_limit
+  notes: 属于 panel-friendly 原生输入。
+  id: F0012
+  tabular_fit: true
+  sequence_fit: true
+- name: alpha158_kmid
+  group: microstructure
+  business_meaning: Alpha158 内置日内价格结构表达 `KMID`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  - $open
+  generation_method: 由 Qlib Alpha158 内置表达式 `($close-$open)/$open` 生成，逻辑别名为 `KMID`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: ($close-$open)/$open
+  provider_expression: ($close-$open)/$open
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0013
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_klen
+  group: microstructure
+  business_meaning: Alpha158 内置日内价格结构表达 `KLEN`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $high
+  - $low
+  - $open
+  generation_method: 由 Qlib Alpha158 内置表达式 `($high-$low)/$open` 生成，逻辑别名为 `KLEN`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: ($high-$low)/$open
+  provider_expression: ($high-$low)/$open
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0014
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_kmid2
+  group: microstructure
+  business_meaning: Alpha158 内置日内价格结构表达 `KMID2`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  - $high
+  - $low
+  - $open
+  generation_method: 由 Qlib Alpha158 内置表达式 `($close-$open)/($high-$low+1e-12)` 生成，逻辑别名为 `KMID2`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: ($close-$open)/($high-$low+1e-12)
+  provider_expression: ($close-$open)/($high-$low+1e-12)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0015
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_kup
+  group: microstructure
+  business_meaning: Alpha158 内置日内价格结构表达 `KUP`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  - $high
+  - $open
+  generation_method: 由 Qlib Alpha158 内置表达式 `($high-Greater($open, $close))/$open` 生成，逻辑别名为 `KUP`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: ($high-Greater($open, $close))/$open
+  provider_expression: ($high-Greater($open, $close))/$open
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0016
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_kup2
+  group: microstructure
+  business_meaning: Alpha158 内置日内价格结构表达 `KUP2`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  - $high
+  - $low
+  - $open
+  generation_method: 由 Qlib Alpha158 内置表达式 `($high-Greater($open, $close))/($high-$low+1e-12)` 生成，逻辑别名为 `KUP2`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: ($high-Greater($open, $close))/($high-$low+1e-12)
+  provider_expression: ($high-Greater($open, $close))/($high-$low+1e-12)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0017
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_klow
+  group: microstructure
+  business_meaning: Alpha158 内置日内价格结构表达 `KLOW`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  - $low
+  - $open
+  generation_method: 由 Qlib Alpha158 内置表达式 `(Less($open, $close)-$low)/$open` 生成，逻辑别名为 `KLOW`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: (Less($open, $close)-$low)/$open
+  provider_expression: (Less($open, $close)-$low)/$open
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0018
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_klow2
+  group: microstructure
+  business_meaning: Alpha158 内置日内价格结构表达 `KLOW2`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  - $high
+  - $low
+  - $open
+  generation_method: 由 Qlib Alpha158 内置表达式 `(Less($open, $close)-$low)/($high-$low+1e-12)` 生成，逻辑别名为 `KLOW2`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: (Less($open, $close)-$low)/($high-$low+1e-12)
+  provider_expression: (Less($open, $close)-$low)/($high-$low+1e-12)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0019
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_ksft
+  group: microstructure
+  business_meaning: Alpha158 内置日内价格结构表达 `KSFT`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  - $high
+  - $low
+  - $open
+  generation_method: 由 Qlib Alpha158 内置表达式 `(2*$close-$high-$low)/$open` 生成，逻辑别名为 `KSFT`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: (2*$close-$high-$low)/$open
+  provider_expression: (2*$close-$high-$low)/$open
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0020
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_ksft2
+  group: microstructure
+  business_meaning: Alpha158 内置日内价格结构表达 `KSFT2`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  - $high
+  - $low
+  generation_method: 由 Qlib Alpha158 内置表达式 `(2*$close-$high-$low)/($high-$low+1e-12)` 生成，逻辑别名为 `KSFT2`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: (2*$close-$high-$low)/($high-$low+1e-12)
+  provider_expression: (2*$close-$high-$low)/($high-$low+1e-12)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0021
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_open0
+  group: microstructure
+  business_meaning: Alpha158 内置日内价格结构表达 `OPEN0`
+  modeling_role: atomic
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  - $open
+  generation_method: 由 Qlib Alpha158 内置表达式 `$open/$close` 生成，逻辑别名为 `OPEN0`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: $open/$close
+  provider_expression: $open/$close
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0022
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_high0
+  group: microstructure
+  business_meaning: Alpha158 内置日内价格结构表达 `HIGH0`
+  modeling_role: atomic
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  - $high
+  generation_method: 由 Qlib Alpha158 内置表达式 `$high/$close` 生成，逻辑别名为 `HIGH0`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: $high/$close
+  provider_expression: $high/$close
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0023
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_low0
+  group: microstructure
+  business_meaning: Alpha158 内置日内价格结构表达 `LOW0`
+  modeling_role: atomic
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  - $low
+  generation_method: 由 Qlib Alpha158 内置表达式 `$low/$close` 生成，逻辑别名为 `LOW0`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: $low/$close
+  provider_expression: $low/$close
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0024
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_vwap0
+  group: microstructure
+  business_meaning: Alpha158 内置日内价格结构表达 `VWAP0`
+  modeling_role: atomic
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  - $vwap
+  generation_method: 由 Qlib Alpha158 内置表达式 `$vwap/$close` 生成，逻辑别名为 `VWAP0`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: $vwap/$close
+  provider_expression: $vwap/$close
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0025
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_roc5
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `ROC5`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Ref($close, 5)/$close` 生成，逻辑别名为 `ROC5`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Ref($close, 5)/$close
+  provider_expression: Ref($close, 5)/$close
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0026
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_roc10
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `ROC10`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Ref($close, 10)/$close` 生成，逻辑别名为 `ROC10`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Ref($close, 10)/$close
+  provider_expression: Ref($close, 10)/$close
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0027
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_roc20
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `ROC20`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Ref($close, 20)/$close` 生成，逻辑别名为 `ROC20`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Ref($close, 20)/$close
+  provider_expression: Ref($close, 20)/$close
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0028
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_roc30
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `ROC30`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Ref($close, 30)/$close` 生成，逻辑别名为 `ROC30`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Ref($close, 30)/$close
+  provider_expression: Ref($close, 30)/$close
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0029
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_roc60
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `ROC60`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Ref($close, 60)/$close` 生成，逻辑别名为 `ROC60`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Ref($close, 60)/$close
+  provider_expression: Ref($close, 60)/$close
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0030
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_ma5
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `MA5`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Mean($close, 5)/$close` 生成，逻辑别名为 `MA5`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Mean($close, 5)/$close
+  provider_expression: Mean($close, 5)/$close
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0031
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_ma10
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `MA10`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Mean($close, 10)/$close` 生成，逻辑别名为 `MA10`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Mean($close, 10)/$close
+  provider_expression: Mean($close, 10)/$close
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0032
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_ma20
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `MA20`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Mean($close, 20)/$close` 生成，逻辑别名为 `MA20`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Mean($close, 20)/$close
+  provider_expression: Mean($close, 20)/$close
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0033
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_ma30
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `MA30`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Mean($close, 30)/$close` 生成，逻辑别名为 `MA30`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Mean($close, 30)/$close
+  provider_expression: Mean($close, 30)/$close
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0034
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_ma60
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `MA60`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Mean($close, 60)/$close` 生成，逻辑别名为 `MA60`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Mean($close, 60)/$close
+  provider_expression: Mean($close, 60)/$close
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0035
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_std5
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `STD5`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Std($close, 5)/$close` 生成，逻辑别名为 `STD5`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Std($close, 5)/$close
+  provider_expression: Std($close, 5)/$close
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0036
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_std10
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `STD10`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Std($close, 10)/$close` 生成，逻辑别名为 `STD10`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Std($close, 10)/$close
+  provider_expression: Std($close, 10)/$close
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0037
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_std20
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `STD20`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Std($close, 20)/$close` 生成，逻辑别名为 `STD20`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Std($close, 20)/$close
+  provider_expression: Std($close, 20)/$close
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0038
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_std30
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `STD30`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Std($close, 30)/$close` 生成，逻辑别名为 `STD30`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Std($close, 30)/$close
+  provider_expression: Std($close, 30)/$close
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0039
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_std60
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `STD60`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Std($close, 60)/$close` 生成，逻辑别名为 `STD60`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Std($close, 60)/$close
+  provider_expression: Std($close, 60)/$close
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0040
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_beta5
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `BETA5`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Slope($close, 5)/$close` 生成，逻辑别名为 `BETA5`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Slope($close, 5)/$close
+  provider_expression: Slope($close, 5)/$close
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0041
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_beta10
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `BETA10`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Slope($close, 10)/$close` 生成，逻辑别名为 `BETA10`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Slope($close, 10)/$close
+  provider_expression: Slope($close, 10)/$close
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0042
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_beta20
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `BETA20`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Slope($close, 20)/$close` 生成，逻辑别名为 `BETA20`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Slope($close, 20)/$close
+  provider_expression: Slope($close, 20)/$close
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0043
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_beta30
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `BETA30`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Slope($close, 30)/$close` 生成，逻辑别名为 `BETA30`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Slope($close, 30)/$close
+  provider_expression: Slope($close, 30)/$close
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0044
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_beta60
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `BETA60`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Slope($close, 60)/$close` 生成，逻辑别名为 `BETA60`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Slope($close, 60)/$close
+  provider_expression: Slope($close, 60)/$close
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0045
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_rsqr5
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `RSQR5`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Rsquare($close, 5)` 生成，逻辑别名为 `RSQR5`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Rsquare($close, 5)
+  provider_expression: Rsquare($close, 5)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0046
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_rsqr10
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `RSQR10`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Rsquare($close, 10)` 生成，逻辑别名为 `RSQR10`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Rsquare($close, 10)
+  provider_expression: Rsquare($close, 10)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0047
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_rsqr20
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `RSQR20`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Rsquare($close, 20)` 生成，逻辑别名为 `RSQR20`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Rsquare($close, 20)
+  provider_expression: Rsquare($close, 20)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0048
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_rsqr30
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `RSQR30`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Rsquare($close, 30)` 生成，逻辑别名为 `RSQR30`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Rsquare($close, 30)
+  provider_expression: Rsquare($close, 30)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0049
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_rsqr60
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `RSQR60`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Rsquare($close, 60)` 生成，逻辑别名为 `RSQR60`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Rsquare($close, 60)
+  provider_expression: Rsquare($close, 60)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0050
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_resi5
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `RESI5`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Resi($close, 5)/$close` 生成，逻辑别名为 `RESI5`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Resi($close, 5)/$close
+  provider_expression: Resi($close, 5)/$close
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0051
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_resi10
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `RESI10`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Resi($close, 10)/$close` 生成，逻辑别名为 `RESI10`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Resi($close, 10)/$close
+  provider_expression: Resi($close, 10)/$close
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0052
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_resi20
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `RESI20`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Resi($close, 20)/$close` 生成，逻辑别名为 `RESI20`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Resi($close, 20)/$close
+  provider_expression: Resi($close, 20)/$close
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0053
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_resi30
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `RESI30`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Resi($close, 30)/$close` 生成，逻辑别名为 `RESI30`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Resi($close, 30)/$close
+  provider_expression: Resi($close, 30)/$close
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0054
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_resi60
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `RESI60`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Resi($close, 60)/$close` 生成，逻辑别名为 `RESI60`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Resi($close, 60)/$close
+  provider_expression: Resi($close, 60)/$close
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0055
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_max5
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `MAX5`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  - $high
+  generation_method: 由 Qlib Alpha158 内置表达式 `Max($high, 5)/$close` 生成，逻辑别名为 `MAX5`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Max($high, 5)/$close
+  provider_expression: Max($high, 5)/$close
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0056
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_max10
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `MAX10`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  - $high
+  generation_method: 由 Qlib Alpha158 内置表达式 `Max($high, 10)/$close` 生成，逻辑别名为 `MAX10`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Max($high, 10)/$close
+  provider_expression: Max($high, 10)/$close
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0057
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_max20
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `MAX20`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  - $high
+  generation_method: 由 Qlib Alpha158 内置表达式 `Max($high, 20)/$close` 生成，逻辑别名为 `MAX20`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Max($high, 20)/$close
+  provider_expression: Max($high, 20)/$close
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0058
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_max30
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `MAX30`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  - $high
+  generation_method: 由 Qlib Alpha158 内置表达式 `Max($high, 30)/$close` 生成，逻辑别名为 `MAX30`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Max($high, 30)/$close
+  provider_expression: Max($high, 30)/$close
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0059
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_max60
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `MAX60`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  - $high
+  generation_method: 由 Qlib Alpha158 内置表达式 `Max($high, 60)/$close` 生成，逻辑别名为 `MAX60`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Max($high, 60)/$close
+  provider_expression: Max($high, 60)/$close
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0060
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_min5
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `MIN5`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  - $low
+  generation_method: 由 Qlib Alpha158 内置表达式 `Min($low, 5)/$close` 生成，逻辑别名为 `MIN5`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Min($low, 5)/$close
+  provider_expression: Min($low, 5)/$close
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0061
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_min10
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `MIN10`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  - $low
+  generation_method: 由 Qlib Alpha158 内置表达式 `Min($low, 10)/$close` 生成，逻辑别名为 `MIN10`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Min($low, 10)/$close
+  provider_expression: Min($low, 10)/$close
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0062
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_min20
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `MIN20`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  - $low
+  generation_method: 由 Qlib Alpha158 内置表达式 `Min($low, 20)/$close` 生成，逻辑别名为 `MIN20`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Min($low, 20)/$close
+  provider_expression: Min($low, 20)/$close
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0063
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_min30
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `MIN30`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  - $low
+  generation_method: 由 Qlib Alpha158 内置表达式 `Min($low, 30)/$close` 生成，逻辑别名为 `MIN30`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Min($low, 30)/$close
+  provider_expression: Min($low, 30)/$close
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0064
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_min60
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `MIN60`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  - $low
+  generation_method: 由 Qlib Alpha158 内置表达式 `Min($low, 60)/$close` 生成，逻辑别名为 `MIN60`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Min($low, 60)/$close
+  provider_expression: Min($low, 60)/$close
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0065
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_qtlu5
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `QTLU5`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Quantile($close, 5, 0.8)/$close` 生成，逻辑别名为 `QTLU5`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Quantile($close, 5, 0.8)/$close
+  provider_expression: Quantile($close, 5, 0.8)/$close
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0066
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_qtlu10
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `QTLU10`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Quantile($close, 10, 0.8)/$close` 生成，逻辑别名为 `QTLU10`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Quantile($close, 10, 0.8)/$close
+  provider_expression: Quantile($close, 10, 0.8)/$close
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0067
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_qtlu20
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `QTLU20`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Quantile($close, 20, 0.8)/$close` 生成，逻辑别名为 `QTLU20`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Quantile($close, 20, 0.8)/$close
+  provider_expression: Quantile($close, 20, 0.8)/$close
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0068
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_qtlu30
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `QTLU30`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Quantile($close, 30, 0.8)/$close` 生成，逻辑别名为 `QTLU30`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Quantile($close, 30, 0.8)/$close
+  provider_expression: Quantile($close, 30, 0.8)/$close
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0069
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_qtlu60
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `QTLU60`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Quantile($close, 60, 0.8)/$close` 生成，逻辑别名为 `QTLU60`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Quantile($close, 60, 0.8)/$close
+  provider_expression: Quantile($close, 60, 0.8)/$close
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0070
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_qtld5
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `QTLD5`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Quantile($close, 5, 0.2)/$close` 生成，逻辑别名为 `QTLD5`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Quantile($close, 5, 0.2)/$close
+  provider_expression: Quantile($close, 5, 0.2)/$close
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0071
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_qtld10
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `QTLD10`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Quantile($close, 10, 0.2)/$close` 生成，逻辑别名为 `QTLD10`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Quantile($close, 10, 0.2)/$close
+  provider_expression: Quantile($close, 10, 0.2)/$close
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0072
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_qtld20
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `QTLD20`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Quantile($close, 20, 0.2)/$close` 生成，逻辑别名为 `QTLD20`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Quantile($close, 20, 0.2)/$close
+  provider_expression: Quantile($close, 20, 0.2)/$close
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0073
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_qtld30
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `QTLD30`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Quantile($close, 30, 0.2)/$close` 生成，逻辑别名为 `QTLD30`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Quantile($close, 30, 0.2)/$close
+  provider_expression: Quantile($close, 30, 0.2)/$close
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0074
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_qtld60
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `QTLD60`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Quantile($close, 60, 0.2)/$close` 生成，逻辑别名为 `QTLD60`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Quantile($close, 60, 0.2)/$close
+  provider_expression: Quantile($close, 60, 0.2)/$close
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0075
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_rank5
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `RANK5`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Rank($close, 5)` 生成，逻辑别名为 `RANK5`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Rank($close, 5)
+  provider_expression: Rank($close, 5)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0076
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_rank10
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `RANK10`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Rank($close, 10)` 生成，逻辑别名为 `RANK10`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Rank($close, 10)
+  provider_expression: Rank($close, 10)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0077
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_rank20
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `RANK20`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Rank($close, 20)` 生成，逻辑别名为 `RANK20`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Rank($close, 20)
+  provider_expression: Rank($close, 20)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0078
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_rank30
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `RANK30`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Rank($close, 30)` 生成，逻辑别名为 `RANK30`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Rank($close, 30)
+  provider_expression: Rank($close, 30)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0079
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_rank60
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `RANK60`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Rank($close, 60)` 生成，逻辑别名为 `RANK60`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Rank($close, 60)
+  provider_expression: Rank($close, 60)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0080
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_rsv5
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `RSV5`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  - $high
+  - $low
+  generation_method: 由 Qlib Alpha158 内置表达式 `($close-Min($low, 5))/(Max($high, 5)-Min($low, 5)+1e-12)` 生成，逻辑别名为 `RSV5`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: ($close-Min($low, 5))/(Max($high, 5)-Min($low, 5)+1e-12)
+  provider_expression: ($close-Min($low, 5))/(Max($high, 5)-Min($low, 5)+1e-12)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0081
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_rsv10
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `RSV10`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  - $high
+  - $low
+  generation_method: 由 Qlib Alpha158 内置表达式 `($close-Min($low, 10))/(Max($high, 10)-Min($low, 10)+1e-12)` 生成，逻辑别名为 `RSV10`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: ($close-Min($low, 10))/(Max($high, 10)-Min($low, 10)+1e-12)
+  provider_expression: ($close-Min($low, 10))/(Max($high, 10)-Min($low, 10)+1e-12)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0082
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_rsv20
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `RSV20`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  - $high
+  - $low
+  generation_method: 由 Qlib Alpha158 内置表达式 `($close-Min($low, 20))/(Max($high, 20)-Min($low, 20)+1e-12)` 生成，逻辑别名为 `RSV20`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: ($close-Min($low, 20))/(Max($high, 20)-Min($low, 20)+1e-12)
+  provider_expression: ($close-Min($low, 20))/(Max($high, 20)-Min($low, 20)+1e-12)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0083
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_rsv30
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `RSV30`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  - $high
+  - $low
+  generation_method: 由 Qlib Alpha158 内置表达式 `($close-Min($low, 30))/(Max($high, 30)-Min($low, 30)+1e-12)` 生成，逻辑别名为 `RSV30`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: ($close-Min($low, 30))/(Max($high, 30)-Min($low, 30)+1e-12)
+  provider_expression: ($close-Min($low, 30))/(Max($high, 30)-Min($low, 30)+1e-12)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0084
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_rsv60
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `RSV60`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  - $high
+  - $low
+  generation_method: 由 Qlib Alpha158 内置表达式 `($close-Min($low, 60))/(Max($high, 60)-Min($low, 60)+1e-12)` 生成，逻辑别名为 `RSV60`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: ($close-Min($low, 60))/(Max($high, 60)-Min($low, 60)+1e-12)
+  provider_expression: ($close-Min($low, 60))/(Max($high, 60)-Min($low, 60)+1e-12)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0085
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_imax5
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `IMAX5`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $high
+  generation_method: 由 Qlib Alpha158 内置表达式 `IdxMax($high, 5)/5` 生成，逻辑别名为 `IMAX5`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: IdxMax($high, 5)/5
+  provider_expression: IdxMax($high, 5)/5
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0086
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_imax10
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `IMAX10`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $high
+  generation_method: 由 Qlib Alpha158 内置表达式 `IdxMax($high, 10)/10` 生成，逻辑别名为 `IMAX10`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: IdxMax($high, 10)/10
+  provider_expression: IdxMax($high, 10)/10
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0087
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_imax20
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `IMAX20`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $high
+  generation_method: 由 Qlib Alpha158 内置表达式 `IdxMax($high, 20)/20` 生成，逻辑别名为 `IMAX20`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: IdxMax($high, 20)/20
+  provider_expression: IdxMax($high, 20)/20
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0088
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_imax30
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `IMAX30`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $high
+  generation_method: 由 Qlib Alpha158 内置表达式 `IdxMax($high, 30)/30` 生成，逻辑别名为 `IMAX30`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: IdxMax($high, 30)/30
+  provider_expression: IdxMax($high, 30)/30
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0089
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_imax60
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `IMAX60`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $high
+  generation_method: 由 Qlib Alpha158 内置表达式 `IdxMax($high, 60)/60` 生成，逻辑别名为 `IMAX60`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: IdxMax($high, 60)/60
+  provider_expression: IdxMax($high, 60)/60
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0090
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_imin5
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `IMIN5`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $low
+  generation_method: 由 Qlib Alpha158 内置表达式 `IdxMin($low, 5)/5` 生成，逻辑别名为 `IMIN5`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: IdxMin($low, 5)/5
+  provider_expression: IdxMin($low, 5)/5
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0091
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_imin10
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `IMIN10`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $low
+  generation_method: 由 Qlib Alpha158 内置表达式 `IdxMin($low, 10)/10` 生成，逻辑别名为 `IMIN10`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: IdxMin($low, 10)/10
+  provider_expression: IdxMin($low, 10)/10
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0092
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_imin20
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `IMIN20`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $low
+  generation_method: 由 Qlib Alpha158 内置表达式 `IdxMin($low, 20)/20` 生成，逻辑别名为 `IMIN20`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: IdxMin($low, 20)/20
+  provider_expression: IdxMin($low, 20)/20
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0093
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_imin30
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `IMIN30`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $low
+  generation_method: 由 Qlib Alpha158 内置表达式 `IdxMin($low, 30)/30` 生成，逻辑别名为 `IMIN30`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: IdxMin($low, 30)/30
+  provider_expression: IdxMin($low, 30)/30
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0094
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_imin60
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `IMIN60`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $low
+  generation_method: 由 Qlib Alpha158 内置表达式 `IdxMin($low, 60)/60` 生成，逻辑别名为 `IMIN60`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: IdxMin($low, 60)/60
+  provider_expression: IdxMin($low, 60)/60
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0095
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_imxd5
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `IMXD5`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $high
+  - $low
+  generation_method: 由 Qlib Alpha158 内置表达式 `(IdxMax($high, 5)-IdxMin($low, 5))/5` 生成，逻辑别名为 `IMXD5`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: (IdxMax($high, 5)-IdxMin($low, 5))/5
+  provider_expression: (IdxMax($high, 5)-IdxMin($low, 5))/5
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0096
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_imxd10
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `IMXD10`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $high
+  - $low
+  generation_method: 由 Qlib Alpha158 内置表达式 `(IdxMax($high, 10)-IdxMin($low, 10))/10` 生成，逻辑别名为 `IMXD10`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: (IdxMax($high, 10)-IdxMin($low, 10))/10
+  provider_expression: (IdxMax($high, 10)-IdxMin($low, 10))/10
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0097
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_imxd20
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `IMXD20`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $high
+  - $low
+  generation_method: 由 Qlib Alpha158 内置表达式 `(IdxMax($high, 20)-IdxMin($low, 20))/20` 生成，逻辑别名为 `IMXD20`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: (IdxMax($high, 20)-IdxMin($low, 20))/20
+  provider_expression: (IdxMax($high, 20)-IdxMin($low, 20))/20
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0098
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_imxd30
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `IMXD30`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $high
+  - $low
+  generation_method: 由 Qlib Alpha158 内置表达式 `(IdxMax($high, 30)-IdxMin($low, 30))/30` 生成，逻辑别名为 `IMXD30`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: (IdxMax($high, 30)-IdxMin($low, 30))/30
+  provider_expression: (IdxMax($high, 30)-IdxMin($low, 30))/30
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0099
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_imxd60
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `IMXD60`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $high
+  - $low
+  generation_method: 由 Qlib Alpha158 内置表达式 `(IdxMax($high, 60)-IdxMin($low, 60))/60` 生成，逻辑别名为 `IMXD60`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: (IdxMax($high, 60)-IdxMin($low, 60))/60
+  provider_expression: (IdxMax($high, 60)-IdxMin($low, 60))/60
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0100
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_corr5
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `CORR5`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  - $volume
+  generation_method: 由 Qlib Alpha158 内置表达式 `Corr($close, Log($volume+1), 5)` 生成，逻辑别名为 `CORR5`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Corr($close, Log($volume+1), 5)
+  provider_expression: Corr($close, Log($volume+1), 5)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0101
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_corr10
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `CORR10`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  - $volume
+  generation_method: 由 Qlib Alpha158 内置表达式 `Corr($close, Log($volume+1), 10)` 生成，逻辑别名为 `CORR10`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Corr($close, Log($volume+1), 10)
+  provider_expression: Corr($close, Log($volume+1), 10)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0102
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_corr20
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `CORR20`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  - $volume
+  generation_method: 由 Qlib Alpha158 内置表达式 `Corr($close, Log($volume+1), 20)` 生成，逻辑别名为 `CORR20`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Corr($close, Log($volume+1), 20)
+  provider_expression: Corr($close, Log($volume+1), 20)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0103
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_corr30
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `CORR30`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  - $volume
+  generation_method: 由 Qlib Alpha158 内置表达式 `Corr($close, Log($volume+1), 30)` 生成，逻辑别名为 `CORR30`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Corr($close, Log($volume+1), 30)
+  provider_expression: Corr($close, Log($volume+1), 30)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0104
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_corr60
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `CORR60`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  - $volume
+  generation_method: 由 Qlib Alpha158 内置表达式 `Corr($close, Log($volume+1), 60)` 生成，逻辑别名为 `CORR60`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Corr($close, Log($volume+1), 60)
+  provider_expression: Corr($close, Log($volume+1), 60)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0105
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_cord5
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `CORD5`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  - $volume
+  generation_method: 由 Qlib Alpha158 内置表达式 `Corr($close/Ref($close,1), Log($volume/Ref($volume, 1)+1), 5)` 生成，逻辑别名为 `CORD5`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Corr($close/Ref($close,1), Log($volume/Ref($volume, 1)+1), 5)
+  provider_expression: Corr($close/Ref($close,1), Log($volume/Ref($volume, 1)+1), 5)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0106
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_cord10
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `CORD10`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  - $volume
+  generation_method: 由 Qlib Alpha158 内置表达式 `Corr($close/Ref($close,1), Log($volume/Ref($volume, 1)+1), 10)` 生成，逻辑别名为 `CORD10`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Corr($close/Ref($close,1), Log($volume/Ref($volume, 1)+1), 10)
+  provider_expression: Corr($close/Ref($close,1), Log($volume/Ref($volume, 1)+1), 10)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0107
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_cord20
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `CORD20`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  - $volume
+  generation_method: 由 Qlib Alpha158 内置表达式 `Corr($close/Ref($close,1), Log($volume/Ref($volume, 1)+1), 20)` 生成，逻辑别名为 `CORD20`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Corr($close/Ref($close,1), Log($volume/Ref($volume, 1)+1), 20)
+  provider_expression: Corr($close/Ref($close,1), Log($volume/Ref($volume, 1)+1), 20)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0108
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_cord30
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `CORD30`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  - $volume
+  generation_method: 由 Qlib Alpha158 内置表达式 `Corr($close/Ref($close,1), Log($volume/Ref($volume, 1)+1), 30)` 生成，逻辑别名为 `CORD30`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Corr($close/Ref($close,1), Log($volume/Ref($volume, 1)+1), 30)
+  provider_expression: Corr($close/Ref($close,1), Log($volume/Ref($volume, 1)+1), 30)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0109
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_cord60
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `CORD60`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  - $volume
+  generation_method: 由 Qlib Alpha158 内置表达式 `Corr($close/Ref($close,1), Log($volume/Ref($volume, 1)+1), 60)` 生成，逻辑别名为 `CORD60`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Corr($close/Ref($close,1), Log($volume/Ref($volume, 1)+1), 60)
+  provider_expression: Corr($close/Ref($close,1), Log($volume/Ref($volume, 1)+1), 60)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0110
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_cntp5
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `CNTP5`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Mean($close>Ref($close, 1), 5)` 生成，逻辑别名为 `CNTP5`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Mean($close>Ref($close, 1), 5)
+  provider_expression: Mean($close>Ref($close, 1), 5)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0111
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_cntp10
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `CNTP10`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Mean($close>Ref($close, 1), 10)` 生成，逻辑别名为 `CNTP10`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Mean($close>Ref($close, 1), 10)
+  provider_expression: Mean($close>Ref($close, 1), 10)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0112
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_cntp20
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `CNTP20`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Mean($close>Ref($close, 1), 20)` 生成，逻辑别名为 `CNTP20`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Mean($close>Ref($close, 1), 20)
+  provider_expression: Mean($close>Ref($close, 1), 20)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0113
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_cntp30
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `CNTP30`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Mean($close>Ref($close, 1), 30)` 生成，逻辑别名为 `CNTP30`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Mean($close>Ref($close, 1), 30)
+  provider_expression: Mean($close>Ref($close, 1), 30)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0114
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_cntp60
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `CNTP60`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Mean($close>Ref($close, 1), 60)` 生成，逻辑别名为 `CNTP60`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Mean($close>Ref($close, 1), 60)
+  provider_expression: Mean($close>Ref($close, 1), 60)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0115
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_cntn5
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `CNTN5`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Mean($close<Ref($close, 1), 5)` 生成，逻辑别名为 `CNTN5`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Mean($close<Ref($close, 1), 5)
+  provider_expression: Mean($close<Ref($close, 1), 5)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0116
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_cntn10
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `CNTN10`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Mean($close<Ref($close, 1), 10)` 生成，逻辑别名为 `CNTN10`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Mean($close<Ref($close, 1), 10)
+  provider_expression: Mean($close<Ref($close, 1), 10)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0117
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_cntn20
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `CNTN20`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Mean($close<Ref($close, 1), 20)` 生成，逻辑别名为 `CNTN20`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Mean($close<Ref($close, 1), 20)
+  provider_expression: Mean($close<Ref($close, 1), 20)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0118
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_cntn30
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `CNTN30`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Mean($close<Ref($close, 1), 30)` 生成，逻辑别名为 `CNTN30`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Mean($close<Ref($close, 1), 30)
+  provider_expression: Mean($close<Ref($close, 1), 30)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0119
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_cntn60
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `CNTN60`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Mean($close<Ref($close, 1), 60)` 生成，逻辑别名为 `CNTN60`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Mean($close<Ref($close, 1), 60)
+  provider_expression: Mean($close<Ref($close, 1), 60)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0120
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_cntd5
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `CNTD5`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Mean($close>Ref($close, 1), 5)-Mean($close<Ref($close, 1), 5)` 生成，逻辑别名为 `CNTD5`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Mean($close>Ref($close, 1), 5)-Mean($close<Ref($close, 1), 5)
+  provider_expression: Mean($close>Ref($close, 1), 5)-Mean($close<Ref($close, 1), 5)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0121
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_cntd10
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `CNTD10`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Mean($close>Ref($close, 1), 10)-Mean($close<Ref($close, 1), 10)` 生成，逻辑别名为 `CNTD10`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Mean($close>Ref($close, 1), 10)-Mean($close<Ref($close, 1), 10)
+  provider_expression: Mean($close>Ref($close, 1), 10)-Mean($close<Ref($close, 1), 10)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0122
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_cntd20
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `CNTD20`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Mean($close>Ref($close, 1), 20)-Mean($close<Ref($close, 1), 20)` 生成，逻辑别名为 `CNTD20`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Mean($close>Ref($close, 1), 20)-Mean($close<Ref($close, 1), 20)
+  provider_expression: Mean($close>Ref($close, 1), 20)-Mean($close<Ref($close, 1), 20)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0123
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_cntd30
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `CNTD30`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Mean($close>Ref($close, 1), 30)-Mean($close<Ref($close, 1), 30)` 生成，逻辑别名为 `CNTD30`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Mean($close>Ref($close, 1), 30)-Mean($close<Ref($close, 1), 30)
+  provider_expression: Mean($close>Ref($close, 1), 30)-Mean($close<Ref($close, 1), 30)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0124
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_cntd60
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `CNTD60`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Mean($close>Ref($close, 1), 60)-Mean($close<Ref($close, 1), 60)` 生成，逻辑别名为 `CNTD60`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Mean($close>Ref($close, 1), 60)-Mean($close<Ref($close, 1), 60)
+  provider_expression: Mean($close>Ref($close, 1), 60)-Mean($close<Ref($close, 1), 60)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0125
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_sump5
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `SUMP5`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Sum(Greater($close-Ref($close, 1), 0), 5)/(Sum(Abs($close-Ref($close, 1)), 5)+1e-12)`
+    生成，逻辑别名为 `SUMP5`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Sum(Greater($close-Ref($close, 1), 0), 5)/(Sum(Abs($close-Ref($close, 1)), 5)+1e-12)
+  provider_expression: Sum(Greater($close-Ref($close, 1), 0), 5)/(Sum(Abs($close-Ref($close, 1)), 5)+1e-12)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0126
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_sump10
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `SUMP10`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Sum(Greater($close-Ref($close, 1), 0), 10)/(Sum(Abs($close-Ref($close, 1)), 10)+1e-12)`
+    生成，逻辑别名为 `SUMP10`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Sum(Greater($close-Ref($close, 1), 0), 10)/(Sum(Abs($close-Ref($close, 1)), 10)+1e-12)
+  provider_expression: Sum(Greater($close-Ref($close, 1), 0), 10)/(Sum(Abs($close-Ref($close, 1)), 10)+1e-12)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0127
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_sump20
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `SUMP20`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Sum(Greater($close-Ref($close, 1), 0), 20)/(Sum(Abs($close-Ref($close, 1)), 20)+1e-12)`
+    生成，逻辑别名为 `SUMP20`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Sum(Greater($close-Ref($close, 1), 0), 20)/(Sum(Abs($close-Ref($close, 1)), 20)+1e-12)
+  provider_expression: Sum(Greater($close-Ref($close, 1), 0), 20)/(Sum(Abs($close-Ref($close, 1)), 20)+1e-12)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0128
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_sump30
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `SUMP30`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Sum(Greater($close-Ref($close, 1), 0), 30)/(Sum(Abs($close-Ref($close, 1)), 30)+1e-12)`
+    生成，逻辑别名为 `SUMP30`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Sum(Greater($close-Ref($close, 1), 0), 30)/(Sum(Abs($close-Ref($close, 1)), 30)+1e-12)
+  provider_expression: Sum(Greater($close-Ref($close, 1), 0), 30)/(Sum(Abs($close-Ref($close, 1)), 30)+1e-12)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0129
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_sump60
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `SUMP60`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Sum(Greater($close-Ref($close, 1), 0), 60)/(Sum(Abs($close-Ref($close, 1)), 60)+1e-12)`
+    生成，逻辑别名为 `SUMP60`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Sum(Greater($close-Ref($close, 1), 0), 60)/(Sum(Abs($close-Ref($close, 1)), 60)+1e-12)
+  provider_expression: Sum(Greater($close-Ref($close, 1), 0), 60)/(Sum(Abs($close-Ref($close, 1)), 60)+1e-12)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0130
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_sumn5
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `SUMN5`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Sum(Greater(Ref($close, 1)-$close, 0), 5)/(Sum(Abs($close-Ref($close, 1)), 5)+1e-12)`
+    生成，逻辑别名为 `SUMN5`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Sum(Greater(Ref($close, 1)-$close, 0), 5)/(Sum(Abs($close-Ref($close, 1)), 5)+1e-12)
+  provider_expression: Sum(Greater(Ref($close, 1)-$close, 0), 5)/(Sum(Abs($close-Ref($close, 1)), 5)+1e-12)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0131
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_sumn10
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `SUMN10`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Sum(Greater(Ref($close, 1)-$close, 0), 10)/(Sum(Abs($close-Ref($close, 1)), 10)+1e-12)`
+    生成，逻辑别名为 `SUMN10`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Sum(Greater(Ref($close, 1)-$close, 0), 10)/(Sum(Abs($close-Ref($close, 1)), 10)+1e-12)
+  provider_expression: Sum(Greater(Ref($close, 1)-$close, 0), 10)/(Sum(Abs($close-Ref($close, 1)), 10)+1e-12)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0132
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_sumn20
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `SUMN20`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Sum(Greater(Ref($close, 1)-$close, 0), 20)/(Sum(Abs($close-Ref($close, 1)), 20)+1e-12)`
+    生成，逻辑别名为 `SUMN20`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Sum(Greater(Ref($close, 1)-$close, 0), 20)/(Sum(Abs($close-Ref($close, 1)), 20)+1e-12)
+  provider_expression: Sum(Greater(Ref($close, 1)-$close, 0), 20)/(Sum(Abs($close-Ref($close, 1)), 20)+1e-12)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0133
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_sumn30
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `SUMN30`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Sum(Greater(Ref($close, 1)-$close, 0), 30)/(Sum(Abs($close-Ref($close, 1)), 30)+1e-12)`
+    生成，逻辑别名为 `SUMN30`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Sum(Greater(Ref($close, 1)-$close, 0), 30)/(Sum(Abs($close-Ref($close, 1)), 30)+1e-12)
+  provider_expression: Sum(Greater(Ref($close, 1)-$close, 0), 30)/(Sum(Abs($close-Ref($close, 1)), 30)+1e-12)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0134
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_sumn60
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `SUMN60`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `Sum(Greater(Ref($close, 1)-$close, 0), 60)/(Sum(Abs($close-Ref($close, 1)), 60)+1e-12)`
+    生成，逻辑别名为 `SUMN60`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Sum(Greater(Ref($close, 1)-$close, 0), 60)/(Sum(Abs($close-Ref($close, 1)), 60)+1e-12)
+  provider_expression: Sum(Greater(Ref($close, 1)-$close, 0), 60)/(Sum(Abs($close-Ref($close, 1)), 60)+1e-12)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0135
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_sumd5
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `SUMD5`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `(Sum(Greater($close-Ref($close, 1), 0), 5)-Sum(Greater(Ref($close, 1)-$close,
+    0), 5))/(Sum(Abs($close-Ref($close, 1)), 5)+1e-12)` 生成，逻辑别名为 `SUMD5`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: (Sum(Greater($close-Ref($close, 1), 0), 5)-Sum(Greater(Ref($close, 1)-$close, 0), 5))/(Sum(Abs($close-Ref($close,
+    1)), 5)+1e-12)
+  provider_expression: (Sum(Greater($close-Ref($close, 1), 0), 5)-Sum(Greater(Ref($close, 1)-$close, 0), 5))/(Sum(Abs($close-Ref($close,
+    1)), 5)+1e-12)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0136
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_sumd10
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `SUMD10`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `(Sum(Greater($close-Ref($close, 1), 0), 10)-Sum(Greater(Ref($close, 1)-$close,
+    0), 10))/(Sum(Abs($close-Ref($close, 1)), 10)+1e-12)` 生成，逻辑别名为 `SUMD10`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: (Sum(Greater($close-Ref($close, 1), 0), 10)-Sum(Greater(Ref($close, 1)-$close, 0), 10))/(Sum(Abs($close-Ref($close,
+    1)), 10)+1e-12)
+  provider_expression: (Sum(Greater($close-Ref($close, 1), 0), 10)-Sum(Greater(Ref($close, 1)-$close, 0), 10))/(Sum(Abs($close-Ref($close,
+    1)), 10)+1e-12)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0137
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_sumd20
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `SUMD20`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `(Sum(Greater($close-Ref($close, 1), 0), 20)-Sum(Greater(Ref($close, 1)-$close,
+    0), 20))/(Sum(Abs($close-Ref($close, 1)), 20)+1e-12)` 生成，逻辑别名为 `SUMD20`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: (Sum(Greater($close-Ref($close, 1), 0), 20)-Sum(Greater(Ref($close, 1)-$close, 0), 20))/(Sum(Abs($close-Ref($close,
+    1)), 20)+1e-12)
+  provider_expression: (Sum(Greater($close-Ref($close, 1), 0), 20)-Sum(Greater(Ref($close, 1)-$close, 0), 20))/(Sum(Abs($close-Ref($close,
+    1)), 20)+1e-12)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0138
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_sumd30
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `SUMD30`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `(Sum(Greater($close-Ref($close, 1), 0), 30)-Sum(Greater(Ref($close, 1)-$close,
+    0), 30))/(Sum(Abs($close-Ref($close, 1)), 30)+1e-12)` 生成，逻辑别名为 `SUMD30`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: (Sum(Greater($close-Ref($close, 1), 0), 30)-Sum(Greater(Ref($close, 1)-$close, 0), 30))/(Sum(Abs($close-Ref($close,
+    1)), 30)+1e-12)
+  provider_expression: (Sum(Greater($close-Ref($close, 1), 0), 30)-Sum(Greater(Ref($close, 1)-$close, 0), 30))/(Sum(Abs($close-Ref($close,
+    1)), 30)+1e-12)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0139
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_sumd60
+  group: cross_section
+  business_meaning: Alpha158 内置价格趋势/统计表达 `SUMD60`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  generation_method: 由 Qlib Alpha158 内置表达式 `(Sum(Greater($close-Ref($close, 1), 0), 60)-Sum(Greater(Ref($close, 1)-$close,
+    0), 60))/(Sum(Abs($close-Ref($close, 1)), 60)+1e-12)` 生成，逻辑别名为 `SUMD60`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: (Sum(Greater($close-Ref($close, 1), 0), 60)-Sum(Greater(Ref($close, 1)-$close, 0), 60))/(Sum(Abs($close-Ref($close,
+    1)), 60)+1e-12)
+  provider_expression: (Sum(Greater($close-Ref($close, 1), 0), 60)-Sum(Greater(Ref($close, 1)-$close, 0), 60))/(Sum(Abs($close-Ref($close,
+    1)), 60)+1e-12)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0140
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_vma5
+  group: liquidity
+  business_meaning: Alpha158 内置量能统计表达 `VMA5`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $volume
+  generation_method: 由 Qlib Alpha158 内置表达式 `Mean($volume, 5)/($volume+1e-12)` 生成，逻辑别名为 `VMA5`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Mean($volume, 5)/($volume+1e-12)
+  provider_expression: Mean($volume, 5)/($volume+1e-12)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0141
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_vma10
+  group: liquidity
+  business_meaning: Alpha158 内置量能统计表达 `VMA10`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $volume
+  generation_method: 由 Qlib Alpha158 内置表达式 `Mean($volume, 10)/($volume+1e-12)` 生成，逻辑别名为 `VMA10`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Mean($volume, 10)/($volume+1e-12)
+  provider_expression: Mean($volume, 10)/($volume+1e-12)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0142
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_vma20
+  group: liquidity
+  business_meaning: Alpha158 内置量能统计表达 `VMA20`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $volume
+  generation_method: 由 Qlib Alpha158 内置表达式 `Mean($volume, 20)/($volume+1e-12)` 生成，逻辑别名为 `VMA20`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Mean($volume, 20)/($volume+1e-12)
+  provider_expression: Mean($volume, 20)/($volume+1e-12)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0143
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_vma30
+  group: liquidity
+  business_meaning: Alpha158 内置量能统计表达 `VMA30`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $volume
+  generation_method: 由 Qlib Alpha158 内置表达式 `Mean($volume, 30)/($volume+1e-12)` 生成，逻辑别名为 `VMA30`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Mean($volume, 30)/($volume+1e-12)
+  provider_expression: Mean($volume, 30)/($volume+1e-12)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0144
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_vma60
+  group: liquidity
+  business_meaning: Alpha158 内置量能统计表达 `VMA60`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $volume
+  generation_method: 由 Qlib Alpha158 内置表达式 `Mean($volume, 60)/($volume+1e-12)` 生成，逻辑别名为 `VMA60`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Mean($volume, 60)/($volume+1e-12)
+  provider_expression: Mean($volume, 60)/($volume+1e-12)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0145
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_vstd5
+  group: liquidity
+  business_meaning: Alpha158 内置量能统计表达 `VSTD5`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $volume
+  generation_method: 由 Qlib Alpha158 内置表达式 `Std($volume, 5)/($volume+1e-12)` 生成，逻辑别名为 `VSTD5`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Std($volume, 5)/($volume+1e-12)
+  provider_expression: Std($volume, 5)/($volume+1e-12)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0146
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_vstd10
+  group: liquidity
+  business_meaning: Alpha158 内置量能统计表达 `VSTD10`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $volume
+  generation_method: 由 Qlib Alpha158 内置表达式 `Std($volume, 10)/($volume+1e-12)` 生成，逻辑别名为 `VSTD10`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Std($volume, 10)/($volume+1e-12)
+  provider_expression: Std($volume, 10)/($volume+1e-12)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0147
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_vstd20
+  group: liquidity
+  business_meaning: Alpha158 内置量能统计表达 `VSTD20`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $volume
+  generation_method: 由 Qlib Alpha158 内置表达式 `Std($volume, 20)/($volume+1e-12)` 生成，逻辑别名为 `VSTD20`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Std($volume, 20)/($volume+1e-12)
+  provider_expression: Std($volume, 20)/($volume+1e-12)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0148
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_vstd30
+  group: liquidity
+  business_meaning: Alpha158 内置量能统计表达 `VSTD30`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $volume
+  generation_method: 由 Qlib Alpha158 内置表达式 `Std($volume, 30)/($volume+1e-12)` 生成，逻辑别名为 `VSTD30`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Std($volume, 30)/($volume+1e-12)
+  provider_expression: Std($volume, 30)/($volume+1e-12)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0149
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_vstd60
+  group: liquidity
+  business_meaning: Alpha158 内置量能统计表达 `VSTD60`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $volume
+  generation_method: 由 Qlib Alpha158 内置表达式 `Std($volume, 60)/($volume+1e-12)` 生成，逻辑别名为 `VSTD60`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Std($volume, 60)/($volume+1e-12)
+  provider_expression: Std($volume, 60)/($volume+1e-12)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0150
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_wvma5
+  group: liquidity
+  business_meaning: Alpha158 内置量能统计表达 `WVMA5`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  - $volume
+  generation_method: 由 Qlib Alpha158 内置表达式 `Std(Abs($close/Ref($close, 1)-1)*$volume, 5)/(Mean(Abs($close/Ref($close, 1)-1)*$volume,
+    5)+1e-12)` 生成，逻辑别名为 `WVMA5`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Std(Abs($close/Ref($close, 1)-1)*$volume, 5)/(Mean(Abs($close/Ref($close, 1)-1)*$volume, 5)+1e-12)
+  provider_expression: Std(Abs($close/Ref($close, 1)-1)*$volume, 5)/(Mean(Abs($close/Ref($close, 1)-1)*$volume, 5)+1e-12)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0151
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_wvma10
+  group: liquidity
+  business_meaning: Alpha158 内置量能统计表达 `WVMA10`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  - $volume
+  generation_method: 由 Qlib Alpha158 内置表达式 `Std(Abs($close/Ref($close, 1)-1)*$volume, 10)/(Mean(Abs($close/Ref($close, 1)-1)*$volume,
+    10)+1e-12)` 生成，逻辑别名为 `WVMA10`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Std(Abs($close/Ref($close, 1)-1)*$volume, 10)/(Mean(Abs($close/Ref($close, 1)-1)*$volume, 10)+1e-12)
+  provider_expression: Std(Abs($close/Ref($close, 1)-1)*$volume, 10)/(Mean(Abs($close/Ref($close, 1)-1)*$volume, 10)+1e-12)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0152
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_wvma20
+  group: liquidity
+  business_meaning: Alpha158 内置量能统计表达 `WVMA20`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  - $volume
+  generation_method: 由 Qlib Alpha158 内置表达式 `Std(Abs($close/Ref($close, 1)-1)*$volume, 20)/(Mean(Abs($close/Ref($close, 1)-1)*$volume,
+    20)+1e-12)` 生成，逻辑别名为 `WVMA20`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Std(Abs($close/Ref($close, 1)-1)*$volume, 20)/(Mean(Abs($close/Ref($close, 1)-1)*$volume, 20)+1e-12)
+  provider_expression: Std(Abs($close/Ref($close, 1)-1)*$volume, 20)/(Mean(Abs($close/Ref($close, 1)-1)*$volume, 20)+1e-12)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0153
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_wvma30
+  group: liquidity
+  business_meaning: Alpha158 内置量能统计表达 `WVMA30`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  - $volume
+  generation_method: 由 Qlib Alpha158 内置表达式 `Std(Abs($close/Ref($close, 1)-1)*$volume, 30)/(Mean(Abs($close/Ref($close, 1)-1)*$volume,
+    30)+1e-12)` 生成，逻辑别名为 `WVMA30`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Std(Abs($close/Ref($close, 1)-1)*$volume, 30)/(Mean(Abs($close/Ref($close, 1)-1)*$volume, 30)+1e-12)
+  provider_expression: Std(Abs($close/Ref($close, 1)-1)*$volume, 30)/(Mean(Abs($close/Ref($close, 1)-1)*$volume, 30)+1e-12)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0154
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_wvma60
+  group: liquidity
+  business_meaning: Alpha158 内置量能统计表达 `WVMA60`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $close
+  - $volume
+  generation_method: 由 Qlib Alpha158 内置表达式 `Std(Abs($close/Ref($close, 1)-1)*$volume, 60)/(Mean(Abs($close/Ref($close, 1)-1)*$volume,
+    60)+1e-12)` 生成，逻辑别名为 `WVMA60`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Std(Abs($close/Ref($close, 1)-1)*$volume, 60)/(Mean(Abs($close/Ref($close, 1)-1)*$volume, 60)+1e-12)
+  provider_expression: Std(Abs($close/Ref($close, 1)-1)*$volume, 60)/(Mean(Abs($close/Ref($close, 1)-1)*$volume, 60)+1e-12)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0155
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_vsump5
+  group: liquidity
+  business_meaning: Alpha158 内置量能统计表达 `VSUMP5`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $volume
+  generation_method: 由 Qlib Alpha158 内置表达式 `Sum(Greater($volume-Ref($volume, 1), 0), 5)/(Sum(Abs($volume-Ref($volume, 1)),
+    5)+1e-12)` 生成，逻辑别名为 `VSUMP5`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Sum(Greater($volume-Ref($volume, 1), 0), 5)/(Sum(Abs($volume-Ref($volume, 1)), 5)+1e-12)
+  provider_expression: Sum(Greater($volume-Ref($volume, 1), 0), 5)/(Sum(Abs($volume-Ref($volume, 1)), 5)+1e-12)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0156
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_vsump10
+  group: liquidity
+  business_meaning: Alpha158 内置量能统计表达 `VSUMP10`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $volume
+  generation_method: 由 Qlib Alpha158 内置表达式 `Sum(Greater($volume-Ref($volume, 1), 0), 10)/(Sum(Abs($volume-Ref($volume, 1)),
+    10)+1e-12)` 生成，逻辑别名为 `VSUMP10`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Sum(Greater($volume-Ref($volume, 1), 0), 10)/(Sum(Abs($volume-Ref($volume, 1)), 10)+1e-12)
+  provider_expression: Sum(Greater($volume-Ref($volume, 1), 0), 10)/(Sum(Abs($volume-Ref($volume, 1)), 10)+1e-12)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0157
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_vsump20
+  group: liquidity
+  business_meaning: Alpha158 内置量能统计表达 `VSUMP20`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $volume
+  generation_method: 由 Qlib Alpha158 内置表达式 `Sum(Greater($volume-Ref($volume, 1), 0), 20)/(Sum(Abs($volume-Ref($volume, 1)),
+    20)+1e-12)` 生成，逻辑别名为 `VSUMP20`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Sum(Greater($volume-Ref($volume, 1), 0), 20)/(Sum(Abs($volume-Ref($volume, 1)), 20)+1e-12)
+  provider_expression: Sum(Greater($volume-Ref($volume, 1), 0), 20)/(Sum(Abs($volume-Ref($volume, 1)), 20)+1e-12)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0158
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_vsump30
+  group: liquidity
+  business_meaning: Alpha158 内置量能统计表达 `VSUMP30`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $volume
+  generation_method: 由 Qlib Alpha158 内置表达式 `Sum(Greater($volume-Ref($volume, 1), 0), 30)/(Sum(Abs($volume-Ref($volume, 1)),
+    30)+1e-12)` 生成，逻辑别名为 `VSUMP30`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Sum(Greater($volume-Ref($volume, 1), 0), 30)/(Sum(Abs($volume-Ref($volume, 1)), 30)+1e-12)
+  provider_expression: Sum(Greater($volume-Ref($volume, 1), 0), 30)/(Sum(Abs($volume-Ref($volume, 1)), 30)+1e-12)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0159
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_vsump60
+  group: liquidity
+  business_meaning: Alpha158 内置量能统计表达 `VSUMP60`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $volume
+  generation_method: 由 Qlib Alpha158 内置表达式 `Sum(Greater($volume-Ref($volume, 1), 0), 60)/(Sum(Abs($volume-Ref($volume, 1)),
+    60)+1e-12)` 生成，逻辑别名为 `VSUMP60`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Sum(Greater($volume-Ref($volume, 1), 0), 60)/(Sum(Abs($volume-Ref($volume, 1)), 60)+1e-12)
+  provider_expression: Sum(Greater($volume-Ref($volume, 1), 0), 60)/(Sum(Abs($volume-Ref($volume, 1)), 60)+1e-12)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0160
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_vsumn5
+  group: liquidity
+  business_meaning: Alpha158 内置量能统计表达 `VSUMN5`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $volume
+  generation_method: 由 Qlib Alpha158 内置表达式 `Sum(Greater(Ref($volume, 1)-$volume, 0), 5)/(Sum(Abs($volume-Ref($volume, 1)),
+    5)+1e-12)` 生成，逻辑别名为 `VSUMN5`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Sum(Greater(Ref($volume, 1)-$volume, 0), 5)/(Sum(Abs($volume-Ref($volume, 1)), 5)+1e-12)
+  provider_expression: Sum(Greater(Ref($volume, 1)-$volume, 0), 5)/(Sum(Abs($volume-Ref($volume, 1)), 5)+1e-12)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0161
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_vsumn10
+  group: liquidity
+  business_meaning: Alpha158 内置量能统计表达 `VSUMN10`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $volume
+  generation_method: 由 Qlib Alpha158 内置表达式 `Sum(Greater(Ref($volume, 1)-$volume, 0), 10)/(Sum(Abs($volume-Ref($volume, 1)),
+    10)+1e-12)` 生成，逻辑别名为 `VSUMN10`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Sum(Greater(Ref($volume, 1)-$volume, 0), 10)/(Sum(Abs($volume-Ref($volume, 1)), 10)+1e-12)
+  provider_expression: Sum(Greater(Ref($volume, 1)-$volume, 0), 10)/(Sum(Abs($volume-Ref($volume, 1)), 10)+1e-12)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0162
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_vsumn20
+  group: liquidity
+  business_meaning: Alpha158 内置量能统计表达 `VSUMN20`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $volume
+  generation_method: 由 Qlib Alpha158 内置表达式 `Sum(Greater(Ref($volume, 1)-$volume, 0), 20)/(Sum(Abs($volume-Ref($volume, 1)),
+    20)+1e-12)` 生成，逻辑别名为 `VSUMN20`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Sum(Greater(Ref($volume, 1)-$volume, 0), 20)/(Sum(Abs($volume-Ref($volume, 1)), 20)+1e-12)
+  provider_expression: Sum(Greater(Ref($volume, 1)-$volume, 0), 20)/(Sum(Abs($volume-Ref($volume, 1)), 20)+1e-12)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0163
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_vsumn30
+  group: liquidity
+  business_meaning: Alpha158 内置量能统计表达 `VSUMN30`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $volume
+  generation_method: 由 Qlib Alpha158 内置表达式 `Sum(Greater(Ref($volume, 1)-$volume, 0), 30)/(Sum(Abs($volume-Ref($volume, 1)),
+    30)+1e-12)` 生成，逻辑别名为 `VSUMN30`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Sum(Greater(Ref($volume, 1)-$volume, 0), 30)/(Sum(Abs($volume-Ref($volume, 1)), 30)+1e-12)
+  provider_expression: Sum(Greater(Ref($volume, 1)-$volume, 0), 30)/(Sum(Abs($volume-Ref($volume, 1)), 30)+1e-12)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0164
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_vsumn60
+  group: liquidity
+  business_meaning: Alpha158 内置量能统计表达 `VSUMN60`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $volume
+  generation_method: 由 Qlib Alpha158 内置表达式 `Sum(Greater(Ref($volume, 1)-$volume, 0), 60)/(Sum(Abs($volume-Ref($volume, 1)),
+    60)+1e-12)` 生成，逻辑别名为 `VSUMN60`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: Sum(Greater(Ref($volume, 1)-$volume, 0), 60)/(Sum(Abs($volume-Ref($volume, 1)), 60)+1e-12)
+  provider_expression: Sum(Greater(Ref($volume, 1)-$volume, 0), 60)/(Sum(Abs($volume-Ref($volume, 1)), 60)+1e-12)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0165
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_vsumd5
+  group: liquidity
+  business_meaning: Alpha158 内置量能统计表达 `VSUMD5`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $volume
+  generation_method: 由 Qlib Alpha158 内置表达式 `(Sum(Greater($volume-Ref($volume, 1), 0), 5)-Sum(Greater(Ref($volume, 1)-$volume,
+    0), 5))/(Sum(Abs($volume-Ref($volume, 1)), 5)+1e-12)` 生成，逻辑别名为 `VSUMD5`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: (Sum(Greater($volume-Ref($volume, 1), 0), 5)-Sum(Greater(Ref($volume, 1)-$volume, 0), 5))/(Sum(Abs($volume-Ref($volume,
+    1)), 5)+1e-12)
+  provider_expression: (Sum(Greater($volume-Ref($volume, 1), 0), 5)-Sum(Greater(Ref($volume, 1)-$volume, 0), 5))/(Sum(Abs($volume-Ref($volume,
+    1)), 5)+1e-12)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0166
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_vsumd10
+  group: liquidity
+  business_meaning: Alpha158 内置量能统计表达 `VSUMD10`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $volume
+  generation_method: 由 Qlib Alpha158 内置表达式 `(Sum(Greater($volume-Ref($volume, 1), 0), 10)-Sum(Greater(Ref($volume, 1)-$volume,
+    0), 10))/(Sum(Abs($volume-Ref($volume, 1)), 10)+1e-12)` 生成，逻辑别名为 `VSUMD10`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: (Sum(Greater($volume-Ref($volume, 1), 0), 10)-Sum(Greater(Ref($volume, 1)-$volume, 0), 10))/(Sum(Abs($volume-Ref($volume,
+    1)), 10)+1e-12)
+  provider_expression: (Sum(Greater($volume-Ref($volume, 1), 0), 10)-Sum(Greater(Ref($volume, 1)-$volume, 0), 10))/(Sum(Abs($volume-Ref($volume,
+    1)), 10)+1e-12)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0167
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_vsumd20
+  group: liquidity
+  business_meaning: Alpha158 内置量能统计表达 `VSUMD20`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $volume
+  generation_method: 由 Qlib Alpha158 内置表达式 `(Sum(Greater($volume-Ref($volume, 1), 0), 20)-Sum(Greater(Ref($volume, 1)-$volume,
+    0), 20))/(Sum(Abs($volume-Ref($volume, 1)), 20)+1e-12)` 生成，逻辑别名为 `VSUMD20`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: (Sum(Greater($volume-Ref($volume, 1), 0), 20)-Sum(Greater(Ref($volume, 1)-$volume, 0), 20))/(Sum(Abs($volume-Ref($volume,
+    1)), 20)+1e-12)
+  provider_expression: (Sum(Greater($volume-Ref($volume, 1), 0), 20)-Sum(Greater(Ref($volume, 1)-$volume, 0), 20))/(Sum(Abs($volume-Ref($volume,
+    1)), 20)+1e-12)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0168
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_vsumd30
+  group: liquidity
+  business_meaning: Alpha158 内置量能统计表达 `VSUMD30`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $volume
+  generation_method: 由 Qlib Alpha158 内置表达式 `(Sum(Greater($volume-Ref($volume, 1), 0), 30)-Sum(Greater(Ref($volume, 1)-$volume,
+    0), 30))/(Sum(Abs($volume-Ref($volume, 1)), 30)+1e-12)` 生成，逻辑别名为 `VSUMD30`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: (Sum(Greater($volume-Ref($volume, 1), 0), 30)-Sum(Greater(Ref($volume, 1)-$volume, 0), 30))/(Sum(Abs($volume-Ref($volume,
+    1)), 30)+1e-12)
+  provider_expression: (Sum(Greater($volume-Ref($volume, 1), 0), 30)-Sum(Greater(Ref($volume, 1)-$volume, 0), 30))/(Sum(Abs($volume-Ref($volume,
+    1)), 30)+1e-12)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0169
+  tabular_fit: true
+  sequence_fit: false
+- name: alpha158_vsumd60
+  group: liquidity
+  business_meaning: Alpha158 内置量能统计表达 `VSUMD60`
+  modeling_role: aggregated
+  temporal_type: dynamic
+  source_type: qlib_alpha158
+  provider_ref: qlib.contrib.data.handler.Alpha158DL.get_feature_config
+  dependencies:
+  - $volume
+  generation_method: 由 Qlib Alpha158 内置表达式 `(Sum(Greater($volume-Ref($volume, 1), 0), 60)-Sum(Greater(Ref($volume, 1)-$volume,
+    0), 60))/(Sum(Abs($volume-Ref($volume, 1)), 60)+1e-12)` 生成，逻辑别名为 `VSUMD60`。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qlib.contrib.data.handler.Alpha158DL
+  qlib_column_name: (Sum(Greater($volume-Ref($volume, 1), 0), 60)-Sum(Greater(Ref($volume, 1)-$volume, 0), 60))/(Sum(Abs($volume-Ref($volume,
+    1)), 60)+1e-12)
+  provider_expression: (Sum(Greater($volume-Ref($volume, 1), 0), 60)-Sum(Greater(Ref($volume, 1)-$volume, 0), 60))/(Sum(Abs($volume-Ref($volume,
+    1)), 60)+1e-12)
+  notes: 属于现有基线训练主输入，但未来 sequence 主通道优先使用 native_daily_panel。
+  id: F0170
+  tabular_fit: true
+  sequence_fit: false
+- name: pe_raw
+  group: fundamental
+  business_meaning: 市盈率原始字段
+  modeling_role: atomic
+  temporal_type: slow
+  source_type: qlib_raw_field
+  provider_ref: qsys.feature.library.FeatureLibrary
+  dependencies:
+  - qlib_bin::$pe
+  generation_method: 通过 Qlib 原始字段表达式 `$pe` 直接读取。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.library
+  qlib_column_name: $pe
+  provider_expression: $pe
+  notes: 属于 Alpha158 之外的原始扩展输入。
+  id: F0171
+  tabular_fit: true
+  sequence_fit: true
+- name: pb_raw_native
+  group: fundamental
+  business_meaning: 市净率原始字段
+  modeling_role: atomic
+  temporal_type: slow
+  source_type: qlib_raw_field
+  provider_ref: qsys.feature.library.FeatureLibrary
+  dependencies:
+  - qlib_bin::$pb
+  generation_method: 通过 Qlib 原始字段表达式 `$pb` 直接读取。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.library
+  qlib_column_name: $pb
+  provider_expression: $pb
+  notes: 属于 Alpha158 之外的原始扩展输入。
+  id: F0172
+  tabular_fit: true
+  sequence_fit: true
+- name: total_mv_raw
+  group: fundamental
+  business_meaning: 总市值原始字段
+  modeling_role: atomic
+  temporal_type: slow
+  source_type: qlib_raw_field
+  provider_ref: qsys.feature.library.FeatureLibrary
+  dependencies:
+  - qlib_bin::$total_mv
+  generation_method: 通过 Qlib 原始字段表达式 `$total_mv` 直接读取。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.library
+  qlib_column_name: $total_mv
+  provider_expression: $total_mv
+  notes: 属于 Alpha158 之外的原始扩展输入。
+  id: F0173
+  tabular_fit: true
+  sequence_fit: true
+- name: circ_mv_raw
+  group: fundamental
+  business_meaning: 流通市值原始字段
+  modeling_role: atomic
+  temporal_type: slow
+  source_type: qlib_raw_field
+  provider_ref: qsys.feature.library.FeatureLibrary
+  dependencies:
+  - qlib_bin::$circ_mv
+  generation_method: 通过 Qlib 原始字段表达式 `$circ_mv` 直接读取。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.library
+  qlib_column_name: $circ_mv
+  provider_expression: $circ_mv
+  notes: 属于 Alpha158 之外的原始扩展输入。
+  id: F0174
+  tabular_fit: true
+  sequence_fit: true
+- name: net_inflow_raw
+  group: event
+  business_meaning: 资金净流入原始字段
+  modeling_role: atomic
+  temporal_type: dynamic
+  source_type: qlib_raw_field
+  provider_ref: qsys.feature.library.FeatureLibrary
+  dependencies:
+  - qlib_bin::$net_inflow
+  generation_method: 通过 Qlib 原始字段表达式 `$net_inflow` 直接读取。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.library
+  qlib_column_name: $net_inflow
+  provider_expression: $net_inflow
+  notes: 属于 Alpha158 之外的原始扩展输入。
+  id: F0175
+  tabular_fit: true
+  sequence_fit: true
+- name: big_inflow_raw
+  group: event
+  business_meaning: 大单净流入原始字段
+  modeling_role: atomic
+  temporal_type: dynamic
+  source_type: qlib_raw_field
+  provider_ref: qsys.feature.library.FeatureLibrary
+  dependencies:
+  - qlib_bin::$big_inflow
+  generation_method: 通过 Qlib 原始字段表达式 `$big_inflow` 直接读取。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.library
+  qlib_column_name: $big_inflow
+  provider_expression: $big_inflow
+  notes: 属于 Alpha158 之外的原始扩展输入。
+  id: F0176
+  tabular_fit: true
+  sequence_fit: true
+- name: roe_raw
+  group: fundamental
+  business_meaning: ROE 原始字段
+  modeling_role: atomic
+  temporal_type: slow
+  source_type: qlib_raw_field
+  provider_ref: qsys.feature.library.FeatureLibrary
+  dependencies:
+  - qlib_bin::$roe
+  generation_method: 通过 Qlib 原始字段表达式 `$roe` 直接读取。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.library
+  qlib_column_name: $roe
+  provider_expression: $roe
+  notes: 属于 Alpha158 之外的原始扩展输入。
+  id: F0177
+  tabular_fit: true
+  sequence_fit: true
+- name: grossprofit_margin_raw
+  group: fundamental
+  business_meaning: 毛利率原始字段
+  modeling_role: atomic
+  temporal_type: slow
+  source_type: qlib_raw_field
+  provider_ref: qsys.feature.library.FeatureLibrary
+  dependencies:
+  - qlib_bin::$grossprofit_margin
+  generation_method: 通过 Qlib 原始字段表达式 `$grossprofit_margin` 直接读取。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.library
+  qlib_column_name: $grossprofit_margin
+  provider_expression: $grossprofit_margin
+  notes: 属于 Alpha158 之外的原始扩展输入。
+  id: F0178
+  tabular_fit: true
+  sequence_fit: true
+- name: debt_to_assets_raw
+  group: fundamental
+  business_meaning: 资产负债率原始字段
+  modeling_role: atomic
+  temporal_type: slow
+  source_type: qlib_raw_field
+  provider_ref: qsys.feature.library.FeatureLibrary
+  dependencies:
+  - qlib_bin::$debt_to_assets
+  generation_method: 通过 Qlib 原始字段表达式 `$debt_to_assets` 直接读取。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.library
+  qlib_column_name: $debt_to_assets
+  provider_expression: $debt_to_assets
+  notes: 属于 Alpha158 之外的原始扩展输入。
+  id: F0179
+  tabular_fit: true
+  sequence_fit: true
+- name: current_ratio_raw
+  group: fundamental
+  business_meaning: 流动比率原始字段
+  modeling_role: atomic
+  temporal_type: slow
+  source_type: qlib_raw_field
+  provider_ref: qsys.feature.library.FeatureLibrary
+  dependencies:
+  - qlib_bin::$current_ratio
+  generation_method: 通过 Qlib 原始字段表达式 `$current_ratio` 直接读取。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.library
+  qlib_column_name: $current_ratio
+  provider_expression: $current_ratio
+  notes: 属于 Alpha158 之外的原始扩展输入。
+  id: F0180
+  tabular_fit: true
+  sequence_fit: true
+- name: net_income_raw
+  group: fundamental
+  business_meaning: 净利润原始字段
+  modeling_role: atomic
+  temporal_type: slow
+  source_type: qlib_raw_field
+  provider_ref: qsys.feature.library.FeatureLibrary
+  dependencies:
+  - qlib_bin::$net_income
+  generation_method: 通过 Qlib 原始字段表达式 `$net_income` 直接读取。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.library
+  qlib_column_name: $net_income
+  provider_expression: $net_income
+  notes: 属于 Alpha158 之外的原始扩展输入。
+  id: F0181
+  tabular_fit: true
+  sequence_fit: true
+- name: revenue_raw
+  group: fundamental
+  business_meaning: 营业收入原始字段
+  modeling_role: atomic
+  temporal_type: slow
+  source_type: qlib_raw_field
+  provider_ref: qsys.feature.library.FeatureLibrary
+  dependencies:
+  - qlib_bin::$revenue
+  generation_method: 通过 Qlib 原始字段表达式 `$revenue` 直接读取。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.library
+  qlib_column_name: $revenue
+  provider_expression: $revenue
+  notes: 属于 Alpha158 之外的原始扩展输入。
+  id: F0182
+  tabular_fit: true
+  sequence_fit: true
+- name: total_assets_raw
+  group: fundamental
+  business_meaning: 总资产原始字段
+  modeling_role: atomic
+  temporal_type: slow
+  source_type: qlib_raw_field
+  provider_ref: qsys.feature.library.FeatureLibrary
+  dependencies:
+  - qlib_bin::$total_assets
+  generation_method: 通过 Qlib 原始字段表达式 `$total_assets` 直接读取。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.library
+  qlib_column_name: $total_assets
+  provider_expression: $total_assets
+  notes: 属于 Alpha158 之外的原始扩展输入。
+  id: F0183
+  tabular_fit: true
+  sequence_fit: true
+- name: equity_raw
+  group: fundamental
+  business_meaning: 股东权益原始字段
+  modeling_role: atomic
+  temporal_type: slow
+  source_type: qlib_raw_field
+  provider_ref: qsys.feature.library.FeatureLibrary
+  dependencies:
+  - qlib_bin::$equity
+  generation_method: 通过 Qlib 原始字段表达式 `$equity` 直接读取。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.library
+  qlib_column_name: $equity
+  provider_expression: $equity
+  notes: 属于 Alpha158 之外的原始扩展输入。
+  id: F0184
+  tabular_fit: true
+  sequence_fit: true
+- name: op_cashflow_raw
+  group: fundamental
+  business_meaning: 经营现金流原始字段
+  modeling_role: atomic
+  temporal_type: slow
+  source_type: qlib_raw_field
+  provider_ref: qsys.feature.library.FeatureLibrary
+  dependencies:
+  - qlib_bin::$op_cashflow
+  generation_method: 通过 Qlib 原始字段表达式 `$op_cashflow` 直接读取。
+  need_norm: true
+  norm_method: qlib_handler_default
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.library
+  qlib_column_name: $op_cashflow
+  provider_expression: $op_cashflow
+  notes: 属于 Alpha158 之外的原始扩展输入。
+  id: F0185
+  tabular_fit: true
+  sequence_fit: true
+- name: margin_balance_raw
+  group: event
+  business_meaning: 融资余额原始字段
+  modeling_role: event
+  temporal_type: dynamic
+  source_type: qlib_raw_field
+  provider_ref: qsys.feature.library.FeatureLibrary
+  dependencies:
+  - qlib_bin::$margin_balance
+  generation_method: 通过 Qlib 原始字段表达式 `$margin_balance` 直接读取。
+  need_norm: false
+  norm_method: none
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.library
+  qlib_column_name: $margin_balance
+  provider_expression: $margin_balance
+  notes: 两融字段稀疏性更高，是否标准化应由具体模型决定。
+  id: F0186
+  tabular_fit: true
+  sequence_fit: true
+- name: margin_buy_amount_raw
+  group: event
+  business_meaning: 融资买入额原始字段
+  modeling_role: event
+  temporal_type: dynamic
+  source_type: qlib_raw_field
+  provider_ref: qsys.feature.library.FeatureLibrary
+  dependencies:
+  - qlib_bin::$margin_buy_amount
+  generation_method: 通过 Qlib 原始字段表达式 `$margin_buy_amount` 直接读取。
+  need_norm: false
+  norm_method: none
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.library
+  qlib_column_name: $margin_buy_amount
+  provider_expression: $margin_buy_amount
+  notes: 两融字段稀疏性更高，是否标准化应由具体模型决定。
+  id: F0187
+  tabular_fit: true
+  sequence_fit: true
+- name: margin_repay_amount_raw
+  group: event
+  business_meaning: 融资偿还额原始字段
+  modeling_role: event
+  temporal_type: dynamic
+  source_type: qlib_raw_field
+  provider_ref: qsys.feature.library.FeatureLibrary
+  dependencies:
+  - qlib_bin::$margin_repay_amount
+  generation_method: 通过 Qlib 原始字段表达式 `$margin_repay_amount` 直接读取。
+  need_norm: false
+  norm_method: none
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.library
+  qlib_column_name: $margin_repay_amount
+  provider_expression: $margin_repay_amount
+  notes: 两融字段稀疏性更高，是否标准化应由具体模型决定。
+  id: F0188
+  tabular_fit: true
+  sequence_fit: true
+- name: margin_total_balance_raw
+  group: event
+  business_meaning: 融资融券余额原始字段
+  modeling_role: event
+  temporal_type: dynamic
+  source_type: qlib_raw_field
+  provider_ref: qsys.feature.library.FeatureLibrary
+  dependencies:
+  - qlib_bin::$margin_total_balance
+  generation_method: 通过 Qlib 原始字段表达式 `$margin_total_balance` 直接读取。
+  need_norm: false
+  norm_method: none
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.library
+  qlib_column_name: $margin_total_balance
+  provider_expression: $margin_total_balance
+  notes: 两融字段稀疏性更高，是否标准化应由具体模型决定。
+  id: F0189
+  tabular_fit: true
+  sequence_fit: true
+- name: lend_volume_raw
+  group: event
+  business_meaning: 融券余量原始字段
+  modeling_role: event
+  temporal_type: dynamic
+  source_type: qlib_raw_field
+  provider_ref: qsys.feature.library.FeatureLibrary
+  dependencies:
+  - qlib_bin::$lend_volume
+  generation_method: 通过 Qlib 原始字段表达式 `$lend_volume` 直接读取。
+  need_norm: false
+  norm_method: none
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.library
+  qlib_column_name: $lend_volume
+  provider_expression: $lend_volume
+  notes: 两融字段稀疏性更高，是否标准化应由具体模型决定。
+  id: F0190
+  tabular_fit: true
+  sequence_fit: true
+- name: lend_sell_volume_raw
+  group: event
+  business_meaning: 融券卖出量原始字段
+  modeling_role: event
+  temporal_type: dynamic
+  source_type: qlib_raw_field
+  provider_ref: qsys.feature.library.FeatureLibrary
+  dependencies:
+  - qlib_bin::$lend_sell_volume
+  generation_method: 通过 Qlib 原始字段表达式 `$lend_sell_volume` 直接读取。
+  need_norm: false
+  norm_method: none
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.library
+  qlib_column_name: $lend_sell_volume
+  provider_expression: $lend_sell_volume
+  notes: 两融字段稀疏性更高，是否标准化应由具体模型决定。
+  id: F0191
+  tabular_fit: true
+  sequence_fit: true
+- name: lend_repay_volume_raw
+  group: event
+  business_meaning: 融券偿还量原始字段
+  modeling_role: event
+  temporal_type: dynamic
+  source_type: qlib_raw_field
+  provider_ref: qsys.feature.library.FeatureLibrary
+  dependencies:
+  - qlib_bin::$lend_repay_volume
+  generation_method: 通过 Qlib 原始字段表达式 `$lend_repay_volume` 直接读取。
+  need_norm: false
+  norm_method: none
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.library
+  qlib_column_name: $lend_repay_volume
+  provider_expression: $lend_repay_volume
+  notes: 两融字段稀疏性更高，是否标准化应由具体模型决定。
+  id: F0192
+  tabular_fit: true
+  sequence_fit: true
+- group: microstructure
+  name: close_to_open_gap_1d
+  business_meaning: 当日开盘价相对前收的跳空幅度
+  modeling_role: atomic
+  temporal_type: dynamic
+  provider_ref: qsys.feature.definitions.price_state.build_daily_price_state_features
+  dependencies:
+  - open_raw
+  - close_raw
+  generation_method: 按个股分组后取前一日收盘价，计算 `open / prev_close - 1`。
+  need_norm: true
+  norm_method: cs_winsorize_zscore_rank
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.definitions.price_state
+  qlib_column_name: close_to_open_gap_1d
+  source_type: custom_python
+  id: F0193
+  builder_group: daily_price_state
+  tabular_fit: true
+  sequence_fit: true
+- group: microstructure
+  name: open_to_close_ret
+  business_meaning: 当日开盘到收盘的日内收益
+  modeling_role: atomic
+  temporal_type: dynamic
+  provider_ref: qsys.feature.definitions.price_state.build_daily_price_state_features
+  dependencies:
+  - open_raw
+  - close_raw
+  generation_method: 计算 `close / open - 1`，描述单日多空方向。
+  need_norm: true
+  norm_method: cs_winsorize_zscore_rank
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.definitions.price_state
+  qlib_column_name: open_to_close_ret
+  source_type: custom_python
+  id: F0194
+  builder_group: daily_price_state
+  tabular_fit: true
+  sequence_fit: true
+- group: microstructure
+  name: close_pos_in_range
+  business_meaning: 收盘价位于当日高低区间中的相对位置
+  modeling_role: atomic
+  temporal_type: dynamic
+  provider_ref: qsys.feature.definitions.price_state.build_daily_price_state_features
+  dependencies:
+  - high_raw
+  - low_raw
+  - close_raw
+  generation_method: 计算 `(close - low) / (high - low)`。
+  need_norm: true
+  norm_method: cs_winsorize_zscore_rank
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.definitions.price_state
+  qlib_column_name: close_pos_in_range
+  source_type: custom_python
+  id: F0195
+  builder_group: daily_price_state
+  tabular_fit: true
+  sequence_fit: true
+- group: microstructure
+  name: open_pos_in_range
+  business_meaning: 开盘价位于当日高低区间中的相对位置
+  modeling_role: atomic
+  temporal_type: dynamic
+  provider_ref: qsys.feature.definitions.price_state.build_daily_price_state_features
+  dependencies:
+  - high_raw
+  - low_raw
+  - open_raw
+  generation_method: 计算 `(open - low) / (high - low)`。
+  need_norm: true
+  norm_method: cs_winsorize_zscore_rank
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.definitions.price_state
+  qlib_column_name: open_pos_in_range
+  source_type: custom_python
+  id: F0196
+  builder_group: daily_price_state
+  tabular_fit: true
+  sequence_fit: true
+- group: microstructure
+  name: upper_shadow_ratio
+  business_meaning: 上影线长度占当日振幅的比例
+  modeling_role: atomic
+  temporal_type: dynamic
+  provider_ref: qsys.feature.definitions.price_state.build_daily_price_state_features
+  dependencies:
+  - high_raw
+  - low_raw
+  - open_raw
+  - close_raw
+  generation_method: 计算 `(high - max(open, close)) / (high - low)`。
+  need_norm: true
+  norm_method: cs_winsorize_zscore_rank
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.definitions.price_state
+  qlib_column_name: upper_shadow_ratio
+  source_type: custom_python
+  id: F0197
+  builder_group: daily_price_state
+  tabular_fit: true
+  sequence_fit: true
+- group: microstructure
+  name: lower_shadow_ratio
+  business_meaning: 下影线长度占当日振幅的比例
+  modeling_role: atomic
+  temporal_type: dynamic
+  provider_ref: qsys.feature.definitions.price_state.build_daily_price_state_features
+  dependencies:
+  - high_raw
+  - low_raw
+  - open_raw
+  - close_raw
+  generation_method: 计算 `(min(open, close) - low) / (high - low)`。
+  need_norm: true
+  norm_method: cs_winsorize_zscore_rank
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.definitions.price_state
+  qlib_column_name: lower_shadow_ratio
+  source_type: custom_python
+  id: F0198
+  builder_group: daily_price_state
+  tabular_fit: true
+  sequence_fit: true
+- group: microstructure
+  name: intraday_reversal_strength
+  business_meaning: 隔夜方向与日内方向相反时的反转强度代理
+  modeling_role: interaction
+  temporal_type: dynamic
+  provider_ref: qsys.feature.definitions.price_state.build_daily_price_state_features
+  dependencies:
+  - close_to_open_gap_1d
+  - open_to_close_ret
+  - close_raw
+  generation_method: 以隔夜收益与日内收益相乘后取负，强调跳空后日内反向修复。
+  need_norm: true
+  norm_method: cs_winsorize_zscore_rank
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.definitions.price_state
+  qlib_column_name: intraday_reversal_strength
+  source_type: custom_python
+  id: F0199
+  builder_group: daily_price_state
+  tabular_fit: true
+  sequence_fit: true
+- group: liquidity
+  name: amount_log
+  business_meaning: 成交额的对数压缩值
+  modeling_role: atomic
+  temporal_type: dynamic
+  provider_ref: qsys.feature.definitions.liquidity.build_liquidity_capacity_features
+  dependencies:
+  - amount_raw
+  generation_method: 对成交额做 `log1p` 压缩，减少极端值影响。
+  need_norm: true
+  norm_method: cs_winsorize_zscore_rank
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.definitions.liquidity
+  qlib_column_name: amount_log
+  source_type: custom_python
+  id: F0200
+  builder_group: liquidity_capacity
+  tabular_fit: true
+  sequence_fit: true
+- group: liquidity
+  name: amount_zscore_20
+  business_meaning: 成交额相对近 20 日自身分布的标准化异常度
+  modeling_role: aggregated
+  temporal_type: dynamic
+  provider_ref: qsys.feature.definitions.liquidity.build_liquidity_capacity_features
+  dependencies:
+  - amount_raw
+  generation_method: 对单股成交额做 20 日滚动 zscore。
+  need_norm: true
+  norm_method: cs_winsorize_zscore_rank
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qsys.feature.definitions.liquidity
+  qlib_column_name: amount_zscore_20
+  source_type: custom_python
+  id: F0201
+  builder_group: liquidity_capacity
+  tabular_fit: true
+  sequence_fit: false
+- group: liquidity
+  name: volume_shock_3
+  business_meaning: 成交量相对近 3 日均量的放量冲击
+  modeling_role: aggregated
+  temporal_type: dynamic
+  provider_ref: qsys.feature.definitions.liquidity.build_liquidity_capacity_features
+  dependencies:
+  - volume_raw
+  generation_method: 计算 `volume / rolling_mean(volume, 3)`。
+  need_norm: true
+  norm_method: cs_winsorize_zscore_rank
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qsys.feature.definitions.liquidity
+  qlib_column_name: volume_shock_3
+  source_type: custom_python
+  id: F0202
+  builder_group: liquidity_capacity
+  tabular_fit: true
+  sequence_fit: false
+- group: liquidity
+  name: volume_shock_5
+  business_meaning: 成交量相对近 5 日均量的放量冲击
+  modeling_role: aggregated
+  temporal_type: dynamic
+  provider_ref: qsys.feature.definitions.liquidity.build_liquidity_capacity_features
+  dependencies:
+  - volume_raw
+  generation_method: 计算 `volume / rolling_mean(volume, 5)`。
+  need_norm: true
+  norm_method: cs_winsorize_zscore_rank
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qsys.feature.definitions.liquidity
+  qlib_column_name: volume_shock_5
+  source_type: custom_python
+  id: F0203
+  builder_group: liquidity_capacity
+  tabular_fit: true
+  sequence_fit: false
+- group: liquidity
+  name: turnover_acceleration
+  business_meaning: 换手率相对 3 日前的加速度
+  modeling_role: aggregated
+  temporal_type: dynamic
+  provider_ref: qsys.feature.definitions.liquidity.build_liquidity_capacity_features
+  dependencies:
+  - turnover_rate_raw
+  generation_method: 计算 `turnover_rate - shift(turnover_rate, 3)`。
+  need_norm: true
+  norm_method: cs_winsorize_zscore_rank
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qsys.feature.definitions.liquidity
+  qlib_column_name: turnover_acceleration
+  source_type: custom_python
+  id: F0204
+  builder_group: liquidity_capacity
+  tabular_fit: true
+  sequence_fit: false
+- group: liquidity
+  name: illiquidity
+  business_meaning: 单位成交额对应的收益冲击程度
+  modeling_role: aggregated
+  temporal_type: dynamic
+  provider_ref: qsys.feature.definitions.liquidity.build_liquidity_capacity_features
+  dependencies:
+  - close_raw
+  - amount_raw
+  generation_method: 用绝对收益除以成交额，近似 Amihud illiquidity。
+  need_norm: true
+  norm_method: cs_winsorize_zscore_rank
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qsys.feature.definitions.liquidity
+  qlib_column_name: illiquidity
+  source_type: custom_python
+  id: F0205
+  builder_group: liquidity_capacity
+  tabular_fit: true
+  sequence_fit: false
+- group: tradability
+  name: is_limit_up
+  business_meaning: 个股当日是否收于涨停
+  modeling_role: event
+  temporal_type: event
+  provider_ref: qsys.feature.definitions.execution_state.build_execution_state_features
+  dependencies:
+  - close_raw
+  - high_limit_raw
+  generation_method: 比较收盘价与涨停价，满足条件记为 1。
+  need_norm: false
+  norm_method: none
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.definitions.execution_state
+  qlib_column_name: is_limit_up
+  source_type: custom_python
+  id: F0206
+  builder_group: execution_state
+  tabular_fit: true
+  sequence_fit: true
+- group: tradability
+  name: is_limit_down
+  business_meaning: 个股当日是否收于跌停
+  modeling_role: event
+  temporal_type: event
+  provider_ref: qsys.feature.definitions.execution_state.build_execution_state_features
+  dependencies:
+  - close_raw
+  - low_limit_raw
+  generation_method: 比较收盘价与跌停价，满足条件记为 1。
+  need_norm: false
+  norm_method: none
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.definitions.execution_state
+  qlib_column_name: is_limit_down
+  source_type: custom_python
+  id: F0207
+  builder_group: execution_state
+  tabular_fit: true
+  sequence_fit: true
+- group: tradability
+  name: distance_to_limit_up
+  business_meaning: 收盘价距离涨停价的剩余空间
+  modeling_role: context
+  temporal_type: dynamic
+  provider_ref: qsys.feature.definitions.execution_state.build_execution_state_features
+  dependencies:
+  - close_raw
+  - high_limit_raw
+  generation_method: 计算 `(high_limit - close) / close`。
+  need_norm: true
+  norm_method: cs_winsorize_zscore_rank
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.definitions.execution_state
+  qlib_column_name: distance_to_limit_up
+  source_type: custom_python
+  id: F0208
+  builder_group: execution_state
+  tabular_fit: true
+  sequence_fit: true
+- group: tradability
+  name: distance_to_limit_down
+  business_meaning: 收盘价距离跌停价的剩余空间
+  modeling_role: context
+  temporal_type: dynamic
+  provider_ref: qsys.feature.definitions.execution_state.build_execution_state_features
+  dependencies:
+  - close_raw
+  - low_limit_raw
+  generation_method: 计算 `(close - low_limit) / close`。
+  need_norm: true
+  norm_method: cs_winsorize_zscore_rank
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.definitions.execution_state
+  qlib_column_name: distance_to_limit_down
+  source_type: custom_python
+  id: F0209
+  builder_group: execution_state
+  tabular_fit: true
+  sequence_fit: true
+- group: tradability
+  name: limit_up_count_5d
+  business_meaning: 近 5 日涨停次数
+  modeling_role: aggregated
+  temporal_type: event
+  provider_ref: qsys.feature.definitions.execution_state.build_execution_state_features
+  dependencies:
+  - is_limit_up
+  generation_method: 对 `is_limit_up` 做 5 日滚动求和。
+  need_norm: false
+  norm_method: none
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qsys.feature.definitions.execution_state
+  qlib_column_name: limit_up_count_5d
+  source_type: custom_python
+  id: F0210
+  builder_group: execution_state
+  tabular_fit: true
+  sequence_fit: false
+- group: tradability
+  name: opened_from_limit_up
+  business_meaning: 当日收于涨停但开盘阶段曾打开涨停
+  modeling_role: event
+  temporal_type: event
+  provider_ref: qsys.feature.definitions.execution_state.build_execution_state_features
+  dependencies:
+  - is_limit_up
+  - open_raw
+  - high_limit_raw
+  generation_method: 在涨停日中识别开盘价低于涨停价的情形。
+  need_norm: false
+  norm_method: none
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.definitions.execution_state
+  qlib_column_name: opened_from_limit_up
+  source_type: custom_python
+  id: F0211
+  builder_group: execution_state
+  tabular_fit: true
+  sequence_fit: true
+- group: tradability
+  name: tradability_score
+  business_meaning: 结合停牌与涨跌停约束的可交易性评分
+  modeling_role: context
+  temporal_type: dynamic
+  provider_ref: qsys.feature.definitions.execution_state.build_execution_state_features
+  dependencies:
+  - paused_raw
+  - is_limit_up
+  - is_limit_down
+  generation_method: 从满分 1.0 出发，对停牌和涨跌停状态做扣分并裁剪到 `[0, 1]`。
+  need_norm: false
+  norm_method: none
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.definitions.execution_state
+  qlib_column_name: tradability_score
+  notes: 更适合作为执行上下文或过滤特征，而不是单独主排序项。
+  source_type: custom_python
+  id: F0212
+  builder_group: execution_state
+  tabular_fit: true
+  sequence_fit: true
+- group: cross_section
+  name: ret_1d
+  business_meaning: 近 1 日收益率
+  modeling_role: aggregated
+  temporal_type: dynamic
+  provider_ref: qsys.feature.definitions.relative_strength.build_relative_strength_features
+  dependencies:
+  - close_raw
+  generation_method: 按个股分组计算 1 日收益率。
+  need_norm: true
+  norm_method: cs_winsorize_zscore_rank
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qsys.feature.definitions.relative_strength
+  qlib_column_name: ret_1d
+  source_type: custom_python
+  id: F0213
+  builder_group: relative_strength
+  tabular_fit: true
+  sequence_fit: false
+- group: cross_section
+  name: ret_3d
+  business_meaning: 近 3 日收益率
+  modeling_role: aggregated
+  temporal_type: dynamic
+  provider_ref: qsys.feature.definitions.relative_strength.build_relative_strength_features
+  dependencies:
+  - close_raw
+  generation_method: 按个股分组计算 3 日收益率。
+  need_norm: true
+  norm_method: cs_winsorize_zscore_rank
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qsys.feature.definitions.relative_strength
+  qlib_column_name: ret_3d
+  source_type: custom_python
+  id: F0214
+  builder_group: relative_strength
+  tabular_fit: true
+  sequence_fit: false
+- group: cross_section
+  name: ret_5d
+  business_meaning: 近 5 日收益率
+  modeling_role: aggregated
+  temporal_type: dynamic
+  provider_ref: qsys.feature.definitions.relative_strength.build_relative_strength_features
+  dependencies:
+  - close_raw
+  generation_method: 按个股分组计算 5 日收益率。
+  need_norm: true
+  norm_method: cs_winsorize_zscore_rank
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qsys.feature.definitions.relative_strength
+  qlib_column_name: ret_5d
+  source_type: custom_python
+  id: F0215
+  builder_group: relative_strength
+  tabular_fit: true
+  sequence_fit: false
+- group: cross_section
+  name: vol_mean_3d
+  business_meaning: 近 3 日平均成交量
+  modeling_role: aggregated
+  temporal_type: dynamic
+  provider_ref: qsys.feature.definitions.relative_strength.build_relative_strength_features
+  dependencies:
+  - volume_raw
+  generation_method: 对成交量做 3 日滚动均值。
+  need_norm: true
+  norm_method: cs_winsorize_zscore_rank
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qsys.feature.definitions.relative_strength
+  qlib_column_name: vol_mean_3d
+  source_type: custom_python
+  id: F0216
+  builder_group: relative_strength
+  tabular_fit: true
+  sequence_fit: false
+- group: cross_section
+  name: vol_mean_5d
+  business_meaning: 近 5 日平均成交量
+  modeling_role: aggregated
+  temporal_type: dynamic
+  provider_ref: qsys.feature.definitions.relative_strength.build_relative_strength_features
+  dependencies:
+  - volume_raw
+  generation_method: 对成交量做 5 日滚动均值。
+  need_norm: true
+  norm_method: cs_winsorize_zscore_rank
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qsys.feature.definitions.relative_strength
+  qlib_column_name: vol_mean_5d
+  source_type: custom_python
+  id: F0217
+  builder_group: relative_strength
+  tabular_fit: true
+  sequence_fit: false
+- group: cross_section
+  name: amount_mean_3d
+  business_meaning: 近 3 日平均成交额
+  modeling_role: aggregated
+  temporal_type: dynamic
+  provider_ref: qsys.feature.definitions.relative_strength.build_relative_strength_features
+  dependencies:
+  - amount_raw
+  generation_method: 对成交额做 3 日滚动均值。
+  need_norm: true
+  norm_method: cs_winsorize_zscore_rank
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qsys.feature.definitions.relative_strength
+  qlib_column_name: amount_mean_3d
+  source_type: custom_python
+  id: F0218
+  builder_group: relative_strength
+  tabular_fit: true
+  sequence_fit: false
+- group: cross_section
+  name: amount_mean_5d
+  business_meaning: 近 5 日平均成交额
+  modeling_role: aggregated
+  temporal_type: dynamic
+  provider_ref: qsys.feature.definitions.relative_strength.build_relative_strength_features
+  dependencies:
+  - amount_raw
+  generation_method: 对成交额做 5 日滚动均值。
+  need_norm: true
+  norm_method: cs_winsorize_zscore_rank
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qsys.feature.definitions.relative_strength
+  qlib_column_name: amount_mean_5d
+  source_type: custom_python
+  id: F0219
+  builder_group: relative_strength
+  tabular_fit: true
+  sequence_fit: false
+- group: cross_section
+  name: ret_1d_rank
+  business_meaning: 1 日收益的当日横截面分位
+  modeling_role: aggregated
+  temporal_type: dynamic
+  provider_ref: qsys.feature.definitions.relative_strength.build_relative_strength_features
+  dependencies:
+  - ret_1d
+  generation_method: 按交易日对 `ret_1d` 做横截面分位排名。
+  need_norm: false
+  norm_method: already_ranked
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qsys.feature.definitions.relative_strength
+  qlib_column_name: ret_1d_rank
+  source_type: custom_python
+  id: F0220
+  builder_group: relative_strength
+  tabular_fit: true
+  sequence_fit: false
+- group: cross_section
+  name: ret_3d_rank
+  business_meaning: 3 日收益的当日横截面分位
+  modeling_role: aggregated
+  temporal_type: dynamic
+  provider_ref: qsys.feature.definitions.relative_strength.build_relative_strength_features
+  dependencies:
+  - ret_3d
+  generation_method: 按交易日对 `ret_3d` 做横截面分位排名。
+  need_norm: false
+  norm_method: already_ranked
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qsys.feature.definitions.relative_strength
+  qlib_column_name: ret_3d_rank
+  source_type: custom_python
+  id: F0221
+  builder_group: relative_strength
+  tabular_fit: true
+  sequence_fit: false
+- group: cross_section
+  name: ret_5d_rank
+  business_meaning: 5 日收益的当日横截面分位
+  modeling_role: aggregated
+  temporal_type: dynamic
+  provider_ref: qsys.feature.definitions.relative_strength.build_relative_strength_features
+  dependencies:
+  - ret_5d
+  generation_method: 按交易日对 `ret_5d` 做横截面分位排名。
+  need_norm: false
+  norm_method: already_ranked
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qsys.feature.definitions.relative_strength
+  qlib_column_name: ret_5d_rank
+  source_type: custom_python
+  id: F0222
+  builder_group: relative_strength
+  tabular_fit: true
+  sequence_fit: false
+- group: cross_section
+  name: vol_mean_3d_rank
+  business_meaning: 近 3 日均量的当日横截面分位
+  modeling_role: aggregated
+  temporal_type: dynamic
+  provider_ref: qsys.feature.definitions.relative_strength.build_relative_strength_features
+  dependencies:
+  - vol_mean_3d
+  generation_method: 按交易日对 `vol_mean_3d` 做横截面分位排名。
+  need_norm: false
+  norm_method: already_ranked
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qsys.feature.definitions.relative_strength
+  qlib_column_name: vol_mean_3d_rank
+  source_type: custom_python
+  id: F0223
+  builder_group: relative_strength
+  tabular_fit: true
+  sequence_fit: false
+- group: cross_section
+  name: vol_mean_5d_rank
+  business_meaning: 近 5 日均量的当日横截面分位
+  modeling_role: aggregated
+  temporal_type: dynamic
+  provider_ref: qsys.feature.definitions.relative_strength.build_relative_strength_features
+  dependencies:
+  - vol_mean_5d
+  generation_method: 按交易日对 `vol_mean_5d` 做横截面分位排名。
+  need_norm: false
+  norm_method: already_ranked
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qsys.feature.definitions.relative_strength
+  qlib_column_name: vol_mean_5d_rank
+  source_type: custom_python
+  id: F0224
+  builder_group: relative_strength
+  tabular_fit: true
+  sequence_fit: false
+- group: cross_section
+  name: amount_mean_3d_rank
+  business_meaning: 近 3 日均额的当日横截面分位
+  modeling_role: aggregated
+  temporal_type: dynamic
+  provider_ref: qsys.feature.definitions.relative_strength.build_relative_strength_features
+  dependencies:
+  - amount_mean_3d
+  generation_method: 按交易日对 `amount_mean_3d` 做横截面分位排名。
+  need_norm: false
+  norm_method: already_ranked
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qsys.feature.definitions.relative_strength
+  qlib_column_name: amount_mean_3d_rank
+  source_type: custom_python
+  id: F0225
+  builder_group: relative_strength
+  tabular_fit: true
+  sequence_fit: false
+- group: cross_section
+  name: amount_mean_5d_rank
+  business_meaning: 近 5 日均额的当日横截面分位
+  modeling_role: aggregated
+  temporal_type: dynamic
+  provider_ref: qsys.feature.definitions.relative_strength.build_relative_strength_features
+  dependencies:
+  - amount_mean_5d
+  generation_method: 按交易日对 `amount_mean_5d` 做横截面分位排名。
+  need_norm: false
+  norm_method: already_ranked
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qsys.feature.definitions.relative_strength
+  qlib_column_name: amount_mean_5d_rank
+  source_type: custom_python
+  id: F0226
+  builder_group: relative_strength
+  tabular_fit: true
+  sequence_fit: false
+- group: cross_section
+  name: stock_minus_index_ret_3d
+  business_meaning: 个股 3 日收益相对指数 3 日收益的超额
+  modeling_role: context
+  temporal_type: dynamic
+  provider_ref: qsys.feature.definitions.relative_strength.build_relative_strength_features
+  dependencies:
+  - ret_3d
+  - index_close
+  generation_method: 在已合并指数收盘价的前提下，计算个股与指数的 3 日收益差。
+  need_norm: true
+  norm_method: cs_winsorize_zscore_rank
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qsys.feature.definitions.relative_strength
+  qlib_column_name: stock_minus_index_ret_3d
+  notes: 更适合作为 tabular 辅助列或 context。
+  source_type: custom_python
+  id: F0227
+  builder_group: relative_strength
+  tabular_fit: true
+  sequence_fit: false
+- group: cross_section
+  name: stock_minus_index_ret_5d
+  business_meaning: 个股 5 日收益相对指数 5 日收益的超额
+  modeling_role: context
+  temporal_type: dynamic
+  provider_ref: qsys.feature.definitions.relative_strength.build_relative_strength_features
+  dependencies:
+  - ret_5d
+  - index_close
+  generation_method: 在已合并指数收盘价的前提下，计算个股与指数的 5 日收益差。
+  need_norm: true
+  norm_method: cs_winsorize_zscore_rank
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qsys.feature.definitions.relative_strength
+  qlib_column_name: stock_minus_index_ret_5d
+  notes: 更适合作为 tabular 辅助列或 context。
+  source_type: custom_python
+  id: F0228
+  builder_group: relative_strength
+  tabular_fit: true
+  sequence_fit: false
+- group: cross_section
+  name: industry_ret_1d
+  business_meaning: 行业当日平均收益
+  modeling_role: context
+  temporal_type: dynamic
+  provider_ref: qsys.feature.definitions.industry_context.build_industry_context_features
+  dependencies:
+  - close_raw
+  - industry
+  generation_method: 按交易日与行业分组后，对单股 1 日收益求均值。
+  need_norm: false
+  norm_method: none
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.definitions.industry_context
+  qlib_column_name: industry_ret_1d
+  notes: 更适合作为 context / side input。
+  source_type: custom_python
+  id: F0229
+  builder_group: industry_context
+  tabular_fit: true
+  sequence_fit: true
+- group: cross_section
+  name: industry_ret_3d
+  business_meaning: 行业近 3 日平均收益
+  modeling_role: context
+  temporal_type: dynamic
+  provider_ref: qsys.feature.definitions.industry_context.build_industry_context_features
+  dependencies:
+  - close_raw
+  - industry
+  generation_method: 按交易日与行业分组后，对单股 3 日收益求均值。
+  need_norm: false
+  norm_method: none
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.definitions.industry_context
+  qlib_column_name: industry_ret_3d
+  notes: 更适合作为 context / side input。
+  source_type: custom_python
+  id: F0230
+  builder_group: industry_context
+  tabular_fit: true
+  sequence_fit: true
+- group: cross_section
+  name: industry_ret_5d
+  business_meaning: 行业近 5 日平均收益
+  modeling_role: context
+  temporal_type: dynamic
+  provider_ref: qsys.feature.definitions.industry_context.build_industry_context_features
+  dependencies:
+  - close_raw
+  - industry
+  generation_method: 按交易日与行业分组后，对单股 5 日收益求均值。
+  need_norm: false
+  norm_method: none
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.definitions.industry_context
+  qlib_column_name: industry_ret_5d
+  notes: 更适合作为 context / side input。
+  source_type: custom_python
+  id: F0231
+  builder_group: industry_context
+  tabular_fit: true
+  sequence_fit: true
+- group: cross_section
+  name: industry_breadth
+  business_meaning: 行业内上涨股票占比
+  modeling_role: context
+  temporal_type: dynamic
+  provider_ref: qsys.feature.definitions.industry_context.build_industry_context_features
+  dependencies:
+  - close_raw
+  - industry
+  generation_method: 按交易日与行业分组后，统计正收益股票比例。
+  need_norm: false
+  norm_method: none
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.definitions.industry_context
+  qlib_column_name: industry_breadth
+  notes: 更适合作为 context / side input。
+  source_type: custom_python
+  id: F0232
+  builder_group: industry_context
+  tabular_fit: true
+  sequence_fit: true
+- group: cross_section
+  name: stock_minus_industry_ret
+  business_meaning: 个股相对行业 1 日超额收益
+  modeling_role: context
+  temporal_type: dynamic
+  provider_ref: qsys.feature.definitions.industry_context.build_industry_context_features
+  dependencies:
+  - industry_ret_1d
+  - close_raw
+  generation_method: 用个股 1 日收益减去行业 1 日平均收益。
+  need_norm: true
+  norm_method: cs_winsorize_zscore_rank
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qsys.feature.definitions.industry_context
+  qlib_column_name: stock_minus_industry_ret
+  source_type: custom_python
+  id: F0233
+  builder_group: industry_context
+  tabular_fit: true
+  sequence_fit: false
+- group: cross_section
+  name: stock_minus_industry_ret_3d
+  business_meaning: 个股相对行业 3 日超额收益
+  modeling_role: context
+  temporal_type: dynamic
+  provider_ref: qsys.feature.definitions.industry_context.build_industry_context_features
+  dependencies:
+  - industry_ret_3d
+  - close_raw
+  generation_method: 用个股 3 日收益减去行业 3 日平均收益。
+  need_norm: true
+  norm_method: cs_winsorize_zscore_rank
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qsys.feature.definitions.industry_context
+  qlib_column_name: stock_minus_industry_ret_3d
+  source_type: custom_python
+  id: F0234
+  builder_group: industry_context
+  tabular_fit: true
+  sequence_fit: false
+- group: cross_section
+  name: stock_minus_industry_ret_5d
+  business_meaning: 个股相对行业 5 日超额收益
+  modeling_role: context
+  temporal_type: dynamic
+  provider_ref: qsys.feature.definitions.industry_context.build_industry_context_features
+  dependencies:
+  - industry_ret_5d
+  - close_raw
+  generation_method: 用个股 5 日收益减去行业 5 日平均收益。
+  need_norm: true
+  norm_method: cs_winsorize_zscore_rank
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qsys.feature.definitions.industry_context
+  qlib_column_name: stock_minus_industry_ret_5d
+  source_type: custom_python
+  id: F0235
+  builder_group: industry_context
+  tabular_fit: true
+  sequence_fit: false
+- group: regime
+  name: market_breadth
+  business_meaning: 全市场上涨家数占比
+  modeling_role: regime
+  temporal_type: dynamic
+  provider_ref: qsys.feature.definitions.market_context.build_market_regime_features
+  dependencies:
+  - close_raw
+  generation_method: 按交易日统计正收益股票占比。
+  need_norm: false
+  norm_method: none
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.definitions.market_context
+  qlib_column_name: market_breadth
+  notes: 更适合作为市场上下文或 gating 条件，而不是主序列输入。
+  source_type: custom_python
+  id: F0236
+  builder_group: market_regime
+  tabular_fit: true
+  sequence_fit: true
+- group: regime
+  name: limit_up_breadth
+  business_meaning: 全市场涨停占比
+  modeling_role: regime
+  temporal_type: event
+  provider_ref: qsys.feature.definitions.market_context.build_market_regime_features
+  dependencies:
+  - is_limit_up
+  generation_method: 按交易日统计涨停股票占比。
+  need_norm: false
+  norm_method: none
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.definitions.market_context
+  qlib_column_name: limit_up_breadth
+  notes: 更适合作为市场上下文或 gating 条件，而不是主序列输入。
+  source_type: custom_python
+  id: F0237
+  builder_group: market_regime
+  tabular_fit: true
+  sequence_fit: true
+- group: regime
+  name: index_volatility_5
+  business_meaning: 指数近 5 日波动率
+  modeling_role: regime
+  temporal_type: dynamic
+  provider_ref: qsys.feature.definitions.market_context.build_market_regime_features
+  dependencies:
+  - index_close
+  generation_method: 对指数日收益做 5 日滚动标准差。
+  need_norm: false
+  norm_method: none
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.definitions.market_context
+  qlib_column_name: index_volatility_5
+  notes: 更适合作为市场上下文或 gating 条件，而不是主序列输入。
+  source_type: custom_python
+  id: F0238
+  builder_group: market_regime
+  tabular_fit: true
+  sequence_fit: true
+- group: regime
+  name: index_volatility_10
+  business_meaning: 指数近 10 日波动率
+  modeling_role: regime
+  temporal_type: dynamic
+  provider_ref: qsys.feature.definitions.market_context.build_market_regime_features
+  dependencies:
+  - index_close
+  generation_method: 对指数日收益做 10 日滚动标准差。
+  need_norm: false
+  norm_method: none
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.definitions.market_context
+  qlib_column_name: index_volatility_10
+  notes: 更适合作为市场上下文或 gating 条件，而不是主序列输入。
+  source_type: custom_python
+  id: F0239
+  builder_group: market_regime
+  tabular_fit: true
+  sequence_fit: true
+- group: regime
+  name: index_volatility_20
+  business_meaning: 指数近 20 日波动率
+  modeling_role: regime
+  temporal_type: dynamic
+  provider_ref: qsys.feature.definitions.market_context.build_market_regime_features
+  dependencies:
+  - index_close
+  generation_method: 对指数日收益做 20 日滚动标准差。
+  need_norm: false
+  norm_method: none
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.definitions.market_context
+  qlib_column_name: index_volatility_20
+  notes: 更适合作为市场上下文或 gating 条件，而不是主序列输入。
+  source_type: custom_python
+  id: F0240
+  builder_group: market_regime
+  tabular_fit: true
+  sequence_fit: true
+- group: regime
+  name: market_trend_strength
+  business_meaning: 指数近 20 日趋势强度
+  modeling_role: regime
+  temporal_type: dynamic
+  provider_ref: qsys.feature.definitions.market_context.build_market_regime_features
+  dependencies:
+  - index_close
+  generation_method: 计算指数相对 20 日前的累计涨跌幅。
+  need_norm: false
+  norm_method: none
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.definitions.market_context
+  qlib_column_name: market_trend_strength
+  notes: 更适合作为市场上下文或 gating 条件，而不是主序列输入。
+  source_type: custom_python
+  id: F0241
+  builder_group: market_regime
+  tabular_fit: true
+  sequence_fit: true
+- group: regime
+  name: small_vs_large_strength
+  business_meaning: 小盘相对大盘的风格强弱代理
+  modeling_role: regime
+  temporal_type: dynamic
+  provider_ref: qsys.feature.definitions.market_context.build_market_regime_features
+  dependencies:
+  - circ_mv_raw
+  - close_raw
+  generation_method: 按流通市值分组后比较小盘与大盘收益差。
+  need_norm: false
+  norm_method: none
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.definitions.market_context
+  qlib_column_name: small_vs_large_strength
+  notes: 更适合作为市场上下文或 gating 条件，而不是主序列输入。
+  source_type: custom_python
+  id: F0242
+  builder_group: market_regime
+  tabular_fit: true
+  sequence_fit: true
+- group: regime
+  name: growth_vs_value_proxy
+  business_meaning: 成长相对价值的风格强弱代理
+  modeling_role: regime
+  temporal_type: dynamic
+  provider_ref: qsys.feature.definitions.market_context.build_market_regime_features
+  dependencies:
+  - pb_raw_native
+  - close_raw
+  generation_method: 按 PB 高低近似划分成长/价值并比较收益差。
+  need_norm: false
+  norm_method: none
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.definitions.market_context
+  qlib_column_name: growth_vs_value_proxy
+  notes: 更适合作为市场上下文或 gating 条件，而不是主序列输入。
+  source_type: custom_python
+  id: F0243
+  builder_group: market_regime
+  tabular_fit: true
+  sequence_fit: true
+- group: fundamental
+  name: log_mktcap
+  business_meaning: 总市值的对数规模特征
+  modeling_role: context
+  temporal_type: slow
+  provider_ref: qsys.feature.definitions.fundamental_context.build_fundamental_context_features
+  dependencies:
+  - total_mv_raw
+  generation_method: 对总市值取对数，提供规模背景。
+  need_norm: true
+  norm_method: cs_winsorize_zscore_rank
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.definitions.fundamental_context
+  qlib_column_name: log_mktcap
+  notes: 更适合作为 side input / context。
+  source_type: custom_python
+  id: F0244
+  builder_group: fundamental_context
+  tabular_fit: true
+  sequence_fit: true
+- group: fundamental
+  name: float_mktcap
+  business_meaning: 流通市值特征
+  modeling_role: context
+  temporal_type: slow
+  provider_ref: qsys.feature.definitions.fundamental_context.build_fundamental_context_features
+  dependencies:
+  - circ_mv_raw
+  generation_method: 直接读取流通市值作为规模背景。
+  need_norm: true
+  norm_method: cs_winsorize_zscore_rank
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.definitions.fundamental_context
+  qlib_column_name: float_mktcap
+  notes: 更适合作为 side input / context。
+  source_type: custom_python
+  id: F0245
+  builder_group: fundamental_context
+  tabular_fit: true
+  sequence_fit: true
+- group: fundamental
+  name: pe_ttm
+  business_meaning: 市盈率上下文特征
+  modeling_role: context
+  temporal_type: slow
+  provider_ref: qsys.feature.definitions.fundamental_context.build_fundamental_context_features
+  dependencies:
+  - pe_raw
+  generation_method: 把 PE 原始字段整理为模型可读列。
+  need_norm: true
+  norm_method: cs_winsorize_zscore_rank
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.definitions.fundamental_context
+  qlib_column_name: pe_ttm
+  notes: 更适合作为 side input / context。
+  source_type: custom_python
+  id: F0246
+  builder_group: fundamental_context
+  tabular_fit: true
+  sequence_fit: true
+- group: fundamental
+  name: pb_raw
+  business_meaning: 市净率上下文特征
+  modeling_role: context
+  temporal_type: slow
+  provider_ref: qsys.feature.definitions.fundamental_context.build_fundamental_context_features
+  dependencies:
+  - pb_raw_native
+  generation_method: 把 PB 原始字段整理为模型可读列。
+  need_norm: true
+  norm_method: cs_winsorize_zscore_rank
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.definitions.fundamental_context
+  qlib_column_name: pb_raw
+  notes: 更适合作为 side input / context。
+  source_type: custom_python
+  id: F0247
+  builder_group: fundamental_context
+  tabular_fit: true
+  sequence_fit: true
+- group: fundamental
+  name: ps_ttm
+  business_meaning: 市销率上下文特征
+  modeling_role: context
+  temporal_type: slow
+  provider_ref: qsys.feature.definitions.fundamental_context.build_fundamental_context_features
+  dependencies:
+  - ps
+  generation_method: 若存在 PS 字段则整理为模型可读列。
+  need_norm: true
+  norm_method: cs_winsorize_zscore_rank
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.definitions.fundamental_context
+  qlib_column_name: ps_ttm
+  notes: 当前依赖可选上游列。
+  source_type: custom_python
+  id: F0248
+  builder_group: fundamental_context
+  tabular_fit: true
+  sequence_fit: true
+- group: fundamental
+  name: net_margin
+  business_meaning: 净利率特征
+  modeling_role: context
+  temporal_type: slow
+  provider_ref: qsys.feature.definitions.fundamental_context.build_fundamental_context_features
+  dependencies:
+  - net_income_raw
+  - revenue_raw
+  generation_method: 用净利润除以营业收入估计净利率。
+  need_norm: true
+  norm_method: cs_winsorize_zscore_rank
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.definitions.fundamental_context
+  qlib_column_name: net_margin
+  source_type: custom_python
+  id: F0249
+  builder_group: fundamental_context
+  tabular_fit: true
+  sequence_fit: true
+- group: fundamental
+  name: operating_cf_to_profit
+  business_meaning: 经营现金流相对利润质量特征
+  modeling_role: context
+  temporal_type: slow
+  provider_ref: qsys.feature.definitions.fundamental_context.build_fundamental_context_features
+  dependencies:
+  - op_cashflow_raw
+  - net_income_raw
+  generation_method: 用经营现金流除以净利润衡量利润兑现质量。
+  need_norm: true
+  norm_method: cs_winsorize_zscore_rank
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.definitions.fundamental_context
+  qlib_column_name: operating_cf_to_profit
+  source_type: custom_python
+  id: F0250
+  builder_group: fundamental_context
+  tabular_fit: true
+  sequence_fit: true
+- group: fundamental
+  name: roa
+  business_meaning: 资产回报率特征
+  modeling_role: context
+  temporal_type: slow
+  provider_ref: qsys.feature.definitions.fundamental_context.build_fundamental_context_features
+  dependencies:
+  - net_income_raw
+  - total_assets_raw
+  generation_method: 用净利润除以总资产估计 ROA。
+  need_norm: true
+  norm_method: cs_winsorize_zscore_rank
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.definitions.fundamental_context
+  qlib_column_name: roa
+  source_type: custom_python
+  id: F0251
+  builder_group: fundamental_context
+  tabular_fit: true
+  sequence_fit: true
+- group: fundamental
+  name: gross_margin
+  business_meaning: 毛利率上下文特征
+  modeling_role: context
+  temporal_type: slow
+  provider_ref: qsys.feature.definitions.fundamental_context.build_fundamental_context_features
+  dependencies:
+  - grossprofit_margin_raw
+  generation_method: 把毛利率原始字段整理为统一命名列。
+  need_norm: true
+  norm_method: cs_winsorize_zscore_rank
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.definitions.fundamental_context
+  qlib_column_name: gross_margin
+  source_type: custom_python
+  id: F0252
+  builder_group: fundamental_context
+  tabular_fit: true
+  sequence_fit: true
+- group: fundamental
+  name: debt_to_asset
+  business_meaning: 资产负债率上下文特征
+  modeling_role: context
+  temporal_type: slow
+  provider_ref: qsys.feature.definitions.fundamental_context.build_fundamental_context_features
+  dependencies:
+  - debt_to_assets_raw
+  generation_method: 把资产负债率原始字段整理为统一命名列。
+  need_norm: true
+  norm_method: cs_winsorize_zscore_rank
+  tabular_ready: true
+  sequence_ready: true
+  source_module: qsys.feature.definitions.fundamental_context
+  qlib_column_name: debt_to_asset
+  source_type: custom_python
+  id: F0253
+  builder_group: fundamental_context
+  tabular_fit: true
+  sequence_fit: true
+- group: fundamental
+  name: revenue_yoy
+  business_meaning: 营业收入近似同比增速
+  modeling_role: aggregated
+  temporal_type: slow
+  provider_ref: qsys.feature.definitions.fundamental_context.build_fundamental_context_features
+  dependencies:
+  - revenue_raw
+  generation_method: 用 252 日前同列值近似展开同比增速。
+  need_norm: true
+  norm_method: cs_winsorize_zscore_rank
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qsys.feature.definitions.fundamental_context
+  qlib_column_name: revenue_yoy
+  notes: 更偏 tabular 辅助特征。
+  source_type: custom_python
+  id: F0254
+  builder_group: fundamental_context
+  tabular_fit: true
+  sequence_fit: false
+- group: fundamental
+  name: profit_yoy
+  business_meaning: 净利润近似同比增速
+  modeling_role: aggregated
+  temporal_type: slow
+  provider_ref: qsys.feature.definitions.fundamental_context.build_fundamental_context_features
+  dependencies:
+  - net_income_raw
+  generation_method: 用 252 日前同列值近似展开同比增速。
+  need_norm: true
+  norm_method: cs_winsorize_zscore_rank
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qsys.feature.definitions.fundamental_context
+  qlib_column_name: profit_yoy
+  notes: 更偏 tabular 辅助特征。
+  source_type: custom_python
+  id: F0255
+  builder_group: fundamental_context
+  tabular_fit: true
+  sequence_fit: false
+- group: fundamental
+  name: inventory_yoy
+  business_meaning: 存货近似同比增速
+  modeling_role: aggregated
+  temporal_type: slow
+  provider_ref: qsys.feature.definitions.fundamental_context.build_fundamental_context_features
+  dependencies:
+  - inventory
+  generation_method: 若存在存货字段则计算 252 日近似同比。
+  need_norm: true
+  norm_method: cs_winsorize_zscore_rank
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qsys.feature.definitions.fundamental_context
+  qlib_column_name: inventory_yoy
+  notes: 当前依赖可选上游列。
+  source_type: custom_python
+  id: F0256
+  builder_group: fundamental_context
+  tabular_fit: true
+  sequence_fit: false
+- group: fundamental
+  name: ar_yoy
+  business_meaning: 应收账款近似同比增速
+  modeling_role: aggregated
+  temporal_type: slow
+  provider_ref: qsys.feature.definitions.fundamental_context.build_fundamental_context_features
+  dependencies:
+  - accounts_receiv
+  generation_method: 若存在应收账款字段则计算 252 日近似同比。
+  need_norm: true
+  norm_method: cs_winsorize_zscore_rank
+  tabular_ready: true
+  sequence_ready: false
+  source_module: qsys.feature.definitions.fundamental_context
+  qlib_column_name: ar_yoy
+  notes: 当前依赖可选上游列。
+  source_type: custom_python
+  id: F0257
+  builder_group: fundamental_context
+  tabular_fit: true
+  sequence_fit: false

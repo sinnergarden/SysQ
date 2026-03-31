@@ -7,13 +7,13 @@ Purpose:
 - emit structured training report
 
 Typical usage:
-- python scripts/run_train.py --model qlib_lgbm --start 2020-01-01 --end 2026-03-20 --feature_set extended
+- python scripts/run_train.py --model qlib_lgbm --start 2020-01-01 --end 2026-03-20 --feature_set price_volume_fundamental_core_v1
 
 Key args:
 - --model: currently qlib_lgbm
 - --universe: csi300 / all
 - --start / --end: training window
-- --feature_set: alpha158 | extended
+- --feature_set: semantic feature-set name, or a legacy alias like alpha158 / extended / margin_extended
 - --run_backtest: run a minimal validation backtest after training
 - --no_report: skip JSON run report
 """
@@ -21,6 +21,7 @@ Key args:
 import sys
 import time
 from pathlib import Path
+import yaml
 
 # Add project root to sys.path
 project_root = Path(__file__).resolve().parent.parent
@@ -32,6 +33,7 @@ import pandas as pd
 from qsys.config import cfg
 from qsys.data.adapter import QlibAdapter
 from qsys.data.health import assert_qlib_data_ready
+from qsys.feature.registry import resolve_feature_selection
 from qsys.reports.train import TrainingReport
 from qsys.utils.logger import log
 
@@ -44,7 +46,7 @@ from qsys.utils.logger import log
 @click.option('--run_backtest', is_flag=True, help='Run minimal backtest after training')
 @click.option('--backtest_start', default=None, help='Backtest start date; defaults to last 40 trading days window start')
 @click.option('--backtest_end', default=None, help='Backtest end date; defaults to training end date')
-@click.option('--feature_set', type=click.Choice(['alpha158', 'extended', 'margin_extended', 'phase1', 'phase12', 'phase123'], case_sensitive=False), default='extended', show_default=True, help='Feature set: alpha158 | extended | margin_extended | phase1 | phase12 | phase123')
+@click.option('--feature_set', default='price_volume_fundamental_core_v1', show_default=True, help='Feature set name or legacy alias. Recommended: price_volume_expression_core_v1 | price_volume_fundamental_core_v1 | price_volume_fundamental_event_core_v1')
 @click.option('--no_report', is_flag=True, help='Skip generating the structured report')
 def main(model, universe, start, end, run_backtest, backtest_start, backtest_end, feature_set, no_report):
     start_time = time.time()
@@ -81,33 +83,34 @@ def main(model, universe, start, end, run_backtest, backtest_start, backtest_end
         }
     }
 
-    if feature_set == 'extended':
-        feature_config = FeatureLibrary.get_alpha158_extended_config()
-    elif feature_set == 'margin_extended':
-        feature_config = FeatureLibrary.get_alpha158_margin_extended_config()
-    elif feature_set == 'phase1':
-        feature_config = FeatureLibrary.get_research_phase1_config()
-    elif feature_set == 'phase12':
-        feature_config = FeatureLibrary.get_research_phase12_config()
-    elif feature_set == 'phase123':
-        feature_config = FeatureLibrary.get_research_phase123_config()
-    else:
-        feature_config = FeatureLibrary.get_alpha158_config()
+    resolved_feature_set = FeatureLibrary.normalize_feature_set_name(feature_set)
+    selection = resolve_feature_selection(feature_set=resolved_feature_set)
+    feature_config = FeatureLibrary.get_feature_fields_by_set(resolved_feature_set)
 
-    if feature_set == 'alpha158':
+    if resolved_feature_set == 'price_volume_expression_core_v1':
         model_name = model
-    elif feature_set == 'margin_extended':
+    elif resolved_feature_set == 'price_volume_fundamental_event_core_v1':
         model_name = f"{model}_margin_extended"
-    elif feature_set in {'phase1', 'phase12', 'phase123'}:
+    elif resolved_feature_set in {'legacy_phase1_raw_v1', 'legacy_phase12_raw_v1', 'legacy_phase123_raw_v1'}:
         model_name = f"{model}_{feature_set}"
     else:
         model_name = f"{model}_extended"
-    log.info(f"Using feature_set={feature_set} with {len(feature_config)} features")
+    log.info(
+        f"Using feature_set={feature_set} resolved_feature_set={resolved_feature_set} "
+        f"with {len(feature_config)} native features"
+    )
     model_instance = QlibNativeModel(
         name=model_name,
         model_config=qlib_config,
         feature_config=feature_config,
     )
+    model_instance.params = {
+        **model_instance.params,
+        "feature_set_name": resolved_feature_set,
+        "feature_set_alias": feature_set,
+        "feature_ids": list(selection.feature_ids),
+        "native_qlib_fields": list(selection.native_qlib_fields),
+    }
 
     health = assert_qlib_data_ready(end, model_instance.feature_config, universe=universe)
     log.info("\n" + health.to_markdown())
@@ -130,7 +133,9 @@ def main(model, universe, start, end, run_backtest, backtest_start, backtest_end
 
     model_info = {
         "model_name": model_name,
-        "feature_set": feature_set,
+        "feature_set": resolved_feature_set,
+        "feature_set_alias": feature_set,
+        "feature_id_count": len(selection.feature_ids),
         "train_window": f"{start} to {end}",
         "universe": universe,
     }
@@ -143,6 +148,21 @@ def main(model, universe, start, end, run_backtest, backtest_start, backtest_end
             raise ValueError("Root path not configured")
         save_path = root_path / "models" / model_name
         model_instance.save(save_path)
+        feature_selection_path = save_path / "feature_selection.yaml"
+
+        with open(feature_selection_path, "w", encoding="utf-8") as handle:
+            yaml.safe_dump(
+                {
+                    "feature_set_name": resolved_feature_set,
+                    "feature_set_alias": feature_set,
+                    "feature_ids": selection.feature_ids,
+                    "native_qlib_fields": selection.native_qlib_fields,
+                    "feature_names": selection.feature_names,
+                },
+                handle,
+                sort_keys=False,
+                allow_unicode=True,
+            )
 
         training_summary = model_instance.training_summary or {}
         if training_summary:
@@ -218,6 +238,7 @@ def main(model, universe, start, end, run_backtest, backtest_start, backtest_end
             notes=notes,
         )
         report.artifacts["training_summary"] = str(save_path / "training_summary.csv")
+        report.artifacts["feature_selection"] = str(save_path / "feature_selection.yaml")
         report.artifacts["model_path"] = str(save_path)
         
         report_path = TrainingReport.save(report)

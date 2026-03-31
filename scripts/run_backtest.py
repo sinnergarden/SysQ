@@ -28,6 +28,7 @@ import click
 from qsys.backtest import BacktestEngine
 from qsys.config import cfg
 from qsys.reports.backtest import BacktestReport
+from qsys.strategy.generator import load_model_artifact_metadata
 from qsys.utils.logger import log
 
 
@@ -66,6 +67,7 @@ def main(model_path, universe, start, end, top_k):
     report = BacktestReport.from_backtest_result(
         result_df=res,
         model_path=str(model_dir),
+        model_meta=load_model_artifact_metadata(model_dir),
         start_date=start,
         end_date=end,
         top_k=top_k,

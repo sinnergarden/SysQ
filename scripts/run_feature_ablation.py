@@ -10,7 +10,8 @@ import click
 import pandas as pd
 
 from qsys.data.storage import StockDataStore
-from qsys.feature.builder import build_phase1_features
+from qsys.feature.builder import build_research_features
+from qsys.feature.registry import resolve_feature_selection
 from qsys.utils.logger import log
 
 
@@ -46,8 +47,9 @@ ABLATIONS = {
 @click.option("--codes", default="600176.SH,000338.SZ,002001.SZ,002493.SZ,300394.SZ")
 @click.option("--start", default="2026-01-01")
 @click.option("--end", default="2026-03-20")
+@click.option("--feature_set", default="research_semantic_default_v1", show_default=True, help="Ablation base feature set")
 @click.option("--output", default="experiments/phase1_ablation_summary.csv")
-def main(codes, start, end, output):
+def main(codes, start, end, feature_set, output):
     store = StockDataStore()
     frames = []
     for code in [c.strip() for c in codes.split(",") if c.strip()]:
@@ -65,13 +67,16 @@ def main(codes, start, end, output):
     full = pd.concat(frames, ignore_index=True)
     full["trade_date"] = pd.to_datetime(full["trade_date"].astype(str))
     full = full.sort_values(["trade_date", "ts_code"]).reset_index(drop=True)
+    base_selection = resolve_feature_selection(feature_set=feature_set)
 
     rows = []
     for name, flags in ABLATIONS.items():
-        feat_df = build_phase1_features(full, flags=flags)
+        feat_df = build_research_features(full, feature_set=feature_set, flags=flags, select_only=True)
         feature_cols = [c for c in feat_df.columns if c not in full.columns]
         rows.append({
             "experiment": name,
+            "feature_set": feature_set,
+            "base_feature_ids": len(base_selection.feature_ids),
             "rows": len(feat_df),
             "feature_count": len(feature_cols),
             "sample_features": ", ".join(feature_cols[:12]),

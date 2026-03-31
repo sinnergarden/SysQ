@@ -282,8 +282,12 @@ def main():
     preview_manager = LiveManager(model_path=model_path)
     preview_manager.load_model()
 
-    feature_config = preview_manager.model.model.feature_config
-    model_info["feature_set"] = feature_config.get("name", "unknown") if isinstance(feature_config, dict) else "alpha158"
+    loaded_model = preview_manager.model.model
+    feature_config = loaded_model.feature_config
+    feature_set_name = getattr(preview_manager.model, 'feature_set_name', None)
+    if not feature_set_name and isinstance(getattr(loaded_model, 'params', None), dict):
+        feature_set_name = loaded_model.params.get('feature_set_name') or loaded_model.params.get('feature_set_alias')
+    model_info["feature_set"] = feature_set_name or (feature_config.get("name", "unknown") if isinstance(feature_config, dict) else "legacy_feature_list")
 
     try:
         health = assert_qlib_data_ready(signal_date, feature_config, universe="csi300")

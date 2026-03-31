@@ -1,18 +1,25 @@
+import pandas as pd
+import numpy as np
+import logging
+from typing import Any, cast
+
+from qlib.contrib.data.handler import Alpha158DL
+from qlib.contrib.eva.alpha import calc_ic
 from qlib.data.dataset import DatasetH
 from qlib.data.dataset.handler import DataHandlerLP
 from qlib.data.dataset.loader import QlibDataLoader
-from qlib.contrib.data.handler import Alpha158DL
-from qlib.contrib.eva.alpha import calc_ic
-from qsys.data.adapter import QlibAdapter
-from qsys.utils.logger import log
-import pandas as pd
-import numpy as np
-from typing import Any, cast
+
+from qsys.feature.registry import list_feature_sets, resolve_feature_selection
+
+
+log = logging.getLogger(__name__)
 
 class FeatureLibrary:
     """
-    Predefined feature sets.
-    Research-only feature sets should not implicitly change production manifest behavior.
+    Qlib-native raw field set registry.
+
+    This class only manages raw/native field collections consumed by Qlib.
+    Research-time derived features are assembled by ``qsys.feature.builder``.
     """
 
     # Extended raw fields - A-share fundamentals and margin financing
@@ -45,59 +52,85 @@ class FeatureLibrary:
         "$lend_sell_volume",  # 融券卖出量
         "$lend_repay_volume", # 融券偿还量
     ]
+
+    SEQUENCE_CORE_FIELDS = [
+        "$open",
+        "$high",
+        "$low",
+        "$close",
+        "$volume",
+        "$amount",
+        "$turnover_rate",
+        "$factor",
+        "$high_limit",
+        "$low_limit",
+        "$paused",
+    ]
+
+    REGISTRY_SET_ALIASES = {
+        "alpha158": "price_volume_expression_core_v1",
+        "extended": "price_volume_fundamental_core_v1",
+        "margin_extended": "price_volume_fundamental_event_core_v1",
+        "phase1": "legacy_phase1_raw_v1",
+        "phase12": "legacy_phase12_raw_v1",
+        "phase123": "legacy_phase123_raw_v1",
+        "sequence_core": "atomic_panel_core_v1",
+    }
+
+    @classmethod
+    def normalize_feature_set_name(cls, feature_set_name: str) -> str:
+        requested = str(feature_set_name).strip()
+        if requested in cls.REGISTRY_SET_ALIASES:
+            return cls.REGISTRY_SET_ALIASES[requested]
+        if requested in list_feature_sets():
+            return requested
+        raise KeyError(f"Unknown feature set alias or registry set: {requested}")
+
+    @classmethod
+    def get_feature_fields_by_set(cls, feature_set_name: str) -> list[str]:
+        selection = resolve_feature_selection(feature_set=cls.normalize_feature_set_name(feature_set_name))
+        return selection.native_qlib_fields
     
     @staticmethod
     def get_alpha158_config():
-        config = Alpha158DL.get_feature_config()
-        if isinstance(config, tuple) and len(config) == 2:
-            return list(config[0])
-        if isinstance(config, dict):
-            feature = config.get("feature") or config.get("fields")
-            if isinstance(feature, tuple) and len(feature) == 2:
-                return list(feature[0])
-            if isinstance(feature, list):
-                return feature
-        if isinstance(config, list):
-            return config
-        return list(config)
+        return FeatureLibrary.get_feature_fields_by_set(FeatureLibrary.REGISTRY_SET_ALIASES["alpha158"])
 
     @classmethod
     def get_alpha158_extended_config(cls):
-        """Extended config: alpha158 + fundamentals (no margin yet)"""
-        base = cls.get_alpha158_config()
-        merged = list(base)
-        for field in cls.EXTENDED_RAW_FIELDS:
-            if field not in merged:
-                merged.append(field)
-        return merged
+        """Legacy alias retained for current training entrypoints."""
+        return cls.get_feature_fields_by_set(cls.REGISTRY_SET_ALIASES["extended"])
     
     @classmethod
     def get_alpha158_margin_extended_config(cls):
-        """Margin-extended config: alpha158 + fundamentals + margin financing"""
-        base = cls.get_alpha158_config()
-        merged = list(base)
-        for field in cls.EXTENDED_RAW_FIELDS:
-            if field not in merged:
-                merged.append(field)
-        for field in cls.MARGIN_FIELDS:
-            if field not in merged:
-                merged.append(field)
-        return merged
+        """Legacy alias retained for current training entrypoints."""
+        return cls.get_feature_fields_by_set(cls.REGISTRY_SET_ALIASES["margin_extended"])
+
+    @classmethod
+    def get_native_tabular_extended_config(cls):
+        return cls.get_alpha158_extended_config()
+
+    @classmethod
+    def get_native_tabular_margin_extended_config(cls):
+        return cls.get_alpha158_margin_extended_config()
+
+    @classmethod
+    def get_native_sequence_core_config(cls):
+        return cls.get_feature_fields_by_set(cls.REGISTRY_SET_ALIASES["sequence_core"])
 
     @classmethod
     def get_research_phase1_config(cls):
-        """Research config placeholder: current minimum uses extended raw feature base."""
-        return cls.get_alpha158_extended_config()
+        """兼容历史 phase1 训练入口；当前仍映射到扩展原生字段集合。"""
+        return cls.get_feature_fields_by_set(cls.REGISTRY_SET_ALIASES["phase1"])
 
     @classmethod
     def get_research_phase12_config(cls):
-        """Research config placeholder: current minimum uses extended raw feature base until custom qlib build is wired."""
-        return cls.get_alpha158_extended_config()
+        """兼容历史 phase12 训练入口；当前仍映射到扩展原生字段集合。"""
+        return cls.get_feature_fields_by_set(cls.REGISTRY_SET_ALIASES["phase12"])
 
     @classmethod
     def get_research_phase123_config(cls):
-        """Research config placeholder: current minimum uses margin_extended raw feature base until custom qlib build is wired."""
-        return cls.get_alpha158_margin_extended_config()
+        """兼容历史 phase123 训练入口；当前映射到带两融扩展的原生字段集合。"""
+        return cls.get_feature_fields_by_set(cls.REGISTRY_SET_ALIASES["phase123"])
 
 class Alpha158(DataHandlerLP):
     def __init__(
@@ -161,6 +194,8 @@ class Alpha158(DataHandlerLP):
 class FeatureResearch:
     @staticmethod
     def rank_features_by_ic(instruments, start_time, end_time, label, feature_fields=None, topk=50, normalize=True):
+        from qsys.data.adapter import QlibAdapter
+
         adapter = QlibAdapter()
         adapter.check_and_update()
         adapter.init_qlib()

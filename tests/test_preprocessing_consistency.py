@@ -3,6 +3,7 @@ import unittest
 import pandas as pd
 
 from qsys.model.zoo.qlib_native import QlibNativeModel, MissingPreprocessParamsError
+from qsys.strategy.generator import load_model_artifact_metadata
 
 
 class DummyBooster:
@@ -69,6 +70,34 @@ class TestPreprocessingConsistency(unittest.TestCase):
             loaded = self._make_model()
             loaded.load(path)
             self.assertEqual(loaded.preprocess_params, model.preprocess_params)
+
+    def test_save_and_load_preserve_feature_set_metadata(self):
+        model = self._make_model()
+        model.params = {
+            "feature_set_name": "price_volume_fundamental_core_v1",
+            "feature_set_alias": "extended",
+            "feature_ids": ["F0001", "F0002"],
+            "native_qlib_fields": ["$open", "$close"],
+        }
+
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "model"
+            model.save(path)
+
+            loaded = self._make_model()
+            loaded.load(path)
+            self.assertEqual(loaded.params["feature_set_name"], "price_volume_fundamental_core_v1")
+            self.assertEqual(loaded.params["feature_set_alias"], "extended")
+            self.assertEqual(loaded.params["feature_ids"], ["F0001", "F0002"])
+
+            meta = load_model_artifact_metadata(path)
+            self.assertEqual(meta["feature_set_name"], "price_volume_fundamental_core_v1")
+            self.assertEqual(meta["feature_set_alias"], "extended")
+            self.assertEqual(meta["feature_ids"], ["F0001", "F0002"])
+            self.assertEqual(meta["native_qlib_fields"], ["$open", "$close"])
 
 
 if __name__ == "__main__":

@@ -71,6 +71,7 @@ class BacktestReport:
         model_path: str,
         start_date: str,
         end_date: str,
+        model_meta: dict | None = None,
         top_k: int = None,
         universe: str = "csi300",
         **kwargs
@@ -116,6 +117,13 @@ class BacktestReport:
             "model_path": model_path,
             "model_name": model_path.split("/")[-1] if "/" in model_path else model_path,
         }
+        if model_meta:
+            if model_meta.get("feature_set_name"):
+                model_info["feature_set"] = model_meta.get("feature_set_name")
+            if model_meta.get("feature_set_alias"):
+                model_info["feature_set_alias"] = model_meta.get("feature_set_alias")
+            if model_meta.get("feature_ids"):
+                model_info["feature_id_count"] = len(model_meta.get("feature_ids", []))
         
         return BacktestReport.generate(
             start_date=start_date,

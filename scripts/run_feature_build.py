@@ -10,11 +10,8 @@ import click
 import pandas as pd
 
 from qsys.data.storage import StockDataStore
-from qsys.feature.groups.microstructure import build_microstructure_features
-from qsys.feature.groups.liquidity import build_liquidity_features
-from qsys.feature.groups.tradability import build_tradability_features
-from qsys.feature.groups.relative_strength import build_relative_strength_features
-from qsys.feature.transforms import apply_cross_sectional_standardization
+from qsys.feature.builder import build_research_features
+from qsys.feature.registry import resolve_feature_selection
 from qsys.utils.logger import log
 
 
@@ -22,8 +19,9 @@ from qsys.utils.logger import log
 @click.option("--codes", default="600176.SH,000338.SZ", help="Comma separated stock codes")
 @click.option("--start", default="2026-01-01")
 @click.option("--end", default="2026-03-20")
+@click.option("--feature_set", default="short_horizon_state_core_v1", show_default=True, help="正式 feature set 名称；脚本当前主要面向 research derived set")
 @click.option("--output", default="scratch/feature_build_sample.csv")
-def main(codes, start, end, output):
+def main(codes, start, end, feature_set, output):
     store = StockDataStore()
     frames = []
     for code in [c.strip() for c in codes.split(",") if c.strip()]:
@@ -40,29 +38,21 @@ def main(codes, start, end, output):
     full = pd.concat(frames, ignore_index=True)
     full["trade_date"] = pd.to_datetime(full["trade_date"].astype(str))
     full = full.sort_values(["trade_date", "ts_code"]).reset_index(drop=True)
-
-    out = build_microstructure_features(full)
-    out = build_liquidity_features(out)
-    out = build_tradability_features(out)
-    out = build_relative_strength_features(out)
-    out = apply_cross_sectional_standardization(
-        out,
-        [
-            "close_to_open_gap_1d",
-            "open_to_close_ret",
-            "amount_log",
-            "amount_zscore_20",
-            "volume_shock_3",
-            "volume_shock_5",
-            "turnover_acceleration",
-            "illiquidity",
-        ],
-        date_col="trade_date",
+    selection = resolve_feature_selection(feature_set=feature_set)
+    out = build_research_features(
+        full,
+        feature_set=feature_set,
+        preset="phase1_core",
+        select_only=True,
     )
 
     output_path = project_root / output
     output_path.parent.mkdir(parents=True, exist_ok=True)
     out.to_csv(output_path, index=False)
+    log.info(
+        f"Resolved feature_set={feature_set} -> feature_ids={len(selection.feature_ids)} "
+        f"derived_groups={selection.required_groups}"
+    )
     log.info(f"Feature sample written to {output_path}")
 
 

@@ -1,0 +1,297 @@
+version: 1
+description: Qsys feature set source of truth。对外推荐使用语义化的 set 名称，历史名字仅保留兼容映射。
+feature_sets:
+  price_volume_expression_core_v1:
+    description: 以 Qlib Alpha158 价格量能表达式为主体的 tabular 核心特征集合。
+    include_sets:
+    - alpha158_builtin_v1
+  price_volume_fundamental_core_v1:
+    description: 价格量能表达式 + 基本面/估值/资金流原始扩展的正式集合。
+    include_sets:
+    - price_volume_expression_core_v1
+    - native_extended_raw_v1
+  price_volume_fundamental_event_core_v1:
+    description: 价格量能表达式 + 基本面原始扩展 + 事件/两融原始扩展的正式集合。
+    include_sets:
+    - price_volume_fundamental_core_v1
+    - native_margin_raw_v1
+  short_horizon_state_core_v1:
+    description: 短周期状态驱动研究核心集，包含微结构、流动性、可交易性与横截面比较特征。
+    include_groups:
+    - microstructure
+    - liquidity
+    - tradability
+    - cross_section
+  context_regime_overlay_v1:
+    description: 市场环境、财务慢变量与上下文覆盖层。
+    include_groups:
+    - regime
+    - fundamental
+  research_semantic_default_v1:
+    description: 当前研究 builder 推荐的默认正式特征集合。
+    include_sets:
+    - short_horizon_state_core_v1
+    - context_regime_overlay_v1
+  atomic_panel_core_v1:
+    description: 未来 sequence 主通道优先使用的原子 panel 输入集合。
+    include_groups:
+    - price
+    - liquidity
+    - tradability
+    - fundamental
+  atomic_panel_plus_state_v1:
+    description: 原子 panel 输入 + 少量单日状态与可交易性特征，适合未来序列模型的保守组合。
+    include_sets:
+    - atomic_panel_core_v1
+    feature_ids:
+    - F0193
+    - F0194
+    - F0195
+    - F0197
+    - F0198
+    - F0208
+    - F0209
+    - F0212
+  mixed_provider_demo_v1:
+    description: 同时包含 Qlib Alpha158、原始扩展字段与自定义派生列的验证集合。
+    feature_ids:
+    - F0013
+    - F0175
+    - F0212
+  tabular_baseline_v1:
+    description: 兼容旧命名：baseline 集合。
+    include_sets:
+    - price_volume_expression_core_v1
+  tabular_extended_v1:
+    description: 兼容旧命名：extended 集合。
+    include_sets:
+    - price_volume_fundamental_core_v1
+  tabular_margin_extended_v1:
+    description: 兼容旧命名：margin_extended 集合。
+    include_sets:
+    - price_volume_fundamental_event_core_v1
+  research_phase1_core_v1:
+    description: 兼容旧命名：phase1 核心派生集合。
+    include_sets:
+    - short_horizon_state_core_v1
+  research_context_v1:
+    description: 兼容旧命名：context 集合。
+    include_sets:
+    - context_regime_overlay_v1
+  research_default_v1:
+    description: 兼容旧命名：research 默认集合。
+    include_sets:
+    - research_semantic_default_v1
+  sequence_native_core_v1:
+    description: 兼容旧命名：sequence 原子 panel 集合。
+    include_sets:
+    - atomic_panel_core_v1
+  transformer_core_v1:
+    description: 兼容旧命名：transformer 核心集合。
+    include_sets:
+    - atomic_panel_plus_state_v1
+  hybrid_research_demo_v1:
+    description: 兼容旧命名：混合集验证。
+    include_sets:
+    - mixed_provider_demo_v1
+  legacy_phase1_raw_v1:
+    description: 历史 phase1 训练入口兼容映射。
+    include_sets:
+    - price_volume_fundamental_core_v1
+  legacy_phase12_raw_v1:
+    description: 历史 phase12 训练入口兼容映射。
+    include_sets:
+    - price_volume_fundamental_core_v1
+  legacy_phase123_raw_v1:
+    description: 历史 phase123 训练入口兼容映射。
+    include_sets:
+    - price_volume_fundamental_event_core_v1
+  alpha158_builtin_v1:
+    description: Qlib Alpha158 内置表达式正式集合。
+    feature_ids:
+    - F0013
+    - F0014
+    - F0015
+    - F0016
+    - F0017
+    - F0018
+    - F0019
+    - F0020
+    - F0021
+    - F0022
+    - F0023
+    - F0024
+    - F0025
+    - F0026
+    - F0027
+    - F0028
+    - F0029
+    - F0030
+    - F0031
+    - F0032
+    - F0033
+    - F0034
+    - F0035
+    - F0036
+    - F0037
+    - F0038
+    - F0039
+    - F0040
+    - F0041
+    - F0042
+    - F0043
+    - F0044
+    - F0045
+    - F0046
+    - F0047
+    - F0048
+    - F0049
+    - F0050
+    - F0051
+    - F0052
+    - F0053
+    - F0054
+    - F0055
+    - F0056
+    - F0057
+    - F0058
+    - F0059
+    - F0060
+    - F0061
+    - F0062
+    - F0063
+    - F0064
+    - F0065
+    - F0066
+    - F0067
+    - F0068
+    - F0069
+    - F0070
+    - F0071
+    - F0072
+    - F0073
+    - F0074
+    - F0075
+    - F0076
+    - F0077
+    - F0078
+    - F0079
+    - F0080
+    - F0081
+    - F0082
+    - F0083
+    - F0084
+    - F0085
+    - F0086
+    - F0087
+    - F0088
+    - F0089
+    - F0090
+    - F0091
+    - F0092
+    - F0093
+    - F0094
+    - F0095
+    - F0096
+    - F0097
+    - F0098
+    - F0099
+    - F0100
+    - F0101
+    - F0102
+    - F0103
+    - F0104
+    - F0105
+    - F0106
+    - F0107
+    - F0108
+    - F0109
+    - F0110
+    - F0111
+    - F0112
+    - F0113
+    - F0114
+    - F0115
+    - F0116
+    - F0117
+    - F0118
+    - F0119
+    - F0120
+    - F0121
+    - F0122
+    - F0123
+    - F0124
+    - F0125
+    - F0126
+    - F0127
+    - F0128
+    - F0129
+    - F0130
+    - F0131
+    - F0132
+    - F0133
+    - F0134
+    - F0135
+    - F0136
+    - F0137
+    - F0138
+    - F0139
+    - F0140
+    - F0141
+    - F0142
+    - F0143
+    - F0144
+    - F0145
+    - F0146
+    - F0147
+    - F0148
+    - F0149
+    - F0150
+    - F0151
+    - F0152
+    - F0153
+    - F0154
+    - F0155
+    - F0156
+    - F0157
+    - F0158
+    - F0159
+    - F0160
+    - F0161
+    - F0162
+    - F0163
+    - F0164
+    - F0165
+    - F0166
+    - F0167
+    - F0168
+    - F0169
+    - F0170
+  native_extended_raw_v1:
+    description: 基本面、估值与资金流原始扩展字段集合。
+    feature_ids:
+    - F0177
+    - F0173
+    - F0175
+    - F0183
+    - F0174
+    - F0172
+    - F0178
+    - F0179
+    - F0181
+    - F0180
+    - F0182
+    - F0171
+    - F0185
+    - F0176
+    - F0184
+  native_margin_raw_v1:
+    description: 两融原始扩展字段集合。
+    feature_ids:
+    - F0187
+    - F0188
+    - F0190
+    - F0191
+    - F0189
+    - F0192
+    - F0186

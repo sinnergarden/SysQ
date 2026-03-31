@@ -99,6 +99,8 @@ class StrictEvalReport:
     @staticmethod
     def from_evaluation_report(eval_report, baseline_path: str, extended_path: str, **kwargs) -> RunReport:
         """Generate report from qsys.evaluation.evaluator.EvaluationReport"""
+        baseline_meta = kwargs.pop("baseline_meta", None) or {}
+        extended_meta = kwargs.pop("extended_meta", None) or {}
         results = []
         
         for r in eval_report.results:
@@ -115,13 +117,18 @@ class StrictEvalReport:
         # Get end date from first result or use latest
         end_date = results[0].get("end_date", "N/A") if results else "N/A"
         
-        return StrictEvalReport.generate(
+        report = StrictEvalReport.generate(
             baseline_model_path=baseline_path,
             extended_model_path=extended_path,
             end_date=end_date,
             results=results,
             **kwargs
         )
+        if baseline_meta.get("feature_set_name"):
+            report.model_info["baseline_feature_set"] = baseline_meta.get("feature_set_name")
+        if extended_meta.get("feature_set_name"):
+            report.model_info["extended_feature_set"] = extended_meta.get("feature_set_name")
+        return report
     
     @staticmethod
     def save(report: RunReport, output_dir: str = "data/reports") -> str:
