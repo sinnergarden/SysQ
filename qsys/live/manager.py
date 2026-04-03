@@ -42,15 +42,20 @@ class LiveManager:
             else:
                 scores = scores.iloc[:, 0]
         if isinstance(scores.index, pd.MultiIndex):
-            if scores.index.nlevels >= 2:
-                scores.index = scores.index.get_level_values(0)
+            if "instrument" in scores.index.names:
+                scores.index = scores.index.get_level_values("instrument")
+            elif scores.index.nlevels >= 2:
+                scores.index = scores.index.get_level_values(-1)
         return pd.Series(scores).groupby(level=0).last().sort_values(ascending=False)
 
     @staticmethod
     def _normalize_price_lookup(prices_df: pd.DataFrame) -> dict:
         normalized = prices_df.copy()
         if isinstance(normalized.index, pd.MultiIndex):
-            normalized.index = normalized.index.get_level_values(0)
+            if "instrument" in normalized.index.names:
+                normalized.index = normalized.index.get_level_values("instrument")
+            else:
+                normalized.index = normalized.index.get_level_values(0)
         normalized = normalized.groupby(level=0).last()
         return normalized["close"].to_dict()
 
@@ -81,11 +86,10 @@ class LiveManager:
         try:
             instruments = D.instruments("csi300")
             if market_data is None:
-                features = QlibAdapter().get_features(
-                    instruments,
-                    self.model.model.feature_config,
-                    start_time=signal_date,
-                    end_time=signal_date,
+                features = self.model.load_feature_frame(
+                    universe="csi300",
+                    start_date=signal_date,
+                    end_date=signal_date,
                 )
             else:
                 features = market_data

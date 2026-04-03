@@ -11,7 +11,7 @@ class StrategyEngine:
         self.method = method # equal_weight, score_weighted
         self.risk_max_position = risk_max_position
 
-    def generate_target_weights(self, scores, market_status=None):
+    def generate_target_weights(self, scores, market_status=None, current_holdings=None):
         """
         Input:
             scores: pd.Series (Index=Code, Value=Score)
@@ -118,3 +118,38 @@ class StrategyEngine:
         # If we clip, sum < 1. That implies holding cash. That's fine.
         # Or we can redistribute. For simplicity, just clip (hold cash remainder).
         return weights
+
+
+class BufferedTopKStrategy(StrategyEngine):
+    def __init__(self, top_k=10, hold_k=15, method="equal_weight", risk_max_position=0.3):
+        super().__init__(top_k=top_k, method=method, risk_max_position=risk_max_position)
+        self.hold_k = max(int(hold_k), int(top_k))
+
+    def generate_target_weights(self, scores, market_status=None, current_holdings=None):
+        if isinstance(scores, pd.DataFrame):
+            if 'score' in scores.columns:
+                scores = scores['score']
+            else:
+                scores = scores.iloc[:, 0]
+
+        valid_scores = self._apply_soft_filters(scores, market_status)
+        if valid_scores.empty:
+            return {}
+
+        ranked = valid_scores.sort_values(ascending=False)
+        buy_list = list(ranked.head(self.top_k).index)
+        hold_pool = set(ranked.head(self.hold_k).index)
+        current_holdings = set(current_holdings or [])
+
+        final_names = list(buy_list)
+        for sym in current_holdings:
+            if sym in hold_pool and sym not in final_names:
+                final_names.append(sym)
+
+        if not final_names:
+            return {}
+
+        selected_scores = ranked.reindex(final_names).dropna()
+        weights = self._calculate_weights(selected_scores)
+        weights = self._apply_risk_constraints(weights)
+        return weights.to_dict()

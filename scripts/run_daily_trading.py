@@ -35,6 +35,7 @@ sys.path.append(str(project_root))
 from qsys.data.adapter import QlibAdapter
 from qsys.data.collector import TushareCollector
 from qsys.data.health import DataReadinessError, assert_qlib_data_ready
+from qsys.data.storage import StockDataStore
 from qsys.live.account import RealAccount
 from qsys.live.manager import LiveManager
 from qsys.live.reconciliation import sync_real_account_from_csv
@@ -70,8 +71,7 @@ def update_data(signal_date: str, force=True, universe: str = "csi300"):
 
 def next_trading_day(signal_date: str) -> str:
     ts = pd.Timestamp(signal_date)
-    calendar = D.calendar(start_time=ts, end_time=ts + pd.Timedelta(days=10))
-    future_days = [pd.Timestamp(x) for x in calendar if pd.Timestamp(x) > ts]
+    future_days = _trading_days_after(ts, limit_days=10)
     if not future_days:
         return ts.strftime("%Y-%m-%d")
     return min(future_days).strftime("%Y-%m-%d")
@@ -79,11 +79,37 @@ def next_trading_day(signal_date: str) -> str:
 
 def previous_trading_day(signal_date: str) -> str:
     ts = pd.Timestamp(signal_date)
-    calendar = D.calendar(start_time=ts - pd.Timedelta(days=10), end_time=ts)
-    past_days = [pd.Timestamp(x) for x in calendar if pd.Timestamp(x) < ts]
+    past_days = _trading_days_before(ts, limit_days=10)
     if not past_days:
         return (ts - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
     return max(past_days).strftime("%Y-%m-%d")
+
+
+def _load_trade_calendar_dates() -> list[pd.Timestamp]:
+    try:
+        calendar = StockDataStore().get_calendar()
+        if calendar is not None and not calendar.empty and {"cal_date", "is_open"}.issubset(calendar.columns):
+            open_days = calendar[calendar["is_open"] == 1]["cal_date"].astype(str).tolist()
+            return [pd.Timestamp(day) for day in open_days]
+    except Exception:
+        pass
+    return []
+
+
+def _trading_days_after(ts: pd.Timestamp, *, limit_days: int) -> list[pd.Timestamp]:
+    dates = [day for day in _load_trade_calendar_dates() if ts < day <= ts + pd.Timedelta(days=limit_days)]
+    if dates:
+        return dates
+    calendar = D.calendar(start_time=ts, end_time=ts + pd.Timedelta(days=limit_days))
+    return [pd.Timestamp(x) for x in calendar if pd.Timestamp(x) > ts]
+
+
+def _trading_days_before(ts: pd.Timestamp, *, limit_days: int) -> list[pd.Timestamp]:
+    dates = [day for day in _load_trade_calendar_dates() if ts - pd.Timedelta(days=limit_days) <= day < ts]
+    if dates:
+        return dates
+    calendar = D.calendar(start_time=ts - pd.Timedelta(days=limit_days), end_time=ts)
+    return [pd.Timestamp(x) for x in calendar if pd.Timestamp(x) < ts]
 
 
 def extract_plan_summary(plan_df, account_name, signal_date, execution_date):
@@ -284,13 +310,14 @@ def main():
 
     loaded_model = preview_manager.model.model
     feature_config = loaded_model.feature_config
+    readiness_feature_fields = list(getattr(preview_manager.model, 'meta', {}).get('native_qlib_fields') or feature_config)
     feature_set_name = getattr(preview_manager.model, 'feature_set_name', None)
     if not feature_set_name and isinstance(getattr(loaded_model, 'params', None), dict):
         feature_set_name = loaded_model.params.get('feature_set_name') or loaded_model.params.get('feature_set_alias')
     model_info["feature_set"] = feature_set_name or (feature_config.get("name", "unknown") if isinstance(feature_config, dict) else "legacy_feature_list")
 
     try:
-        health = assert_qlib_data_ready(signal_date, feature_config, universe="csi300")
+        health = assert_qlib_data_ready(signal_date, readiness_feature_fields, universe="csi300")
         health_ok = True
     except DataReadinessError as readiness_error:
         health = readiness_error.report
