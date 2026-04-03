@@ -11,6 +11,59 @@ class MissingPreprocessParamsError(ValueError):
     pass
 
 
+def _coerce_feature_frame_numeric(frame: pd.DataFrame) -> pd.DataFrame:
+    clean = frame.copy()
+    for col in clean.columns:
+        series = clean[col]
+        non_null = series.dropna()
+        if pd.api.types.is_bool_dtype(series) or (not non_null.empty and non_null.isin([True, False]).all()):
+            clean[col] = series.astype("boolean").astype(float)
+            continue
+        if series.dtype == object:
+            lowered = non_null.astype(str).str.strip().str.lower()
+            if not lowered.empty and lowered.isin(["true", "false"]).all():
+                mapped = lowered.map({"true": 1.0, "false": 0.0})
+                clean[col] = mapped.reindex(series.index)
+                continue
+        clean[col] = pd.to_numeric(series, errors="coerce")
+    return clean.replace([np.inf, -np.inf], np.nan)
+
+
+def build_identity_sanitize_contract(frame: pd.DataFrame, *, fill_value: float = 0.0) -> tuple[pd.DataFrame, dict]:
+    clean = _coerce_feature_frame_numeric(frame)
+    input_feature_columns = list(frame.columns)
+    constant_cols = [col for col in clean.columns if clean[col].nunique(dropna=False) <= 1]
+    if constant_cols:
+        clean = clean.drop(columns=constant_cols)
+    feature_name_map = {col: f"f_{idx:04d}" for idx, col in enumerate(clean.columns, start=1)}
+    clean = clean.rename(columns=feature_name_map).fillna(float(fill_value))
+    contract = {
+        "method": "identity",
+        "fillna": float(fill_value),
+        "input_feature_columns": input_feature_columns,
+        "raw_feature_columns": list(feature_name_map.keys()),
+        "feature_name_map": feature_name_map,
+        "sanitized_feature_columns": list(clean.columns),
+        "dropped_columns": constant_cols,
+    }
+    return clean, contract
+
+
+def _apply_feature_frame_contract(frame: pd.DataFrame, contract: dict | None, *, expected_columns: list[str] | None = None) -> pd.DataFrame:
+    clean = _coerce_feature_frame_numeric(frame)
+    contract = contract or {}
+    raw_feature_columns = list(contract.get("raw_feature_columns") or expected_columns or clean.columns)
+    clean = clean.reindex(columns=raw_feature_columns)
+    dropped_columns = [col for col in contract.get("dropped_columns", []) if col in clean.columns]
+    if dropped_columns:
+        clean = clean.drop(columns=dropped_columns)
+    feature_name_map = {str(col): str(name) for col, name in (contract.get("feature_name_map") or {}).items()}
+    if feature_name_map:
+        clean = clean.reindex(columns=list(feature_name_map.keys()))
+        clean = clean.rename(columns=feature_name_map)
+    return clean
+
+
 class QlibNativeModel(IModel):
     def __init__(self, name, model_config, feature_config, label_config=None):
         """
@@ -209,7 +262,23 @@ class QlibNativeModel(IModel):
 
     def _apply_preprocess(self, X: pd.DataFrame) -> pd.DataFrame:
         params = getattr(self, "preprocess_params", None) or {}
+        fill_value = float(params.get("fillna", 0.0))
+        contract = {}
+        if isinstance(self.params, dict):
+            contract = dict(self.params.get("sanitize_feature_contract") or {})
+            if not contract and self.params.get("feature_name_map"):
+                contract = {
+                    "method": "identity",
+                    "fillna": fill_value,
+                    "raw_feature_columns": list(self.feature_config or self.params.get("feature_name_map", {}).keys()),
+                    "feature_name_map": dict(self.params.get("feature_name_map", {})),
+                    "dropped_columns": list(self.params.get("constant_feature_columns", [])),
+                }
+        expected_columns = list(self.feature_config or X.columns)
+        X = _apply_feature_frame_contract(X, contract, expected_columns=expected_columns)
         method = params.get("method")
+        if method in {None, "identity"}:
+            return X.fillna(fill_value)
         if method != "qlib_robust_zscore":
             raise MissingPreprocessParamsError("Missing or unsupported preprocessing contract for inference")
 
@@ -220,22 +289,23 @@ class QlibNativeModel(IModel):
             raise MissingPreprocessParamsError(f"Preprocessing params missing for columns: {missing}")
 
         scale = scale.replace(0, 1.0)
-        X = X.astype(float)
-        X = (X - center) / scale
+        X = (X.astype(float) - center) / scale
         if params.get("clip_outlier", True):
             X = X.clip(-3, 3)
-        X = X.fillna(float(params.get("fillna", 0.0)))
+        X = X.fillna(fill_value)
         return X
 
     def predict(self, df):
         """
         Pure Python Inference.
         """
-        first_feat = self.feature_config[0] if self.feature_config else None
-
-        if not first_feat or first_feat not in df.columns:
+        if not self.feature_config:
             raise ValueError("Feature columns missing. Provide precomputed features.")
-        X = self._apply_preprocess(df[self.feature_config].copy())
+
+        available = [col for col in self.feature_config if col in df.columns]
+        if not available:
+            raise ValueError("Feature columns missing. Provide precomputed features.")
+        X = self._apply_preprocess(df.reindex(columns=self.feature_config).copy())
 
         # 2. Predict
         # We need to access the underlying booster to predict on DataFrame/Numpy

@@ -1,7 +1,10 @@
 import pandas as pd
 import yaml
 from pathlib import Path
+from typing import Any
+
 from qsys.utils.logger import log
+from qsys.feature.runtime import build_feature_panel
 from qsys.model.zoo.qlib_native import QlibNativeModel
 
 
@@ -70,3 +73,29 @@ class SignalGenerator:
         log.info(f"Generating signals for {len(inference_data)} symbols...")
         scores = self.model.predict(inference_data)
         return scores
+
+    def load_feature_frame(self, *, universe: str, start_date: str, end_date: str) -> pd.DataFrame:
+        if self.feature_set_name:
+            panel, _ = build_feature_panel(
+                feature_set=str(self.feature_set_name),
+                universe=universe,
+                start_date=start_date,
+                end_date=end_date,
+            )
+            if panel.empty:
+                return panel
+            panel = panel.set_index(["trade_date", "ts_code"]).sort_index()
+            panel.index = panel.index.rename(["datetime", "instrument"])
+            return panel.reindex(columns=self.model.feature_config)
+
+        from qsys.data.adapter import QlibAdapter
+        from qlib.data import D
+
+        instruments = D.instruments(universe)
+        features = QlibAdapter().get_features(
+            instruments,
+            self.model.feature_config,
+            start_time=start_date,
+            end_time=end_date,
+        )
+        return features.reindex(columns=self.model.feature_config) if hasattr(features, 'reindex') else features

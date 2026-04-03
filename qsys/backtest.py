@@ -28,13 +28,14 @@ class BacktestEngine:
         daily_predictions=None,
         top_k=50,
         n_drop=0,
+        strategy=None,
     ):
         self.start_date = start_date
         self.end_date = end_date
         self.universe = universe
         self.signal_gen = SignalGenerator(model_path) if model_path else None
         self.daily_predictions = daily_predictions
-        self.strategy = StrategyEngine(top_k=top_k, method="equal_weight")
+        self.strategy = strategy if strategy is not None else StrategyEngine(top_k=top_k, method="equal_weight")
         self.account = account if account else Account(init_cash=1_000_000)
         self.order_gen = OrderGenerator()
         self.matcher = MatchEngine()
@@ -76,11 +77,10 @@ class BacktestEngine:
                 return pd.DataFrame()
 
             try:
-                all_features = QlibAdapter().get_features(
-                    instruments=instruments,
-                    fields=self.signal_gen.model.feature_config,
-                    start_time=self.start_date,
-                    end_time=self.end_date,
+                all_features = self.signal_gen.load_feature_frame(
+                    universe=self.universe,
+                    start_date=self.start_date,
+                    end_date=self.end_date,
                 )
             except Exception as e:
                 log.error(f"Failed to fetch batch features: {e}")
@@ -142,7 +142,8 @@ class BacktestEngine:
                     continue
 
                 current_prices = market_data["close"].to_dict()
-                target_weights = self.strategy.generate_target_weights(scores, market_data)
+                current_holdings = list(self.account.positions.keys())
+                target_weights = self.strategy.generate_target_weights(scores, market_data, current_holdings=current_holdings)
                 orders = self.order_gen.generate_orders(target_weights, self.account, current_prices)
                 trades = self.matcher.match(orders, self.account, market_data, current_prices)
 

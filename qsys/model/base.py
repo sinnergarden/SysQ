@@ -1,6 +1,5 @@
 from abc import ABC, abstractmethod
 import joblib
-import pickle
 import yaml
 from pathlib import Path
 from qsys.utils.logger import log
@@ -36,11 +35,18 @@ class IModel(ABC):
     def save(self, path):
         path = Path(path)
         path.mkdir(parents=True, exist_ok=True)
-        
+
         # Save Model
         if self.model:
             joblib.dump(self.model, path / "model.pkl")
-            
+
+        training_summary = self.training_summary or {}
+        train_period = None
+        train_start = training_summary.get("train_start")
+        train_end = training_summary.get("train_end")
+        if train_start and train_end:
+            train_period = [str(train_start), str(train_end)]
+
         # Save Metadata
         meta = {
             "name": self.name,
@@ -48,10 +54,13 @@ class IModel(ABC):
             "feature_config": self.feature_config,
             "preprocess_params": self.preprocess_params,
             "training_summary": self.training_summary,
+            "train_period": train_period,
+            "model_config": getattr(self, "model_config", None),
+            "label_config": getattr(self, "label_config", None),
         }
-        with open(path / "meta.yaml", 'w') as f:
-            yaml.dump(meta, f)
-            
+        with open(path / "meta.yaml", 'w', encoding='utf-8') as f:
+            yaml.safe_dump(meta, f, sort_keys=False, allow_unicode=True)
+
         log.info(f"Model saved to {path}")
 
     def load(self, path):
@@ -65,13 +74,17 @@ class IModel(ABC):
         # Load Metadata
         meta_path = path / "meta.yaml"
         if meta_path.exists():
-            with open(meta_path, 'r') as f:
-                meta = yaml.safe_load(f)
+            with open(meta_path, 'r', encoding='utf-8') as f:
+                meta = yaml.safe_load(f) or {}
                 self.name = meta.get("name", self.name)
                 self.params = meta.get("params", {})
                 self.feature_config = meta.get("feature_config", [])
                 self.preprocess_params = meta.get("preprocess_params", {})
                 self.training_summary = meta.get("training_summary")
+                if meta.get("model_config") is not None:
+                    self.model_config = meta.get("model_config")
+                if meta.get("label_config") is not None:
+                    self.label_config = meta.get("label_config")
         
         log.info(f"Model loaded from {path}")
 

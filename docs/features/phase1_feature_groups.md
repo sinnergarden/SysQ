@@ -1,5 +1,7 @@
 # Phase 1 Feature Groups
 
+> 历史研究文档。当前长期结构请以 `docs/features/README.md`、`docs/features/groups/*.md` 和 `docs/features/migration_notes.md` 为准。
+
 本文件记录第一批短周期日频特征（Phase 1）的最小可用实现。
 
 ## Group A: 微观结构 / K线结构

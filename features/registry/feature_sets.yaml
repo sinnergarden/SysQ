@@ -1,6 +1,17 @@
 version: 1
 description: Qsys feature set source of truth。对外推荐使用语义化的 set 名称，历史名字仅保留兼容映射。
 feature_sets:
+  semantic_all_features_v1:
+    description: 语义分组下的全特征基线集合，包含 price/liquidity/microstructure/tradability/cross_section/regime/fundamental/event 八组全部正式特征。
+    include_groups:
+    - price
+    - liquidity
+    - microstructure
+    - tradability
+    - cross_section
+    - regime
+    - fundamental
+    - event
   price_volume_expression_core_v1:
     description: 以 Qlib Alpha158 价格量能表达式为主体的 tabular 核心特征集合。
     include_sets:

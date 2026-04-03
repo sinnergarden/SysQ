@@ -105,6 +105,7 @@ registry 记录的是“正式 feature identity”，而不是脚本里的临时
 
 当前推荐的语义化 set 包括：
 
+- `semantic_all_features_v1`
 - `price_volume_expression_core_v1`
 - `price_volume_fundamental_core_v1`
 - `price_volume_fundamental_event_core_v1`
@@ -116,6 +117,10 @@ registry 记录的是“正式 feature identity”，而不是脚本里的临时
 - `mixed_provider_demo_v1`
 
 历史名字如 `tabular_extended_v1`、`research_phase1_core_v1`、`transformer_core_v1` 仍保留兼容，但不再作为主命名推荐。
+
+当前如果需要一个“全正式特征都用上”的语义化基线，优先使用：
+
+- `semantic_all_features_v1`
 
 ## 5. 如何统一适配 Qlib 内置与自定义特征
 

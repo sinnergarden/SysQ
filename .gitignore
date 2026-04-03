@@ -8,6 +8,7 @@ experiments/*.csv
 !experiments/backtest_result_latest.csv
 reports/
 state/
+scratch/
 __pycache__/
 *.pyc
 .DS_Store
