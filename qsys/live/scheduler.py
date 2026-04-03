@@ -25,6 +25,8 @@ class ModelScheduler:
         """
         needs_retrain = False
         train_end_date = None
+        feature_set_name = None
+        model_name = Path(model_path).name
         
         model_dir = Path(model_path)
         meta_path = model_dir / "meta.yaml"
@@ -33,6 +35,9 @@ class ModelScheduler:
             try:
                 with open(meta_path) as f:
                     meta = yaml.safe_load(f) or {}
+                    model_name = meta.get("name", model_name)
+                    params = meta.get("params") or {}
+                    feature_set_name = params.get("feature_set_name") or params.get("feature_set_alias")
                     train_period = meta.get("train_period")
                     if train_period and len(train_period) >= 2:
                         train_end_str = str(train_period[1])
@@ -76,21 +81,32 @@ class ModelScheduler:
                 sys.executable, "scripts/run_train.py",
                 "--model", "qlib_lgbm",
                 "--start", new_start,
-                "--end", new_end
+                "--end", new_end,
             ]
+            if feature_set_name:
+                cmd.extend(["--feature_set", str(feature_set_name)])
             
             try:
                 subprocess.check_call(cmd)
-                
-                # Find the new model
-                # It should be in data/models/qlib_lgbm_{timestamp}
+
+                data_root = cfg.get_path("root")
+                if data_root is not None:
+                    expected_model_path = data_root / "models" / model_name
+                    if expected_model_path.exists():
+                        log.info(f"Updated model available at: {expected_model_path}")
+                        return str(expected_model_path)
+
                 models_root = Path("data/models")
                 if models_root.exists():
-                    candidates = sorted([d for d in models_root.iterdir() if d.is_dir() and "qlib_lgbm" in d.name])
+                    candidates = sorted([d for d in models_root.iterdir() if d.is_dir() and d.name == model_name])
                     if candidates:
                         new_model_path = candidates[-1]
                         log.info(f"New model trained at: {new_model_path}")
                         return str(new_model_path)
+
+                if model_dir.exists() and model_dir.name == model_name:
+                    log.info(f"Updated model available at: {model_dir}")
+                    return str(model_dir)
                 
                 log.error("Training finished but could not find new model directory.")
                 return model_path # Fallback

@@ -40,7 +40,7 @@ class TestCliSemantics(unittest.TestCase):
         resolved = Path(_resolve_cli_path("ops/reports"))
         self.assertTrue(resolved.is_absolute())
         self.assertEqual(resolved.name, "reports")
-        self.assertIn("SysQ", str(resolved))
+        self.assertEqual(resolved.parent, run_daily_trading.project_root / "ops")
 
     def test_extract_plan_summary_is_structured_and_low_noise(self):
         plan = run_daily_trading.pd.DataFrame(
