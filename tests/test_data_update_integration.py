@@ -235,3 +235,40 @@ class TestDataUpdateIntegration(unittest.TestCase):
         
         # Raw should have data
         self.assertEqual(report['raw_latest'], "2023-01-05")
+
+    def test_merge_trade_frames_coalesces_overlapping_close_columns(self):
+        collector = TushareCollector()
+        left = pd.DataFrame(
+            {
+                "ts_code": ["600489.SH"],
+                "trade_date": ["20260403"],
+                "close": [np.nan],
+                "open": [26.75],
+            }
+        )
+        right = pd.DataFrame(
+            {
+                "ts_code": ["600489.SH"],
+                "trade_date": ["20260403"],
+                "close": [26.68],
+                "turnover_rate": [0.7621],
+            }
+        )
+
+        merged = collector._merge_trade_frames(left, right, keys=["ts_code", "trade_date"])
+        self.assertAlmostEqual(float(merged.iloc[0]["close"]), 26.68)
+        self.assertAlmostEqual(float(merged.iloc[0]["turnover_rate"]), 0.7621)
+
+    def test_adapter_coalesces_duplicate_columns_after_rename(self):
+        from qsys.data.adapter import QlibAdapter
+
+        df = pd.DataFrame(
+            [
+                ["20260403", 369409.33, 36940933.0, 26.68],
+            ],
+            columns=["date", "volume", "volume", "close"],
+        )
+
+        collapsed = QlibAdapter._coalesce_duplicate_columns(df)
+        self.assertEqual(collapsed.columns.tolist(), ["date", "volume", "close"])
+        self.assertAlmostEqual(float(collapsed.iloc[0]["volume"]), 369409.33)

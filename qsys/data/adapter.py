@@ -144,7 +144,12 @@ class QlibAdapter:
         # If raw data folder is modified, we check for updates
         if raw_mtime > qlib_mtime:
             log.info(f"Raw data updated. Checking for new data since {last_date.date()}...")
-            self.convert_incremental(last_date)
+            raw_latest = self._get_raw_latest_date()
+            if raw_latest is not None and pd.Timestamp(raw_latest) <= last_date:
+                log.info("Detected raw data repair on the latest qlib date. Running dump_fix to refresh same-day features...")
+                self.convert_fix(last_date)
+            else:
+                self.convert_incremental(last_date)
         else:
             log.info("Qlib bin is up to date.")
 
@@ -174,6 +179,23 @@ class QlibAdapter:
             freq=freq,
             inst_processors=inst_processors or []
         )
+
+    @staticmethod
+    def _coalesce_duplicate_columns(df: pd.DataFrame) -> pd.DataFrame:
+        if not df.columns.duplicated().any():
+            return df
+
+        collapsed = pd.DataFrame(index=df.index)
+        for col in df.columns.unique():
+            selected = df.loc[:, col]
+            if isinstance(selected, pd.DataFrame):
+                series = selected.iloc[:, 0]
+                for idx in range(1, selected.shape[1]):
+                    series = series.combine_first(selected.iloc[:, idx])
+                collapsed[col] = series
+            else:
+                collapsed[col] = selected
+        return collapsed
 
     def _prepare_csvs(self, since_date=None):
         """
@@ -231,6 +253,7 @@ class QlibAdapter:
                     if src in df.columns and dst not in df.columns:
                         rename_map[src] = dst
                 df = df.rename(columns=rename_map)
+                df = self._coalesce_duplicate_columns(df)
 
                 # Resolve duplicated market columns produced by merges
                 if "close" not in df.columns:
@@ -316,7 +339,9 @@ class QlibAdapter:
                 
                 # Incremental Filter
                 if since_date:
-                    df = df[df['date'] > since_date]
+                    # Include the latest qlib date itself so repaired raw rows on the same
+                    # trading day can overwrite stale or partially converted values.
+                    df = df[df['date'] >= since_date]
                     if df.empty:
                         continue
                         
@@ -375,6 +400,18 @@ class QlibAdapter:
 
         log.info(f"Found {count} stocks with new data. Running dump_update...")
         self._run_dump_script(csv_dir, mode="dump_update")
+
+    def convert_fix(self, since_date):
+        """Repair latest-date feature files using dump_fix when raw rows changed in-place."""
+        log.info(f"Starting same-date repair update (since {since_date})...")
+        csv_dir, count = self._prepare_csvs(since_date)
+
+        if count == 0:
+            log.info("No repaired data found to update.")
+            return
+
+        log.info(f"Found {count} stocks with repaired data. Running dump_fix...")
+        self._run_dump_script(csv_dir, mode="dump_fix")
 
     def convert_all(self):
         """Full update using dump_all"""
