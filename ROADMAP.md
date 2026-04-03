@@ -7,6 +7,7 @@
 - 能稳定做周一到周五运营的系统
 - 能持续做投研与回测的系统
 - 能把 research / candidate / production 分层管理的系统
+- 能把高频研究与运营流程沉淀成稳定入口，而不是每次靠临时 prompt 和散装文档驱动
 
 阶段完成判定：
 
@@ -14,7 +15,32 @@
 - 训练 / 回测 / 严格评估有统一口径
 - 模型替换有明确晋级门槛与回滚边界
 - 重要流程有结构化报告，而不是只看 stdout
+- 高频流程已有可复用的 workflow asset（skills / commands / output contract）
 - 文档、脚本、测试三者保持同步
+
+---
+
+## 现状总结（2026-04）
+
+当前 Qsys 已经不是“空架子”，而是已经具备最小闭环的量化投研/运营底座：
+
+- `raw -> qlib/bin -> train -> backtest -> latest cross-sectional predict` 最小链路已跑通
+- 日常交易主流程已存在，real / shadow 账户和 plan 产物已初步成形
+- 非重叠 strict eval 口径、`top_k=5`、周级重训等关键研究共识已基本固定
+- 文档、架构、runbook、feature docs 已开始成体系，项目已从“探索期”进入“收敛期”
+
+但当前的主要短板，也已经比较明确：
+
+- 高频流程仍偏脚本驱动，入口多、口径容易漂移
+- 一部分重要规则仍散落在聊天结论、文档、脚本默认值和人工记忆里
+- 结构化 report 还不完整，很多流程仍更像“能跑通”而不是“可审计、可复用”
+- Qsys 已有不少文档，但其中很多是给人读的，不是给 agent/自动流程直接消费的“可执行规则层”
+
+因此，当前 roadmap 的新增方向不是大改引擎，而是补一层轻量的 workflow / plugin abstraction：
+
+- 保留现有 Python engine 与脚本入口
+- 把高频流程提炼成 `skills + commands + connectors + output contracts`
+- 让 Qsys 从“研究仓库 + 若干脚本”进一步收敛成“研究操作系统”
 
 ---
 
@@ -81,6 +107,18 @@
 - [ ] strict evaluation report
 - [x] daily ops report
 
+### P0.5 固化 workflow contract（新增）
+
+目标：
+- 把高频研究/运营流程从“散装文档 + 临时口述”收敛成可复用的 workflow asset
+- 先统一规则层，再决定是否接 Claude/OpenClaw 等宿主壳
+
+待办：
+- [ ] 定义 Qsys workflow asset 的最小物理结构（`skill` / `command` / `connector` / `output contract`）
+- [ ] 明确哪些现有文档内容应上收为 `SKILL.md`，哪些继续保留为普通文档
+- [ ] 明确 command 层只做入口与编排，不重写底层研究/交易逻辑
+- [ ] 定义 `md + json` 的统一输出契约，便于人读与 agent 续接
+
 ---
 
 ## P1：收束代码与脚本
@@ -116,6 +154,18 @@
 - [ ] 补足 model age / train window / feature_set 等元信息
 - [ ] 统一训练 summary 与模型目录结构
 
+### P1.4 文档分层与 skill 提炼（新增）
+
+目标：
+- 不再让规则长期停留在散装文档和聊天结论里
+- 把“给人看的说明”和“给 agent/流程消费的规则”明确分层
+
+待办：
+- [ ] 盘点现有 `README / ARCHITECTURE / RUNBOOK / features/* / 研究记录` 中可提炼的高频规则
+- [ ] 首批沉淀 `trading-calendar-guard`、`feature-readiness-audit`、`train-split-discipline`、`shadow-execution-planner`
+- [ ] 为首批 skill 明确触发条件、workflow、输出契约、阻断条件
+- [ ] 建立 skill 与底层 Python 入口的映射表，避免规则层与执行层脱节
+
 ---
 
 ## P2：投研与模型晋级流程
@@ -140,6 +190,18 @@
 - [ ] 因子实验模板
 - [ ] 模型实验模板
 - [ ] 策略实验模板
+
+### P2.4 Qsys plugin / workflow layer 首发版本（新增）
+
+目标：
+- 在不改动核心 engine 的前提下，给 Qsys 增加一层稳定的研究操作接口
+
+待办：
+- [ ] 设计 `qsys_plugins/core` 的目录骨架与 manifest
+- [ ] 首发 `preopen-plan`、`feature-audit`、`rolling-eval` 三个 command
+- [ ] 为 command 补一层薄适配代码，统一调用现有 `scripts/` 或 `qsys/*` 模块
+- [ ] 验证 command 输出可同时服务：人工阅读、日报沉淀、agent 二次消费
+- [ ] 再决定是否兼容 Claude plugin / OpenClaw skill 等外部宿主格式
 
 ---
 
