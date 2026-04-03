@@ -275,11 +275,13 @@ def collect_signal_quality_snapshot(
         }
 
     completed = detailed[detailed["holding_days"] >= 1].head(recent_window)
+    weighted_series = completed["weighted_return"] if "weighted_return" in completed.columns else pd.Series(dtype=float)
+    excess_series = completed["weighted_excess_return"] if "weighted_excess_return" in completed.columns else pd.Series(dtype=float)
     recent_summary = {
         "recent_vintage_count": int(len(completed)),
-        "recent_vintage_win_rate": float((completed["weighted_return"] > 0).mean()) if not completed.empty else None,
-        "recent_vintage_avg_weighted_return": float(completed["weighted_return"].mean()) if not completed.empty else None,
-        "recent_vintage_avg_excess_return": float(completed["weighted_excess_return"].dropna().mean()) if not completed.empty and completed["weighted_excess_return"].notna().any() else None,
+        "recent_vintage_win_rate": float((weighted_series > 0).mean()) if not weighted_series.empty else None,
+        "recent_vintage_avg_weighted_return": float(weighted_series.mean()) if not weighted_series.empty else None,
+        "recent_vintage_avg_excess_return": float(excess_series.dropna().mean()) if not excess_series.empty and excess_series.notna().any() else None,
     }
 
     summary = {
