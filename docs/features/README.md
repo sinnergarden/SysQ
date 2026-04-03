@@ -20,3 +20,7 @@
 
 - [new_feature.md](file:///Users/liuming/Documents/trae_projects/SysQ/docs/features/new_feature.md)
 - `daily_signal_monitoring.md`：daily ops 推荐篮子质量监控需求，覆盖 1d/2d/3d vintage 跟踪与盘后信号质量摘要。
+
+## 当前进度备注
+
+- daily ops 已补充 `signal basket`、`signal quality` 和 `daily ops manifest` 三类结构化产物，后续 MiniQMT 接入应继续复用这套输出骨架。

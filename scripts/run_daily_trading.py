@@ -15,6 +15,7 @@ from qsys.data.adapter import QlibAdapter
 from qsys.data.health import inspect_qlib_data_health
 from qsys.live.account import RealAccount
 from qsys.live.manager import LiveManager
+from qsys.live.ops_manifest import update_manifest
 from qsys.live.reconciliation import sync_real_account_from_csv
 from qsys.live.signal_monitoring import (
     build_signal_quality_blockers,
@@ -223,7 +224,19 @@ def main():
                 blockers=blockers,
             )
             report_path = DailyOpsReport.save(report)
+            manifest_path = update_manifest(
+                report_dir="data/reports",
+                execution_date=execution_date,
+                signal_date=signal_date,
+                stage="pre_open",
+                status=report.status.value,
+                report_path=report_path,
+                data_status=data_status,
+                model_info=model_info,
+                blockers=blockers,
+            )
             log.info(f"Report saved to: {report_path}")
+            log.info(f"Manifest saved to: {manifest_path}")
         return
     log.info("\n" + health.to_markdown())
 
@@ -257,7 +270,21 @@ def main():
                 )
                 report.artifacts.update(signal_quality_artifacts)
                 report_path = DailyOpsReport.save(report)
+                manifest_path = update_manifest(
+                    report_dir="data/reports",
+                    execution_date=execution_date,
+                    signal_date=signal_date,
+                    stage="pre_open",
+                    status=report.status.value,
+                    report_path=report_path,
+                    artifacts=report.artifacts,
+                    data_status=data_status,
+                    model_info=model_info,
+                    blockers=blockers,
+                    summary={"signal_quality_gate": signal_quality_summary},
+                )
                 log.info(f"Report saved to: {report_path}")
+                log.info(f"Manifest saved to: {manifest_path}")
             return
 
     preview_manager.strategy.top_k = args.top_k
@@ -349,7 +376,26 @@ def main():
         report.artifacts.update(signal_quality_artifacts)
         
         report_path = DailyOpsReport.save(report)
+        manifest_path = update_manifest(
+            report_dir="data/reports",
+            execution_date=execution_date,
+            signal_date=signal_date,
+            stage="pre_open",
+            status=report.status.value,
+            report_path=report_path,
+            artifacts=report.artifacts,
+            data_status=data_status,
+            model_info=model_info,
+            blockers=blockers,
+            notes=report.notes,
+            summary={
+                "shadow_plan": shadow_summary,
+                "real_plan": real_summary,
+                "signal_quality_gate": signal_quality_summary,
+            },
+        )
         log.info(f"Report saved to: {report_path}")
+        log.info(f"Manifest saved to: {manifest_path}")
         
         # Also print markdown summary
         print("\n" + "=" * 60)

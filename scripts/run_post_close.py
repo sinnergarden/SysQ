@@ -11,6 +11,7 @@ sys.path.append(str(project_root))
 
 from qsys.data.adapter import QlibAdapter
 from qsys.live.account import RealAccount
+from qsys.live.ops_manifest import update_manifest
 from qsys.live.reconciliation import (
     build_reconciliation_result,
     reconciliation_to_markdown,
@@ -164,7 +165,24 @@ def main():
             )
         
         report_path = DailyOpsReport.save(report)
+        manifest_path = update_manifest(
+            report_dir="data/reports",
+            execution_date=execution_date,
+            signal_date=signal_date,
+            stage="post_close",
+            status=report.status.value,
+            report_path=report_path,
+            artifacts=report.artifacts,
+            data_status=data_status,
+            model_info=model_info,
+            blockers=blockers,
+            summary={
+                "reconciliation": reconciliation_summary,
+                "signal_quality": signal_quality_summary,
+            },
+        )
         log.info(f"Report saved to: {report_path}")
+        log.info(f"Manifest saved to: {manifest_path}")
         
         # Also print markdown summary
         print("\n" + "=" * 60)
