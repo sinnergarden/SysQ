@@ -7,6 +7,7 @@ from unittest.mock import patch
 import pandas as pd
 
 from qsys.live.signal_monitoring import (
+    _default_benchmark_loader,
     build_signal_quality_blockers,
     collect_signal_quality_snapshot,
     evaluate_signal_basket,
@@ -212,6 +213,23 @@ class TestDailySignalMonitoring(unittest.TestCase):
         self.assertEqual(len(blockers), 2)
         self.assertIn("horizon_2d", blockers[0])
         self.assertIn("horizon_3d", blockers[1])
+
+    def test_default_benchmark_loader_uses_universe_symbols_for_signal_date(self):
+        price_frame = pd.DataFrame(
+            [
+                {"date": "2025-01-02", "symbol": "AAA", "close": 10.0},
+                {"date": "2025-01-03", "symbol": "AAA", "close": 11.0},
+                {"date": "2025-01-02", "symbol": "BBB", "close": 20.0},
+                {"date": "2025-01-03", "symbol": "BBB", "close": 21.0},
+            ]
+        )
+        with patch("qsys.live.signal_monitoring._load_universe_symbols_for_date", return_value=["AAA", "BBB"]), patch(
+            "qsys.live.signal_monitoring._default_price_loader",
+            return_value=price_frame,
+        ):
+            benchmark_return = _default_benchmark_loader("csi300", "2025-01-02", "2025-01-03")
+
+        self.assertAlmostEqual(benchmark_return, 0.075)
 
     def test_write_signal_quality_outputs_persists_summary_and_details(self):
         snapshot = type("Snapshot", (), {

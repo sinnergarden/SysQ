@@ -85,8 +85,28 @@ def _default_price_loader(symbols: list[str], start_date: str, end_date: str) ->
     return frame[["date", "symbol", "close"]]
 
 
+def _load_universe_symbols_for_date(universe: str, date: str) -> list[str]:
+    instrument_path = Path(str(QlibAdapter().qlib_dir)) / "instruments" / f"{universe}.txt"
+    if instrument_path.exists():
+        frame = pd.read_csv(
+            instrument_path,
+            sep="\t",
+            names=["symbol", "start_date", "end_date"],
+        )
+        if not frame.empty:
+            date_str = pd.Timestamp(date).strftime("%Y-%m-%d")
+            valid = frame[(frame["start_date"] <= date_str) & (frame["end_date"] >= date_str)]
+            if not valid.empty:
+                return valid["symbol"].astype(str).tolist()
+    instruments = D.instruments(universe)
+    normalized = QlibAdapter().normalize_instruments(instruments)
+    if isinstance(normalized, str):
+        return [normalized]
+    return list(normalized)
+
+
 def _default_benchmark_loader(universe: str, start_date: str, end_date: str) -> float | None:
-    symbols = D.instruments(universe)
+    symbols = _load_universe_symbols_for_date(universe, start_date)
     frame = _default_price_loader(symbols, start_date, end_date)
     if frame.empty:
         return None

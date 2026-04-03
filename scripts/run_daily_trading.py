@@ -16,7 +16,12 @@ from qsys.data.health import inspect_qlib_data_health
 from qsys.live.account import RealAccount
 from qsys.live.manager import LiveManager
 from qsys.live.reconciliation import sync_real_account_from_csv
-from qsys.live.signal_monitoring import save_signal_basket
+from qsys.live.signal_monitoring import (
+    build_signal_quality_blockers,
+    collect_signal_quality_snapshot,
+    save_signal_basket,
+    write_signal_quality_outputs,
+)
 from qsys.live.scheduler import ModelScheduler
 from qsys.live.simulation import ShadowSimulator
 from qsys.reports.base import ReportStatus
@@ -132,6 +137,7 @@ def main():
     parser.add_argument("--retrain_days", type=int, default=7, help="Model max age in days before retraining")
     parser.add_argument("--top_k", type=int, default=30, help="Number of stocks to select in strategy")
     parser.add_argument("--min_trade", type=int, default=5000, help="Minimum trade amount in RMB")
+    parser.add_argument("--skip_signal_quality_gate", action="store_true", help="Bypass the pre-open signal-quality readiness gate")
     parser.add_argument("--no_report", action="store_true", help="Skip generating the structured report")
     args = parser.parse_args()
 
@@ -140,6 +146,8 @@ def main():
     model_info = {}
     health_ok = False
     signal_basket_path = None
+    signal_quality_summary = {}
+    signal_quality_artifacts = {}
     
     if not args.skip_update:
         update_data()
@@ -210,6 +218,7 @@ def main():
                 model_info=model_info,
                 shadow_plan_summary={"status": "skipped"},
                 real_plan_summary={"status": "skipped"},
+                signal_quality_summary=signal_quality_summary,
                 duration_seconds=time.time() - start_time,
                 blockers=blockers,
             )
@@ -217,6 +226,39 @@ def main():
             log.info(f"Report saved to: {report_path}")
         return
     log.info("\n" + health.to_markdown())
+
+    if not args.skip_signal_quality_gate:
+        signal_quality_snapshot = collect_signal_quality_snapshot(
+            as_of_date=signal_date,
+            signal_dir="data",
+            horizons=(1, 2, 3),
+            recent_window=5,
+        )
+        signal_quality_summary = signal_quality_snapshot.summary
+        signal_quality_artifacts = write_signal_quality_outputs(
+            signal_quality_snapshot,
+            output_dir="data/signal_quality",
+            as_of_date=signal_date,
+        )
+        blockers.extend(build_signal_quality_blockers(signal_quality_summary, required_horizons=(1, 2, 3)))
+        if blockers:
+            log.error("Signal quality gate failed; refusing to continue daily planning")
+            if not args.no_report:
+                report = DailyOpsReport.generate_pre_open_report(
+                    signal_date=signal_date,
+                    execution_date=execution_date,
+                    data_status=data_status,
+                    model_info=model_info,
+                    shadow_plan_summary={"status": "skipped"},
+                    real_plan_summary={"status": "skipped"},
+                    signal_quality_summary=signal_quality_summary,
+                    duration_seconds=time.time() - start_time,
+                    blockers=blockers,
+                )
+                report.artifacts.update(signal_quality_artifacts)
+                report_path = DailyOpsReport.save(report)
+                log.info(f"Report saved to: {report_path}")
+            return
 
     preview_manager.strategy.top_k = args.top_k
     signal_basket = preview_manager.generate_signal_basket(
@@ -290,6 +332,7 @@ def main():
             model_info=model_info,
             shadow_plan_summary=shadow_summary,
             real_plan_summary=real_summary,
+            signal_quality_summary=signal_quality_summary,
             duration_seconds=duration,
             blockers=blockers,
             notes=[
@@ -303,6 +346,7 @@ def main():
         report.artifacts["real_plan"] = f"data/plan_{signal_date}_{real_account_name}.csv"
         if signal_basket_path:
             report.artifacts["signal_basket"] = signal_basket_path
+        report.artifacts.update(signal_quality_artifacts)
         
         report_path = DailyOpsReport.save(report)
         log.info(f"Report saved to: {report_path}")
