@@ -16,6 +16,7 @@ from qsys.data.health import inspect_qlib_data_health
 from qsys.live.account import RealAccount
 from qsys.live.manager import LiveManager
 from qsys.live.reconciliation import sync_real_account_from_csv
+from qsys.live.signal_monitoring import save_signal_basket
 from qsys.live.scheduler import ModelScheduler
 from qsys.live.simulation import ShadowSimulator
 from qsys.reports.base import ReportStatus
@@ -138,6 +139,7 @@ def main():
     data_status = {}
     model_info = {}
     health_ok = False
+    signal_basket_path = None
     
     if not args.skip_update:
         update_data()
@@ -216,6 +218,15 @@ def main():
         return
     log.info("\n" + health.to_markdown())
 
+    preview_manager.strategy.top_k = args.top_k
+    signal_basket = preview_manager.generate_signal_basket(
+        signal_date,
+        execution_date=execution_date,
+        universe="csi300",
+    )
+    signal_basket_path = save_signal_basket(signal_basket, output_dir="data", signal_date=signal_date)
+    log.info(f"Signal basket saved to {signal_basket_path}")
+
     shadow_account_name = "shadow"
     shadow_sim = ShadowSimulator(account_name=shadow_account_name, initial_cash=args.shadow_cash)
 
@@ -290,6 +301,8 @@ def main():
         )
         report.artifacts["shadow_plan"] = f"data/plan_{signal_date}_{shadow_account_name}.csv"
         report.artifacts["real_plan"] = f"data/plan_{signal_date}_{real_account_name}.csv"
+        if signal_basket_path:
+            report.artifacts["signal_basket"] = signal_basket_path
         
         report_path = DailyOpsReport.save(report)
         log.info(f"Report saved to: {report_path}")

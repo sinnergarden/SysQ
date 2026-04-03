@@ -19,3 +19,4 @@
 ## 当前文件
 
 - [new_feature.md](file:///Users/liuming/Documents/trae_projects/SysQ/docs/features/new_feature.md)
+- `daily_signal_monitoring.md`：daily ops 推荐篮子质量监控需求，覆盖 1d/2d/3d vintage 跟踪与盘后信号质量摘要。

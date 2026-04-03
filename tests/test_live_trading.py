@@ -9,6 +9,7 @@ import shutil
 import tempfile
 
 from qsys.live.account import RealAccount
+from qsys.live.manager import LiveManager
 from qsys.live.simulation import ShadowSimulator
 from qsys.live.scheduler import ModelScheduler
 from qsys.live.reconciliation import (
@@ -257,6 +258,23 @@ class TestLiveTrading(unittest.TestCase):
         self.assertEqual(plan.iloc[0]["score_rank"], 1)
         self.assertAlmostEqual(plan.iloc[0]["score"], 0.321)
         self.assertEqual(plan.iloc[0]["target_value"], 10000.0)
+
+    def test_live_manager_normalizes_multiindex_scores_by_instrument(self):
+        scores = pd.Series(
+            [0.15, 0.85, -0.10],
+            index=pd.MultiIndex.from_tuples(
+                [
+                    (pd.Timestamp("2026-04-02"), "000001.SZ"),
+                    (pd.Timestamp("2026-04-02"), "000002.SZ"),
+                    (pd.Timestamp("2026-04-02"), "000003.SZ"),
+                ],
+                names=["datetime", "instrument"],
+            ),
+        )
+
+        normalized = LiveManager._normalize_score_series(scores)
+        self.assertEqual(list(normalized.index[:3]), ["000002.SZ", "000001.SZ", "000003.SZ"])
+        self.assertAlmostEqual(float(normalized.iloc[0]), 0.85)
 
     def test_scheduler_find_latest(self):
         """Test finding latest model"""

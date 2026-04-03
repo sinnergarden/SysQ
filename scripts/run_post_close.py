@@ -17,6 +17,7 @@ from qsys.live.reconciliation import (
     sync_real_account_from_csv,
     write_reconciliation_outputs,
 )
+from qsys.live.signal_monitoring import collect_signal_quality_snapshot, write_signal_quality_outputs
 from qsys.reports.daily import DailyOpsReport
 from qsys.utils.logger import log
 
@@ -119,6 +120,19 @@ def main():
     position_gaps = len(result.positions) if not result.positions.empty else 0
     if not result.positions.empty:
         position_gaps = len(result.positions[result.positions["amount_diff"] != 0])
+
+    signal_quality_snapshot = None
+    signal_quality_summary = {}
+    try:
+        signal_quality_snapshot = collect_signal_quality_snapshot(as_of_date=args.date, signal_dir="data")
+        signal_quality_summary = signal_quality_snapshot.summary
+    except Exception as e:
+        log.warning(f"Could not build signal quality snapshot: {e}")
+        signal_quality_summary = {
+            "as_of_date": args.date,
+            "status": "failed",
+            "reason": str(e),
+        }
     
     # Generate structured report
     duration = time.time() - start_time
@@ -130,12 +144,21 @@ def main():
             data_status=data_status,
             model_info=model_info,
             reconciliation_summary=reconciliation_summary,
+            signal_quality_summary=signal_quality_summary,
             real_trades_count=len(result.real_trades) if not result.real_trades.empty else 0,
             position_gaps_count=position_gaps,
             duration_seconds=duration,
             blockers=blockers,
         )
         report.artifacts.update(written)
+        if signal_quality_snapshot is not None:
+            report.artifacts.update(
+                write_signal_quality_outputs(
+                    signal_quality_snapshot,
+                    output_dir=args.output_dir,
+                    as_of_date=args.date,
+                )
+            )
         
         report_path = DailyOpsReport.save(report)
         log.info(f"Report saved to: {report_path}")
