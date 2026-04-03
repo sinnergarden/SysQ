@@ -18,6 +18,7 @@ from qsys.live.reconciliation import (
     write_reconciliation_outputs,
 )
 from qsys.live.signal_monitoring import collect_signal_quality_snapshot, write_signal_quality_outputs
+from qsys.live.signal_monitoring import build_signal_quality_blockers
 from qsys.reports.daily import DailyOpsReport
 from qsys.utils.logger import log
 
@@ -126,6 +127,7 @@ def main():
     try:
         signal_quality_snapshot = collect_signal_quality_snapshot(as_of_date=args.date, signal_dir="data")
         signal_quality_summary = signal_quality_snapshot.summary
+        blockers.extend(build_signal_quality_blockers(signal_quality_summary, required_horizons=(1, 2, 3)))
     except Exception as e:
         log.warning(f"Could not build signal quality snapshot: {e}")
         signal_quality_summary = {
@@ -133,6 +135,7 @@ def main():
             "status": "failed",
             "reason": str(e),
         }
+        blockers.append(f"Signal quality evaluation failed: {e}")
     
     # Generate structured report
     duration = time.time() - start_time

@@ -34,6 +34,16 @@ class SignalQualitySnapshot:
     observations: pd.DataFrame
 
 
+def _classify_missing_price_reason(*, missing_start_count: int, missing_end_count: int) -> str:
+    if missing_start_count and missing_end_count:
+        return "missing_start_and_end_price"
+    if missing_end_count:
+        return "missing_end_price"
+    if missing_start_count:
+        return "missing_start_price"
+    return "ok"
+
+
 def save_signal_basket(basket_df: pd.DataFrame, *, output_dir: str | Path, signal_date: str) -> str:
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -107,6 +117,93 @@ def _normalize_weights(weights: pd.Series) -> pd.Series:
     return weights / total
 
 
+def inspect_signal_basket_price_readiness(
+    basket_df: pd.DataFrame,
+    *,
+    as_of_date: str,
+    price_loader: Callable[[list[str], str, str], pd.DataFrame] | None = None,
+) -> dict:
+    price_loader = price_loader or _default_price_loader
+
+    if basket_df is None or basket_df.empty:
+        return {
+            "signal_date": None,
+            "execution_date": None,
+            "as_of_date": as_of_date,
+            "status": "missing_plan",
+            "reason": "empty_signal_basket",
+            "basket_size": 0,
+            "ready_count": 0,
+            "ready_ratio": 0.0,
+            "missing_start_count": 0,
+            "missing_end_count": 0,
+            "missing_start_symbols": [],
+            "missing_end_symbols": [],
+        }
+
+    normalized = basket_df.copy()
+    normalized["symbol"] = normalized["symbol"].astype(str)
+    signal_date = str(normalized["signal_date"].iloc[0])
+    execution_date = str(normalized.get("execution_date", pd.Series([signal_date])).iloc[0])
+    price_basis_date = str(normalized.get("price_basis_date", pd.Series([signal_date])).iloc[0])
+    symbols = normalized["symbol"].tolist()
+
+    prices = price_loader(symbols, price_basis_date, as_of_date)
+    if prices is None or prices.empty:
+        missing_reason = _classify_missing_price_reason(
+            missing_start_count=len(symbols),
+            missing_end_count=len(symbols),
+        )
+        return {
+            "signal_date": signal_date,
+            "execution_date": execution_date,
+            "as_of_date": as_of_date,
+            "status": "failed",
+            "reason": missing_reason,
+            "basket_size": int(len(symbols)),
+            "ready_count": 0,
+            "ready_ratio": 0.0,
+            "missing_start_count": int(len(symbols)),
+            "missing_end_count": int(len(symbols)),
+            "missing_start_symbols": symbols,
+            "missing_end_symbols": symbols,
+        }
+
+    start_prices = prices[prices["date"] == price_basis_date].set_index("symbol")["close"]
+    end_prices = prices[prices["date"] == as_of_date].set_index("symbol")["close"]
+    frame = normalized.set_index("symbol")
+    frame["start_price"] = start_prices
+    frame["end_price"] = end_prices
+
+    missing_start_symbols = [str(sym) for sym in frame.index[frame["start_price"].isna()].tolist()]
+    missing_end_symbols = [str(sym) for sym in frame.index[frame["end_price"].isna()].tolist()]
+    ready_count = int((frame["start_price"].notna() & frame["end_price"].notna()).sum())
+    basket_size = int(len(frame))
+    ready_ratio = float(ready_count / basket_size) if basket_size else 0.0
+    status = "success" if ready_count == basket_size else ("failed" if ready_count == 0 else "partial")
+    reason = _classify_missing_price_reason(
+        missing_start_count=len(missing_start_symbols),
+        missing_end_count=len(missing_end_symbols),
+    )
+    if status == "success":
+        reason = "ok"
+
+    return {
+        "signal_date": signal_date,
+        "execution_date": execution_date,
+        "as_of_date": as_of_date,
+        "status": status,
+        "reason": reason,
+        "basket_size": basket_size,
+        "ready_count": ready_count,
+        "ready_ratio": ready_ratio,
+        "missing_start_count": int(len(missing_start_symbols)),
+        "missing_end_count": int(len(missing_end_symbols)),
+        "missing_start_symbols": missing_start_symbols,
+        "missing_end_symbols": missing_end_symbols,
+    }
+
+
 def evaluate_signal_basket(
     basket_df: pd.DataFrame,
     *,
@@ -151,6 +248,11 @@ def evaluate_signal_basket(
             "universe": universe,
         }
 
+    readiness = inspect_signal_basket_price_readiness(
+        normalized,
+        as_of_date=as_of_date,
+        price_loader=price_loader,
+    )
     symbols = normalized["symbol"].astype(str).tolist()
     prices = price_loader(symbols, price_basis_date, as_of_date)
     start_prices = prices[prices["date"] == price_basis_date].set_index("symbol")["close"] if not prices.empty else pd.Series(dtype=float)
@@ -170,10 +272,16 @@ def evaluate_signal_basket(
             "as_of_date": as_of_date,
             "holding_days": holding_days,
             "status": "failed",
-            "reason": "missing_price",
+            "reason": readiness["reason"],
             "basket_size": int(len(normalized)),
             "coverage_count": 0,
             "coverage_ratio": 0.0,
+            "ready_count": readiness["ready_count"],
+            "ready_ratio": readiness["ready_ratio"],
+            "missing_start_count": readiness["missing_start_count"],
+            "missing_end_count": readiness["missing_end_count"],
+            "missing_start_symbols": readiness["missing_start_symbols"],
+            "missing_end_symbols": readiness["missing_end_symbols"],
             "model_name": model_name,
             "model_path": model_path,
             "universe": universe,
@@ -198,7 +306,7 @@ def evaluate_signal_basket(
     basket_size = int(len(normalized))
     coverage_ratio = float(coverage_count / basket_size) if basket_size else 0.0
     status = "success" if coverage_count == basket_size else "partial"
-    reason = "ok" if status == "success" else "incomplete_price"
+    reason = "ok" if status == "success" else readiness["reason"]
 
     return {
         "signal_date": signal_date,
@@ -210,6 +318,12 @@ def evaluate_signal_basket(
         "basket_size": basket_size,
         "coverage_count": coverage_count,
         "coverage_ratio": coverage_ratio,
+        "ready_count": readiness["ready_count"],
+        "ready_ratio": readiness["ready_ratio"],
+        "missing_start_count": readiness["missing_start_count"],
+        "missing_end_count": readiness["missing_end_count"],
+        "missing_start_symbols": readiness["missing_start_symbols"],
+        "missing_end_symbols": readiness["missing_end_symbols"],
         "equal_weight_return": equal_weight_return,
         "weighted_return": weighted_return,
         "benchmark_return": benchmark_return,
@@ -284,13 +398,36 @@ def collect_signal_quality_snapshot(
         "recent_vintage_avg_excess_return": float(excess_series.dropna().mean()) if not excess_series.empty and excess_series.notna().any() else None,
     }
 
+    data_quality_status = "success"
+    if any(item.get("status") == "failed" for item in horizon_summary.values() if isinstance(item, dict)):
+        data_quality_status = "failed"
+    elif any(item.get("status") == "partial" for item in horizon_summary.values() if isinstance(item, dict)):
+        data_quality_status = "partial"
+
     summary = {
         "as_of_date": as_of_date,
         "status": "success",
+        "data_quality_status": data_quality_status,
         **horizon_summary,
         **recent_summary,
     }
     return SignalQualitySnapshot(summary=summary, observations=detailed)
+
+
+def build_signal_quality_blockers(summary: dict, *, required_horizons: tuple[int, ...] = (1, 2, 3)) -> list[str]:
+    blockers: list[str] = []
+    if not summary:
+        return ["Signal quality summary missing"]
+
+    for horizon in required_horizons:
+        key = f"horizon_{horizon}d"
+        horizon_summary = summary.get(key) or {}
+        status = horizon_summary.get("status")
+        if status in {"failed", "partial"}:
+            blockers.append(
+                f"Signal basket {key} data quality {status}: reason={horizon_summary.get('reason')} signal_date={horizon_summary.get('signal_date')}"
+            )
+    return blockers
 
 
 def write_signal_quality_outputs(

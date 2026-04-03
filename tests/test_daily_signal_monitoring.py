@@ -7,8 +7,10 @@ from unittest.mock import patch
 import pandas as pd
 
 from qsys.live.signal_monitoring import (
+    build_signal_quality_blockers,
     collect_signal_quality_snapshot,
     evaluate_signal_basket,
+    inspect_signal_basket_price_readiness,
     save_signal_basket,
     write_signal_quality_outputs,
 )
@@ -161,6 +163,55 @@ class TestDailySignalMonitoring(unittest.TestCase):
         self.assertEqual(snapshot.summary["recent_vintage_count"], 3)
         self.assertAlmostEqual(snapshot.summary["recent_vintage_win_rate"], 2 / 3)
         self.assertAlmostEqual(snapshot.summary["recent_vintage_avg_weighted_return"], 0.0066666667, places=6)
+
+    def test_price_readiness_classifies_missing_end_price(self):
+        basket = pd.DataFrame(
+            [
+                {
+                    "symbol": "AAA",
+                    "signal_date": "2025-01-02",
+                    "execution_date": "2025-01-03",
+                    "price_basis_date": "2025-01-02",
+                },
+                {
+                    "symbol": "BBB",
+                    "signal_date": "2025-01-02",
+                    "execution_date": "2025-01-03",
+                    "price_basis_date": "2025-01-02",
+                },
+            ]
+        )
+
+        def price_loader(symbols, start_date, end_date):
+            return pd.DataFrame(
+                [
+                    {"date": "2025-01-02", "symbol": "AAA", "close": 10.0},
+                    {"date": "2025-01-03", "symbol": "AAA", "close": 10.5},
+                    {"date": "2025-01-02", "symbol": "BBB", "close": 20.0},
+                ]
+            )
+
+        readiness = inspect_signal_basket_price_readiness(
+            basket,
+            as_of_date="2025-01-03",
+            price_loader=price_loader,
+        )
+
+        self.assertEqual(readiness["status"], "partial")
+        self.assertEqual(readiness["reason"], "missing_end_price")
+        self.assertEqual(readiness["ready_count"], 1)
+        self.assertEqual(readiness["missing_end_symbols"], ["BBB"])
+
+    def test_build_signal_quality_blockers_only_flags_failed_or_partial_horizons(self):
+        summary = {
+            "horizon_1d": {"status": "success", "reason": "ok", "signal_date": "2025-01-03"},
+            "horizon_2d": {"status": "failed", "reason": "missing_end_price", "signal_date": "2025-01-02"},
+            "horizon_3d": {"status": "partial", "reason": "missing_start_price", "signal_date": "2025-01-01"},
+        }
+        blockers = build_signal_quality_blockers(summary, required_horizons=(1, 2, 3))
+        self.assertEqual(len(blockers), 2)
+        self.assertIn("horizon_2d", blockers[0])
+        self.assertIn("horizon_3d", blockers[1])
 
     def test_write_signal_quality_outputs_persists_summary_and_details(self):
         snapshot = type("Snapshot", (), {
