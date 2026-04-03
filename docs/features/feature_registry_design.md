@@ -107,6 +107,7 @@ feature id 解决的是“身份”，feature set 解决的是“正式组合引
 
 ### 6.1 面向当前 tabular 的集合
 
+- `semantic_all_features_v1`
 - `price_volume_expression_core_v1`
 - `price_volume_fundamental_core_v1`
 - `price_volume_fundamental_event_core_v1`

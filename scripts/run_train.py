@@ -28,14 +28,83 @@ project_root = Path(__file__).resolve().parent.parent
 sys.path.append(str(project_root))
 
 import click
+import lightgbm as lgb
 import pandas as pd
 
 from qsys.config import cfg
 from qsys.data.adapter import QlibAdapter
 from qsys.data.health import assert_qlib_data_ready
 from qsys.feature.registry import resolve_feature_selection
+from qsys.feature.runtime import build_feature_panel
+from qsys.model.zoo.qlib_native import build_identity_sanitize_contract
 from qsys.reports.train import TrainingReport
 from qsys.utils.logger import log
+
+
+def _fit_semantic_all_features_model(
+    *,
+    model_name: str,
+    model_config: dict,
+    feature_set_name: str,
+    universe: str,
+    start: str,
+    end: str,
+) -> tuple[object, list[str], dict, dict]:
+    panel, selection_info = build_feature_panel(
+        feature_set=feature_set_name,
+        universe=universe,
+        start_date=start,
+        end_date=end,
+        include_close=True,
+    )
+    if panel.empty:
+        raise ValueError(f'No feature panel built for feature_set={feature_set_name}')
+
+    panel = panel.sort_values(['ts_code', 'trade_date']).reset_index(drop=True)
+    panel['label'] = panel.groupby('ts_code', sort=False)['close'].shift(-5) / panel.groupby('ts_code', sort=False)['close'].shift(-1) - 1
+
+    feature_columns = [c for c in panel.columns if c not in {'trade_date', 'ts_code', 'close', 'label'}]
+    train_mask = panel['label'].notna()
+    X_train_raw = panel.loc[train_mask, feature_columns]
+    y_train = panel.loc[train_mask, 'label']
+    safe_X_train, sanitize_contract = build_identity_sanitize_contract(X_train_raw, fill_value=0.0)
+    feature_name_map = dict(sanitize_contract['feature_name_map'])
+    constant_cols = list(sanitize_contract['dropped_columns'])
+    if safe_X_train.empty or safe_X_train.shape[1] == 0:
+        raise ValueError(f'All features were dropped during sanitization for feature_set={feature_set_name}')
+
+    model = lgb.LGBMRegressor(
+        objective='regression',
+        learning_rate=float(model_config['kwargs'].get('learning_rate', 0.05)),
+        num_leaves=int(model_config['kwargs'].get('num_leaves', 64)),
+        max_depth=int(model_config['kwargs'].get('max_depth', 8)),
+        colsample_bytree=float(model_config['kwargs'].get('colsample_bytree', 0.8)),
+        subsample=float(model_config['kwargs'].get('subsample', 0.8)),
+        reg_alpha=float(model_config['kwargs'].get('lambda_l1', 0.0)),
+        reg_lambda=float(model_config['kwargs'].get('lambda_l2', 0.0)),
+        n_estimators=1000,
+        n_jobs=int(model_config['kwargs'].get('num_threads', 8)),
+    )
+    model.fit(safe_X_train, y_train)
+
+    train_pred = pd.Series(model.predict(safe_X_train), index=y_train.index)
+    aligned = pd.DataFrame({'score': train_pred.values, 'label': y_train.values}, index=y_train.index).dropna()
+    rank_ic = float(aligned['score'].corr(aligned['label'], method='spearman')) if not aligned.empty else float('nan')
+    mse = float(((aligned['score'] - aligned['label']) ** 2).mean()) if not aligned.empty else float('nan')
+    training_summary = {
+        'train_start': start,
+        'train_end': end,
+        'sample_count': int(len(aligned)),
+        'feature_count': int(len(feature_columns)),
+        'feature_count_used': int(safe_X_train.shape[1]),
+        'feature_count_constant_dropped': int(len(constant_cols)),
+        'label_name': '(Ref($close, -5) / Ref($close, -1) - 1)',
+        'mse': mse,
+        'rank_ic': rank_ic,
+        'score_mean': float(aligned['score'].mean()) if not aligned.empty else float('nan'),
+        'label_mean': float(aligned['label'].mean()) if not aligned.empty else float('nan'),
+    }
+    return model, list(feature_name_map.keys()), training_summary, sanitize_contract
 
 
 @click.command()
@@ -46,7 +115,7 @@ from qsys.utils.logger import log
 @click.option('--run_backtest', is_flag=True, help='Run minimal backtest after training')
 @click.option('--backtest_start', default=None, help='Backtest start date; defaults to last 40 trading days window start')
 @click.option('--backtest_end', default=None, help='Backtest end date; defaults to training end date')
-@click.option('--feature_set', default='price_volume_fundamental_core_v1', show_default=True, help='Feature set name or legacy alias. Recommended: price_volume_expression_core_v1 | price_volume_fundamental_core_v1 | price_volume_fundamental_event_core_v1')
+@click.option('--feature_set', default='price_volume_fundamental_core_v1', show_default=True, help='Feature set name or legacy alias. Recommended: semantic_all_features_v1 | price_volume_expression_core_v1 | price_volume_fundamental_core_v1 | price_volume_fundamental_event_core_v1')
 @click.option('--no_report', is_flag=True, help='Skip generating the structured report')
 def main(model, universe, start, end, run_backtest, backtest_start, backtest_end, feature_set, no_report):
     start_time = time.time()
@@ -86,8 +155,11 @@ def main(model, universe, start, end, run_backtest, backtest_start, backtest_end
     resolved_feature_set = FeatureLibrary.normalize_feature_set_name(feature_set)
     selection = resolve_feature_selection(feature_set=resolved_feature_set)
     feature_config = FeatureLibrary.get_feature_fields_by_set(resolved_feature_set)
+    uses_derived_features = bool(selection.derived_columns)
 
-    if resolved_feature_set == 'price_volume_expression_core_v1':
+    if resolved_feature_set == 'semantic_all_features_v1':
+        model_name = f"{model}_semantic_all_features"
+    elif resolved_feature_set == 'price_volume_expression_core_v1':
         model_name = model
     elif resolved_feature_set == 'price_volume_fundamental_event_core_v1':
         model_name = f"{model}_margin_extended"
@@ -112,7 +184,7 @@ def main(model, universe, start, end, run_backtest, backtest_start, backtest_end
         "native_qlib_fields": list(selection.native_qlib_fields),
     }
 
-    health = assert_qlib_data_ready(end, model_instance.feature_config, universe=universe)
+    health = assert_qlib_data_ready(end, selection.native_qlib_fields, universe=universe)
     log.info("\n" + health.to_markdown())
 
     # Data status for report
@@ -141,7 +213,38 @@ def main(model, universe, start, end, run_backtest, backtest_start, backtest_end
     }
 
     try:
-        model_instance.fit(codes, start, end)
+        training_summary = {}
+        sanitize_contract = {}
+        constant_cols: list[str] = []
+        if uses_derived_features:
+            trained_model, semantic_feature_columns, training_summary, sanitize_contract = _fit_semantic_all_features_model(
+                model_name=model_name,
+                model_config=qlib_config,
+                feature_set_name=resolved_feature_set,
+                universe=universe,
+                start=start,
+                end=end,
+            )
+            model_instance.model = trained_model
+            model_instance.feature_config = semantic_feature_columns
+            model_instance.training_summary = training_summary
+            constant_cols = list(sanitize_contract.get('dropped_columns', []))
+            model_instance.preprocess_params = {
+                'method': 'identity',
+                'fillna': float(sanitize_contract.get('fillna', 0.0)),
+            }
+            model_instance.params = {
+                **model_instance.params,
+                'derived_feature_columns': list(selection.derived_columns),
+                'uses_derived_features': True,
+                'feature_name_map': dict(sanitize_contract.get('feature_name_map', {})),
+                'constant_feature_columns': constant_cols,
+                'sanitized_feature_columns': list(sanitize_contract.get('sanitized_feature_columns', [])),
+                'sanitize_feature_contract': sanitize_contract,
+            }
+        else:
+            model_instance.fit(codes, start, end)
+            training_summary = model_instance.training_summary or {}
 
         root_path = cfg.get_path("root")
         if root_path is None:
@@ -158,13 +261,14 @@ def main(model, universe, start, end, run_backtest, backtest_start, backtest_end
                     "feature_ids": selection.feature_ids,
                     "native_qlib_fields": selection.native_qlib_fields,
                     "feature_names": selection.feature_names,
+                    "derived_columns": selection.derived_columns,
                 },
                 handle,
                 sort_keys=False,
                 allow_unicode=True,
             )
 
-        training_summary = model_instance.training_summary or {}
+        training_summary = model_instance.training_summary or training_summary or {}
         if training_summary:
             summary_path = save_path / "training_summary.csv"
             pd.DataFrame([training_summary]).to_csv(summary_path, index=False)
@@ -174,8 +278,13 @@ def main(model, universe, start, end, run_backtest, backtest_start, backtest_end
                 f"rank_ic={training_summary.get('rank_ic')} samples={training_summary.get('sample_count')}"
             )
             model_info["sample_count"] = training_summary.get("sample_count")
+            if uses_derived_features:
+                model_info["derived_feature_count"] = len(selection.derived_columns)
+                model_info["feature_count_constant_dropped"] = len(constant_cols)
 
         notes.append(f"Feature count: {len(feature_config)}")
+        if uses_derived_features:
+            notes.append(f"Derived feature count: {len(selection.derived_columns)}")
         
         backtest_info = None
         if run_backtest:
