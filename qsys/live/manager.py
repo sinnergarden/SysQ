@@ -42,17 +42,88 @@ class LiveManager:
             else:
                 scores = scores.iloc[:, 0]
         if isinstance(scores.index, pd.MultiIndex):
-            if scores.index.nlevels >= 2:
-                scores.index = scores.index.get_level_values(0)
+            if "instrument" in scores.index.names:
+                scores.index = scores.index.get_level_values("instrument")
+            elif scores.index.nlevels >= 2:
+                scores.index = scores.index.get_level_values(-1)
         return pd.Series(scores).groupby(level=0).last().sort_values(ascending=False)
 
     @staticmethod
     def _normalize_price_lookup(prices_df: pd.DataFrame) -> dict:
         normalized = prices_df.copy()
         if isinstance(normalized.index, pd.MultiIndex):
-            normalized.index = normalized.index.get_level_values(0)
+            if "instrument" in normalized.index.names:
+                normalized.index = normalized.index.get_level_values("instrument")
+            elif normalized.index.nlevels >= 2:
+                normalized.index = normalized.index.get_level_values(0)
         normalized = normalized.groupby(level=0).last()
         return normalized["close"].to_dict()
+
+    def generate_signal_basket(self, date, market_data=None, execution_date=None, universe="csi300") -> pd.DataFrame:
+        self.load_model()
+        if self.model is None:
+            return pd.DataFrame()
+
+        signal_date = pd.Timestamp(date).strftime("%Y-%m-%d")
+        execution_date = pd.Timestamp(execution_date or date).strftime("%Y-%m-%d")
+
+        instruments = D.instruments(universe)
+        features = market_data
+        if features is None:
+            features = QlibAdapter().get_features(
+                instruments,
+                self.model.model.feature_config,
+                start_time=signal_date,
+                end_time=signal_date,
+            )
+        if features is None or features.empty:
+            return pd.DataFrame()
+
+        raw_scores = self.model.predict(features)
+        scores = self._normalize_score_series(raw_scores)
+        ranked_scores = scores.reset_index()
+        ranked_scores.columns = ["symbol", "score"]
+        ranked_scores["score_rank"] = ranked_scores["score"].rank(ascending=False, method="first").astype(int)
+
+        prices_df = QlibAdapter().get_features(
+            instruments,
+            ["$close", "$factor"],
+            start_time=signal_date,
+            end_time=signal_date,
+        )
+        prices_df = prices_df.rename(columns={"$close": "close", "$factor": "factor"})
+        current_prices = self._normalize_price_lookup(prices_df)
+        target_weights = self.strategy.generate_target_weights(scores, market_status=None)
+
+        score_lookup = ranked_scores.set_index("symbol")["score"].to_dict()
+        rank_lookup = ranked_scores.set_index("symbol")["score_rank"].to_dict()
+        rows = []
+        for symbol, weight in target_weights.items():
+            price = float(current_prices.get(symbol, 0.0) or 0.0)
+            if price <= 0:
+                continue
+            rows.append(
+                {
+                    "symbol": str(symbol),
+                    "score": float(score_lookup.get(symbol)) if score_lookup.get(symbol) is not None else None,
+                    "score_rank": rank_lookup.get(symbol),
+                    "weight": float(weight),
+                    "price": price,
+                    "signal_date": signal_date,
+                    "execution_date": execution_date,
+                    "price_basis_date": signal_date,
+                    "price_basis_field": "close",
+                    "price_basis_label": f"close@{signal_date} -> next-session signal basket",
+                    "model_name": self.model.model.name,
+                    "model_path": str(self.model_path),
+                    "universe": universe,
+                }
+            )
+
+        basket_df = pd.DataFrame(rows)
+        if basket_df.empty:
+            return basket_df
+        return basket_df.sort_values(["score_rank", "weight"], ascending=[True, False]).reset_index(drop=True)
 
     def run_daily_plan(self, date, market_data=None, account_name="real", execution_date=None):
         self.load_model()
@@ -79,38 +150,19 @@ class LiveManager:
         log.info(f"Total Assets: {state['total_assets']:,.2f}, Cash: {state['cash']:,.2f}")
 
         try:
-            instruments = D.instruments("csi300")
-            if market_data is None:
-                features = QlibAdapter().get_features(
-                    instruments,
-                    self.model.model.feature_config,
-                    start_time=signal_date,
-                    end_time=signal_date,
-                )
-            else:
-                features = market_data
+            basket_df = self.generate_signal_basket(
+                signal_date,
+                market_data=market_data,
+                execution_date=execution_date,
+                universe="csi300",
+            )
 
-            if features is None or features.empty:
+            if basket_df is None or basket_df.empty:
                 log.error(f"No features found for signal_date={signal_date}!")
                 return None
 
-            raw_scores = self.model.predict(features)
-            scores = self._normalize_score_series(raw_scores)
-            ranked_scores = scores.reset_index()
-            ranked_scores.columns = ["symbol", "score"]
-            ranked_scores["score_rank"] = ranked_scores["score"].rank(ascending=False, method="first").astype(int)
-
-            price_fields = ["$close", "$factor"]
-            prices_df = QlibAdapter().get_features(
-                instruments,
-                price_fields,
-                start_time=signal_date,
-                end_time=signal_date,
-            )
-            prices_df = prices_df.rename(columns={"$close": "close", "$factor": "factor"})
-
-            current_prices = self._normalize_price_lookup(prices_df)
-            target_weights = self.strategy.generate_target_weights(scores, market_status=None)
+            current_prices = basket_df.set_index("symbol")["price"].to_dict()
+            target_weights = basket_df.set_index("symbol")["weight"].to_dict()
 
             current_positions = state["positions"]
             total_assets = state["total_assets"]
@@ -119,8 +171,8 @@ class LiveManager:
                 current_positions,
                 total_assets,
                 current_prices,
-                score_lookup=ranked_scores.set_index("symbol")["score"].to_dict(),
-                score_rank_lookup=ranked_scores.set_index("symbol")["score_rank"].to_dict(),
+                score_lookup=basket_df.set_index("symbol")["score"].to_dict(),
+                score_rank_lookup=basket_df.set_index("symbol")["score_rank"].to_dict(),
                 weight_method=self.strategy.method,
             )
 

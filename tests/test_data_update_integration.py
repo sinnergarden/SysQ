@@ -238,25 +238,56 @@ class TestDataUpdateIntegration(unittest.TestCase):
         self.assertNotIn("20230102", updated_df["trade_date"].tolist())
 
     def test_adapter_get_data_status_report(self):
-        """Test the new status report method returns raw vs qlib info"""
-        # Seed some raw data
         self._seed_existing("000001.SZ", "20230101", "20230105")
         self._seed_existing("000002.SZ", "20230101", "20230105")
-        
+
         from qsys.data.adapter import QlibAdapter
         adapter = QlibAdapter()
-        
-        # Test the report generation
-        # Note: without qlib initialized, we can still check raw data
+
         report = adapter.get_data_status_report()
-        
+
         self.assertIn('raw_latest', report)
         self.assertIn('qlib_latest', report)
         self.assertIn('target_signal_date', report)
         self.assertIn('aligned', report)
-        
-        # Raw should have data
         self.assertEqual(report['raw_latest'], "2023-01-05")
+
+    def test_merge_trade_frames_coalesces_overlapping_close_columns(self):
+        collector = TushareCollector()
+        left = pd.DataFrame(
+            {
+                "ts_code": ["600489.SH"],
+                "trade_date": ["20260403"],
+                "close": [np.nan],
+                "open": [26.75],
+            }
+        )
+        right = pd.DataFrame(
+            {
+                "ts_code": ["600489.SH"],
+                "trade_date": ["20260403"],
+                "close": [26.68],
+                "turnover_rate": [0.7621],
+            }
+        )
+
+        merged = collector._merge_trade_frames(left, right, keys=["ts_code", "trade_date"])
+        self.assertAlmostEqual(float(merged.iloc[0]["close"]), 26.68)
+        self.assertAlmostEqual(float(merged.iloc[0]["turnover_rate"]), 0.7621)
+
+    def test_adapter_coalesces_duplicate_columns_after_rename(self):
+        from qsys.data.adapter import QlibAdapter
+
+        df = pd.DataFrame(
+            [
+                ["20260403", 369409.33, 36940933.0, 26.68],
+            ],
+            columns=["date", "volume", "volume", "close"],
+        )
+
+        collapsed = QlibAdapter._coalesce_duplicate_columns(df)
+        self.assertEqual(collapsed.columns.tolist(), ["date", "volume", "close"])
+        self.assertAlmostEqual(float(collapsed.iloc[0]["volume"]), 369409.33)
 
     def test_update_batch_skips_margin_without_ts_code(self):
         class DummyBatchPro:
@@ -315,3 +346,7 @@ class TestDataUpdateIntegration(unittest.TestCase):
         self.assertIn("df", saved)
         self.assertIn("ts_code", saved["df"].columns)
         self.assertEqual(saved["codes"], ["000001.SZ"])
+
+
+if __name__ == "__main__":
+    unittest.main()

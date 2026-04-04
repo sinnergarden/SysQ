@@ -1,0 +1,17 @@
+{
+  "name": "qsys-core",
+  "version": "0.1.0",
+  "description": "Workflow assets for Qsys research and daily operations.",
+  "scope": "internal-draft",
+  "commands": [
+    "preopen-plan",
+    "feature-audit",
+    "rolling-eval"
+  ],
+  "skills": [
+    "trading-calendar-guard",
+    "feature-readiness-audit",
+    "train-split-discipline",
+    "shadow-execution-planner"
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "connectors": [
+    {
+      "name": "data_status",
+      "purpose": "Expose raw_latest, qlib_latest, alignment, and universe readiness."
+    },
+    {
+      "name": "feature_store",
+      "purpose": "Expose feature sets, coverage summaries, and derived artifacts."
+    },
+    {
+      "name": "model_registry",
+      "purpose": "Expose model metadata, feature_set, train window, and production manifest."
+    },
+    {
+      "name": "backtest_store",
+      "purpose": "Expose strict evaluation and rolling backtest outputs."
+    },
+    {
+      "name": "shadow_state",
+      "purpose": "Expose real/shadow account state, plans, and reconciliation results."
+    },
+    {
+      "name": "repo_state",
+      "purpose": "Expose repo version, changed files, and artifact paths for auditability."
+    }
+  ]
+}

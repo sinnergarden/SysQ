@@ -36,7 +36,14 @@ from qsys.data.adapter import QlibAdapter
 from qsys.data.health import DataReadinessError, assert_qlib_data_ready
 from qsys.live.account import RealAccount
 from qsys.live.manager import LiveManager
+from qsys.live.ops_manifest import update_manifest
 from qsys.live.reconciliation import sync_real_account_from_csv
+from qsys.live.signal_monitoring import (
+    build_signal_quality_blockers,
+    collect_signal_quality_snapshot,
+    save_signal_basket,
+    write_signal_quality_outputs,
+)
 from qsys.live.scheduler import ModelScheduler
 from qsys.live.simulation import ShadowSimulator
 from qsys.reports.daily import DailyOpsReport
@@ -197,6 +204,7 @@ def main():
     parser.add_argument("--retrain_days", type=int, default=7, help="Model max age in days before retraining")
     parser.add_argument("--top_k", type=int, default=30, help="Number of stocks to select in strategy")
     parser.add_argument("--min_trade", type=int, default=5000, help="Minimum trade amount in RMB")
+    parser.add_argument("--skip_signal_quality_gate", action="store_true", help="Bypass the pre-open signal-quality readiness gate")
     parser.add_argument("--no_report", action="store_true", help="Skip generating the structured report")
     args = parser.parse_args()
     args.db_path = _resolve_cli_path(args.db_path)
@@ -208,6 +216,9 @@ def main():
     data_status = {}
     model_info = {}
     health_ok = False
+    signal_basket_path = None
+    signal_quality_summary = {}
+    signal_quality_artifacts = {}
     signal_date, execution_date = resolve_signal_and_execution_date(args.date, args.execution_date)
 
     log_stage(
@@ -220,7 +231,6 @@ def main():
         skip_update=args.skip_update,
         report_dir=args.report_dir,
     )
-
     if not args.skip_update:
         update_ok, update_report = update_data()
         if args.require_update_success and not update_ok:
@@ -329,12 +339,84 @@ def main():
                 model_info=model_info,
                 shadow_plan_summary={"status": "skipped"},
                 real_plan_summary={"status": "skipped"},
+                signal_quality_summary=signal_quality_summary,
                 duration_seconds=time.time() - start_time,
                 blockers=blockers,
             )
+            report.artifacts["account_db"] = args.db_path
             report_path = DailyOpsReport.save(report, output_dir=args.report_dir)
+            manifest_path = update_manifest(
+                report_dir=args.report_dir,
+                execution_date=execution_date,
+                signal_date=signal_date,
+                stage="pre_open",
+                status=report.status.value,
+                report_path=report_path,
+                artifacts=report.artifacts,
+                data_status=data_status,
+                model_info=model_info,
+                blockers=blockers,
+            )
             log_stage("report", "saved", path=report_path)
+            log_stage("manifest", "saved", path=manifest_path)
         return
+
+    if not args.skip_signal_quality_gate:
+        signal_quality_snapshot = collect_signal_quality_snapshot(
+            as_of_date=signal_date,
+            signal_dir="data",
+            horizons=(1, 2, 3),
+            recent_window=5,
+        )
+        signal_quality_summary = signal_quality_snapshot.summary
+        signal_quality_artifacts = write_signal_quality_outputs(
+            signal_quality_snapshot,
+            output_dir="data/signal_quality",
+            as_of_date=signal_date,
+        )
+        blockers.extend(build_signal_quality_blockers(signal_quality_summary, required_horizons=(1, 2, 3)))
+        if blockers:
+            log.error("Signal quality gate failed; refusing to continue daily planning")
+            if not args.no_report:
+                report = DailyOpsReport.generate_pre_open_report(
+                    signal_date=signal_date,
+                    execution_date=execution_date,
+                    data_status=data_status,
+                    model_info=model_info,
+                    shadow_plan_summary={"status": "skipped"},
+                    real_plan_summary={"status": "skipped"},
+                    signal_quality_summary=signal_quality_summary,
+                    duration_seconds=time.time() - start_time,
+                    blockers=blockers,
+                )
+                report.artifacts.update(signal_quality_artifacts)
+                report.artifacts["account_db"] = args.db_path
+                report_path = DailyOpsReport.save(report, output_dir=args.report_dir)
+                manifest_path = update_manifest(
+                    report_dir=args.report_dir,
+                    execution_date=execution_date,
+                    signal_date=signal_date,
+                    stage="pre_open",
+                    status=report.status.value,
+                    report_path=report_path,
+                    artifacts=report.artifacts,
+                    data_status=data_status,
+                    model_info=model_info,
+                    blockers=blockers,
+                    summary={"signal_quality_gate": signal_quality_summary},
+                )
+                log_stage("report", "saved", path=report_path)
+                log_stage("manifest", "saved", path=manifest_path)
+            return
+
+    preview_manager.strategy.top_k = args.top_k
+    signal_basket = preview_manager.generate_signal_basket(
+        signal_date,
+        execution_date=execution_date,
+        universe="csi300",
+    )
+    signal_basket_path = save_signal_basket(signal_basket, output_dir="data", signal_date=signal_date)
+    log.info(f"Signal basket saved to {signal_basket_path}")
 
     shadow_account_name = "shadow"
     shadow_sim = ShadowSimulator(account_name=shadow_account_name, initial_cash=args.shadow_cash, db_path=args.db_path)
@@ -386,6 +468,7 @@ def main():
             model_info=model_info,
             shadow_plan_summary=shadow_summary,
             real_plan_summary=real_summary,
+            signal_quality_summary=signal_quality_summary,
             duration_seconds=duration,
             blockers=blockers,
             notes=[
@@ -400,9 +483,31 @@ def main():
         report.artifacts["shadow_real_sync_template"] = str(Path(args.output_dir) / f"real_sync_template_{signal_date}_{shadow_account_name}.csv")
         report.artifacts["real_real_sync_template"] = str(Path(args.output_dir) / f"real_sync_template_{signal_date}_{real_account_name}.csv")
         report.artifacts["account_db"] = args.db_path
+        if signal_basket_path:
+            report.artifacts["signal_basket"] = signal_basket_path
+        report.artifacts.update(signal_quality_artifacts)
 
         report_path = DailyOpsReport.save(report, output_dir=args.report_dir)
+        manifest_path = update_manifest(
+            report_dir=args.report_dir,
+            execution_date=execution_date,
+            signal_date=signal_date,
+            stage="pre_open",
+            status=report.status.value,
+            report_path=report_path,
+            artifacts=report.artifacts,
+            data_status=data_status,
+            model_info=model_info,
+            blockers=blockers,
+            notes=report.notes,
+            summary={
+                "shadow_plan": shadow_summary,
+                "real_plan": real_summary,
+                "signal_quality_gate": signal_quality_summary,
+            },
+        )
         log_stage("report", "saved", path=report_path)
+        log_stage("manifest", "saved", path=manifest_path)
 
     log_stage("daily_workflow", "done", duration_seconds=duration, blockers=len(blockers))
 

@@ -7,7 +7,9 @@
 - 能稳定做周一到周五运营的系统
 - 能持续做投研、评估、滚动回测的系统
 - 能把 research / candidate / production 分层管理的系统
+- 能把高频研究与运营流程沉淀成稳定入口，而不是每次靠临时 prompt 和散装文档驱动
 - 能在长任务里稳定给出低噪音、结构化、可复盘进度的系统
+- 能逐步收敛出低 agent 依赖、可严格 review 的生产脚本与执行桥接链路
 
 阶段完成判定：
 
@@ -16,7 +18,33 @@
 - 模型替换有明确晋级门槛与回滚边界
 - feature set 可追踪 coverage / readiness / 缺失退化情况
 - 重要流程优先产出结构化 report，而不是堆 stdout
+- 高频流程已有可复用的 workflow asset（skills / commands / output contract）
 - 文档、脚本、测试三者保持同步
+
+---
+
+## 现状总结（2026-04）
+
+当前 SysQ 已经不是“空架子”，而是已经具备最小闭环的量化投研/运营底座：
+
+- `raw -> qlib/bin -> train -> backtest -> latest cross-sectional predict` 最小链路已跑通
+- 日常交易主流程已存在，real / shadow 账户和 plan 产物已初步成形
+- 非重叠 strict eval 口径、`top_k=5`、周级重训等关键研究共识已基本固定
+- 文档、架构、runbook、feature docs 已开始成体系，项目已从“探索期”进入“收敛期”
+
+但当前的主要短板也比较明确：
+
+- 高频流程仍偏脚本驱动，入口多、口径容易漂移
+- 一部分重要规则仍散落在聊天结论、文档、脚本默认值和人工记忆里
+- 结构化 report 还不完整，很多流程仍更像“能跑通”而不是“可审计、可复用”
+- SysQ 已有不少文档，但其中很多是给人读的，不是给 agent/自动流程直接消费的“可执行规则层”
+- 生产运行形态与执行桥接尚未产品化：目标是 WSL 固定生产流程 + Windows MiniQMT 执行桥接，但当前还停留在 plan / sync / reconcile 阶段
+
+因此，当前 roadmap 的新增方向不是大改引擎，而是两条并行主线：
+
+- 保留现有 Python engine 与脚本入口，继续收束研究、评估、运营主链路
+- 补一层轻量的 workflow / plugin abstraction，把高频流程提炼成 `skills + commands + connectors + output contracts`
+- 同时明确生产运行形态：WSL 固定生产脚本 + Windows MiniQMT bridge
 
 ---
 
@@ -92,6 +120,33 @@
 - [ ] 统一 run report 中的 progress / stage / artifact schema
 - [ ] 为长任务失败场景补“卡在哪一阶段”的最小护栏测试
 
+### 5. workflow contract 与 skill 层
+
+目标：
+- 不再让规则长期停留在散装文档和聊天结论里
+- 把“给人看的说明”和“给 agent/流程消费的规则”明确分层
+
+当前项：
+- [ ] 盘点现有 `README / ARCHITECTURE / RUNBOOK / features/* / 研究记录` 中可提炼的高频规则
+- [ ] 首批沉淀 `trading-calendar-guard`、`feature-readiness-audit`、`train-split-discipline`、`shadow-execution-planner`
+- [ ] 为首批 skill 明确触发条件、workflow、输出契约、阻断条件
+- [ ] 建立 skill 与底层 Python 入口的映射表，避免规则层与执行层脱节
+- [ ] 定义 `md + json` 的统一输出契约，便于人读与 agent 续接
+
+### 6. daily ops 产品化与执行桥接准备
+
+目标：
+- 让盘前 / 盘后流程从“能跑”进化到“可运营”
+- 为后续 WSL 生产脚本与 Windows MiniQMT 执行桥接预留稳定输入输出
+
+当前项：
+- [x] 盘前 checklist 结构化
+- [x] 盘后 checklist 结构化
+- [x] 生成 daily plan 时附带模型版本 / 数据状态
+- [x] real/shadow reconciliation 结果结构化输出
+- [ ] 明确空 plan、账户异常、数据不齐时的处理策略
+- [ ] 定义 `order_intents` 产物契约，作为 WSL -> Windows bridge 的固定输入
+
 ---
 
 ## 下一阶段
@@ -119,6 +174,31 @@
 - [ ] 重训后自动跑 strict eval + rolling backtest
 - [ ] 候选模型自动与 baseline / production 对比
 - [ ] 晋级、上线、回滚留下最小审计轨迹
+
+### E. Qsys plugin / workflow layer 首发版本
+
+目标：
+- 在不改动核心 engine 的前提下，给 Qsys 增加一层稳定的研究操作接口
+
+待办：
+- [ ] 设计 `qsys_plugins/core` 的目录骨架与 manifest
+- [ ] 首发 `preopen-plan`、`feature-audit`、`rolling-eval` 三个 command
+- [ ] 为 command 补一层薄适配代码，统一调用现有 `scripts/` 或 `qsys/*` 模块
+- [ ] 验证 command 输出可同时服务：人工阅读、日报沉淀、agent 二次消费
+- [ ] 再决定是否兼容 Claude plugin / OpenClaw skill 等外部宿主格式
+
+### F. MiniQMT bridge / production script 主线
+
+目标：
+- 收敛出低 agent 依赖的生产 daily 脚本，并逐步打通 WSL 与 Windows MiniQMT 的执行桥接
+
+待办：
+- [ ] 明确 production daily 的固定运行时：Windows 主机上的 WSL
+- [ ] 固化 `preopen-plan` adapter，并输出 target / executable / blocker / assumptions
+- [ ] 设计 `order_intents` artifact 作为 WSL -> Windows bridge 输入
+- [ ] 设计 `qsys/broker/miniqmt.py` 抽象接口，先支持账户/持仓/委托/成交读取
+- [ ] 定义订单生命周期对象：pending / partial_fill / filled / canceled / rejected
+- [ ] 设计 Windows 回流到 WSL 的执行结果契约，替代长期依赖手工 CSV
 
 ---
 

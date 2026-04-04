@@ -44,6 +44,7 @@ class DailyOpsReport:
         model_info: dict,
         shadow_plan_summary: dict,
         real_plan_summary: dict,
+        signal_quality_summary: dict | None = None,
         duration_seconds: float = None,
         blockers: list = None,
         notes: list = None,
@@ -119,6 +120,16 @@ class DailyOpsReport:
             status=real_status,
             metrics=real_plan_summary,
         )
+
+        if signal_quality_summary:
+            signal_status = ReportStatus.SUCCESS
+            if signal_quality_summary.get("data_quality_status") in {"failed", "partial"}:
+                signal_status = ReportStatus.PARTIAL
+            report.add_section(
+                name="Signal Quality Gate",
+                status=signal_status,
+                metrics=signal_quality_summary,
+            )
         
         # Add anomaly detection notes
         if data_status.get("health_ok") is False:
@@ -141,6 +152,7 @@ class DailyOpsReport:
         data_status: dict,
         model_info: dict,
         reconciliation_summary: dict,
+        signal_quality_summary: dict | None = None,
         real_trades_count: int = 0,
         position_gaps_count: int = 0,
         duration_seconds: float = None,
@@ -168,6 +180,16 @@ class DailyOpsReport:
                 "position_gaps_count": position_gaps_count,
             },
         )
+
+        if signal_quality_summary:
+            signal_status = ReportStatus.SUCCESS
+            if signal_quality_summary.get("status") in {"failed", "missing_plan"}:
+                signal_status = ReportStatus.PARTIAL
+            report.add_section(
+                name="Signal Quality",
+                status=signal_status,
+                metrics=signal_quality_summary,
+            )
         
         for blocker in (blockers or []):
             report.add_blocker(blocker)

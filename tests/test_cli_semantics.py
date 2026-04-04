@@ -7,7 +7,6 @@ import scripts.run_daily_trading as run_daily_trading
 from scripts.run_daily_trading import (
     _resolve_cli_path,
     extract_plan_summary,
-    next_trading_day,
     previous_trading_day,
     resolve_signal_and_execution_date,
 )

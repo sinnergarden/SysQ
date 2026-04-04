@@ -199,6 +199,22 @@ class TushareCollector:
         rename = cfg_item.get("rename", {})
         return rename if isinstance(rename, dict) else {}
 
+    def _merge_trade_frames(self, left: pd.DataFrame, right: pd.DataFrame, *, keys: list[str]) -> pd.DataFrame:
+        if left is None or left.empty:
+            return right.copy() if right is not None else pd.DataFrame()
+        if right is None or right.empty:
+            return left
+
+        overlapping = [col for col in right.columns if col in left.columns and col not in keys]
+        merged = pd.merge(left, right, on=keys, how="left", suffixes=("", "__src"))
+        for col in overlapping:
+            src_col = f"{col}__src"
+            if src_col not in merged.columns:
+                continue
+            merged[col] = merged[col].combine_first(merged[src_col])
+            merged = merged.drop(columns=[src_col])
+        return merged
+
     def _fetch_by_date_range(self, interface_name, ts_codes, start_date, end_date):
         api = self._get_interface_api(interface_name)
         fields = self._get_interface_fields(interface_name)
@@ -815,13 +831,13 @@ class TushareCollector:
             if "amount" in df_daily.columns:
                 df_daily["amount"] = pd.to_numeric(df_daily["amount"], errors="coerce") * 1000
             if not df_basic.empty:
-                df_daily = pd.merge(df_daily, df_basic, on=["ts_code", "trade_date"], how="left")
+                df_daily = self._merge_trade_frames(df_daily, df_basic, keys=["ts_code", "trade_date"])
             
             if not df_adj.empty:
-                df_daily = pd.merge(df_daily, df_adj, on=["ts_code", "trade_date"], how="left")
+                df_daily = self._merge_trade_frames(df_daily, df_adj, keys=["ts_code", "trade_date"])
                 
             if not df_limit.empty:
-                df_daily = pd.merge(df_daily, df_limit, on=["ts_code", "trade_date"], how="left")
+                df_daily = self._merge_trade_frames(df_daily, df_limit, keys=["ts_code", "trade_date"])
             if df_moneyflow is not None and not df_moneyflow.empty:
                 df_moneyflow = df_moneyflow.copy()
                 df_moneyflow["buy_elg_amount"] = pd.to_numeric(df_moneyflow["buy_elg_amount"], errors="coerce")
@@ -832,7 +848,7 @@ class TushareCollector:
                 keep_cols = ["ts_code", "trade_date"] + self.moneyflow_fields + self._moneyflow_derived
                 keep_cols = [c for c in keep_cols if c in df_moneyflow.columns]
                 df_moneyflow = df_moneyflow[keep_cols]
-                df_daily = pd.merge(df_daily, df_moneyflow, on=["ts_code", "trade_date"], how="left")
+                df_daily = self._merge_trade_frames(df_daily, df_moneyflow, keys=["ts_code", "trade_date"])
 
             # Margin financing (两融) - fetch and merge
             margin_df = self._fetch_with_retry(
@@ -1291,11 +1307,11 @@ class TushareCollector:
                     df_daily["amount"] = pd.to_numeric(df_daily["amount"], errors="coerce") * 1000
 
                 if not df_basic.empty:
-                    df_daily = pd.merge(df_daily, df_basic, on=['ts_code', 'trade_date'], how='left')
+                    df_daily = self._merge_trade_frames(df_daily, df_basic, keys=['ts_code', 'trade_date'])
                 if not df_adj.empty:
-                    df_daily = pd.merge(df_daily, df_adj, on=['ts_code', 'trade_date'], how='left')
+                    df_daily = self._merge_trade_frames(df_daily, df_adj, keys=['ts_code', 'trade_date'])
                 if not df_limit.empty:
-                    df_daily = pd.merge(df_daily, df_limit, on=['ts_code', 'trade_date'], how='left')
+                    df_daily = self._merge_trade_frames(df_daily, df_limit, keys=['ts_code', 'trade_date'])
                 
                 if include_moneyflow and not df_moneyflow.empty:
                     cols_to_numeric = ["buy_elg_amount", "sell_elg_amount", "net_mf_amount"]
@@ -1308,7 +1324,7 @@ class TushareCollector:
                     
                     keep_cols = ["ts_code", "trade_date"] + self.moneyflow_fields + self._moneyflow_derived
                     keep_cols = [c for c in keep_cols if c in df_moneyflow.columns]
-                    df_daily = pd.merge(df_daily, df_moneyflow[keep_cols], on=['ts_code', 'trade_date'], how='left')
+                    df_daily = self._merge_trade_frames(df_daily, df_moneyflow[keep_cols], keys=['ts_code', 'trade_date'])
 
                 if include_margin and df_margin is not None and not df_margin.empty:
                     rename_map = self._get_interface_rename("margin")
@@ -1469,11 +1485,11 @@ class TushareCollector:
                     if "amount" in df_daily.columns:
                         df_daily["amount"] = pd.to_numeric(df_daily["amount"], errors="coerce") * 1000
                     if not df_basic.empty:
-                        df_daily = pd.merge(df_daily, df_basic, on=['ts_code', 'trade_date'], how='left')
+                        df_daily = self._merge_trade_frames(df_daily, df_basic, keys=['ts_code', 'trade_date'])
                     if not df_adj.empty:
-                        df_daily = pd.merge(df_daily, df_adj, on=['ts_code', 'trade_date'], how='left')
+                        df_daily = self._merge_trade_frames(df_daily, df_adj, keys=['ts_code', 'trade_date'])
                     if not df_limit.empty:
-                        df_daily = pd.merge(df_daily, df_limit, on=['ts_code', 'trade_date'], how='left')
+                        df_daily = self._merge_trade_frames(df_daily, df_limit, keys=['ts_code', 'trade_date'])
                     if include_moneyflow and df_moneyflow is not None and not df_moneyflow.empty:
                         df_moneyflow = df_moneyflow.copy()
                         df_moneyflow["buy_elg_amount"] = pd.to_numeric(df_moneyflow["buy_elg_amount"], errors="coerce")
@@ -1484,7 +1500,7 @@ class TushareCollector:
                         keep_cols = ["ts_code", "trade_date"] + self.moneyflow_fields + self._moneyflow_derived
                         keep_cols = [c for c in keep_cols if c in df_moneyflow.columns]
                         df_moneyflow = df_moneyflow[keep_cols]
-                        df_daily = pd.merge(df_daily, df_moneyflow, on=['ts_code', 'trade_date'], how='left')
+                        df_daily = self._merge_trade_frames(df_daily, df_moneyflow, keys=['ts_code', 'trade_date'])
                     if include_margin and df_margin is not None and not df_margin.empty:
                         rename_map = self._get_interface_rename("margin")
                         if rename_map:
