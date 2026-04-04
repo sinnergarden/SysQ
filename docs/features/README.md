@@ -20,7 +20,11 @@
 
 - [new_feature.md](file:///Users/liuming/Documents/trae_projects/SysQ/docs/features/new_feature.md)
 - `daily_signal_monitoring.md`：daily ops 推荐篮子质量监控需求，覆盖 1d/2d/3d vintage 跟踪与盘后信号质量摘要。
+- `qsys_workflow_layer.md`：workflow / plugin 抽象层的首版设计与文档映射。
+- `qsys_workflow_adapter_plan.md`：首批 commands 的 adapter 设计与 PR 拆分建议。
+- `miniqmt_bridge_and_production_ops.md`：研究+生产双定位、WSL 生产运行形态与 MiniQMT 桥接方向。
 
 ## 当前进度备注
 
 - daily ops 已补充 `signal basket`、`signal quality` 和 `daily ops manifest` 三类结构化产物，后续 MiniQMT 接入应继续复用这套输出骨架。
+- workflow layer 已完成文档与 skeleton 起草，后续应沿 `preopen-plan` adapter -> `order_intents` -> `miniqmt broker adapter` 主线推进。

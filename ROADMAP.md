@@ -8,6 +8,7 @@
 - 能持续做投研与回测的系统
 - 能把 research / candidate / production 分层管理的系统
 - 能把高频研究与运营流程沉淀成稳定入口，而不是每次靠临时 prompt 和散装文档驱动
+- 能逐步收敛出低 agent 依赖、可严格 review 的生产脚本与执行桥接链路
 
 阶段完成判定：
 
@@ -35,6 +36,7 @@
 - 一部分重要规则仍散落在聊天结论、文档、脚本默认值和人工记忆里
 - 结构化 report 还不完整，很多流程仍更像“能跑通”而不是“可审计、可复用”
 - Qsys 已有不少文档，但其中很多是给人读的，不是给 agent/自动流程直接消费的“可执行规则层”
+- 生产运行形态与执行桥接尚未产品化：目标是 WSL 固定生产流程 + Windows MiniQMT 执行桥接，但当前还停留在 plan / sync / reconcile 阶段
 
 因此，当前 roadmap 的新增方向不是大改引擎，而是补一层轻量的 workflow / plugin abstraction：
 
@@ -87,6 +89,7 @@
 
 目标：
 - 让盘前 / 盘后流程从"能跑"进化到"可运营"
+- 为后续 WSL 生产脚本与 Windows MiniQMT 执行桥接预留稳定输入输出
 
 待办：
 - [x] 盘前 checklist 结构化
@@ -94,6 +97,7 @@
 - [x] 生成 daily plan 时附带模型版本 / 数据状态
 - [x] real/shadow reconciliation 结果结构化输出
 - [ ] 明确空 plan、账户异常、数据不齐时的处理策略
+- [ ] 定义 `order_intents` 产物契约，作为 WSL -> Windows bridge 的固定输入
 
 ### P0.4 统一 run report
 
@@ -202,6 +206,19 @@
 - [ ] 为 command 补一层薄适配代码，统一调用现有 `scripts/` 或 `qsys/*` 模块
 - [ ] 验证 command 输出可同时服务：人工阅读、日报沉淀、agent 二次消费
 - [ ] 再决定是否兼容 Claude plugin / OpenClaw skill 等外部宿主格式
+
+### P2.5 MiniQMT bridge / production script 主线（新增）
+
+目标：
+- 收敛出低 agent 依赖的生产 daily 脚本，并逐步打通 WSL 与 Windows MiniQMT 的执行桥接
+
+待办：
+- [ ] 明确 production daily 的固定运行时：Windows 主机上的 WSL
+- [ ] 固化 `preopen-plan` adapter，并输出 target / executable / blocker / assumptions
+- [ ] 设计 `order_intents` artifact 作为 WSL -> Windows bridge 输入
+- [ ] 设计 `qsys/broker/miniqmt.py` 抽象接口，先支持账户/持仓/委托/成交读取
+- [ ] 定义订单生命周期对象：pending / partial_fill / filled / canceled / rejected
+- [ ] 设计 Windows 回流到 WSL 的执行结果契约，替代长期依赖手工 CSV
 
 ---
 
