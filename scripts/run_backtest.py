@@ -1,3 +1,20 @@
+"""
+Primary backtest entrypoint.
+
+Purpose:
+- run a historical backtest for a saved model artifact
+- save daily result csv + structured backtest report
+
+Typical usage:
+- python scripts/run_backtest.py --model_path data/models/qlib_lgbm_extended --start 2025-01-01 --end 2026-03-20 --top_k 5
+
+Key args:
+- --model_path: model directory to evaluate
+- --universe: backtest universe
+- --start / --end: backtest window
+- --top_k: portfolio breadth
+"""
+
 import sys
 from pathlib import Path
 import time

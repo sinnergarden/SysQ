@@ -89,28 +89,50 @@ class DummyPro:
             "net_mf_vol": np.zeros(n)
         })
 
+    def margin_detail(self, ts_code, start_date, end_date, fields=None):
+        self.calls.append(("margin_detail", start_date, end_date))
+        trade_dates = self._date_range(start_date, end_date)
+        n = len(trade_dates)
+        return pd.DataFrame({
+            "ts_code": [ts_code] * n,
+            "trade_date": trade_dates,
+            "rzye": np.zeros(n),
+            "rzmre": np.zeros(n),
+            "rzche": np.zeros(n),
+            "rzrqye": np.zeros(n),
+            "rqyl": np.zeros(n),
+            "rqmcl": np.zeros(n),
+            "rqchl": np.zeros(n),
+        })
+
     def income(self, ts_code, start_date, end_date, fields=None):
         self.calls.append(("income", start_date, end_date))
         return pd.DataFrame({
             "ts_code": [ts_code],
+            "ann_date": [end_date],
             "end_date": [end_date],
             "n_income": [0.0],
-            "revenue": [0.0]
+            "revenue": [0.0],
+            "oper_cost": [0.0],
         })
 
     def balancesheet(self, ts_code, start_date, end_date, fields=None):
         self.calls.append(("balancesheet", start_date, end_date))
         return pd.DataFrame({
             "ts_code": [ts_code],
+            "ann_date": [end_date],
             "end_date": [end_date],
             "total_hldr_eqy_exc_min_int": [0.0],
-            "total_assets": [0.0]
+            "total_assets": [0.0],
+            "total_cur_assets": [0.0],
+            "total_cur_liab": [1.0],
         })
 
     def cashflow(self, ts_code, start_date, end_date, fields=None):
         self.calls.append(("cashflow", start_date, end_date))
         return pd.DataFrame({
             "ts_code": [ts_code],
+            "ann_date": [end_date],
             "end_date": [end_date],
             "n_cashflow_act": [0.0]
         })
@@ -216,24 +238,18 @@ class TestDataUpdateIntegration(unittest.TestCase):
         self.assertNotIn("20230102", updated_df["trade_date"].tolist())
 
     def test_adapter_get_data_status_report(self):
-        """Test the new status report method returns raw vs qlib info"""
-        # Seed some raw data
         self._seed_existing("000001.SZ", "20230101", "20230105")
         self._seed_existing("000002.SZ", "20230101", "20230105")
-        
+
         from qsys.data.adapter import QlibAdapter
         adapter = QlibAdapter()
-        
-        # Test the report generation
-        # Note: without qlib initialized, we can still check raw data
+
         report = adapter.get_data_status_report()
-        
+
         self.assertIn('raw_latest', report)
         self.assertIn('qlib_latest', report)
         self.assertIn('target_signal_date', report)
         self.assertIn('aligned', report)
-        
-        # Raw should have data
         self.assertEqual(report['raw_latest'], "2023-01-05")
 
     def test_merge_trade_frames_coalesces_overlapping_close_columns(self):
@@ -272,3 +288,65 @@ class TestDataUpdateIntegration(unittest.TestCase):
         collapsed = QlibAdapter._coalesce_duplicate_columns(df)
         self.assertEqual(collapsed.columns.tolist(), ["date", "volume", "close"])
         self.assertAlmostEqual(float(collapsed.iloc[0]["volume"]), 369409.33)
+
+    def test_update_batch_skips_margin_without_ts_code(self):
+        class DummyBatchPro:
+            def daily(self, ts_code, start_date, end_date, fields=None):
+                return pd.DataFrame({
+                    "ts_code": ["000001.SZ"],
+                    "trade_date": [start_date],
+                    "open": [10.0],
+                    "high": [10.5],
+                    "low": [9.8],
+                    "close": [10.2],
+                    "vol": [1000.0],
+                })
+
+            def adj_factor(self, ts_code, start_date, end_date, fields=None):
+                return pd.DataFrame()
+
+            def moneyflow(self, ts_code, start_date, end_date, fields=None):
+                return pd.DataFrame()
+
+        collector = TushareCollector()
+        collector.__dict__["pro"] = DummyBatchPro()
+        collector._fetch_with_retry = lambda api_func, **kwargs: api_func(**kwargs)
+        collector._fetch_financials_batch = lambda code_str, start_date, end_date: pd.DataFrame()
+
+        def fake_fetch_by_date_range(interface_name, ts_codes, start_date, end_date):
+            if interface_name == "margin":
+                return pd.DataFrame({
+                    "trade_date": [start_date],
+                    "rzye": [1.0],
+                })
+            return pd.DataFrame()
+
+        collector._fetch_by_date_range = fake_fetch_by_date_range
+
+        saved = {}
+
+        def fake_save_batch_results(df_big, code_list, ignore_columns=None):
+            saved["df"] = df_big.copy()
+            saved["codes"] = code_list
+
+        collector._save_batch_results = fake_save_batch_results
+
+        collector._update_batch_by_year(
+            ["000001.SZ"],
+            "000001.SZ",
+            "20260320",
+            "20260325",
+            include_basic=False,
+            include_limit=False,
+            include_adj=False,
+            include_moneyflow=False,
+            include_margin=True,
+        )
+
+        self.assertIn("df", saved)
+        self.assertIn("ts_code", saved["df"].columns)
+        self.assertEqual(saved["codes"], ["000001.SZ"])
+
+
+if __name__ == "__main__":
+    unittest.main()

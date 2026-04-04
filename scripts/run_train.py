@@ -1,3 +1,23 @@
+"""
+Primary training entrypoint.
+
+Purpose:
+- train the selected model on a chosen universe/window
+- optionally run a minimal post-train backtest
+- emit structured training report
+
+Typical usage:
+- python scripts/run_train.py --model qlib_lgbm --start 2020-01-01 --end 2026-03-20 --feature_set extended
+
+Key args:
+- --model: currently qlib_lgbm
+- --universe: csi300 / all
+- --start / --end: training window
+- --feature_set: alpha158 | extended
+- --run_backtest: run a minimal validation backtest after training
+- --no_report: skip JSON run report
+"""
+
 import sys
 import time
 from pathlib import Path
@@ -11,7 +31,7 @@ import pandas as pd
 
 from qsys.config import cfg
 from qsys.data.adapter import QlibAdapter
-from qsys.data.health import inspect_qlib_data_health
+from qsys.data.health import assert_qlib_data_ready
 from qsys.reports.train import TrainingReport
 from qsys.utils.logger import log
 
@@ -24,7 +44,7 @@ from qsys.utils.logger import log
 @click.option('--run_backtest', is_flag=True, help='Run minimal backtest after training')
 @click.option('--backtest_start', default=None, help='Backtest start date; defaults to last 40 trading days window start')
 @click.option('--backtest_end', default=None, help='Backtest end date; defaults to training end date')
-@click.option('--feature_set', type=click.Choice(['alpha158', 'extended'], case_sensitive=False), default='extended', show_default=True, help='Feature set to train with')
+@click.option('--feature_set', type=click.Choice(['alpha158', 'extended', 'margin_extended', 'phase1', 'phase12', 'phase123'], case_sensitive=False), default='extended', show_default=True, help='Feature set: alpha158 | extended | margin_extended | phase1 | phase12 | phase123')
 @click.option('--no_report', is_flag=True, help='Skip generating the structured report')
 def main(model, universe, start, end, run_backtest, backtest_start, backtest_end, feature_set, no_report):
     start_time = time.time()
@@ -63,10 +83,25 @@ def main(model, universe, start, end, run_backtest, backtest_start, backtest_end
 
     if feature_set == 'extended':
         feature_config = FeatureLibrary.get_alpha158_extended_config()
+    elif feature_set == 'margin_extended':
+        feature_config = FeatureLibrary.get_alpha158_margin_extended_config()
+    elif feature_set == 'phase1':
+        feature_config = FeatureLibrary.get_research_phase1_config()
+    elif feature_set == 'phase12':
+        feature_config = FeatureLibrary.get_research_phase12_config()
+    elif feature_set == 'phase123':
+        feature_config = FeatureLibrary.get_research_phase123_config()
     else:
         feature_config = FeatureLibrary.get_alpha158_config()
 
-    model_name = model if feature_set == 'alpha158' else f"{model}_extended"
+    if feature_set == 'alpha158':
+        model_name = model
+    elif feature_set == 'margin_extended':
+        model_name = f"{model}_margin_extended"
+    elif feature_set in {'phase1', 'phase12', 'phase123'}:
+        model_name = f"{model}_{feature_set}"
+    else:
+        model_name = f"{model}_extended"
     log.info(f"Using feature_set={feature_set} with {len(feature_config)} features")
     model_instance = QlibNativeModel(
         name=model_name,
@@ -74,10 +109,8 @@ def main(model, universe, start, end, run_backtest, backtest_start, backtest_end
         feature_config=feature_config,
     )
 
-    health = inspect_qlib_data_health(end, model_instance.feature_config, universe=universe)
+    health = assert_qlib_data_ready(end, model_instance.feature_config, universe=universe)
     log.info("\n" + health.to_markdown())
-    if not health.ok:
-        raise ValueError(f"Data health check failed before training: {health.issues}")
 
     # Data status for report
     data_status = {}

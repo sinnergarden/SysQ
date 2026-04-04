@@ -10,6 +10,23 @@ from typing import Optional
 from qsys.reports.base import RunReport, ReportStatus, save_report
 
 
+def _validate_plan_summary_dates(plan_summary: dict | None, *, account_name: str, signal_date: str, execution_date: str) -> dict:
+    summary = dict(plan_summary or {})
+    expected = {
+        "signal_date": signal_date,
+        "execution_date": execution_date,
+    }
+    for field, expected_value in expected.items():
+        actual = summary.get(field)
+        if actual is None:
+            continue
+        if str(actual) != str(expected_value):
+            raise ValueError(
+                f"Refusing to build {account_name} report section: {field}={actual} does not match intended {expected_value}"
+            )
+    return summary
+
+
 class DailyOpsReport:
     """
     Daily Operations Report Generator
@@ -33,6 +50,19 @@ class DailyOpsReport:
         notes: list = None,
     ) -> RunReport:
         """Generate a pre-open daily trading report"""
+        shadow_plan_summary = _validate_plan_summary_dates(
+            shadow_plan_summary,
+            account_name="shadow",
+            signal_date=signal_date,
+            execution_date=execution_date,
+        )
+        real_plan_summary = _validate_plan_summary_dates(
+            real_plan_summary,
+            account_name="real",
+            signal_date=signal_date,
+            execution_date=execution_date,
+        )
+
         # Determine overall status based on blockers and plan anomalies
         has_blockers = bool(blockers)
         shadow_empty = not shadow_plan_summary or shadow_plan_summary.get("trades", 0) == 0

@@ -255,22 +255,52 @@ class QlibAdapter:
                 df = df.rename(columns=rename_map)
                 df = self._coalesce_duplicate_columns(df)
 
-                # Resolve duplicated market columns produced by merges
-                if "close" not in df.columns:
-                    if "close_x" in df.columns:
-                        df["close"] = df["close_x"]
-                    elif "close_y" in df.columns:
-                        df["close"] = df["close_y"]
-                if "date" not in df.columns and "trade_date" in df.columns:
-                    df["date"] = df["trade_date"]
-                if "factor" not in df.columns and "adj_factor" in df.columns:
-                    df["factor"] = df["adj_factor"]
-                if "volume" not in df.columns and "vol" in df.columns:
-                    df["volume"] = df["vol"]
-                if "high_limit" not in df.columns and "up_limit" in df.columns:
-                    df["high_limit"] = df["up_limit"]
-                if "low_limit" not in df.columns and "down_limit" in df.columns:
-                    df["low_limit"] = df["down_limit"]
+                # Resolve duplicated columns produced by merges
+                def _collapse_column(name: str):
+                    if name not in df.columns:
+                        return None
+                    obj = df.loc[:, name]
+                    if isinstance(obj, pd.DataFrame):
+                        series = None
+                        for i in range(obj.shape[1]):
+                            cur = pd.to_numeric(obj.iloc[:, i], errors='coerce')
+                            series = cur if series is None else series.combine_first(cur)
+                        return series
+                    return pd.to_numeric(obj, errors='coerce')
+
+                def _coalesce_column(target_col: str, candidates: list[str]) -> None:
+                    merged = _collapse_column(target_col)
+                    for candidate in candidates:
+                        cur = _collapse_column(candidate)
+                        if cur is None:
+                            continue
+                        merged = cur if merged is None else merged.combine_first(cur)
+                    if merged is not None:
+                        df[target_col] = merged
+
+                _coalesce_column("close", ["close_x", "close_y"])
+                _coalesce_column("open", ["open_x", "open_y"])
+                _coalesce_column("high", ["high_x", "high_y"])
+                _coalesce_column("low", ["low_x", "low_y"])
+                _coalesce_column("date", ["trade_date"])
+                _coalesce_column("factor", ["adj_factor"])
+                _coalesce_column("volume", ["vol"])
+                _coalesce_column("high_limit", ["up_limit"])
+                _coalesce_column("low_limit", ["down_limit"])
+
+                # Collapse any remaining duplicated columns so downstream numeric ops always see Series.
+                deduped = {}
+                for col_name in list(dict.fromkeys(df.columns.tolist())):
+                    collapsed = _collapse_column(col_name)
+                    if collapsed is None:
+                        obj = df.loc[:, col_name]
+                        if isinstance(obj, pd.DataFrame):
+                            deduped[col_name] = obj.iloc[:, 0]
+                        else:
+                            deduped[col_name] = obj
+                    else:
+                        deduped[col_name] = collapsed
+                df = pd.DataFrame(deduped)
                 
                 # Unit Conversion (Tushare -> Qlib Standard)
                 # Tushare vol is in lots (100 shares), Qlib expects shares
@@ -311,12 +341,41 @@ class QlibAdapter:
                         denom = ocf.replace(0, np.nan)
                         df["pcf"] = (price * share) / denom
                 if "roe" in target_fields:
+                    existing_roe = pd.to_numeric(df["roe"], errors="coerce") if "roe" in df.columns else None
                     if "roe_waa" in df.columns:
-                        df["roe"] = df["roe_waa"]
-                    elif "roe" not in df.columns and {"net_income", "equity"}.issubset(df.columns):
+                        roe_waa = pd.to_numeric(df["roe_waa"], errors="coerce")
+                        df["roe"] = roe_waa if existing_roe is None else existing_roe.combine_first(roe_waa)
+                    elif existing_roe is not None:
+                        df["roe"] = existing_roe
+                    if {"net_income", "equity"}.issubset(df.columns):
                         ni = pd.to_numeric(df["net_income"], errors="coerce")
                         eq = pd.to_numeric(df["equity"], errors="coerce")
-                        df["roe"] = ni / eq.replace(0, np.nan)
+                        derived = ni / eq.replace(0, np.nan)
+                        df["roe"] = derived if "roe" not in df.columns else pd.to_numeric(df["roe"], errors="coerce").combine_first(derived)
+                if "grossprofit_margin" in target_fields and {"revenue", "oper_cost"}.issubset(df.columns):
+                    revenue = pd.to_numeric(df["revenue"], errors="coerce")
+                    oper_cost = pd.to_numeric(df["oper_cost"], errors="coerce")
+                    derived = (revenue - oper_cost) / revenue.replace(0, np.nan)
+                    if "grossprofit_margin" in df.columns:
+                        df["grossprofit_margin"] = pd.to_numeric(df["grossprofit_margin"], errors="coerce").combine_first(derived)
+                    else:
+                        df["grossprofit_margin"] = derived
+                if "debt_to_assets" in target_fields and {"total_assets", "equity"}.issubset(df.columns):
+                    total_assets = pd.to_numeric(df["total_assets"], errors="coerce")
+                    equity = pd.to_numeric(df["equity"], errors="coerce")
+                    derived = (total_assets - equity) / total_assets.replace(0, np.nan)
+                    if "debt_to_assets" in df.columns:
+                        df["debt_to_assets"] = pd.to_numeric(df["debt_to_assets"], errors="coerce").combine_first(derived)
+                    else:
+                        df["debt_to_assets"] = derived
+                if "current_ratio" in target_fields and {"total_cur_assets", "total_cur_liab"}.issubset(df.columns):
+                    total_cur_assets = pd.to_numeric(df["total_cur_assets"], errors="coerce")
+                    total_cur_liab = pd.to_numeric(df["total_cur_liab"], errors="coerce")
+                    derived = total_cur_assets / total_cur_liab.replace(0, np.nan)
+                    if "current_ratio" in df.columns:
+                        df["current_ratio"] = pd.to_numeric(df["current_ratio"], errors="coerce").combine_first(derived)
+                    else:
+                        df["current_ratio"] = derived
                 if "ps" in target_fields and "ps" not in df.columns:
                     if {"total_mv", "revenue"}.issubset(df.columns):
                         total_mv = pd.to_numeric(df["total_mv"], errors="coerce")
@@ -333,9 +392,17 @@ class QlibAdapter:
                     industry_id = industry_map.get(industry_name, 0) if industry_name is not None else 0
                     df["industry"] = industry_id
 
-                # Ensure date format
-                if not pd.api.types.is_datetime64_any_dtype(df['date']):
-                    df['date'] = pd.to_datetime(df['date'])
+                # Ensure date format with explicit YYYYMMDD handling.
+                date_series = df['date']
+                if not pd.api.types.is_datetime64_any_dtype(date_series):
+                    date_as_str = date_series.astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
+                    ymd_mask = date_as_str.str.fullmatch(r'\d{8}')
+                    converted = pd.Series(pd.NaT, index=df.index, dtype='datetime64[ns]')
+                    if ymd_mask.any():
+                        converted.loc[ymd_mask] = pd.to_datetime(date_as_str.loc[ymd_mask], format='%Y%m%d', errors='coerce')
+                    if (~ymd_mask).any():
+                        converted.loc[~ymd_mask] = pd.to_datetime(date_as_str.loc[~ymd_mask], errors='coerce')
+                    df['date'] = converted
                 
                 # Incremental Filter
                 if since_date:
@@ -394,6 +461,13 @@ class QlibAdapter:
         
         if count == 0:
             log.info("No new data found to update.")
+            if self._should_rebuild_corrupted_aligned_data(since_date):
+                log.warning(
+                    "Detected unusable qlib core fields on aligned latest date. "
+                    "Running full rebuild to backfill repaired conversion logic."
+                )
+                self.convert_all()
+                return
             # Touch qlib dir to update mtime so we don't check again immediately
             os.utime(self.qlib_dir, None)
             return
@@ -412,6 +486,33 @@ class QlibAdapter:
 
         log.info(f"Found {count} stocks with repaired data. Running dump_fix...")
         self._run_dump_script(csv_dir, mode="dump_fix")
+
+    def _should_rebuild_corrupted_aligned_data(self, latest_date, missing_threshold: float = 0.2) -> bool:
+        """
+        When raw/qlib dates are aligned but recent qlib rows are unusable, trigger a full rebuild.
+        This protects against previously-buggy conversions that produced empty/NaN core fields.
+        """
+        if latest_date is None:
+            return False
+        try:
+            self.init_qlib()
+            check_date = pd.Timestamp(latest_date).strftime("%Y-%m-%d")
+            core_fields = ["$close", "$open", "$high", "$low", "$volume", "$factor"]
+            probe = self.get_features("all", core_fields, start_time=check_date, end_time=check_date)
+
+            if probe is None or probe.empty:
+                return True
+
+            for field in core_fields:
+                if field not in probe.columns:
+                    return True
+                missing_ratio = float(probe[field].isna().mean())
+                if missing_ratio > missing_threshold:
+                    return True
+        except Exception as err:
+            log.warning(f"Skip aligned-corruption rebuild probe due to error: {err}")
+            return False
+        return False
 
     def convert_all(self):
         """Full update using dump_all"""
@@ -456,6 +557,7 @@ class QlibAdapter:
         try:
             subprocess.run(cmd, check=True)
             log.info(f"Qlib {mode} completed successfully.")
+            self._refresh_universe_instruments()
         except subprocess.CalledProcessError as e:
             log.error(f"Qlib dump failed: {e}")
         finally:
@@ -463,6 +565,18 @@ class QlibAdapter:
                 shutil.rmtree(csv_dir)
             self._clean_artifacts()
 
+
+    def _refresh_universe_instruments(self):
+        """Refresh derived universe instrument files after qlib conversion."""
+        script_path = cfg.project_root / "scripts" / "create_instrument_csi300.py"
+        if not script_path.exists():
+            log.warning(f"CSI300 instrument refresh script not found: {script_path}")
+            return
+        try:
+            subprocess.run([sys.executable, str(script_path)], check=True)
+            log.info("Refreshed csi300 instrument file after qlib conversion.")
+        except subprocess.CalledProcessError as e:
+            log.warning(f"Failed to refresh csi300 instrument file: {e}")
 
     def _clean_artifacts(self):
         """Clean up mlruns and Users directories often generated by Qlib/MLflow"""

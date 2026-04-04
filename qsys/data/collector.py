@@ -3,6 +3,7 @@ import pandas as pd
 import time
 import json
 from datetime import datetime, timedelta
+from typing import Optional
 from qsys.config import cfg
 from qsys.utils.logger import log
 from qsys.data.storage import StockDataStore
@@ -31,8 +32,11 @@ class TushareCollector:
             [
                 "net_income",
                 "revenue",
+                "oper_cost",
                 "total_assets",
                 "equity",
+                "total_cur_assets",
+                "total_cur_liab",
                 "roe",
                 "op_cashflow",
                 "q_dt_profit",
@@ -73,14 +77,37 @@ class TushareCollector:
             "non_numeric_cols",
             ["trade_status"],
         )
+        # Margin financing (两融) - first batch
+        self.margin_cols = collector_cfg.get(
+            "margin_cols",
+            [
+                "margin_balance", "margin_buy_amount", "margin_repay_amount",
+                "margin_total_balance", "lend_volume", "lend_sell_volume", "lend_repay_volume",
+            ],
+        )
+        self._margin_interfaces = collector_cfg.get("interfaces", {}).get("margin", {})
+        
         self._non_negative_cols = collector_cfg.get(
             "non_negative_cols",
             [
                 "open", "high", "low", "close", "vol", "amount",
                 "turnover_rate", "total_share", "float_share",
                 "free_share", "total_mv", "circ_mv", "adj_factor", "up_limit", "down_limit",
+                # Margin financing (两融) - first batch
+                "margin_balance", "margin_buy_amount", "margin_repay_amount",
+                "margin_total_balance", "lend_volume", "lend_sell_volume", "lend_repay_volume",
             ],
         )
+        self._sparse_event_cols = {
+            'exalter', 'buy', 'sell', 'net_buy', 'name', 'buyer_sum', 'seller_sum', 'net_amount', 'reason'
+        }
+        self._financial_sparse_by_industry = {
+            '银行': {'grossprofit_margin', 'current_ratio', 'oper_cost', 'total_cur_assets', 'total_cur_liab'},
+            '保险': {'grossprofit_margin', 'current_ratio', 'oper_cost', 'total_cur_assets', 'total_cur_liab'},
+            '证券': {'grossprofit_margin', 'current_ratio', 'oper_cost', 'total_cur_assets', 'total_cur_liab'},
+            '多元金融': {'grossprofit_margin', 'current_ratio', 'oper_cost', 'total_cur_assets', 'total_cur_liab'},
+        }
+        self._industry_cache = None
 
     def _normalize_date(self, date_str):
         if date_str is None:
@@ -126,12 +153,14 @@ class TushareCollector:
         for name in self._collector_interfaces:
             if name in self._financial_interfaces:
                 continue
+            rename_map = self._get_interface_rename(name)
             for f in self._get_interface_field_list(name):
                 if f in {"ts_code", "trade_date", "ann_date", "end_date"}:
                     continue
-                if f not in seen:
-                    seen.add(f)
-                    fields.append(f)
+                mapped = rename_map.get(f, f)
+                if mapped not in seen:
+                    seen.add(mapped)
+                    fields.append(mapped)
         return fields
 
     def _get_expected_columns(self):
@@ -152,6 +181,18 @@ class TushareCollector:
         cfg_item = self._get_interface_config(name)
         api_name = cfg_item.get("interface", name)
         return getattr(self.pro, api_name)
+
+    def _get_stock_industry(self, code: str) -> str | None:
+        if self._industry_cache is None:
+            try:
+                basic = self.store.load_meta_stock_basic()
+                if basic is not None and not basic.empty and {'ts_code', 'industry'}.issubset(basic.columns):
+                    self._industry_cache = dict(zip(basic['ts_code'], basic['industry']))
+                else:
+                    self._industry_cache = {}
+            except Exception:
+                self._industry_cache = {}
+        return self._industry_cache.get(code)
 
     def _get_interface_rename(self, name):
         cfg_item = self._get_interface_config(name)
@@ -191,7 +232,8 @@ class TushareCollector:
             # Full market fetch -> Loop by Date
             return self._fetch_by_date_loop(api, fields, start_date, end_date)
             
-        if interface_name in ["daily_basic", "stk_limit"]:
+        if interface_name in ["daily_basic", "stk_limit", "margin"]:
+            # margin interface doesn't support ts_code list well, needs stock loop like daily_basic/stk_limit
             if isinstance(ts_codes, str):
                 code_list = ts_codes.split(",")
             else:
@@ -439,8 +481,11 @@ class TushareCollector:
         balancesheet = balancesheet.rename(columns={"total_hldr_eqy_exc_min_int": "equity"})
         cashflow = cashflow.rename(columns={"n_cashflow_act": "op_cashflow"})
         
-        income = self._prepare_financial_frame(income, ["net_income", "revenue"])
-        balancesheet = self._prepare_financial_frame(balancesheet, ["total_assets", "equity"])
+        income = self._prepare_financial_frame(income, ["net_income", "revenue", "oper_cost"])
+        balancesheet = self._prepare_financial_frame(
+            balancesheet,
+            ["total_assets", "equity", "total_cur_assets", "total_cur_liab"],
+        )
         cashflow = self._prepare_financial_frame(cashflow, ["op_cashflow"])
         
         if not fina_indicator.empty:
@@ -482,6 +527,41 @@ class TushareCollector:
                 merge_keys.append("end_date")
             merged = pd.merge(merged, frame, on=merge_keys, how="outer")
         merged["ann_date"] = merged["ann_date"].astype(str)
+
+        for col in ["net_income", "equity", "total_assets", "revenue", "oper_cost", "total_cur_assets", "total_cur_liab"]:
+            if col in merged.columns:
+                merged[col] = pd.to_numeric(merged[col], errors="coerce")
+
+        if "roe" not in merged.columns:
+            merged["roe"] = np.nan
+        roe_missing = merged["roe"].isna()
+        if roe_missing.any() and {"net_income", "equity"}.issubset(merged.columns):
+            denom = merged["equity"].replace(0, np.nan)
+            merged.loc[roe_missing, "roe"] = merged.loc[roe_missing, "net_income"] / denom[roe_missing]
+
+        if "grossprofit_margin" not in merged.columns:
+            merged["grossprofit_margin"] = np.nan
+        gpm_missing = merged["grossprofit_margin"].isna()
+        if gpm_missing.any() and {"revenue", "oper_cost"}.issubset(merged.columns):
+            revenue = merged["revenue"].replace(0, np.nan)
+            gross_profit = merged["revenue"] - merged["oper_cost"]
+            merged.loc[gpm_missing, "grossprofit_margin"] = gross_profit[gpm_missing] / revenue[gpm_missing]
+
+        if "debt_to_assets" not in merged.columns:
+            merged["debt_to_assets"] = np.nan
+        dta_missing = merged["debt_to_assets"].isna()
+        if dta_missing.any() and {"total_assets", "equity"}.issubset(merged.columns):
+            assets = merged["total_assets"].replace(0, np.nan)
+            liabilities = merged["total_assets"] - merged["equity"]
+            merged.loc[dta_missing, "debt_to_assets"] = liabilities[dta_missing] / assets[dta_missing]
+
+        if "current_ratio" not in merged.columns:
+            merged["current_ratio"] = np.nan
+        cr_missing = merged["current_ratio"].isna()
+        if cr_missing.any() and {"total_cur_assets", "total_cur_liab"}.issubset(merged.columns):
+            denom = merged["total_cur_liab"].replace(0, np.nan)
+            merged.loc[cr_missing, "current_ratio"] = merged.loc[cr_missing, "total_cur_assets"] / denom[cr_missing]
+
         return merged
 
 
@@ -544,6 +624,20 @@ class TushareCollector:
         else:
             merged = merged_valid
         merged = merged.drop(columns=["trade_date_dt", "ann_date_dt", "ann_date"], errors="ignore")
+        for col in ["net_income", "revenue", "oper_cost", "total_assets", "equity", "total_cur_assets", "total_cur_liab", "roe", "grossprofit_margin", "debt_to_assets", "current_ratio"]:
+            if col in merged.columns:
+                merged[col] = pd.to_numeric(merged[col], errors="coerce")
+        if {"net_income", "equity"}.issubset(merged.columns):
+            merged["roe"] = merged.get("roe").combine_first(merged["net_income"] / merged["equity"].replace(0, np.nan)) if "roe" in merged.columns else merged["net_income"] / merged["equity"].replace(0, np.nan)
+        if {"revenue", "oper_cost"}.issubset(merged.columns):
+            derived = (merged["revenue"] - merged["oper_cost"]) / merged["revenue"].replace(0, np.nan)
+            merged["grossprofit_margin"] = merged.get("grossprofit_margin").combine_first(derived) if "grossprofit_margin" in merged.columns else derived
+        if {"total_assets", "equity"}.issubset(merged.columns):
+            derived = (merged["total_assets"] - merged["equity"]) / merged["total_assets"].replace(0, np.nan)
+            merged["debt_to_assets"] = merged.get("debt_to_assets").combine_first(derived) if "debt_to_assets" in merged.columns else derived
+        if {"total_cur_assets", "total_cur_liab"}.issubset(merged.columns):
+            derived = merged["total_cur_assets"] / merged["total_cur_liab"].replace(0, np.nan)
+            merged["current_ratio"] = merged.get("current_ratio").combine_first(derived) if "current_ratio" in merged.columns else derived
         for col in self.financial_cols:
             if col not in merged.columns:
                 merged[col] = np.nan
@@ -556,10 +650,28 @@ class TushareCollector:
         ignore_columns = set(ignore_columns or [])
         df = df.copy()
         df['trade_date'] = df['trade_date'].astype(str)
+
+        # Repair common merge artifacts before validation.
+        repair_map = {
+            'close': ['close_x', 'close_y'],
+            'high_limit': ['up_limit'],
+            'low_limit': ['down_limit'],
+            'volume': ['vol'],
+        }
+        for target, sources in repair_map.items():
+            if target not in df.columns:
+                df[target] = np.nan
+            base = pd.to_numeric(df[target], errors='coerce')
+            for src in sources:
+                if src in df.columns:
+                    base = base.combine_first(pd.to_numeric(df[src], errors='coerce'))
+            df[target] = base
+
         if "paused" not in df.columns and "vol" in df.columns:
             df["paused"] = (pd.to_numeric(df["vol"], errors="coerce").fillna(0) <= 0).astype(int)
         expected_columns = self._get_expected_columns()
         missing_columns = [c for c in expected_columns if c not in df.columns and c not in ignore_columns]
+        missing_columns = [c for c in missing_columns if c not in self._sparse_event_cols]
         if missing_columns:
             log.warning(f"{code} missing columns: {missing_columns}")
         for col in expected_columns:
@@ -619,16 +731,19 @@ class TushareCollector:
         present_cols = [c for c in numeric_cols if c in df.columns and c not in ignore_columns]
         if present_cols:
             miss_ratio = df[present_cols].isna().mean()
-            # Relax threshold to 0.95 (allow 5% data presence) or make it stricter
-            high_missing = miss_ratio[miss_ratio > 0.95] 
-            
-            # Special handling for banking/insurance sectors which legitimately lack some fields
-            # e.g., Banks don't have standard 'revenue' or 'grossprofit_margin' in some contexts
-            # 600000.SH (Pudong Bank), 601318.SH (Ping An)
-            
+            high_missing = miss_ratio[miss_ratio > 0.95]
+
+            industry = self._get_stock_industry(code)
+            allowed_sparse = set(self._sparse_event_cols)
+            allowed_sparse.update({'roe_ttm'})
+            if industry in self._financial_sparse_by_industry:
+                allowed_sparse.update(self._financial_sparse_by_industry[industry])
+
             if not high_missing.empty:
-                items = [f"{k}={v:.2%}" for k, v in high_missing.sort_values(ascending=False).items()]
-                log.warning(f"{code} high missing ratio: {items}")
+                high_missing = high_missing[~high_missing.index.isin(allowed_sparse)]
+                if not high_missing.empty:
+                    items = [f"{k}={v:.2%}" for k, v in high_missing.sort_values(ascending=False).items()]
+                    log.warning(f"{code} high missing ratio: {items}")
         if 'adj_factor' in df.columns:
             df['adj_factor'] = df['adj_factor'].fillna(1.0)
         if 'circ_mv' in df.columns:
@@ -735,6 +850,25 @@ class TushareCollector:
                 df_moneyflow = df_moneyflow[keep_cols]
                 df_daily = self._merge_trade_frames(df_daily, df_moneyflow, keys=["ts_code", "trade_date"])
 
+            # Margin financing (两融) - fetch and merge
+            margin_df = self._fetch_with_retry(
+                self._get_interface_api("margin"),
+                trade_date=date,
+                fields=self._get_interface_fields("margin"),
+            )
+            if margin_df is not None and not margin_df.empty:
+                # Rename columns according to config
+                rename_map = self._get_interface_rename("margin")
+                if rename_map:
+                    margin_df = margin_df.rename(columns=rename_map)
+                # Keep only needed columns
+                keep_cols = ["ts_code", "trade_date"] + self.margin_cols
+                keep_cols = [c for c in keep_cols if c in margin_df.columns]
+                margin_df = margin_df[keep_cols]
+                df_daily = pd.merge(df_daily, margin_df, on=["ts_code", "trade_date"], how="left")
+            else:
+                log.warning(f"{date} margin data empty")
+
             fin_df = self._fetch_financials(date, date)
             if fin_df is None or fin_df.empty:
                 log.warning(f"{date} financials empty")
@@ -752,6 +886,8 @@ class TushareCollector:
                 ignore_columns += self._get_interface_feature_fields("stk_limit")
             if df_moneyflow is None or df_moneyflow.empty:
                 ignore_columns += self.moneyflow_fields + self._moneyflow_derived
+            if margin_df is None or margin_df.empty:
+                ignore_columns += self.margin_cols
             if fin_df is None or fin_df.empty:
                 ignore_columns += self.financial_cols
             df_daily = self._validate_and_clean(df_daily, "ALL", ignore_columns=ignore_columns)
@@ -806,6 +942,78 @@ class TushareCollector:
         df = self._fetch_with_retry(self.pro.trade_cal, exchange='', start_date='20000101', end_date='20301231')
         self.store.save_meta_calendar(df)
         log.info("Updated trading calendar")
+
+    # === Dragon-Tiger List (龙虎榜) Batch 1 Integration ===
+
+    def get_top_inst(self, trade_date: str) -> Optional[pd.DataFrame]:
+        """
+        Fetch institution seat data (机构席位).
+        Batch 1: Best for first integration - daily level, few fields, good for PIT.
+        """
+        if "top_inst" not in self._collector_interfaces:
+            log.warning("top_inst not configured in interfaces")
+            return None
+        
+        try:
+            df = self._fetch_with_retry(
+                self.pro.top_inst,
+                trade_date=trade_date,
+                fields=self._get_interface_fields("top_inst"),
+            )
+            if df is not None and not df.empty:
+                # Convert numeric fields
+                for col in ["buy", "sell", "net_buy"]:
+                    if col in df.columns:
+                        df[col] = pd.to_numeric(df[col], errors="coerce")
+                log.info(f"Fetched top_inst: {len(df)} records for {trade_date}")
+            return df
+        except Exception as e:
+            log.error(f"Failed to fetch top_inst for {trade_date}: {e}")
+            return None
+
+    def get_top_list(self, trade_date: str) -> Optional[pd.DataFrame]:
+        """
+        Fetch dragon-tiger list (龙虎榜列表).
+        Core龙虎榜数据: 股票当日是否上榜.
+        """
+        if "top_list" not in self._collector_interfaces:
+            log.warning("top_list not configured in interfaces")
+            return None
+        
+        try:
+            df = self._fetch_with_retry(
+                self.pro.top_list,
+                trade_date=trade_date,
+                fields=self._get_interface_fields("top_list"),
+            )
+            if df is not None and not df.empty:
+                # Convert numeric fields
+                for col in ["close", "pct_chg", "turnover_rate", "amount", 
+                            "buyer_sum", "seller_sum", "net_amount"]:
+                    if col in df.columns:
+                        df[col] = pd.to_numeric(df[col], errors="coerce")
+                log.info(f"Fetched top_list: {len(df)} records for {trade_date}")
+            return df
+        except Exception as e:
+            log.error(f"Failed to fetch top_list for {trade_date}: {e}")
+            return None
+
+    def get_daily(self, trade_date: str) -> Optional[pd.DataFrame]:
+        """
+        Fetch daily K-line data.
+        """
+        try:
+            df = self._fetch_with_retry(
+                self.pro.daily,
+                trade_date=trade_date,
+                fields=self._get_interface_fields("daily"),
+            )
+            if df is not None and not df.empty:
+                log.info(f"Fetched daily: {len(df)} records for {trade_date}")
+            return df
+        except Exception as e:
+            log.error(f"Failed to fetch daily for {trade_date}: {e}")
+            return None
 
     def get_index_daily(self, index_code="000300.SH", start_date=None, end_date=None):
         df = self._fetch_with_retry(
@@ -972,7 +1180,7 @@ class TushareCollector:
         return merged
 
 
-    def _update_batch_by_year(self, code_list, code_str, start_date, end_date, include_basic=True, include_limit=True, include_adj=True, include_moneyflow=True):
+    def _update_batch_by_year(self, code_list, code_str, start_date, end_date, include_basic=True, include_limit=True, include_adj=True, include_moneyflow=True, include_margin=True):
         """
         [Optimization] 
         1. Fetch Financials, DailyBasic, StkLimit for the FULL period (per stock loop or batch period).
@@ -1076,6 +1284,13 @@ class TushareCollector:
                         fields=self._get_interface_fields("moneyflow"),
                     )
 
+                # 3.5 Margin (Batch by date range)
+                df_margin = pd.DataFrame()
+                if include_margin:
+                    df_margin = self._fetch_by_date_range("margin", valid_codes, chunk_start, chunk_end)
+                    if df_margin is not None and not df_margin.empty and "trade_date" in df_margin.columns:
+                        df_margin["trade_date"] = df_margin["trade_date"].astype(str)
+
                 # 4. Filter Basic/Limit from All
                 df_basic = pd.DataFrame()
                 if not df_basic_all.empty:
@@ -1111,6 +1326,22 @@ class TushareCollector:
                     keep_cols = [c for c in keep_cols if c in df_moneyflow.columns]
                     df_daily = self._merge_trade_frames(df_daily, df_moneyflow[keep_cols], keys=['ts_code', 'trade_date'])
 
+                if include_margin and df_margin is not None and not df_margin.empty:
+                    rename_map = self._get_interface_rename("margin")
+                    if rename_map:
+                        df_margin = df_margin.rename(columns=rename_map)
+                    keep_cols = ["ts_code", "trade_date"] + self.margin_cols
+                    keep_cols = [c for c in keep_cols if c in df_margin.columns]
+                    df_margin = df_margin[keep_cols]
+                    merge_keys = {"ts_code", "trade_date"}
+                    if not merge_keys.issubset(df_margin.columns):
+                        log.warning(
+                            f"Skip margin merge for {chunk_start}-{chunk_end}: missing keys {sorted(merge_keys - set(df_margin.columns))}"
+                        )
+                        df_margin = pd.DataFrame()
+                    else:
+                        df_daily = pd.merge(df_daily, df_margin, on=['ts_code', 'trade_date'], how='left')
+
                 # Merge Financials
                 if fin_df_all is not None and not fin_df_all.empty:
                     df_daily = self._merge_financials(df_daily, fin_df_all)
@@ -1125,6 +1356,8 @@ class TushareCollector:
                     ignore_columns += self._get_interface_feature_fields("stk_limit")
                 if include_moneyflow and df_moneyflow.empty:
                     ignore_columns += self.moneyflow_fields + self._moneyflow_derived
+                if include_margin and (df_margin is None or df_margin.empty):
+                    ignore_columns += self.margin_cols
                 if fin_df_all is None or fin_df_all.empty:
                     ignore_columns += self.financial_cols
 
@@ -1153,7 +1386,7 @@ class TushareCollector:
                 df_part = df_part.sort_values('trade_date').reset_index(drop=True)
             self.store.save_daily(df_part, code, existing_df=None)
 
-    def update_history(self, code: str, start_date='20100101', end_date=None, incremental=True, include_basic=True, include_limit=True, include_adj=True, include_moneyflow=True):
+    def update_history(self, code: str, start_date='20100101', end_date=None, incremental=True, include_basic=True, include_limit=True, include_adj=True, include_moneyflow=True, include_margin=True):
         """
         Fetch history for a single stock.
         """
@@ -1180,6 +1413,8 @@ class TushareCollector:
         ignore_columns = set()
         if not include_moneyflow:
             ignore_columns.update(self.moneyflow_fields + self._moneyflow_derived)
+        if not include_margin:
+            ignore_columns.update(self.margin_cols)
         chunks = []
         while current_start <= end_date:
             current_end_dt = min(datetime.strptime(current_start, '%Y%m%d').replace(year=int(current_start[:4])+1), datetime.strptime(end_date, '%Y%m%d'))
@@ -1221,6 +1456,12 @@ class TushareCollector:
                     end_date=current_end,
                     fields=self._get_interface_fields("moneyflow"),
                 ) if include_moneyflow else pd.DataFrame()
+                df_margin = self._fetch_by_date_range(
+                    "margin",
+                    [code],
+                    current_start,
+                    current_end,
+                ) if include_margin else pd.DataFrame()
 
                 if not df_daily.empty:
                     if include_basic and (df_basic is None or df_basic.empty):
@@ -1237,6 +1478,9 @@ class TushareCollector:
                     if include_moneyflow and (df_moneyflow is None or df_moneyflow.empty):
                         log.warning(f"{code} {current_start}-{current_end} moneyflow empty")
                         ignore_columns.update(self.moneyflow_fields + self._moneyflow_derived)
+                    if include_margin and (df_margin is None or df_margin.empty):
+                        log.warning(f"{code} {current_start}-{current_end} margin empty")
+                        ignore_columns.update(self.margin_cols)
                     # Merge
                     if "amount" in df_daily.columns:
                         df_daily["amount"] = pd.to_numeric(df_daily["amount"], errors="coerce") * 1000
@@ -1257,6 +1501,21 @@ class TushareCollector:
                         keep_cols = [c for c in keep_cols if c in df_moneyflow.columns]
                         df_moneyflow = df_moneyflow[keep_cols]
                         df_daily = self._merge_trade_frames(df_daily, df_moneyflow, keys=['ts_code', 'trade_date'])
+                    if include_margin and df_margin is not None and not df_margin.empty:
+                        rename_map = self._get_interface_rename("margin")
+                        if rename_map:
+                            df_margin = df_margin.rename(columns=rename_map)
+                        keep_cols = ["ts_code", "trade_date"] + self.margin_cols
+                        keep_cols = [c for c in keep_cols if c in df_margin.columns]
+                        df_margin = df_margin[keep_cols]
+                        merge_keys = {"ts_code", "trade_date"}
+                        if not merge_keys.issubset(df_margin.columns):
+                            log.warning(
+                                f"{code} {current_start}-{current_end} skip margin merge: missing keys {sorted(merge_keys - set(df_margin.columns))}"
+                            )
+                            ignore_columns.update(self.margin_cols)
+                        else:
+                            df_daily = pd.merge(df_daily, df_margin, on=['ts_code', 'trade_date'], how='left')
                     fin_df = self._fetch_financials(current_start, current_end, ts_code=code)
                     if fin_df is None or fin_df.empty:
                         log.warning(f"{code} {current_start}-{current_end} financials empty")

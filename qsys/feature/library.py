@@ -12,9 +12,12 @@ from typing import Any, cast
 class FeatureLibrary:
     """
     Predefined feature sets.
+    Research-only feature sets should not implicitly change production manifest behavior.
     """
 
+    # Extended raw fields - A-share fundamentals and margin financing
     EXTENDED_RAW_FIELDS = [
+        # Fundamentals
         "$pe",
         "$pb",
         "$total_mv",
@@ -30,6 +33,17 @@ class FeatureLibrary:
         "$total_assets",
         "$equity",
         "$op_cashflow",
+    ]
+    
+    # Margin financing (两融) fields - need to match adapter rename_map
+    MARGIN_FIELDS = [
+        "$margin_balance",    # 融资余额
+        "$margin_buy_amount", # 融资买入额
+        "$margin_repay_amount", # 融资偿还额
+        "$margin_total_balance", # 融资融券余额
+        "$lend_volume",       # 融券余量
+        "$lend_sell_volume",  # 融券卖出量
+        "$lend_repay_volume", # 融券偿还量
     ]
     
     @staticmethod
@@ -49,12 +63,41 @@ class FeatureLibrary:
 
     @classmethod
     def get_alpha158_extended_config(cls):
+        """Extended config: alpha158 + fundamentals (no margin yet)"""
         base = cls.get_alpha158_config()
         merged = list(base)
         for field in cls.EXTENDED_RAW_FIELDS:
             if field not in merged:
                 merged.append(field)
         return merged
+    
+    @classmethod
+    def get_alpha158_margin_extended_config(cls):
+        """Margin-extended config: alpha158 + fundamentals + margin financing"""
+        base = cls.get_alpha158_config()
+        merged = list(base)
+        for field in cls.EXTENDED_RAW_FIELDS:
+            if field not in merged:
+                merged.append(field)
+        for field in cls.MARGIN_FIELDS:
+            if field not in merged:
+                merged.append(field)
+        return merged
+
+    @classmethod
+    def get_research_phase1_config(cls):
+        """Research config placeholder: current minimum uses extended raw feature base."""
+        return cls.get_alpha158_extended_config()
+
+    @classmethod
+    def get_research_phase12_config(cls):
+        """Research config placeholder: current minimum uses extended raw feature base until custom qlib build is wired."""
+        return cls.get_alpha158_extended_config()
+
+    @classmethod
+    def get_research_phase123_config(cls):
+        """Research config placeholder: current minimum uses margin_extended raw feature base until custom qlib build is wired."""
+        return cls.get_alpha158_margin_extended_config()
 
 class Alpha158(DataHandlerLP):
     def __init__(

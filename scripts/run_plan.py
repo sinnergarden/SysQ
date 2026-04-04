@@ -1,3 +1,7 @@
+"""
+DEPRECATED: Use run_daily_trading.py instead.
+This script is kept for backward compatibility only.
+"""
 import pandas as pd
 import sys
 from pathlib import Path

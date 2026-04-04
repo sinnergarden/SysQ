@@ -32,10 +32,17 @@ STANDARD_PLAN_COLUMNS = [
     "current_value",
     "diff_value",
     "weight_method",
+    "plan_role",
+    "execution_bucket",
+    "cash_dependency",
+    "t1_rule",
     "account_name",
     "signal_date",
     "plan_date",
     "execution_date",
+    "price_basis_date",
+    "price_basis_field",
+    "price_basis_label",
     "status",
     "filled_amount",
     "filled_price",
@@ -295,6 +302,33 @@ def export_plan_bundle(
         normalized["signal_date"] = signal_date
         normalized["plan_date"] = plan_date
         normalized["execution_date"] = execution_date
+        normalized["price_basis_date"] = signal_date
+        normalized["price_basis_field"] = "close"
+        normalized["price_basis_label"] = (
+            normalized["price_basis_field"].astype(str)
+            + "@"
+            + normalized["price_basis_date"].astype(str)
+            + " -> next-session execution plan"
+        )
+        normalized["plan_role"] = "target_portfolio_delta"
+        normalized["execution_bucket"] = normalized["side"].astype(str).str.lower().map(
+            {
+                "sell": "open_sell",
+                "buy": "after_sell_cash",
+            }
+        ).fillna("review")
+        normalized["cash_dependency"] = normalized["side"].astype(str).str.lower().map(
+            {
+                "sell": "releases_cash",
+                "buy": "requires_available_cash",
+            }
+        ).fillna("review")
+        normalized["t1_rule"] = normalized["side"].astype(str).str.lower().map(
+            {
+                "sell": "sell_amount_subject_to_existing_sellable_position",
+                "buy": "new_buy_not_sellable_until_next_session",
+            }
+        ).fillna("review")
         normalized["status"] = "planned"
         normalized["filled_amount"] = pd.NA
         normalized["filled_price"] = pd.NA
@@ -302,7 +336,12 @@ def export_plan_bundle(
         normalized["tax"] = pd.NA
         normalized["total_cost"] = pd.NA
         normalized["order_id"] = ""
-        normalized["note"] = ""
+        normalized["note"] = normalized["side"].astype(str).str.lower().map(
+            {
+                "sell": "Baseline rotation: prioritize selling old holdings during call auction/open.",
+                "buy": "Baseline rotation: buy after cash returns; partial fills/slippage are acceptable.",
+            }
+        ).fillna("")
         for column in STANDARD_PLAN_COLUMNS:
             if column not in normalized.columns:
                 normalized[column] = pd.NA

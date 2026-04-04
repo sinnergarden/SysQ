@@ -1,3 +1,22 @@
+"""
+Primary daily ops entrypoint (post-close).
+
+Purpose:
+- sync broker-exported real account state
+- reconcile real vs shadow
+- emit structured post-close report
+
+Typical usage:
+- python scripts/run_post_close.py --date 2026-03-20 --real_sync broker/real_sync_2026-03-20.csv
+
+Key args:
+- --date: trading date being reconciled
+- --real_sync: broker/account CSV after market close
+- --db_path / --output_dir / --report_dir / --plan_dir: redirect operational artifacts outside SysQ/data
+- --execution_date: optional execution date override
+- --no_report: skip JSON run report
+"""
+
 import argparse
 import sys
 import time
@@ -24,6 +43,13 @@ from qsys.reports.daily import DailyOpsReport
 from qsys.utils.logger import log
 
 
+def _resolve_cli_path(path_str: str) -> str:
+    path = Path(path_str).expanduser()
+    if not path.is_absolute():
+        path = project_root / path
+    return str(path)
+
+
 def main():
     start_time = time.time()
     blockers = []
@@ -39,11 +65,26 @@ def main():
         default="data/reconciliation",
         help="Directory to write reconciliation CSV outputs",
     )
+    parser.add_argument(
+        "--plan_dir",
+        default="data",
+        help="Directory containing pre-open plan CSV artifacts",
+    )
+    parser.add_argument(
+        "--report_dir",
+        default="data/reports",
+        help="Directory to write structured JSON reports",
+    )
     parser.add_argument("--real_account_name", default="real", help="Account name for real broker state")
     parser.add_argument("--shadow_account_name", default="shadow", help="Account name for shadow simulation state")
     parser.add_argument("--execution_date", type=str, help="Execution date (defaults to args.date)")
     parser.add_argument("--no_report", action="store_true", help="Skip generating the structured report")
     args = parser.parse_args()
+    args.db_path = _resolve_cli_path(args.db_path)
+    args.output_dir = _resolve_cli_path(args.output_dir)
+    args.report_dir = _resolve_cli_path(args.report_dir)
+    args.plan_dir = _resolve_cli_path(args.plan_dir)
+    args.real_sync = _resolve_cli_path(args.real_sync)
     
     execution_date = args.execution_date or args.date
     
@@ -75,7 +116,7 @@ def main():
     
     # Try to get signal_date from plan file
     signal_date = args.date
-    plan_path = Path(f"data/plan_{args.date}_{args.shadow_account_name}.csv")
+    plan_path = Path(args.plan_dir) / f"plan_{args.date}_{args.shadow_account_name}.csv"
     if plan_path.exists():
         try:
             plan_df = pd.read_csv(plan_path)
@@ -164,9 +205,10 @@ def main():
                 )
             )
         
-        report_path = DailyOpsReport.save(report)
+        report.artifacts["account_db"] = args.db_path
+        report_path = DailyOpsReport.save(report, output_dir=args.report_dir)
         manifest_path = update_manifest(
-            report_dir="data/reports",
+            report_dir=args.report_dir,
             execution_date=execution_date,
             signal_date=signal_date,
             stage="post_close",
