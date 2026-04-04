@@ -35,6 +35,7 @@ sys.path.append(str(project_root))
 from qsys.data.adapter import QlibAdapter
 from qsys.data.health import DataReadinessError, assert_qlib_data_ready
 from qsys.live.account import RealAccount
+from qsys.live.daily_artifacts import archive_daily_artifacts, build_daily_summary_bundle, extract_account_snapshot
 from qsys.live.manager import LiveManager
 from qsys.live.ops_manifest import update_manifest
 from qsys.live.reconciliation import sync_real_account_from_csv
@@ -238,6 +239,7 @@ def run_preopen_workflow(
         "real_plan_summary": {"status": "skipped", "signal_date": signal_date, "execution_date": execution_date},
         "signal_quality_summary": signal_quality_summary,
         "signal_basket_summary": {},
+        "account_snapshots": {},
         "artifacts": {"account_db": db_path},
         "blockers": blockers,
         "blocked_symbols": [],
@@ -403,6 +405,16 @@ def run_preopen_workflow(
             )
             result["artifacts"]["report"] = report_path
             result["artifacts"]["manifest"] = manifest_path
+            archive_info = archive_daily_artifacts(
+                execution_date=execution_date,
+                signal_date=signal_date,
+                stage="pre_open",
+                artifacts=result["artifacts"],
+            )
+            digest = build_daily_summary_bundle(execution_date=execution_date)
+            result["artifacts"]["daily_index"] = archive_info["index_path"]
+            result["artifacts"]["daily_summary_md"] = digest.report_markdown_path
+            result["artifacts"]["daily_summary_json"] = digest.report_json_path
             log_stage("report", "saved", path=report_path)
             log_stage("manifest", "saved", path=manifest_path)
         result["next_action"] = "Refresh data until readiness passes before pre-open"
@@ -456,6 +468,16 @@ def run_preopen_workflow(
                 result["artifacts"].update(signal_quality_artifacts)
                 result["artifacts"]["report"] = report_path
                 result["artifacts"]["manifest"] = manifest_path
+                archive_info = archive_daily_artifacts(
+                    execution_date=execution_date,
+                    signal_date=signal_date,
+                    stage="pre_open",
+                    artifacts=result["artifacts"],
+                )
+                digest = build_daily_summary_bundle(execution_date=execution_date)
+                result["artifacts"]["daily_index"] = archive_info["index_path"]
+                result["artifacts"]["daily_summary_md"] = digest.report_markdown_path
+                result["artifacts"]["daily_summary_json"] = digest.report_json_path
                 log_stage("report", "saved", path=report_path)
                 log_stage("manifest", "saved", path=manifest_path)
             result["next_action"] = "Investigate signal-quality blockers before trading"
@@ -502,6 +524,11 @@ def run_preopen_workflow(
     plan_shadow = manager_shadow.run_daily_plan(signal_date, account_name=shadow_account_name, execution_date=execution_date)
     shadow_summary = extract_plan_summary(plan_shadow, shadow_account_name, signal_date, execution_date)
     result["shadow_plan_summary"] = shadow_summary
+    result["account_snapshots"][shadow_account_name] = extract_account_snapshot(
+        shadow_sim.account,
+        date=signal_date,
+        account_name=shadow_account_name,
+    )
     log_plan_summary(shadow_summary)
 
     manager_real = LiveManager(model_path=model_path, db_path=db_path, output_dir=output_dir)
@@ -512,6 +539,11 @@ def run_preopen_workflow(
     plan_real = manager_real.run_daily_plan(signal_date, account_name=real_account_name, execution_date=execution_date)
     real_summary = extract_plan_summary(plan_real, real_account_name, signal_date, execution_date)
     result["real_plan_summary"] = real_summary
+    result["account_snapshots"][real_account_name] = extract_account_snapshot(
+        real_account,
+        date=signal_date,
+        account_name=real_account_name,
+    )
     log_plan_summary(real_summary)
 
     shadow_intents = build_order_intents(
@@ -606,11 +638,22 @@ def run_preopen_workflow(
                 "shadow_plan": shadow_summary,
                 "real_plan": real_summary,
                 "signal_quality_gate": signal_quality_summary,
+                "account_snapshots": result["account_snapshots"],
             },
         )
         result["artifacts"].update(report.artifacts)
         result["artifacts"]["report"] = report_path
         result["artifacts"]["manifest"] = manifest_path
+        archive_info = archive_daily_artifacts(
+            execution_date=execution_date,
+            signal_date=signal_date,
+            stage="pre_open",
+            artifacts=result["artifacts"],
+        )
+        digest = build_daily_summary_bundle(execution_date=execution_date)
+        result["artifacts"]["daily_index"] = archive_info["index_path"]
+        result["artifacts"]["daily_summary_md"] = digest.report_markdown_path
+        result["artifacts"]["daily_summary_json"] = digest.report_json_path
         log_stage("report", "saved", path=report_path)
         log_stage("manifest", "saved", path=manifest_path)
 

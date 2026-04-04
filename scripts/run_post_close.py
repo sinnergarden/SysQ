@@ -31,6 +31,7 @@ sys.path.append(str(project_root))
 
 from qsys.data.adapter import QlibAdapter
 from qsys.live.account import RealAccount
+from qsys.live.daily_artifacts import archive_daily_artifacts, build_daily_summary_bundle, extract_account_snapshot
 from qsys.live.ops_manifest import update_manifest
 from qsys.live.reconciliation import (
     build_reconciliation_result,
@@ -114,6 +115,7 @@ def main():
         log.warning(f"Could not resolve production model: {e}")
 
     account = RealAccount(db_path=args.db_path, account_name=args.real_account_name)
+    account_snapshots = {}
     
     # Try to get signal_date from plan file
     signal_date = args.date
@@ -139,6 +141,16 @@ def main():
         date=args.date,
         real_account_name=args.real_account_name,
         shadow_account_name=args.shadow_account_name,
+    )
+    account_snapshots[args.real_account_name] = extract_account_snapshot(
+        account,
+        date=args.date,
+        account_name=args.real_account_name,
+    )
+    account_snapshots[args.shadow_account_name] = extract_account_snapshot(
+        account,
+        date=args.date,
+        account_name=args.shadow_account_name,
     )
     written = write_reconciliation_outputs(
         result,
@@ -222,10 +234,20 @@ def main():
             summary={
                 "reconciliation": reconciliation_summary,
                 "signal_quality": signal_quality_summary,
+                "account_snapshots": account_snapshots,
             },
         )
+        archive_info = archive_daily_artifacts(
+            execution_date=execution_date,
+            signal_date=signal_date,
+            stage="post_close",
+            artifacts={**report.artifacts, "report": report_path, "manifest": manifest_path},
+        )
+        digest = build_daily_summary_bundle(execution_date=execution_date)
         log.info(f"Report saved to: {report_path}")
         log.info(f"Manifest saved to: {manifest_path}")
+        log.info(f"Daily index saved to: {archive_info['index_path']}")
+        log.info(f"Daily digest saved to: {digest.report_markdown_path}")
         
         # Also print markdown summary
         print("\n" + "=" * 60)
