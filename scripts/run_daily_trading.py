@@ -47,6 +47,7 @@ from qsys.live.signal_monitoring import (
 from qsys.live.scheduler import ModelScheduler
 from qsys.live.simulation import ShadowSimulator
 from qsys.reports.daily import DailyOpsReport
+from qsys.trader.order_intents import build_order_intents, save_order_intents
 from qsys.utils.logger import log, log_event, log_stage
 
 
@@ -513,6 +514,37 @@ def run_preopen_workflow(
     result["real_plan_summary"] = real_summary
     log_plan_summary(real_summary)
 
+    shadow_intents = build_order_intents(
+        plan_shadow,
+        signal_date=signal_date,
+        execution_date=execution_date,
+        account_name=shadow_account_name,
+        model_info=model_info,
+        assumptions=assumptions,
+    )
+    real_intents = build_order_intents(
+        plan_real,
+        signal_date=signal_date,
+        execution_date=execution_date,
+        account_name=real_account_name,
+        model_info=model_info,
+        assumptions=assumptions,
+    )
+    shadow_intents_path = save_order_intents(
+        shadow_intents,
+        output_dir=output_dir,
+        execution_date=execution_date,
+        account_name=shadow_account_name,
+    )
+    real_intents_path = save_order_intents(
+        real_intents,
+        output_dir=output_dir,
+        execution_date=execution_date,
+        account_name=real_account_name,
+    )
+    result["artifacts"]["shadow_order_intents"] = shadow_intents_path
+    result["artifacts"]["real_order_intents"] = real_intents_path
+
     result["cash_utilization"] = {
         shadow_account_name: {
             "planned_value": shadow_summary.get("total_value", 0.0),
@@ -550,6 +582,8 @@ def run_preopen_workflow(
         report.artifacts["real_plan"] = str(Path(output_dir) / f"plan_{signal_date}_{real_account_name}.csv")
         report.artifacts["shadow_real_sync_template"] = str(Path(output_dir) / f"real_sync_template_{signal_date}_{shadow_account_name}.csv")
         report.artifacts["real_real_sync_template"] = str(Path(output_dir) / f"real_sync_template_{signal_date}_{real_account_name}.csv")
+        report.artifacts["shadow_order_intents"] = shadow_intents_path
+        report.artifacts["real_order_intents"] = real_intents_path
         report.artifacts["account_db"] = db_path
         if signal_basket_path:
             report.artifacts["signal_basket"] = signal_basket_path

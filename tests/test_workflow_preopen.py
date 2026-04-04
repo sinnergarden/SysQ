@@ -26,7 +26,7 @@ class TestPreopenWorkflowAdapter(unittest.TestCase):
             "real_plan_summary": {"status": "ready", "trades": 4, "signal_date": "2026-04-03", "execution_date": "2026-04-06"},
             "signal_basket_summary": {"status": "ready", "trades": 5},
             "signal_quality_summary": {"status": "success"},
-            "artifacts": {"report": "/tmp/report.json"},
+            "artifacts": {"report": "/tmp/report.json", "shadow_order_intents": "/tmp/shadow.json", "real_order_intents": "/tmp/real.json"},
             "blockers": [],
             "blocked_symbols": [],
             "cash_utilization": {"shadow": {"planned_ratio": 0.95}},
@@ -40,6 +40,7 @@ class TestPreopenWorkflowAdapter(unittest.TestCase):
         self.assertEqual(result["summary"]["signal_date"], "2026-04-03")
         self.assertEqual(result["summary"]["executable_portfolio"]["shadow"]["trades"], 5)
         self.assertEqual(result["summary"]["assumptions"]["top_k"], 5)
+        self.assertEqual(result["summary"]["order_intents"]["real"], "/tmp/real.json")
         self.assertFalse(result["risk_flags"])
 
     @patch("scripts.run_daily_trading.run_preopen_workflow")

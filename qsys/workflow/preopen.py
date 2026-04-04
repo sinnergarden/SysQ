@@ -81,6 +81,10 @@ def run_preopen_plan(**kwargs) -> dict[str, Any]:
             "signal_quality_gate": workflow.get("signal_quality_summary") or {},
             "cash_utilization": workflow.get("cash_utilization") or {},
             "assumptions": workflow.get("assumptions") or {},
+            "order_intents": {
+                "shadow": (workflow.get("artifacts") or {}).get("shadow_order_intents"),
+                "real": (workflow.get("artifacts") or {}).get("real_order_intents"),
+            },
         },
         risk_flags=risk_flags,
         next_action=workflow.get("next_action"),

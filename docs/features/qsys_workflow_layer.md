@@ -158,7 +158,7 @@ qsys_plugins/
 
 - 已落地 `qsys/workflow/contracts.py` 与 `qsys/workflow/preopen.py`
 - `scripts/run_daily_trading.py` 现已暴露 `run_preopen_workflow()`，可直接返回结构化 dict，而不再只能依赖 stdout
-- `preopen-plan` adapter 当前已能输出 `signal_date / execution_date / data_status / model_info / target vs executable summary / risk_flags / next_action`
+- `preopen-plan` adapter 当前已能输出 `signal_date / execution_date / data_status / model_info / target vs executable summary / order_intents / risk_flags / next_action`
 - `feature-audit` 与 `rolling-eval` 仍停留在 command / design 层，尚未实现 Python adapter
 
 ## Test Plan
