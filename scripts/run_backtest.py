@@ -28,6 +28,7 @@ import click
 from qsys.backtest import BacktestEngine
 from qsys.config import cfg
 from qsys.reports.backtest import BacktestReport
+from qsys.strategy.engine import DEFAULT_TOP_K
 from qsys.utils.logger import log
 
 
@@ -36,7 +37,7 @@ from qsys.utils.logger import log
 @click.option("--universe", type=str, default="csi300", help="Backtest universe")
 @click.option("--start", type=str, default="2022-01-01", help="Backtest start date")
 @click.option("--end", type=str, default="2022-03-01", help="Backtest end date")
-@click.option("--top_k", type=int, default=30, help="Top K positions")
+@click.option("--top_k", type=int, default=DEFAULT_TOP_K, help="Top K positions")
 def main(model_path, universe, start, end, top_k):
     start_time = time.time()
     root_path = cfg.get_path("root")
