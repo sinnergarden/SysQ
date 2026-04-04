@@ -84,6 +84,65 @@ class TestMiniQMTBridge(unittest.TestCase):
         self.assertEqual(result.rejected_orders[0].status, BrokerOrderStatus.REJECTED)
         self.assertIn("dry_run_only", result.notes)
 
+    def test_load_readback_contract(self):
+        payload = {
+            "artifact_type": "miniqmt_readback",
+            "adapter_name": "MiniQMTWindowsBridge",
+            "account_name": "real",
+            "as_of_date": "2026-04-07",
+            "account_snapshot": {
+                "cash": 50000.0,
+                "total_assets": 80000.0,
+                "frozen_cash": 1000.0,
+            },
+            "positions": [
+                {
+                    "symbol": "600000.SH",
+                    "total_amount": 300,
+                    "sellable_amount": 300,
+                    "avg_cost": 10.2,
+                    "market_value": 3150.0,
+                    "last_price": 10.5,
+                }
+            ],
+            "orders": [
+                {
+                    "broker_order_id": "ord-1",
+                    "intent_id": "intent-1",
+                    "symbol": "600000.SH",
+                    "side": "buy",
+                    "amount": 300,
+                    "price": 10.5,
+                    "status": "filled",
+                    "filled_amount": 300,
+                    "filled_price": 10.5,
+                }
+            ],
+            "trades": [
+                {
+                    "broker_trade_id": "trade-1",
+                    "broker_order_id": "ord-1",
+                    "intent_id": "intent-1",
+                    "symbol": "600000.SH",
+                    "side": "buy",
+                    "filled_amount": 300,
+                    "filled_price": 10.5,
+                    "fee": 1.2,
+                }
+            ],
+        }
+
+        with tempfile.NamedTemporaryFile("w", suffix=".json", encoding="utf-8", delete=False) as handle:
+            json.dump(payload, handle)
+            path = handle.name
+
+        adapter = MiniQMTAdapter()
+        readback = adapter.load_readback(path)
+        self.assertEqual(readback.account_snapshot.cash, 50000.0)
+        self.assertEqual(readback.positions[0].last_price, 10.5)
+        self.assertEqual(readback.orders[0].status, BrokerOrderStatus.FILLED)
+        self.assertGreater(readback.trades[0].total_cost, 0.0)
+
     def test_read_methods_are_not_implemented_yet(self):
         adapter = MiniQMTAdapter()
         with self.assertRaises(NotImplementedError):

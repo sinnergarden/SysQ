@@ -5,6 +5,7 @@ import sqlite3
 import pandas as pd
 from datetime import datetime
 from pathlib import Path
+import json
 import shutil
 import tempfile
 
@@ -247,6 +248,95 @@ class TestLiveTrading(unittest.TestCase):
         self.assertEqual(len(result.real_trades), 1)
         self.assertEqual(result.real_trades.iloc[0]["order_id"], "ord-1")
         self.assertEqual(int(result.positions.iloc[0]["amount_diff"]), -20)
+
+    def test_reconciliation_sync_from_miniqmt_readback_json(self):
+        shadow_account = RealAccount(db_path=self.db_path, account_name="shadow")
+        real_account = RealAccount(db_path=self.db_path, account_name="real")
+
+        shadow_positions = pd.DataFrame([
+            {"symbol": "600000.SH", "amount": 300, "price": 10.0, "cost_basis": 9.8}
+        ])
+        shadow_account.sync_broker_state(
+            "2025-01-02",
+            cash=47000.0,
+            positions=shadow_positions,
+            total_assets=50000.0,
+            account_name="shadow",
+        )
+
+        json_path = os.path.join(self.test_dir, "miniqmt_readback.json")
+        payload = {
+            "artifact_type": "miniqmt_readback",
+            "adapter_name": "MiniQMTWindowsBridge",
+            "account_name": "real",
+            "as_of_date": "2025-01-02",
+            "account_snapshot": {
+                "cash": 48000.0,
+                "total_assets": 51150.0,
+                "frozen_cash": 0.0,
+            },
+            "positions": [
+                {
+                    "symbol": "600000.SH",
+                    "total_amount": 300,
+                    "sellable_amount": 300,
+                    "avg_cost": 10.2,
+                    "market_value": 3150.0,
+                    "last_price": 10.5,
+                }
+            ],
+            "orders": [
+                {
+                    "broker_order_id": "ord-2",
+                    "intent_id": "intent-2",
+                    "symbol": "600000.SH",
+                    "side": "buy",
+                    "amount": 300,
+                    "price": 10.5,
+                    "status": "filled",
+                    "filled_amount": 300,
+                    "filled_price": 10.5,
+                }
+            ],
+            "trades": [
+                {
+                    "broker_trade_id": "trade-2",
+                    "broker_order_id": "ord-2",
+                    "intent_id": "intent-2",
+                    "symbol": "600000.SH",
+                    "side": "buy",
+                    "filled_amount": 300,
+                    "filled_price": 10.5,
+                    "fee": 1.5,
+                    "tax": 0.0,
+                }
+            ],
+        }
+        with open(json_path, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle)
+
+        normalized = sync_real_account_from_csv(
+            real_account,
+            account_name="real",
+            sync_path=json_path,
+            date="2025-01-02",
+            persist_trade_log=True,
+        )
+
+        self.assertEqual(normalized.iloc[0]["symbol"], "600000.SH")
+        self.assertEqual(float(normalized.iloc[0]["cash"]), 48000.0)
+
+        result = build_reconciliation_result(
+            real_account,
+            date="2025-01-02",
+            real_account_name="real",
+            shadow_account_name="shadow",
+        )
+        cash_diff = result.summary.loc[result.summary["metric"] == "cash", "diff"].iloc[0]
+        self.assertEqual(cash_diff, 1000.0)
+        self.assertEqual(len(result.real_trades), 1)
+        self.assertEqual(result.real_trades.iloc[0]["order_id"], "ord-2")
+        self.assertEqual(int(result.positions.iloc[0]["amount_diff"]), 0)
 
     def test_plan_generator_keeps_clean_symbol_and_scores(self):
         planner = PlanGenerator(min_trade_amount=1000)

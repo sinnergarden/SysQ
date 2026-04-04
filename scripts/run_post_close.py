@@ -8,10 +8,11 @@ Purpose:
 
 Typical usage:
 - python scripts/run_post_close.py --date 2026-03-20 --real_sync broker/real_sync_2026-03-20.csv
+- python scripts/run_post_close.py --date 2026-03-20 --real_sync broker/miniqmt_readback_2026-03-20.json
 
 Key args:
 - --date: trading date being reconciled
-- --real_sync: broker/account CSV after market close
+- --real_sync: broker/account CSV or MiniQMT readback JSON after market close
 - --db_path / --output_dir / --report_dir / --plan_dir: redirect operational artifacts outside SysQ/data
 - --execution_date: optional execution date override
 - --no_report: skip JSON run report
@@ -58,7 +59,7 @@ def main():
         description="Post-close workflow: sync real account CSV and reconcile against shadow account"
     )
     parser.add_argument("--date", required=True, help="Trading date to reconcile (YYYY-MM-DD)")
-    parser.add_argument("--real_sync", required=True, help="Broker/account CSV exported after market close")
+    parser.add_argument("--real_sync", required=True, help="Broker/account CSV or MiniQMT readback JSON exported after market close")
     parser.add_argument("--db_path", default="data/real_account.db", help="SQLite account database path")
     parser.add_argument(
         "--output_dir",

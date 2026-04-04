@@ -67,6 +67,21 @@ class BrokerOrder:
     filled_price: float = 0.0
     message: str = ""
 
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "BrokerOrder":
+        return cls(
+            broker_order_id=str(payload.get("broker_order_id") or ""),
+            intent_id=str(payload.get("intent_id") or ""),
+            symbol=str(payload.get("symbol") or ""),
+            side=str(payload.get("side") or "").lower(),
+            amount=int(payload.get("amount") or 0),
+            price=float(payload.get("price") or 0.0),
+            status=BrokerOrderStatus(str(payload.get("status") or BrokerOrderStatus.PENDING.value)),
+            filled_amount=int(payload.get("filled_amount") or 0),
+            filled_price=float(payload.get("filled_price") or 0.0),
+            message=str(payload.get("message") or ""),
+        )
+
 
 @dataclass
 class PositionSnapshot:
@@ -75,6 +90,131 @@ class PositionSnapshot:
     sellable_amount: int
     avg_cost: float
     market_value: float
+    last_price: float = 0.0
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "PositionSnapshot":
+        total_amount = int(payload.get("total_amount") or payload.get("amount") or 0)
+        market_value = float(payload.get("market_value") or 0.0)
+        last_price = float(payload.get("last_price") or payload.get("price") or 0.0)
+        if last_price <= 0 and total_amount > 0 and market_value > 0:
+            last_price = market_value / total_amount
+        return cls(
+            symbol=str(payload.get("symbol") or ""),
+            total_amount=total_amount,
+            sellable_amount=int(payload.get("sellable_amount") or total_amount),
+            avg_cost=float(payload.get("avg_cost") or payload.get("cost_basis") or last_price),
+            market_value=market_value,
+            last_price=last_price,
+        )
+
+
+@dataclass
+class AccountSnapshot:
+    account_name: str
+    cash: float
+    total_assets: float
+    frozen_cash: float = 0.0
+    market_value: float = 0.0
+    available_cash: float = 0.0
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any], *, account_name: str = "real") -> "AccountSnapshot":
+        cash = float(payload.get("cash") or 0.0)
+        frozen_cash = float(payload.get("frozen_cash") or 0.0)
+        available_cash = float(payload.get("available_cash") or max(cash - frozen_cash, 0.0))
+        return cls(
+            account_name=str(payload.get("account_name") or account_name),
+            cash=cash,
+            total_assets=float(payload.get("total_assets") or 0.0),
+            frozen_cash=frozen_cash,
+            market_value=float(payload.get("market_value") or 0.0),
+            available_cash=available_cash,
+        )
+
+
+@dataclass
+class TradeSnapshot:
+    broker_trade_id: str
+    broker_order_id: str
+    intent_id: str
+    symbol: str
+    side: str
+    filled_amount: int
+    filled_price: float
+    fee: float = 0.0
+    tax: float = 0.0
+    total_cost: float = 0.0
+    order_id: str = ""
+    note: str = ""
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "TradeSnapshot":
+        filled_amount = int(payload.get("filled_amount") or payload.get("amount") or 0)
+        filled_price = float(payload.get("filled_price") or payload.get("price") or 0.0)
+        fee = float(payload.get("fee") or 0.0)
+        tax = float(payload.get("tax") or 0.0)
+        total_cost = float(payload.get("total_cost") or 0.0)
+        side = str(payload.get("side") or "").lower()
+        if total_cost == 0.0 and filled_amount > 0 and filled_price > 0:
+            gross = filled_amount * filled_price
+            total_cost = gross + fee + tax if side == "buy" else gross - fee - tax
+        order_id = str(payload.get("order_id") or payload.get("broker_order_id") or "")
+        return cls(
+            broker_trade_id=str(payload.get("broker_trade_id") or ""),
+            broker_order_id=str(payload.get("broker_order_id") or order_id),
+            intent_id=str(payload.get("intent_id") or ""),
+            symbol=str(payload.get("symbol") or ""),
+            side=side,
+            filled_amount=filled_amount,
+            filled_price=filled_price,
+            fee=fee,
+            tax=tax,
+            total_cost=total_cost,
+            order_id=order_id,
+            note=str(payload.get("note") or ""),
+        )
+
+
+@dataclass
+class MiniQMTReadback:
+    account_snapshot: AccountSnapshot
+    positions: list[PositionSnapshot] = field(default_factory=list)
+    orders: list[BrokerOrder] = field(default_factory=list)
+    trades: list[TradeSnapshot] = field(default_factory=list)
+    adapter_name: str = "MiniQMTAdapter"
+    account_name: str = "real"
+    as_of_date: str = ""
+    artifact_type: str = "miniqmt_readback"
+    notes: list[str] = field(default_factory=list)
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "MiniQMTReadback":
+        account_name = str(payload.get("account_name") or payload.get("account_snapshot", {}).get("account_name") or "real")
+        return cls(
+            artifact_type=str(payload.get("artifact_type") or "miniqmt_readback"),
+            adapter_name=str(payload.get("adapter_name") or "MiniQMTAdapter"),
+            account_name=account_name,
+            as_of_date=str(payload.get("as_of_date") or payload.get("date") or ""),
+            account_snapshot=AccountSnapshot.from_dict(payload.get("account_snapshot") or {}, account_name=account_name),
+            positions=[PositionSnapshot.from_dict(item) for item in payload.get("positions") or []],
+            orders=[BrokerOrder.from_dict(item) for item in payload.get("orders") or []],
+            trades=[TradeSnapshot.from_dict(item) for item in payload.get("trades") or []],
+            notes=list(payload.get("notes") or []),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "artifact_type": self.artifact_type,
+            "adapter_name": self.adapter_name,
+            "account_name": self.account_name,
+            "as_of_date": self.as_of_date,
+            "account_snapshot": asdict(self.account_snapshot),
+            "positions": [asdict(item) for item in self.positions],
+            "orders": [MiniQMTBridgeResult._serialize_order(item) for item in self.orders],
+            "trades": [asdict(item) for item in self.trades],
+            "notes": list(self.notes),
+        }
 
 
 @dataclass
@@ -121,6 +261,11 @@ class MiniQMTAdapter:
         intents = payload.get("intents") or []
         return [MiniQMTOrderIntent.from_dict(item) for item in intents]
 
+    def load_readback(self, path: str | Path) -> MiniQMTReadback:
+        with open(path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+        return MiniQMTReadback.from_dict(payload)
+
     def validate_intent(self, intent: MiniQMTOrderIntent) -> list[str]:
         issues: list[str] = []
         if not intent.intent_id:
@@ -162,7 +307,7 @@ class MiniQMTAdapter:
             message="converted_for_bridge",
         )
 
-    def read_account_snapshot(self) -> dict[str, Any]:
+    def read_account_snapshot(self) -> AccountSnapshot:
         raise NotImplementedError("MiniQMT read bridge is not implemented yet")
 
     def read_positions(self) -> list[PositionSnapshot]:
@@ -171,7 +316,7 @@ class MiniQMTAdapter:
     def read_orders(self) -> list[BrokerOrder]:
         raise NotImplementedError("MiniQMT order bridge is not implemented yet")
 
-    def read_trades(self) -> list[dict[str, Any]]:
+    def read_trades(self) -> list[TradeSnapshot]:
         raise NotImplementedError("MiniQMT trade bridge is not implemented yet")
 
     def submit_orders(self, intents: list[MiniQMTOrderIntent]) -> MiniQMTBridgeResult:
