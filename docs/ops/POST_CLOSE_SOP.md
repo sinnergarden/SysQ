@@ -1,132 +1,129 @@
-# 收盘后 SOP
+# POST CLOSE SOP
 
-## 1. 目的
+## 1. 目标
 
-在交易日结束后，把真实账户状态回填进系统，完成 real / shadow 对账，并把盘后证据统一落到 `daily/{execution_date}/post_close/`，为下一交易日接续运行提供可信基线。
+盘后 SOP 的核心不是简单保存 broker 导出文件，而是闭合当天证据链：
 
-## 2. 输入
+- 收盘后的 real account 状态成功回写到长期账本。
+- real vs shadow 的差异有结构化对账输出。
+- 当天盘后证据落进 `daily/{execution_date}/post_close/`。
+- 关键结构化字段可继续 rollup 到 `data/derived/` 做横向分析。
 
-- `--date`：交易日，通常也是 `execution_date`
-- `--real_sync`：券商导出 CSV 或 bridge readback JSON
-- `--db_path`
-- `--plan_dir`（默认 `daily/{execution_date}/pre_open/plans`）
-- `--output_dir`（默认 `daily/{execution_date}/post_close`）
-- `--report_dir`（默认 `daily/{execution_date}/post_close/reports`）
+## 2. 前置条件
 
-## 3. 默认输出
+执行盘后前，确保：
 
-- `daily/{execution_date}/post_close/reconciliation/reconcile_summary_{date}.csv`
-- `daily/{execution_date}/post_close/reconciliation/reconcile_positions_{date}.csv`
-- `daily/{execution_date}/post_close/reconciliation/reconcile_real_trades_{date}.csv`
-- `daily/{execution_date}/post_close/snapshots/real_sync_snapshot_{date}.csv`
-- `daily/{execution_date}/post_close/diagnostics/signal_quality_summary_{date}.json`
-- `daily/{execution_date}/post_close/reports/daily_ops_post_close_{run_id}.json`
-- `daily/{execution_date}/post_close/manifests/daily_ops_manifest_{execution_date}.json`
+- 已有对应交易日的盘前 evidence 包。
+- broker 导出的 `real_sync` 文件日期明确且内容完整。
+- 长期账本使用 `data/meta/real_account.db`，不要在 `daily/` 中维护主库副本。
 
-## 4. 标准步骤
+如果账户状态缺失、broker 导出日期不清、回写字段不完整，直接视为 blocker。
 
-### Step A：读取真实券商回填文件
+## 3. 执行命令
 
-最小字段：
+标准命令：
 
-- `symbol`
-- `amount`
-- `price`
-- `cost_basis`
-- `cash`
-- `total_assets`
+```bash
+python scripts/run_post_close.py --date 2026-04-03 --real_sync broker/real_sync_2026-04-03.csv
+```
 
-建议字段：
+如果盘前计划和盘后对账使用同一 execution date，但你想显式传入：
 
-- `side`
-- `filled_amount`
-- `filled_price`
-- `fee`
-- `tax`
-- `total_cost`
-- `order_id`
-- `note`
+```bash
+python scripts/run_post_close.py \
+  --date 2026-04-03 \
+  --execution_date 2026-04-03 \
+  --real_sync broker/real_sync_2026-04-03.csv
+```
 
-如果缺最小字段，不允许凭猜测落库。
+## 4. 默认输出位置
 
-### Step B：定位对应的盘前计划
+盘后默认输出目录：`daily/{execution_date}/post_close/`
 
-规则：
+固定子目录：
 
-- 默认从 `daily/{execution_date}/pre_open/plans/` 找对应 plan
-- 若找到了 plan，则优先使用 plan 内的 `signal_date`
-- 若新目录找不到，脚本会最小兼容回退到 legacy `data/plan_*.csv`
-- 若仍找不到，才回退到 `--date`
+- `reconciliation/`
+- `snapshots/`
+- `reports/`
+- `manifests/`
 
-### Step C：同步真实账户状态
+关键文件模式：
 
-通过条件：
+- `reconciliation/reconcile_summary_{date}.csv`
+- `reconciliation/reconcile_positions_{date}.csv`
+- `reconciliation/reconcile_real_trades_{date}.csv`
+- `snapshots/real_sync_snapshot_{date}.csv`
+- `reports/daily_ops_post_close_*.json`
+- `reports/signal_quality_summary_{date}.json`
+- `manifests/daily_ops_manifest_{execution_date}.json`
 
-- balance history 写入成功
-- position history 写入成功
-- trade log 可追溯
-- 真实快照已写入 `post_close/snapshots/`
+## 5. 盘后验收清单
 
-### Step D：执行对账
+### 5.1 Real Account 回写
 
-至少比较：
+至少确认：
 
 - `cash`
 - `total_assets`
-- 持仓数量差异
-- 真实成交记录数量
+- `positions`
+- `trade_log`（如 broker 输入里有稳定成交信息）
 
-默认对账产物：
+这些内容要写回长期账本 `data/meta/real_account.db`，不是复制到按天数据库。
 
-- `reconcile_summary_{date}.csv`
-- `reconcile_positions_{date}.csv`
-- `reconcile_real_trades_{date}.csv`
+### 5.2 Reconciliation Summary
 
-### Step E：生成盘后报告与 manifest
+至少确认 summary 中包含：
 
-盘后报告必须能回答：
+- `cash`
+- `total_assets`
+- `position_count`
+- `diff`
 
-- 用的是哪天的 `signal_date` / `execution_date`
-- 真实账户回填文件来自哪里
-- real / shadow 差异有多大
-- signal quality 诊断是否有缺口
-- 关键文件落在哪里
+### 5.3 Position Gaps
 
-## 5. 成功标准
+至少确认：
 
-- 真实账户最新状态已落库
-- 对账 CSV 与摘要可读
-- 盘后报告和 manifest 已落盘
-- 第二天盘前能接续读取到最新状态
-- 输出确实在 `daily/{execution_date}/post_close/`
+- 缺口标的可追踪到 `symbol`
+- `real_amount` 与 `shadow_amount` 可比较
+- `amount_diff` 与 `market_value_diff` 可解释
 
-## 6. 常见故障
+### 5.4 Snapshots
 
-### real_sync 缺字段
+`real_sync_snapshot_{date}.csv` 只作为当天证据快照使用，不能替代主账本。
 
-处理：补 CSV / JSON 标准化字段，不允许凭经验推断。
+## 6. 盘后完成后的长期沉淀
 
-### 找不到盘前计划
+盘后 evidence 写完后，建议立刻 rollup：
 
-处理：盘后仍可运行，但 `signal_date` 会回退到 `--date`；报告里必须说明是 fallback。
+```bash
+python scripts/rollup_daily_artifacts.py --execution_date 2026-04-03
+```
 
-### 对账差异过大
+当前 rollup 会追加到：
 
-处理：优先查成交回填、部分成交、手续费税费、T+1 约束、人工临时下单。
+- `data/derived/signal_baskets.csv`
+- `data/derived/order_intents.csv`
+- `data/derived/reconciliation_summary.csv`
+- `data/derived/position_gaps.csv`
 
-### 盘后文件写回 legacy 根目录
+这样做的目的：
 
-表现：出现 `data/reconcile_*.csv` 或 `data/reports/daily_ops_post_close_*.json`
+- 跨天分析不用反复扫整个 `daily/`
+- 排障时可以先从长期表定位，再回到原始证据文件
+- 同一日重复 rollup 也能去重，避免明显重复记录
 
-处理：检查是否误传了 legacy `--output_dir` / `--report_dir`，或是否直接调用了底层 helper 并绕过主脚本。
+## 7. 失败时怎么处理
 
-## 7. 人工接管
+- 找不到盘前计划：只检查 `daily/{execution_date}/pre_open/plans/`，不再回退到旧 `data/` 根目录。
+- 回写失败：先修 broker 导出或字段映射，不要手工创建日级账本副本。
+- 对账差异异常：先查 `reconciliation/` 与 `snapshots/`，再查 `data/derived/position_gaps.csv`。
+- 信号质量评估失败：保留 `reports/` 里的质量摘要，作为次日 blocker 输入。
 
-人工接管时至少保留：
+## 8. 盘后结束标准
 
-- 券商原始导出文件路径
-- 实际写入的 `db_path`
-- 对账输出目录
-- 差异解释
-- 是否允许第二天继续自动盘前
-- 若临时使用了 legacy 路径，需标明原因与回滚方案
+满足以下条件，才算当天 post-close 完成：
+
+- 实盘状态已回写到 `data/meta/real_account.db`
+- `daily/{execution_date}/post_close/` 证据齐全
+- manifest 与 report 已生成
+- 至少一次 rollup 已完成，`data/derived/` 有对应结构化记录

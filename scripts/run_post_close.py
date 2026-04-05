@@ -94,7 +94,7 @@ def main():
     )
     parser.add_argument("--date", required=True, help="Trading date to reconcile (YYYY-MM-DD)")
     parser.add_argument("--real_sync", required=True, help="Broker/account CSV or MiniQMT readback JSON exported after market close")
-    parser.add_argument("--db_path", help="SQLite account database path (default: data/meta/real_account.db with legacy fallback to data/real_account.db)")
+    parser.add_argument("--db_path", help="SQLite account database path (default: data/meta/real_account.db)")
     parser.add_argument(
         "--output_dir",
         help="Directory to write post-close artifacts (default: daily/<execution_date>/post_close)",
@@ -162,7 +162,6 @@ def main():
         account_name=args.shadow_account_name,
         plan_dir=args.plan_dir,
         daily_root=daily_root,
-        legacy_root=project_root / "data",
     )
     if plan_path and plan_path.exists():
         try:

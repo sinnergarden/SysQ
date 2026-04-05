@@ -1,158 +1,136 @@
-# 盘前 SOP
+# PRE OPEN SOP
 
-## 1. 目的
+## 1. 目标
 
-在执行日开盘前，基于上一交易日收盘数据生成可执行计划，并把计划、信号篮子、order intents、报告统一落到 `daily/{execution_date}/pre_open/`。
+盘前 SOP 的目标不是“生成几个文件”，而是确认今天可以运营：
 
-## 2. 输入
+- 数据健康通过。
+- 模型输出可解释的分数与排序。
+- 每个账户都有明确的计划、权重、计划股数与参考价格。
+- 所有证据都落进 `daily/{execution_date}/pre_open/`。
 
-- `signal_date`：上一交易日
-- `execution_date`：实际执行日
-- 生产模型或指定 `--model_path`
-- 账户数据库 `--db_path`
-- 盘前产物根目录 `--output_dir`（默认 `daily/{execution_date}/pre_open`）
-- 报告目录 `--report_dir`（默认 `daily/{execution_date}/pre_open/reports`）
+## 2. 前置检查
 
-## 3. 默认输出
+开始前先确认：
 
-- `daily/{execution_date}/pre_open/plans/plan_{signal_date}_shadow.csv`
-- `daily/{execution_date}/pre_open/plans/plan_{signal_date}_real.csv`
-- `daily/{execution_date}/pre_open/templates/real_sync_template_{signal_date}_shadow.csv`
-- `daily/{execution_date}/pre_open/templates/real_sync_template_{signal_date}_real.csv`
-- `daily/{execution_date}/pre_open/order_intents/order_intents_{execution_date}_shadow.json`
-- `daily/{execution_date}/pre_open/order_intents/order_intents_{execution_date}_real.json`
-- `daily/{execution_date}/pre_open/signals/signal_basket_{signal_date}.csv`
-- `daily/{execution_date}/pre_open/diagnostics/signal_quality_summary_{signal_date}.json`
-- `daily/{execution_date}/pre_open/reports/daily_ops_pre_open_{run_id}.json`
-- `daily/{execution_date}/pre_open/manifests/daily_ops_manifest_{execution_date}.json`
+- canonical data 已更新到正确日期：`data/raw/` 与 `data/qlib_bin/`
+- 生产模型可解析：`data/models/production_manifest.yaml`
+- 长期账户账本存在于 `data/meta/real_account.db`
+- 日期语义明确：`signal_date` 是算信号用的数据日期，`execution_date` 是计划执行日期
 
-## 4. 标准步骤
+若日期不清、数据滞后、账户状态缺失，直接视为 blocker。
 
-### Step A：确认日期
+## 3. 执行命令
 
-规则：
+标准命令：
 
-- 若 `--execution_date` 明确传入，则 `--date` 就是 `signal_date`
-- 若仅传 `--date` 且该日期晚于今天，则该日期视为 `execution_date`，脚本自动回退到上一交易日作为 `signal_date`
-- 任何盘前输出都必须同时写清 `signal_date` 与 `execution_date`
+```bash
+python scripts/run_daily_trading.py --date 2026-04-02
+```
 
-### Step B：先做数据健康检查
+如果需要显式指定执行日：
+
+```bash
+python scripts/run_daily_trading.py --date 2026-04-02 --execution_date 2026-04-03
+```
+
+## 4. 默认输出位置
+
+盘前默认输出目录：`daily/{execution_date}/pre_open/`
+
+固定子目录：
+
+- `plans/`
+- `order_intents/`
+- `signals/`
+- `reports/`
+- `manifests/`
+
+关键文件模式：
+
+- `plans/plan_{signal_date}_{account}.csv`
+- `plans/real_sync_template_{signal_date}_{account}.csv`
+- `order_intents/order_intents_{execution_date}_{account}.json`
+- `signals/signal_basket_{signal_date}.csv`
+- `reports/daily_ops_pre_open_*.json`
+- `reports/signal_quality_summary_{signal_date}.json`
+- `manifests/daily_ops_manifest_{execution_date}.json`
+
+说明：`real_sync_template` 归入 `plans/`，因为它本质上是盘前计划的执行回写模板，不再单独开 `templates/` 目录。
+
+## 5. 盘前验收清单
+
+### 5.1 数据健康
 
 至少检查：
 
-- 最新日期是否到位
-- raw 与 qlib 是否对齐
-- 字段是否齐全
-- 缺失率是否异常
-- `core_daily_status` 是否阻断
+- 日期是否正确
+- 是否存在缺口
+- 关键字段是否齐全
+- 空值是否异常偏多
 
-建议命令：
+如果脚本输出了 data readiness blocker，禁止继续把结果当作正式计划。
 
-```bash
-python scripts/run_daily_trading.py \
-  --date 2026-04-03 \
-  --execution_date 2026-04-06 \
-  --require_update_success
-```
+### 5.2 Signal Basket
 
-通过条件：
+至少检查这些字段：
 
-- 显式刷新未失败
-- `health_ok == true`
-- `aligned == true`
-- `core_daily_status` 不阻断
+- `symbol`
+- `score`
+- `score_rank`
+- `weight`
+- `price`
+- `signal_date`
+- `execution_date`
 
-若不通过，流程必须停在报告阶段，不得继续生成可运营计划。
+如果只有代码没有排序依据，不满足运营要求。
 
-### Step C：确认模型
+### 5.3 Plan
 
-通过条件：
-
-- 生产 manifest 能解析，或手工指定 `--model_path`
-- 模型可加载
-- 特征配置可读取
-- 模型信息能写入报告与 order intents
-
-### Step D：生成 signal basket 与计划
-
-盘前至少应生成：
-
-- signal basket
-- shadow plan
-- real plan
-- shadow / real order intents
-- real sync template
-
-计划 CSV 至少应包含：
+至少检查这些字段：
 
 - `symbol`
 - `side`
 - `amount`
 - `price`
-- `weight`
-- `score`
-- `score_rank`
+- `est_value`
+- `weight` 或 `target_value`
 - `signal_date`
 - `execution_date`
-- `plan_role`
+
+### 5.4 Order Intents
+
+至少检查这些字段：
+
+- `account_name`
+- `symbol`
+- `side`
+- `amount`
+- `price`
 - `execution_bucket`
 - `cash_dependency`
 - `t1_rule`
-- `price_basis_date`
-- `price_basis_field`
-- `price_basis_label`
 
-### Step E：人工复核
+## 6. 结果解释
 
-至少检查：
+盘前 evidence 包回答的问题应该是：
 
-- 是否出现异常集中持仓
-- 是否存在大面积空计划
-- `sell` 是否先于 `buy` 的现金依赖逻辑
-- 小账户在 `min_trade` 约束下是否失真
-- 输出路径是否确实在 `daily/{execution_date}/pre_open/`
-- `order_intents` 是否包含 `intent_count`、`price_basis`、`execution_bucket`
+- 用了哪一天的数据？
+- 模型为什么选了这些票？
+- 每个账户打算怎么执行？
+- 有没有 blocker 阻止今日执行？
 
-## 5. 成功标准
+## 7. 失败时怎么处理
 
-- real / shadow 计划已生成
-- signal basket 与 order intents 已落盘
-- 日期字段一致
-- 报告和 manifest 已落盘
-- 人能看懂计划含义、评分依据和下一步动作
+- 数据健康失败：先修数据，不继续下游。
+- 模型路径缺失：先修 `data/models/production_manifest.yaml` 或重新训练。
+- 账户主库问题：检查 `data/meta/real_account.db`，不要去 `daily/` 找主库副本。
+- 找不到计划：只检查 `daily/{execution_date}/pre_open/`，不再回退到 `data/` 根目录旧文件。
 
-## 6. 常见故障
+## 8. 盘前完成后的建议动作
 
-### 数据 stale
+```bash
+python scripts/run_signal_quality.py --date 2026-04-03
+```
 
-表现：`last_qlib_date < expected_latest_date`
-
-处理：转 `docs/ops/DATA_PIPELINE_SOP.md`，禁止硬跑盘前。
-
-### 模型不存在
-
-表现：manifest 无法解析或 model path 不存在
-
-处理：切到 `docs/ops/MODEL_OPS_SOP.md`，恢复生产模型或回滚。
-
-### 计划为空
-
-表现：real / shadow 某一侧无交易
-
-处理：检查账户状态、`min_trade`、昨日回填是否完成。若为空属正常，也必须在报告中明确原因。
-
-### 输出仍落到 legacy 根目录
-
-表现：出现 `data/plan_*.csv`、`data/order_intents_*.json`、`data/signal_basket_*.csv`
-
-处理：检查是否误传了 legacy `--output_dir`，或是否绕过了 `run_daily_trading.py` 主入口。
-
-## 7. 人工接管
-
-当盘前流程失败时：
-
-- 人工先确认是否允许继续交易日运营
-- 若数据未 ready，直接阻断，不做猜测推荐
-- 若仅路径或账户状态问题，可修复后重跑
-- 接管后必须保留本次使用的命令、目录和报告路径
-- 若临时改了 `--output_dir` / `--report_dir`，必须把实际路径写进交接说明
+如果当天完成交易并在收盘后拿到 broker 回写，再执行盘后 SOP。

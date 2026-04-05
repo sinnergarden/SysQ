@@ -13,7 +13,7 @@ class RealAccount:
     Stores the 'Reality' (what we actually own at the broker).
     Supports multiple accounts via 'account_name'.
     """
-    def __init__(self, db_path="data/real_account.db", account_name="default"):
+    def __init__(self, db_path="data/meta/real_account.db", account_name="default"):
         self.db_path = str(db_path)
         self.account_name = account_name
         self._init_db()

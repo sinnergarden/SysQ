@@ -5,7 +5,6 @@ from pathlib import Path
 
 from qsys.live.daily_artifacts import archive_daily_artifacts, build_daily_summary_bundle, extract_account_snapshot
 from qsys.live.ops_manifest import update_manifest
-from qsys.live.ops_paths import migrate_legacy_daily_artifacts
 
 
 class _FakeAccount:
@@ -127,50 +126,32 @@ class TestDailyArtifacts(unittest.TestCase):
             self.assertIn("Current Day Predictions", bundle.report_text)
             self.assertIn("status=available", bundle.report_text)
             self.assertIn("2026-04-02: cash_diff=100.0", bundle.report_text)
+            self.assertTrue(bundle.report_markdown_path.endswith("pre_open/reports/daily_ops_digest_2026-04-03.md"))
 
             index_payload = json.loads(Path(bundle.snapshot_index_path).read_text(encoding="utf-8"))
             self.assertIn("pre_open", index_payload["stages"])
             self.assertEqual(index_payload["stages"]["pre_open"]["artifacts"]["report"]["category"], "reports")
 
-    def test_migrate_legacy_daily_artifacts_moves_pre_open_outputs(self):
+    def test_archive_daily_artifacts_keeps_account_db_as_external_reference(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            project_root = Path(tmpdir)
-            data_root = project_root / "data"
-            reports_root = data_root / "reports"
-            data_root.mkdir(parents=True)
-            reports_root.mkdir(parents=True)
+            tmp = Path(tmpdir)
+            db_path = tmp / "data" / "meta" / "real_account.db"
+            db_path.parent.mkdir(parents=True, exist_ok=True)
+            db_path.write_text("placeholder", encoding="utf-8")
 
-            plan_path = data_root / "plan_2026-04-02_shadow.csv"
-            plan_path.write_text(
-                "symbol,execution_date\nAAA,2026-04-03\n",
-                encoding="utf-8",
-            )
-            template_path = data_root / "real_sync_template_2026-04-02_shadow.csv"
-            template_path.write_text(
-                "symbol,execution_date\nAAA,2026-04-03\n",
-                encoding="utf-8",
-            )
-            basket_path = data_root / "signal_basket_2026-04-02.csv"
-            basket_path.write_text(
-                "symbol,signal_date,execution_date\nAAA,2026-04-02,2026-04-03\n",
-                encoding="utf-8",
-            )
-            intents_path = data_root / "order_intents_2026-04-03_shadow.json"
-            intents_path.write_text('{"intent_count": 0}', encoding="utf-8")
-            report_path = reports_root / "daily_ops_pre_open_20260403_000001.json"
-            report_path.write_text(
-                '{"workflow": "daily_ops_pre_open", "execution_date": "2026-04-03"}',
-                encoding="utf-8",
+            archive_info = archive_daily_artifacts(
+                execution_date="2026-04-03",
+                signal_date="2026-04-02",
+                stage="pre_open",
+                artifacts={"account_db": str(db_path)},
+                archive_root=tmp / "daily",
             )
 
-            moves = migrate_legacy_daily_artifacts(project_root=project_root)
-
-            self.assertTrue(any(move.status == "moved" for move in moves))
-            self.assertTrue((project_root / "daily" / "2026-04-03" / "pre_open" / "plans" / plan_path.name).exists())
-            self.assertTrue((project_root / "daily" / "2026-04-03" / "pre_open" / "templates" / template_path.name).exists())
-            self.assertTrue((project_root / "daily" / "2026-04-03" / "pre_open" / "signals" / basket_path.name).exists())
-            self.assertTrue((project_root / "daily" / "2026-04-03" / "pre_open" / "order_intents" / intents_path.name).exists())
-            self.assertTrue((project_root / "daily" / "2026-04-03" / "pre_open" / "reports" / report_path.name).exists())
+            index_payload = json.loads(Path(archive_info["index_path"]).read_text(encoding="utf-8"))
+            db_artifact = index_payload["stages"]["pre_open"]["artifacts"]["account_db"]
+            self.assertEqual(db_artifact["category"], "external_reference")
+            self.assertIsNone(db_artifact["archived_path"])
+            self.assertFalse((tmp / "daily" / "2026-04-03" / "pre_open" / "accounts").exists())
 
 
 if __name__ == "__main__":

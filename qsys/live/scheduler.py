@@ -4,7 +4,7 @@ import yaml
 import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
-from qsys.live.ops_paths import DEFAULT_EXPERIMENTS_ROOT, LEGACY_EXPERIMENTS_ROOT
+from qsys.live.ops_paths import DEFAULT_EXPERIMENTS_ROOT
 from qsys.utils.logger import log
 from qsys.config import cfg
 
@@ -112,9 +112,9 @@ class ModelScheduler:
         if models_root.exists():
             candidates.extend([d for d in models_root.iterdir() if d.is_dir()])
             
-        for experiments_path in [Path(experiments_dir), Path(LEGACY_EXPERIMENTS_ROOT)]:
-            if experiments_path.exists():
-                candidates.extend([d for d in experiments_path.iterdir() if d.is_dir()])
+        experiments_path = Path(experiments_dir)
+        if experiments_path.exists():
+            candidates.extend([d for d in experiments_path.iterdir() if d.is_dir()])
             
         if not candidates:
             return None

@@ -455,7 +455,7 @@ def write_signal_quality_outputs(
     output_dir: str | Path,
     as_of_date: str,
 ) -> dict[str, str]:
-    output_dir = ensure_stage_subdir(output_dir, "diagnostics")
+    output_dir = ensure_stage_subdir(output_dir, "reports")
     output_dir.mkdir(parents=True, exist_ok=True)
 
     detailed_path = output_dir / f"signal_quality_vintages_{as_of_date}.csv"

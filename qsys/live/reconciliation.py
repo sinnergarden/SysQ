@@ -369,9 +369,7 @@ def export_plan_bundle(
 ) -> dict[str, str]:
     output_dir = Path(output_dir)
     plans_dir = ensure_stage_subdir(output_dir, "plans")
-    templates_dir = ensure_stage_subdir(output_dir, "templates")
     plans_dir.mkdir(parents=True, exist_ok=True)
-    templates_dir.mkdir(parents=True, exist_ok=True)
     execution_date = execution_date or plan_date
 
     normalized = plan_df.copy()
@@ -436,7 +434,7 @@ def export_plan_bundle(
     plan_path = plans_dir / f"plan_{plan_date}_{account_name}.csv"
     normalized.to_csv(plan_path, index=False)
 
-    template_path = templates_dir / f"real_sync_template_{plan_date}_{account_name}.csv"
+    template_path = plans_dir / f"real_sync_template_{plan_date}_{account_name}.csv"
     execution_template.to_csv(template_path, index=False)
 
     return {

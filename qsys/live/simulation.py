@@ -4,7 +4,7 @@ from qsys.utils.logger import log
 
 
 class ShadowSimulator:
-    def __init__(self, account_name="shadow", initial_cash=1_000_000.0, db_path="data/real_account.db"):
+    def __init__(self, account_name="shadow", initial_cash=1_000_000.0, db_path="data/meta/real_account.db"):
         self.account_name = account_name
         self.initial_cash = float(initial_cash)
         self.account = RealAccount(db_path=db_path, account_name=account_name)

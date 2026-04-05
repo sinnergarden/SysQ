@@ -584,7 +584,6 @@ def run_preopen_workflow(
             execution_date=signal_date,
             account_name=shadow_account_name,
             daily_root=daily_root,
-            legacy_root=project_root / "data",
         )
         if plan_path and plan_path.exists():
             log_stage("shadow_account", "simulate_previous_plan", plan_path=str(plan_path), signal_date=signal_date)
@@ -695,11 +694,10 @@ def run_preopen_workflow(
             ],
         )
         plans_dir = pre_open_paths.plans_dir if output_dir == str(pre_open_paths.root) else Path(output_dir)
-        templates_dir = pre_open_paths.templates_dir if output_dir == str(pre_open_paths.root) else Path(output_dir)
         report.artifacts["shadow_plan"] = str(plans_dir / f"plan_{signal_date}_{shadow_account_name}.csv")
         report.artifacts["real_plan"] = str(plans_dir / f"plan_{signal_date}_{real_account_name}.csv")
-        report.artifacts["shadow_real_sync_template"] = str(templates_dir / f"real_sync_template_{signal_date}_{shadow_account_name}.csv")
-        report.artifacts["real_real_sync_template"] = str(templates_dir / f"real_sync_template_{signal_date}_{real_account_name}.csv")
+        report.artifacts["shadow_real_sync_template"] = str(plans_dir / f"real_sync_template_{signal_date}_{shadow_account_name}.csv")
+        report.artifacts["real_real_sync_template"] = str(plans_dir / f"real_sync_template_{signal_date}_{real_account_name}.csv")
         report.artifacts["shadow_order_intents"] = shadow_intents_path
         report.artifacts["real_order_intents"] = real_intents_path
         report.artifacts["account_db"] = db_path
@@ -761,7 +759,7 @@ def main():
     parser.add_argument("--execution_date", type=str, help="Execution Date (YYYY-MM-DD). Defaults to next trading day after signal date")
     parser.add_argument("--model_path", type=str, help="Path to model directory")
     parser.add_argument("--real_sync", type=str, help="Path to CSV file with Real Account state (cash, positions)")
-    parser.add_argument("--db_path", help="SQLite account database path (default: data/meta/real_account.db with legacy fallback to data/real_account.db)")
+    parser.add_argument("--db_path", help="SQLite account database path (default: data/meta/real_account.db)")
     parser.add_argument("--output_dir", help="Directory to write pre-open artifacts (default: daily/<execution_date>/pre_open)")
     parser.add_argument("--report_dir", help="Directory to write structured JSON reports (default: daily/<execution_date>/pre_open/reports)")
     parser.add_argument("--skip_update", action="store_true", help="Skip data update")

@@ -1,10 +1,8 @@
-
-import os
 import yaml
 import pandas as pd
 from pathlib import Path
 from datetime import datetime
-from qsys.live.ops_paths import DEFAULT_EXPERIMENTS_ROOT, LEGACY_EXPERIMENTS_ROOT
+from qsys.live.ops_paths import DEFAULT_EXPERIMENTS_ROOT
 from qsys.utils.logger import log
 
 class ExperimentManager:
@@ -22,8 +20,6 @@ class ExperimentManager:
     """
     def __init__(self, experiment_root=str(DEFAULT_EXPERIMENTS_ROOT)):
         self.root = Path(experiment_root)
-        if not self.root.exists() and Path(LEGACY_EXPERIMENTS_ROOT).exists():
-            self.root = Path(LEGACY_EXPERIMENTS_ROOT)
         self.root.mkdir(parents=True, exist_ok=True)
         self.leaderboard_path = self.root / "leaderboard.csv"
 

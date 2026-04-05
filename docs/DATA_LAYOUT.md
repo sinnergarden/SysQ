@@ -1,212 +1,206 @@
-# SysQ Data Layout
+# Data Layout
 
-本文档定义 SysQ 当前统一目录契约。目标只有三个：
+## 1. 分层原则
 
-- `data/` 只放 canonical data 与少量长期持久资产
-- `daily/` 只放按交易日归档的运行证据
-- `experiments/` 只放研究与实验输出
+SysQ 的目录约定先服务业务语义，再服务文件归档。判断一个产物该放哪里，先问它属于哪一层：
 
-若脚本没有显式覆盖路径，默认都应遵守这里的约定。
+- `data/raw/` 与 `data/qlib_bin/` 是 canonical data / serving data。
+  - `data/raw/` 保存原始抓取与标准化后的基础行情、财务、成分等长期主数据。
+  - `data/qlib_bin/` 是供特征、训练、推理直接消费的 bin 形态，不承载 daily ops 证据。
+- `data/models/` 是模型接口产物层。
+  - 放生产模型目录、模型元数据、生产模型 manifest。
+  - 它是 daily plan 的输入，不是 daily evidence 包。
+- `data/meta/` 是长期小型账本与映射层。
+  - 例如 `data/meta/real_account.db`、行业映射、账户别名等。
+  - 这类文件是长期唯一主账本，不能按天复制到 `daily/`。
+- `daily/{date}/` 是当天 evidence package。
+  - 只保存当天盘前/盘后运行留下的证据、快照、报告、manifest。
+  - 它不是长期主数据层，也不是研究实验层。
+- `data/derived/` 是长期 append 型结构化汇总层。
+  - 它从 `daily/{date}` 抽取稳定字段，形成横向分析、排障、复盘可直接读取的长期表。
+  - 它不替代 `daily/`，而是把高价值字段做长期沉淀。
+- `experiments/` 是研究实验输出层。
+  - 只放研究、参数扫描、分析报表、试验模型等。
+  - 它不参与 daily 生产真相源判定。
+- `runs/{date}/` 是 minimal runner 证据层。
+  - 面向 runner 的步骤状态机与最小编排证据。
+  - 它与 `daily/{date}` 并行存在，职责不同。
 
-## 1. 顶层目录树
+一句话归纳：`data/` 放长期主数据与长期派生表，`daily/` 放单日证据包，`experiments/` 放研究输出，`runs/` 放最小 runner 证据。
+
+## 2. 目录总览
 
 ```text
-SysQ/
+.
 ├── data/
 │   ├── raw/
-│   │   └── daily/
 │   ├── qlib_bin/
-│   ├── feature/
-│   ├── meta/
 │   ├── models/
-│   ├── meta.db                  # legacy metadata db, 仍被数据适配层使用
-│   └── experiments/             # legacy research outputs, 只读兼容，不再默认新增
+│   ├── meta/
+│   │   └── real_account.db
+│   └── derived/
 ├── daily/
-│   └── {execution_date}/
+│   └── {date}/
 │       ├── pre_open/
 │       │   ├── plans/
-│       │   ├── templates/
 │       │   ├── order_intents/
 │       │   ├── signals/
-│       │   ├── diagnostics/
 │       │   ├── reports/
 │       │   └── manifests/
 │       ├── post_close/
 │       │   ├── reconciliation/
 │       │   ├── snapshots/
-│       │   ├── diagnostics/
 │       │   ├── reports/
 │       │   └── manifests/
-│       ├── snapshot_index.json
-│       └── summary/
+│       └── snapshot_index.json
 ├── experiments/
-│   ├── leaderboard.csv
-│   └── {experiment_run}/
 └── runs/
     └── {date}/
 ```
 
-## 2. 目录职责
+说明：
 
-### 2.1 `data/`
+- `snapshot_index.json` 是单日 artifact 索引文件，用于快速定位该交易日 evidence；它不是长期分析表。
+- 不再使用 `daily/ops/`。
+- 不再把 daily plan、signal basket、reconciliation 等产物散落写回 `data/` 根目录。
+- 不再按天复制账户主库；`real_account.db` 固定放在 `data/meta/`。
 
-`data/` 只保留长期资产，不再接收 daily ops 的按日期中间产物。
+## 3. Daily Evidence Package
 
-- `data/raw/`：原始 canonical 数据。当前主数据是 `data/raw/daily/*.feather`
-- `data/qlib_bin/`：Qlib bin 数据，是研究/盘前读取的标准特征底座
-- `data/feature/`：长期持久化特征资产、版本化 feature 集输出
-- `data/models/`：模型目录、模型元数据、训练摘要、production manifest
-- `data/meta/`：小型 metadata 资产，例如映射文件、账户数据库的新默认位置
-- `data/meta.db`：当前数据适配层仍直接使用的 metadata sqlite；暂视为 legacy canonical metadata db
-- `data/experiments/`：历史实验输出保留区；新实验不再默认写这里
+### 3.1 `daily/{date}/pre_open/`
 
-### 2.2 `daily/`
+盘前 evidence 包只保留五类子目录：
 
-`daily/{execution_date}/` 是单个交易日的运行证据目录。凡是与盘前/盘后某个交易日强绑定、且可用于 debug / 审计 / 回放的文件，默认都写这里。
+- `plans/`
+  - `plan_{signal_date}_{account}.csv`
+  - `real_sync_template_{signal_date}_{account}.csv`
+- `order_intents/`
+  - `order_intents_{execution_date}_{account}.json`
+- `signals/`
+  - `signal_basket_{signal_date}.csv`
+- `reports/`
+  - `daily_ops_pre_open_*.json`
+  - `signal_quality_summary_{signal_date}.json`
+  - `signal_quality_vintages_{signal_date}.csv`
+  - `daily_ops_digest_{execution_date}.md`
+  - `daily_ops_digest_{execution_date}.json`
+- `manifests/`
+  - `daily_ops_manifest_{execution_date}.json`
 
-- `pre_open/`：盘前计划、信号篮子、order intents、盘前报告、盘前 manifest
-- `post_close/`：盘后对账、真实回填快照、盘后报告、盘后 manifest
-- `snapshot_index.json`：按 stage 聚合的文件索引，便于快速定位当日所有关键产物
-- `summary/`：交易日 digest，串联盘前摘要与最近盘后回顾
+`pre_open` 的核心目标是回答三件事：
 
-### 2.3 `experiments/`
+- 今天基于哪天数据发信号。
+- 模型给出了什么排序/分数与目标持仓。
+- 对不同账户准备了什么可执行交易意图。
 
-只存研究和实验输出，不应混入交易日运行证据。
+### 3.2 `daily/{date}/post_close/`
 
-- 参数扫描 CSV
-- 研究日志
-- 实验 run 目录
-- 研究侧 leaderboard
+盘后 evidence 包只保留四类子目录：
 
-### 2.4 `runs/`
+- `reconciliation/`
+  - `reconcile_summary_{date}.csv`
+  - `reconcile_positions_{date}.csv`
+  - `reconcile_real_trades_{date}.csv`
+- `snapshots/`
+  - `real_sync_snapshot_{date}.csv`
+- `reports/`
+  - `daily_ops_post_close_*.json`
+  - `signal_quality_summary_{date}.json`
+  - `signal_quality_vintages_{date}.csv`
+  - `daily_ops_digest_{execution_date}.md`
+  - `daily_ops_digest_{execution_date}.json`
+- `manifests/`
+  - `daily_ops_manifest_{execution_date}.json`
 
-`runs/{date}/` 是 minimal production kernel 的状态机产物，不等同于 `daily/`。
+`post_close` 的核心目标是固化收盘后证据：
 
-- `runs/{date}/manifest.json`：该 runner 的单一真相源
-- 其余 `01_data/`、`02_broker/`、`05_portfolio/`、`06_order_staging/` 等目录，记录内核步骤输出
+- 实盘账户回写了什么状态。
+- real vs shadow 的差异有多大。
+- 哪些差异需要次日继续追踪。
 
-## 3. Raw Data 与 Qlib Bin 的关系
+## 4. Long-Lived Derived Tables
 
-这两类目录必须分清：
+`data/derived/` 的存在，是为了避免横向分析时反复扫描大量 `daily/{date}` 文件。
 
-- `data/raw/`：原始 canonical 数据，保留原始列和原始频率语义，是更新和审计的上游真相源
-- `data/qlib_bin/`：从 raw 数据整理出的 qlib 可读 bin 数据，是模型训练、推理、回测、盘前计划的下游消费层
+第一版长期汇总表：
 
-统一口径：
+- `data/derived/signal_baskets.csv`
+  - 粒度：单日、单标的信号篮子。
+  - 主字段：`signal_date`, `execution_date`, `account_name`, `symbol`, `score`, `score_rank`, `weight`, `artifact_source`。
+  - 其中 `account_name` 固定为 `shared`，表示该篮子在账户分配前共享。
+- `data/derived/order_intents.csv`
+  - 粒度：单日、单账户、单 intent。
+  - 主字段：`signal_date`, `execution_date`, `account_name`, `intent_id`, `symbol`, `side`, `amount`, `price`, `score`, `artifact_source`。
+- `data/derived/reconciliation_summary.csv`
+  - 粒度：单日、单指标。
+  - 主字段：`signal_date`, `execution_date`, `account_name`, `metric`, `real`, `shadow`, `diff`, `artifact_source`。
+  - `account_name` 固定为 `real_vs_shadow`。
+- `data/derived/position_gaps.csv`
+  - 粒度：单日、单标的持仓缺口。
+  - 主字段：`signal_date`, `execution_date`, `account_name`, `symbol`, `real_amount`, `shadow_amount`, `amount_diff`, `market_value_diff`, `artifact_source`。
 
-- 先更新 `data/raw/`
-- 再刷新 `data/qlib_bin/`
-- 盘前 readiness 以 `raw_latest`、`qlib_latest`、字段齐全度、缺失率、日期对齐情况共同判断
+设计约束：
 
-## 4. Daily Ops 文件模式
+- 采用 CSV，保持 append-friendly 与 debug-friendly。
+- 支持重复 rollup；实现通过主键去重避免明显重复。
+- `artifact_source` 必须保留，便于从长期表回跳到原始 daily evidence。
 
-### 4.1 盘前 `daily/{execution_date}/pre_open/`
+## 5. 关键字段口径
 
-默认文件模式：
+### 5.1 Signal Basket
 
-- `plans/plan_{signal_date}_{account}.csv`
-- `templates/real_sync_template_{signal_date}_{account}.csv`
-- `order_intents/order_intents_{execution_date}_{account}.json`
-- `signals/signal_basket_{signal_date}.csv`
-- `diagnostics/signal_quality_vintages_{signal_date}.csv`
-- `diagnostics/signal_quality_summary_{signal_date}.json`
-- `reports/daily_ops_pre_open_{run_id}.json`
-- `manifests/daily_ops_manifest_{execution_date}.json`
+最少要能回答“为什么选这只股票”：
 
-关键 schema 提示：
+- `signal_date`: 用哪天数据算出的分数
+- `execution_date`: 计划在哪天执行
+- `symbol`: 标的
+- `score` / `score_rank`: 模型分数与排序依据
+- `weight`: 策略目标权重
+- `price`: 计划参考价
 
-- `plan_{signal_date}_{account}.csv`
-  - 必含：`symbol`, `side`, `amount`, `price`, `weight`, `score`, `score_rank`, `signal_date`, `execution_date`
-  - 重要补充：`plan_role`, `execution_bucket`, `cash_dependency`, `t1_rule`, `price_basis_date`, `price_basis_field`, `price_basis_label`
-- `real_sync_template_{signal_date}_{account}.csv`
-  - 基于 plan 扩展出 `cash`, `total_assets`, `cost_basis`, `filled_amount`, `filled_price`, `fee`, `tax`, `total_cost`, `order_id`
-  - 作用：作为盘后真实回填模板或对账辅助模板
-- `order_intents_{execution_date}_{account}.json`
-  - 顶层：`artifact_type`, `signal_date`, `execution_date`, `account_name`, `model_info`, `assumptions`, `intent_count`, `intents`
-  - `intents[]` 关键字段：`intent_id`, `symbol`, `side`, `amount`, `price`, `execution_bucket`, `cash_dependency`, `t1_rule`, `price_basis`, `status`
-- `signal_basket_{signal_date}.csv`
-  - 关键字段：`symbol`, `score`, `score_rank`, `weight`, `price`, `signal_date`, `execution_date`, `price_basis_date`, `model_name`, `model_path`, `universe`
+### 5.2 Order Intents
 
-### 4.2 盘后 `daily/{execution_date}/post_close/`
+最少要能回答“打算怎么下单”：
 
-默认文件模式：
+- `account_name`: 账户名
+- `symbol` / `side` / `amount`: 买卖方向与计划股数
+- `price` / `est_value`: 参考价格与预计金额
+- `execution_bucket`: 执行顺序，例如先卖后买
+- `t1_rule`: T+1 相关约束
 
-- `reconciliation/reconcile_summary_{date}.csv`
-- `reconciliation/reconcile_positions_{date}.csv`
-- `reconciliation/reconcile_real_trades_{date}.csv`
-- `snapshots/real_sync_snapshot_{date}.csv`
-- `diagnostics/signal_quality_vintages_{date}.csv`
-- `diagnostics/signal_quality_summary_{date}.json`
-- `reports/daily_ops_post_close_{run_id}.json`
-- `manifests/daily_ops_manifest_{execution_date}.json`
+### 5.3 Reconciliation
 
-关键 schema 提示：
+最少要能回答“实盘与影子盘差在哪”：
 
-- `reconcile_summary_{date}.csv`
-  - 行级 metric 摘要，当前至少包含：`cash`, `total_assets`, `position_count`
-  - 列至少包含：`metric`, `real`, `shadow`, `diff`
-- `reconcile_positions_{date}.csv`
-  - 关键字段：`symbol`, `real_amount`, `shadow_amount`, `amount_diff`, `real_market_value`, `shadow_market_value`, `market_value_diff`, `real_cost_basis`, `shadow_cost_basis`
-- `reconcile_real_trades_{date}.csv`
-  - 关键字段：`symbol`, `side`, `amount`, `price`, `fee`, `tax`, `total_cost`, `order_id`
-- `real_sync_snapshot_{date}.csv`
-  - 来自券商导出或 bridge readback 标准化后的快照
-  - 最小字段：`symbol`, `amount`, `price`, `cost_basis`, `cash`, `total_assets`
+- summary: `metric`, `real`, `shadow`, `diff`
+- position gaps: `symbol`, `real_amount`, `shadow_amount`, `amount_diff`, `market_value_diff`
+- snapshots: 收盘回写时的实盘状态快照
 
-### 4.3 日级索引与摘要
+## 6. 不再使用的旧约定
 
-- `daily/{execution_date}/snapshot_index.json`
-  - 按 `pre_open` / `post_close` 记录 artifact 分类、原路径、归档路径、是否存在
-- `daily/{execution_date}/summary/daily_ops_digest_{execution_date}.md`
-- `daily/{execution_date}/summary/daily_ops_digest_{execution_date}.json`
+以下约定不再作为默认路径，也不再作为兼容读取入口：
 
-## 5. Minimal Kernel 文件模式
+- `daily/ops/`
+- `data/experiments/` 作为实验默认目录
+- `data/` 根目录下散落的 daily artifacts
+- 按交易日复制账户 SQLite 主库
 
-`runs/{date}/manifest.json` 为唯一真相源。当前常见模式：
+## 7. 常用命令
 
-- `runs/{date}/01_data/data_status.json`
-- `runs/{date}/02_broker/broker_snapshot.json`
-- `runs/{date}/03_retrain/training_summary.json`
-- `runs/{date}/05_portfolio/portfolio.json`
-- `runs/{date}/06_order_staging/staged_orders.json`
-- `runs/{date}/07_reconcile/reconcile_summary.json`
+盘前：
 
-与 `daily/` 的区别：
+```bash
+python scripts/run_daily_trading.py --date 2026-04-02
+```
 
-- `daily/` 面向人类运营与审计
-- `runs/` 面向 minimal kernel runner 的步骤状态机
+盘后：
 
-## 6. Legacy 兼容约定
+```bash
+python scripts/run_post_close.py --date 2026-04-03 --real_sync broker/real_sync_2026-04-03.csv
+```
 
-以下路径仍保留兼容读取，但新的默认写入不再使用：
+汇总 daily evidence 到长期表：
 
-- `data/plan_*.csv`
-- `data/real_sync_template_*.csv`
-- `data/order_intents_*.json`
-- `data/signal_basket_*.csv`
-- `data/reports/daily_ops_*.json`
-- `data/reports/daily_ops_manifest_*.json`
-- `data/experiments/`
-- `daily/ops/{date}/snapshot_index.json`
-
-兼容策略：
-
-- 读：daily ops helper 会优先找新目录，必要时回退到 legacy 路径
-- 写：新的盘前/盘后脚本默认写入 `daily/{execution_date}/...`
-- 迁移：对 legacy daily 产物优先移动到新目录，不确认归属的历史文件保持原地并在文档中标记 legacy
-
-## 7. Debug 建议
-
-排查某个交易日时，先看：
-
-1. `daily/{execution_date}/pre_open/manifests/daily_ops_manifest_{execution_date}.json`
-2. `daily/{execution_date}/snapshot_index.json`
-3. `daily/{execution_date}/pre_open/plans/`
-4. `daily/{execution_date}/post_close/reconciliation/`
-5. `daily/{execution_date}/summary/daily_ops_digest_{execution_date}.md`
-
-如果是模型或研究问题，再去：
-
-1. `data/models/`
-2. `experiments/`
-3. `runs/{date}/manifest.json`
+```bash
+python scripts/rollup_daily_artifacts.py --execution_date 2026-04-03
+```
