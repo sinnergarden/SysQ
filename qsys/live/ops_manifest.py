@@ -54,6 +54,8 @@ def update_manifest(
         "report_path": report_path,
         "updated_at": datetime.now().isoformat(),
         "summary": summary or {},
+        "blockers": list(blockers or []),
+        "notes": list(notes or []),
     }
 
     merged = _merge_dict(
@@ -69,16 +71,18 @@ def update_manifest(
         },
     )
 
-    all_blockers = list(existing.get("blockers") or [])
-    for item in blockers or []:
-        if item not in all_blockers:
-            all_blockers.append(item)
+    all_blockers: list[str] = []
+    for stage_payload in stages.values():
+        for item in stage_payload.get("blockers") or []:
+            if item not in all_blockers:
+                all_blockers.append(item)
     merged["blockers"] = all_blockers
 
-    all_notes = list(existing.get("notes") or [])
-    for item in notes or []:
-        if item not in all_notes:
-            all_notes.append(item)
+    all_notes: list[str] = []
+    for stage_payload in stages.values():
+        for item in stage_payload.get("notes") or []:
+            if item not in all_notes:
+                all_notes.append(item)
     merged["notes"] = all_notes
 
     with open(manifest_path, "w", encoding="utf-8") as handle:

@@ -26,6 +26,7 @@ from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
+import yaml
 from qlib.data import D
 
 # Add project root to sys.path
@@ -97,6 +98,38 @@ def next_trading_day(signal_date: str) -> str:
 
 def previous_trading_day(signal_date: str) -> str:
     return _resolve_trading_day(signal_date, direction="previous")
+
+
+def _resolve_model_feature_set(model_path: str, feature_config) -> str:
+    if isinstance(feature_config, dict):
+        feature_name = feature_config.get("feature_set_alias") or feature_config.get("feature_set_name") or feature_config.get("name")
+        if feature_name:
+            return str(feature_name)
+
+    meta_path = Path(model_path) / "meta.yaml"
+    if meta_path.exists():
+        try:
+            with open(meta_path, "r", encoding="utf-8") as handle:
+                meta = yaml.safe_load(handle) or {}
+            training_meta = meta.get("training_summary") or {}
+            feature_name = training_meta.get("feature_set_alias") or training_meta.get("feature_set_name")
+            if feature_name:
+                return str(feature_name)
+        except Exception as exc:
+            log.warning(f"Failed to read feature_set from {meta_path}: {exc}")
+
+    feature_selection_path = Path(model_path) / "feature_selection.yaml"
+    if feature_selection_path.exists():
+        try:
+            with open(feature_selection_path, "r", encoding="utf-8") as handle:
+                selection_meta = yaml.safe_load(handle) or {}
+            feature_name = selection_meta.get("feature_set_alias") or selection_meta.get("feature_set_name")
+            if feature_name:
+                return str(feature_name)
+        except Exception as exc:
+            log.warning(f"Failed to read feature_set from {feature_selection_path}: {exc}")
+
+    return "alpha158"
 
 
 def extract_plan_summary(plan_df, account_name, signal_date, execution_date):
@@ -341,7 +374,7 @@ def run_preopen_workflow(
     preview_manager.load_model()
 
     feature_config = preview_manager.model.model.feature_config
-    model_info["feature_set"] = feature_config.get("name", "unknown") if isinstance(feature_config, dict) else "alpha158"
+    model_info["feature_set"] = _resolve_model_feature_set(model_path, feature_config)
 
     try:
         health = assert_qlib_data_ready(signal_date, feature_config, universe="csi300")
