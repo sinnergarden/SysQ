@@ -1,125 +1,47 @@
-# Script Inventory & Consolidation Plan
+# Script Inventory
 
-> Last updated: 2026-03-22
-> Status: P1.1 in progress
+> Last updated: 2026-04-07
+> Scope: safe repo cleanup for current daily ops mainline
 
-## 1. Overview
+## Main entrypoints
 
-Total scripts in `scripts/`: **16**
+Current daily ops only support these CLI entrypoints:
 
-Classification:
-- **Keep**: 9 (active production/research entrypoints)
-- **Merge**: 2 (functionality covered by others)
-- **Deprecate**: 2 (already redirected with warnings)
-- **Review**: 3 (utility/debug, lower priority)
+- `scripts/run_daily_trading.py`: pre-open daily plan and report generation
+- `scripts/run_post_close.py`: post-close reconciliation and follow-up reports
 
----
+Legacy aliases `scripts/run_plan.py` and `scripts/run_reconcile.py` have been removed in this cleanup. Docs and future automation should call the main entrypoints directly.
 
-## 2. Inventory Table
+## Kept scripts
 
-| Script | Type | Status | Reason |
-|--------|------|--------|--------|
-| `run_daily_trading.py` | ops | **KEEP** | Primary daily ops entrypoint (盘前) |
-| `run_post_close.py` | ops | **KEEP** | Primary daily ops entrypoint (盘后) |
-| `run_train.py` | training | **KEEP** | Primary training entrypoint with click CLI |
-| `run_backtest.py` | research | **KEEP** | Primary backtest entrypoint |
-| `run_strict_eval.py` | research | **KEEP** | Primary strict evaluation entrypoint |
-| `run_update.py` | data | **KEEP** | Data update entrypoint (universe/date based) |
-| `update_data_all.py` | data | **KEEP** | Full data status check & alignment |
-| `create_instrument_csi300.py` | data | **KEEP** | Universe initialization |
-| `run_compare.py` | research | **KEEP** | Model comparison utility |
-| `run_plan.py` | ops | **DEPRECATE** | Legacy, prints warning, redirects to run_daily_trading.py |
-| `run_reconcile.py` | ops | **DEPRECATE** | Legacy, prints warning, redirects to run_daily_trading.py |
-| `debug_data_quality.py` | debug | **REVIEW** | Debug utility, lower priority |
-| `debug_model_performance.py` | debug | **REVIEW** | Debug/analysis utility |
-| `check_amount.py` | utility | **MERGE** | Thin wrapper, likely covered by other tools |
-| `rebuild_qlib_bin.py` | utility | **MERGE** | Thin wrapper around dump_bin.py |
-| `dump_bin.py` | lib | **KEEP** | Core qlib data handling (imported as lib) |
-| `run_train.py` | | | (already listed above) |
+| Group | Scripts | Why kept |
+|--------|---------|----------|
+| Daily ops | `run_daily_trading.py`, `run_post_close.py`, `run_signal_quality.py`, `run_intent_staging_example.py`, `run_minimal_kernel.py` | Current production and staging flow |
+| Data pipeline | `run_update.py`, `update_data_all.py`, `create_instrument_csi300.py`, `dump_bin.py` | Active data refresh and qlib bin maintenance |
+| Training / research | `run_train.py`, `run_backtest.py`, `run_strict_eval.py`, `run_compare.py`, `run_feature_build.py`, `run_feature_experiment.py`, `run_feature_ablation.py`, `run_feature_backtest_report.py`, `run_feature_readiness_audit.py` | Current model and feature workflow |
+| Debug / manual utilities | `debug_data_quality.py`, `debug_model_performance.py`, `check_amount.py`, `rebuild_qlib_bin.py`, `setup_openclaw_qsys_cron.sh` | Still useful for manual diagnostics or maintenance; not on the daily ops critical path |
 
----
+## Removed in this cleanup
 
-## 3. Redundant / Overlapping Scripts
+| Path | Reason |
+|------|--------|
+| `scripts/run_plan.py` | Deprecated pre-open alias; current mainline is `run_daily_trading.py` |
+| `scripts/run_reconcile.py` | Deprecated post-close alias; current mainline is `run_post_close.py` |
+| `tests/test_plot_success.png` | Unreferenced test artifact; no test or doc depends on it |
+| root `*.log` cleanup files | One-off compile/test outputs, already ignored by `.gitignore` |
+| local `__pycache__/` directories | Generated Python cache noise, already ignored by `.gitignore` |
 
-### 3.1 Deprecated but still present
+## Explicitly retained for now
 
-| Script | Replacement | Action |
-|--------|-------------|--------|
-| `run_plan.py` | `run_daily_trading.py` | Already prints warning. Can remove after confirmation. |
-| `run_reconcile.py` | `run_daily_trading.py` or `run_post_close.py` | Already prints warning. Can remove after confirmation. |
+| Path | Why not removed |
+|------|-----------------|
+| `scripts/check_amount.py` | Thin, but still a direct manual qlib raw-data probe; low risk to revisit later |
+| `scripts/rebuild_qlib_bin.py` | Destructive rebuild helper with clearer intent than `dump_bin.py`; keep until a safer unified CLI exists |
+| `docs/features/new_feature.md` | Required feature-doc template referenced by repo workflow docs |
+| `data/` samples and `runs/examples/` | Not fully audited as unused; may still support docs, tests, or demos |
 
-**Risk**: Low. Both print deprecation warnings at runtime. Can be removed in next cleanup cycle.
+## Cleanup rule going forward
 
-### 3.2 Potential merge candidates
-
-| Script | Concern | Recommendation |
-|--------|---------|----------------|
-| `check_amount.py` | Very thin wrapper around qlib init | Merge into `debug_data_quality.py` or remove |
-| `rebuild_qlib_bin.py` | Thin wrapper calling `dump_bin` main | Merge into `dump_bin.py` as CLI option |
-
-### 3.3 Active vs Debug
-
-- Active production scripts (9): clear CLI interfaces, tracked in RUNBOOK
-- Debug/analysis scripts (3): lower priority, no CLI standardization
-
----
-
-## 4. Implemented First Cleanup
-
-### 4.1 Already done (no code change needed)
-
-Both `run_plan.py` and `run_reconcile.py` already:
-- Print `log.warning("Legacy entrypoint detected...")` 
-- Reference the recommended alternative
-
-This satisfies the "mark deprecated" requirement.
-
-### 4.2 Implemented minimal cleanup
-
-1. **Deprecated aliases are explicitly marked**
-   - `run_plan.py`
-   - `run_reconcile.py`
-
-2. **Primary scripts now carry top-of-file usage notes**
-   - purpose
-   - typical command
-   - important arguments
-
-3. **Optionally next**: Remove `check_amount.py` or merge into `debug_data_quality.py`
-
----
-
-## 5. Next Cleanup Steps (Require User Approval)
-
-1. **High priority**:
-   - [ ] Confirm `run_plan.py` and `run_reconcile.py` deprecation is acceptable, then delete them
-   - [ ] Merge `check_amount.py` into `debug_data_quality.py` or remove
-
-2. **Medium priority**:
-   - [ ] Standardize debug scripts CLI or move to `tools/` subdir
-   - [ ] Consider merging `rebuild_qlib_bin.py` into `dump_bin.py`
-
-3. **Low priority**:
-   - [x] Add consistent top-level usage docstrings to primary keep scripts
-   - [ ] Add shebang line to all entrypoints
-
----
-
-## 6. Classification Criteria Used
-
-Based on RUNBOOK.md and ROADMAP.md:
-
-1. **Has CLI (click/argparse)** → likely active
-2. **Referenced in RUNBOOK** → production critical
-3. **Prints "Legacy" warning** → already deprecated
-4. **Imported as module, no CLI** → library (keep)
-5. **No clear purpose or redundant** → merge/deprecate
-
----
-
-## 7. Notes
-
-- Main entrypoints are now `run_daily_trading.py` and `run_post_close.py` for daily ops
-- Training/research flows are covered by `run_train.py`, `run_backtest.py`, `run_strict_eval.py`
-- Data flows: `run_update.py`, `update_data_all.py`, `create_instrument_csi300.py`
-- 16 scripts total → target ~12 after cleanup
+- New daily ops docs should only point to `scripts/run_daily_trading.py` and `scripts/run_post_close.py`.
+- Generated logs, caches, and screenshots should stay out of git and be removed after local debugging.
+- Thin wrappers should be deleted only after their manual use case is either documented elsewhere or folded into an existing supported CLI.
