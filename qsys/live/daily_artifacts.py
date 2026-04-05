@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from qsys.live.ops_manifest import build_manifest_path, load_manifest
+from qsys.live.ops_paths import DEFAULT_DAILY_ROOT, build_daily_summary_dir
 
 if TYPE_CHECKING:
     from qsys.live.account import RealAccount
@@ -58,7 +59,7 @@ def _json_default(value: Any):
 
 def _artifact_category(name: str) -> str:
     if name.startswith("signal_quality"):
-        return "signal_quality"
+        return "diagnostics"
     return ARTIFACT_CATEGORIES.get(name, "misc")
 
 
@@ -66,6 +67,9 @@ def _copy_if_exists(source: str | Path, destination: Path) -> str | None:
     source_path = Path(source)
     if not source_path.exists() or source_path.is_dir():
         return None
+    if source_path.resolve() == destination.resolve():
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        return str(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source_path, destination)
     return str(destination)
@@ -114,7 +118,7 @@ def archive_daily_artifacts(
     signal_date: str | None,
     stage: str,
     artifacts: dict[str, str] | None,
-    archive_root: str | Path = "daily/ops",
+    archive_root: str | Path = DEFAULT_DAILY_ROOT,
 ) -> dict[str, Any]:
     archive_root = Path(archive_root)
     day_root = archive_root / execution_date
@@ -257,7 +261,7 @@ def _build_report_text(
 def build_daily_summary_bundle(
     *,
     execution_date: str,
-    archive_root: str | Path = "daily/ops",
+    archive_root: str | Path = DEFAULT_DAILY_ROOT,
     lookback_days: int = 3,
 ) -> DailySummaryBundle:
     archive_root = Path(archive_root)
@@ -286,8 +290,7 @@ def build_daily_summary_bundle(
         index_payload=index_payload,
         recent_reviews=recent_reviews,
     )
-    summary_dir = day_root / "summary"
-    summary_dir.mkdir(parents=True, exist_ok=True)
+    summary_dir = build_daily_summary_dir(execution_date, daily_root=archive_root)
     markdown_path = summary_dir / f"daily_ops_digest_{execution_date}.md"
     json_path = summary_dir / f"daily_ops_digest_{execution_date}.json"
     markdown_path.write_text(report_text, encoding="utf-8")

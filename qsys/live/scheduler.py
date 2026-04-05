@@ -4,6 +4,7 @@ import yaml
 import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
+from qsys.live.ops_paths import DEFAULT_EXPERIMENTS_ROOT, LEGACY_EXPERIMENTS_ROOT
 from qsys.utils.logger import log
 from qsys.config import cfg
 
@@ -102,7 +103,7 @@ class ModelScheduler:
         return model_path
 
     @staticmethod
-    def find_latest_model(models_dir="data/models", experiments_dir="data/experiments"):
+    def find_latest_model(models_dir="data/models", experiments_dir=str(DEFAULT_EXPERIMENTS_ROOT)):
         """Find the latest model directory."""
         candidates = []
         
@@ -111,10 +112,9 @@ class ModelScheduler:
         if models_root.exists():
             candidates.extend([d for d in models_root.iterdir() if d.is_dir()])
             
-        # Check data/experiments (For research models)
-        exp_root = Path(experiments_dir)
-        if exp_root.exists():
-            candidates.extend([d for d in exp_root.iterdir() if d.is_dir()])
+        for experiments_path in [Path(experiments_dir), Path(LEGACY_EXPERIMENTS_ROOT)]:
+            if experiments_path.exists():
+                candidates.extend([d for d in experiments_path.iterdir() if d.is_dir()])
             
         if not candidates:
             return None

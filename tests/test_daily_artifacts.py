@@ -5,6 +5,7 @@ from pathlib import Path
 
 from qsys.live.daily_artifacts import archive_daily_artifacts, build_daily_summary_bundle, extract_account_snapshot
 from qsys.live.ops_manifest import update_manifest
+from qsys.live.ops_paths import migrate_legacy_daily_artifacts
 
 
 class _FakeAccount:
@@ -38,7 +39,7 @@ class TestDailyArtifacts(unittest.TestCase):
     def test_archive_and_build_daily_summary_bundle(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
-            archive_root = tmp / "daily" / "ops"
+            archive_root = tmp / "daily"
             source = tmp / "source"
             source.mkdir()
 
@@ -130,6 +131,46 @@ class TestDailyArtifacts(unittest.TestCase):
             index_payload = json.loads(Path(bundle.snapshot_index_path).read_text(encoding="utf-8"))
             self.assertIn("pre_open", index_payload["stages"])
             self.assertEqual(index_payload["stages"]["pre_open"]["artifacts"]["report"]["category"], "reports")
+
+    def test_migrate_legacy_daily_artifacts_moves_pre_open_outputs(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_root = Path(tmpdir)
+            data_root = project_root / "data"
+            reports_root = data_root / "reports"
+            data_root.mkdir(parents=True)
+            reports_root.mkdir(parents=True)
+
+            plan_path = data_root / "plan_2026-04-02_shadow.csv"
+            plan_path.write_text(
+                "symbol,execution_date\nAAA,2026-04-03\n",
+                encoding="utf-8",
+            )
+            template_path = data_root / "real_sync_template_2026-04-02_shadow.csv"
+            template_path.write_text(
+                "symbol,execution_date\nAAA,2026-04-03\n",
+                encoding="utf-8",
+            )
+            basket_path = data_root / "signal_basket_2026-04-02.csv"
+            basket_path.write_text(
+                "symbol,signal_date,execution_date\nAAA,2026-04-02,2026-04-03\n",
+                encoding="utf-8",
+            )
+            intents_path = data_root / "order_intents_2026-04-03_shadow.json"
+            intents_path.write_text('{"intent_count": 0}', encoding="utf-8")
+            report_path = reports_root / "daily_ops_pre_open_20260403_000001.json"
+            report_path.write_text(
+                '{"workflow": "daily_ops_pre_open", "execution_date": "2026-04-03"}',
+                encoding="utf-8",
+            )
+
+            moves = migrate_legacy_daily_artifacts(project_root=project_root)
+
+            self.assertTrue(any(move.status == "moved" for move in moves))
+            self.assertTrue((project_root / "daily" / "2026-04-03" / "pre_open" / "plans" / plan_path.name).exists())
+            self.assertTrue((project_root / "daily" / "2026-04-03" / "pre_open" / "templates" / template_path.name).exists())
+            self.assertTrue((project_root / "daily" / "2026-04-03" / "pre_open" / "signals" / basket_path.name).exists())
+            self.assertTrue((project_root / "daily" / "2026-04-03" / "pre_open" / "order_intents" / intents_path.name).exists())
+            self.assertTrue((project_root / "daily" / "2026-04-03" / "pre_open" / "reports" / report_path.name).exists())
 
 
 if __name__ == "__main__":

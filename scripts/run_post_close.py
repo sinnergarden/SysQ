@@ -33,6 +33,7 @@ from qsys.data.adapter import QlibAdapter
 from qsys.live.account import RealAccount
 from qsys.live.daily_artifacts import archive_daily_artifacts, build_daily_summary_bundle, extract_account_snapshot
 from qsys.live.ops_manifest import update_manifest
+from qsys.live.ops_paths import build_stage_paths, find_plan_path_for_execution_date, resolve_account_db_path
 from qsys.live.reconciliation import (
     build_reconciliation_result,
     reconciliation_to_markdown,
@@ -52,6 +53,38 @@ def _resolve_cli_path(path_str: str) -> str:
     return str(path)
 
 
+def _resolve_ops_paths(
+    *,
+    execution_date: str,
+    output_dir: str | None,
+    report_dir: str | None,
+    plan_dir: str | None,
+    db_path: str | None,
+) -> dict[str, str]:
+    daily_root = project_root / "daily"
+    post_close_paths = build_stage_paths(execution_date, stage="post_close", daily_root=daily_root)
+    pre_open_paths = build_stage_paths(execution_date, stage="pre_open", daily_root=daily_root)
+
+    if db_path is None:
+        resolved_db_path = str(resolve_account_db_path(project_root=project_root))
+    else:
+        resolved_db_path = _resolve_cli_path(db_path)
+
+    resolved_output_dir = str(post_close_paths.root) if output_dir is None else _resolve_cli_path(output_dir)
+    resolved_report_dir = str(post_close_paths.reports_dir) if report_dir is None else _resolve_cli_path(report_dir)
+    resolved_manifest_dir = str(post_close_paths.manifests_dir) if report_dir is None else resolved_report_dir
+    resolved_plan_dir = str(pre_open_paths.plans_dir) if plan_dir is None else _resolve_cli_path(plan_dir)
+
+    return {
+        "daily_root": str(daily_root),
+        "output_dir": resolved_output_dir,
+        "report_dir": resolved_report_dir,
+        "manifest_dir": resolved_manifest_dir,
+        "plan_dir": resolved_plan_dir,
+        "db_path": resolved_db_path,
+    }
+
+
 def main():
     start_time = time.time()
     blockers = []
@@ -61,34 +94,39 @@ def main():
     )
     parser.add_argument("--date", required=True, help="Trading date to reconcile (YYYY-MM-DD)")
     parser.add_argument("--real_sync", required=True, help="Broker/account CSV or MiniQMT readback JSON exported after market close")
-    parser.add_argument("--db_path", default="data/real_account.db", help="SQLite account database path")
+    parser.add_argument("--db_path", help="SQLite account database path (default: data/meta/real_account.db with legacy fallback to data/real_account.db)")
     parser.add_argument(
         "--output_dir",
-        default="data/reconciliation",
-        help="Directory to write reconciliation CSV outputs",
+        help="Directory to write post-close artifacts (default: daily/<execution_date>/post_close)",
     )
     parser.add_argument(
         "--plan_dir",
-        default="data",
-        help="Directory containing pre-open plan CSV artifacts",
+        help="Directory containing pre-open plan CSV artifacts (default: daily/<execution_date>/pre_open/plans)",
     )
     parser.add_argument(
         "--report_dir",
-        default="data/reports",
-        help="Directory to write structured JSON reports",
+        help="Directory to write structured JSON reports (default: daily/<execution_date>/post_close/reports)",
     )
     parser.add_argument("--real_account_name", default="real", help="Account name for real broker state")
     parser.add_argument("--shadow_account_name", default="shadow", help="Account name for shadow simulation state")
     parser.add_argument("--execution_date", type=str, help="Execution date (defaults to args.date)")
     parser.add_argument("--no_report", action="store_true", help="Skip generating the structured report")
     args = parser.parse_args()
-    args.db_path = _resolve_cli_path(args.db_path)
-    args.output_dir = _resolve_cli_path(args.output_dir)
-    args.report_dir = _resolve_cli_path(args.report_dir)
-    args.plan_dir = _resolve_cli_path(args.plan_dir)
-    args.real_sync = _resolve_cli_path(args.real_sync)
-    
     execution_date = args.execution_date or args.date
+    resolved_paths = _resolve_ops_paths(
+        execution_date=execution_date,
+        output_dir=args.output_dir,
+        report_dir=args.report_dir,
+        plan_dir=args.plan_dir,
+        db_path=args.db_path,
+    )
+    daily_root = resolved_paths["daily_root"]
+    args.db_path = resolved_paths["db_path"]
+    args.output_dir = resolved_paths["output_dir"]
+    args.report_dir = resolved_paths["report_dir"]
+    manifest_dir = resolved_paths["manifest_dir"]
+    args.plan_dir = resolved_paths["plan_dir"]
+    args.real_sync = _resolve_cli_path(args.real_sync)
     
     # Get data status for report
     try:
@@ -119,8 +157,14 @@ def main():
     
     # Try to get signal_date from plan file
     signal_date = args.date
-    plan_path = Path(args.plan_dir) / f"plan_{args.date}_{args.shadow_account_name}.csv"
-    if plan_path.exists():
+    plan_path = find_plan_path_for_execution_date(
+        execution_date=execution_date,
+        account_name=args.shadow_account_name,
+        plan_dir=args.plan_dir,
+        daily_root=daily_root,
+        legacy_root=project_root / "data",
+    )
+    if plan_path and plan_path.exists():
         try:
             plan_df = pd.read_csv(plan_path)
             if "signal_date" in plan_df.columns:
@@ -180,7 +224,7 @@ def main():
     signal_quality_snapshot = None
     signal_quality_summary = {}
     try:
-        signal_quality_snapshot = collect_signal_quality_snapshot(as_of_date=args.date, signal_dir="data")
+        signal_quality_snapshot = collect_signal_quality_snapshot(as_of_date=args.date, signal_dir=daily_root)
         signal_quality_summary = signal_quality_snapshot.summary
         blockers.extend(build_signal_quality_blockers(signal_quality_summary, required_horizons=(1, 2, 3)))
     except Exception as e:
@@ -221,7 +265,7 @@ def main():
         report.artifacts["account_db"] = args.db_path
         report_path = DailyOpsReport.save(report, output_dir=args.report_dir)
         manifest_path = update_manifest(
-            report_dir=args.report_dir,
+            report_dir=manifest_dir,
             execution_date=execution_date,
             signal_date=signal_date,
             stage="post_close",
@@ -242,8 +286,9 @@ def main():
             signal_date=signal_date,
             stage="post_close",
             artifacts={**report.artifacts, "report": report_path, "manifest": manifest_path},
+            archive_root=daily_root,
         )
-        digest = build_daily_summary_bundle(execution_date=execution_date)
+        digest = build_daily_summary_bundle(execution_date=execution_date, archive_root=daily_root)
         log.info(f"Report saved to: {report_path}")
         log.info(f"Manifest saved to: {manifest_path}")
         log.info(f"Daily index saved to: {archive_info['index_path']}")

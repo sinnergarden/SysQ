@@ -1,6 +1,7 @@
 import json
 import tempfile
 import unittest
+from pathlib import Path
 
 import pandas as pd
 
@@ -75,6 +76,29 @@ class TestOrderIntents(unittest.TestCase):
 
         self.assertEqual(loaded["artifact_type"], "order_intents")
         self.assertEqual(loaded["account_name"], "real")
+
+    def test_save_order_intents_uses_order_intents_subdir_for_pre_open_root(self):
+        payload = {
+            "artifact_type": "order_intents",
+            "signal_date": "2026-04-03",
+            "execution_date": "2026-04-06",
+            "account_name": "shadow",
+            "model_info": {},
+            "assumptions": {},
+            "intent_count": 0,
+            "intents": [],
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            pre_open_root = Path(tmpdir) / "daily" / "2026-04-06" / "pre_open"
+            path = save_order_intents(
+                payload,
+                output_dir=pre_open_root,
+                execution_date="2026-04-06",
+                account_name="shadow",
+            )
+
+        self.assertTrue(str(path).endswith("pre_open/order_intents/order_intents_2026-04-06_shadow.json"))
 
 
 if __name__ == "__main__":

@@ -6,8 +6,10 @@ import pandas as pd
 
 from qsys.data.adapter import QlibAdapter
 import scripts.run_daily_trading as run_daily_trading
+import scripts.run_post_close as run_post_close
 from scripts.run_daily_trading import (
     _resolve_cli_path,
+    _resolve_ops_paths as resolve_preopen_ops_paths,
     extract_plan_summary,
     previous_trading_day,
     resolve_signal_and_execution_date,
@@ -45,6 +47,31 @@ class TestCliSemantics(unittest.TestCase):
         self.assertTrue(resolved.is_absolute())
         self.assertEqual(resolved.name, "reports")
         self.assertIn("SysQ", str(resolved))
+
+    def test_run_daily_defaults_use_dated_daily_layout(self):
+        resolved = resolve_preopen_ops_paths(
+            execution_date="2026-03-23",
+            output_dir=None,
+            report_dir=None,
+            db_path=None,
+        )
+        self.assertTrue(str(resolved["output_dir"]).endswith("daily/2026-03-23/pre_open"))
+        self.assertTrue(str(resolved["report_dir"]).endswith("daily/2026-03-23/pre_open/reports"))
+        self.assertTrue(str(resolved["manifest_dir"]).endswith("daily/2026-03-23/pre_open/manifests"))
+        self.assertEqual(Path(resolved["db_path"]).name, "real_account.db")
+
+    def test_run_post_close_defaults_use_dated_daily_layout(self):
+        resolved = run_post_close._resolve_ops_paths(
+            execution_date="2026-03-23",
+            output_dir=None,
+            report_dir=None,
+            plan_dir=None,
+            db_path=None,
+        )
+        self.assertTrue(str(resolved["output_dir"]).endswith("daily/2026-03-23/post_close"))
+        self.assertTrue(str(resolved["report_dir"]).endswith("daily/2026-03-23/post_close/reports"))
+        self.assertTrue(str(resolved["plan_dir"]).endswith("daily/2026-03-23/pre_open/plans"))
+        self.assertTrue(str(resolved["manifest_dir"]).endswith("daily/2026-03-23/post_close/manifests"))
 
     def test_extract_plan_summary_is_structured_and_low_noise(self):
         plan = run_daily_trading.pd.DataFrame(

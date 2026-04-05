@@ -9,6 +9,7 @@ import pandas as pd
 
 from qsys.broker.miniqmt import MiniQMTReadback
 from qsys.live.account import RealAccount
+from qsys.live.ops_paths import ensure_stage_subdir
 from qsys.utils.logger import log
 
 
@@ -331,23 +332,26 @@ def write_reconciliation_outputs(
     real_sync_snapshot: Optional[pd.DataFrame] = None,
 ) -> dict[str, str]:
     output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    reconciliation_dir = ensure_stage_subdir(output_dir, "reconciliation")
+    snapshots_dir = ensure_stage_subdir(output_dir, "snapshots")
+    reconciliation_dir.mkdir(parents=True, exist_ok=True)
+    snapshots_dir.mkdir(parents=True, exist_ok=True)
 
     written = {}
-    summary_path = output_dir / f"reconcile_summary_{date}.csv"
+    summary_path = reconciliation_dir / f"reconcile_summary_{date}.csv"
     result.summary.to_csv(summary_path, index=False)
     written["summary"] = str(summary_path)
 
-    positions_path = output_dir / f"reconcile_positions_{date}.csv"
+    positions_path = reconciliation_dir / f"reconcile_positions_{date}.csv"
     result.positions.to_csv(positions_path, index=False)
     written["positions"] = str(positions_path)
 
-    trades_path = output_dir / f"reconcile_real_trades_{date}.csv"
+    trades_path = reconciliation_dir / f"reconcile_real_trades_{date}.csv"
     result.real_trades.to_csv(trades_path, index=False)
     written["real_trades"] = str(trades_path)
 
     if real_sync_snapshot is not None:
-        snapshot_path = output_dir / f"real_sync_snapshot_{date}.csv"
+        snapshot_path = snapshots_dir / f"real_sync_snapshot_{date}.csv"
         real_sync_snapshot.to_csv(snapshot_path, index=False)
         written["real_sync_snapshot"] = str(snapshot_path)
 
@@ -364,7 +368,10 @@ def export_plan_bundle(
     execution_date: Optional[str] = None,
 ) -> dict[str, str]:
     output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    plans_dir = ensure_stage_subdir(output_dir, "plans")
+    templates_dir = ensure_stage_subdir(output_dir, "templates")
+    plans_dir.mkdir(parents=True, exist_ok=True)
+    templates_dir.mkdir(parents=True, exist_ok=True)
     execution_date = execution_date or plan_date
 
     normalized = plan_df.copy()
@@ -426,10 +433,10 @@ def export_plan_bundle(
     execution_template["total_assets"] = pd.NA
     execution_template["cost_basis"] = execution_template["price"]
 
-    plan_path = output_dir / f"plan_{plan_date}_{account_name}.csv"
+    plan_path = plans_dir / f"plan_{plan_date}_{account_name}.csv"
     normalized.to_csv(plan_path, index=False)
 
-    template_path = output_dir / f"real_sync_template_{plan_date}_{account_name}.csv"
+    template_path = templates_dir / f"real_sync_template_{plan_date}_{account_name}.csv"
     execution_template.to_csv(template_path, index=False)
 
     return {
