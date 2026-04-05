@@ -44,6 +44,32 @@ class TestOpsManifest(unittest.TestCase):
             self.assertIn("pre_open_blocker", manifest["blockers"])
             self.assertIn("post_close_blocker", manifest["blockers"])
 
+    def test_rerun_replaces_stage_blockers_in_top_level_summary(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            manifest_path = update_manifest(
+                report_dir=tmpdir,
+                execution_date="2026-04-03",
+                signal_date="2026-04-02",
+                stage="pre_open",
+                status="partial",
+                blockers=["stale_pre_open_blocker"],
+                notes=["old_note"],
+            )
+            manifest_path = update_manifest(
+                report_dir=tmpdir,
+                execution_date="2026-04-03",
+                signal_date="2026-04-02",
+                stage="pre_open",
+                status="success",
+                blockers=[],
+                notes=["new_note"],
+            )
+
+            manifest = load_manifest(manifest_path)
+            self.assertEqual(manifest["blockers"], [])
+            self.assertEqual(manifest["notes"], ["new_note"])
+            self.assertEqual(manifest["stages"]["pre_open"]["blockers"], [])
+
     def test_build_manifest_path_uses_execution_date(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             path = build_manifest_path(tmpdir, "2026-04-03")

@@ -104,11 +104,16 @@ Qsys 侧继续消费 Windows 回流结果，形成：
 
 当前 repo 相对这个目标，主要还缺：
 
-- 没有正式的 MiniQMT broker bridge
-- 没有统一的 `order_intents` artifact contract
-- 没有订单生命周期对象：pending / partial fill / filled / canceled / rejected
+- Windows 原生的 MiniQMT 真实桥接实现仍未落地
 - 没有稳定的 WSL -> Windows -> WSL 回流通道约定
 - production daily 仍偏脚本可运行，但还不是“低 agent 依赖的固定生产脚本”
+
+当前已落地的最小骨架：
+
+- `order_intents` artifact contract 已落地
+- `qsys/broker/miniqmt.py` 已落地 dry-run bridge contract
+- 已定义订单生命周期枚举：`pending / partial_fill / filled / canceled / rejected`
+- 当前 `MiniQMTAdapter` 仅负责：加载 intent、校验 lot/price/side、转换 dry-run broker order、保留未来 Windows bridge 的接口位
 
 ## Development Priority
 

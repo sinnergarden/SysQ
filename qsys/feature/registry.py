@@ -40,6 +40,13 @@ FEATURE_GROUPS = {
     "relative_strength": {
         "enabled_by": "enable_relative_strength_features",
         "features": [
+            "ret_1d",
+            "ret_3d",
+            "ret_5d",
+            "vol_mean_3d",
+            "vol_mean_5d",
+            "amount_mean_3d",
+            "amount_mean_5d",
             "ret_1d_rank",
             "ret_3d_rank",
             "ret_5d_rank",

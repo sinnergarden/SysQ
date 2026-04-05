@@ -3,9 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
+import json
 
 import pandas as pd
 
+from qsys.broker.miniqmt import MiniQMTReadback
 from qsys.live.account import RealAccount
 from qsys.utils.logger import log
 
@@ -75,11 +77,9 @@ class ReconciliationResult:
         return self.summary.empty and self.positions.empty and self.real_trades.empty
 
 
-def normalize_real_sync_csv(csv_path: str | Path) -> pd.DataFrame:
-    csv_path = Path(csv_path)
-    df = pd.read_csv(csv_path)
+def _normalize_real_sync_frame(df: pd.DataFrame, *, source_label: str) -> pd.DataFrame:
     if df.empty:
-        raise ValueError(f"Real sync file is empty: {csv_path}")
+        raise ValueError(f"Real sync file is empty: {source_label}")
 
     missing = REQUIRED_REAL_SYNC_COLUMNS - set(df.columns)
     if missing:
@@ -124,6 +124,78 @@ def normalize_real_sync_csv(csv_path: str | Path) -> pd.DataFrame:
     return normalized
 
 
+def normalize_real_sync_csv(csv_path: str | Path) -> pd.DataFrame:
+    csv_path = Path(csv_path)
+    df = pd.read_csv(csv_path)
+    return _normalize_real_sync_frame(df, source_label=str(csv_path))
+
+
+def normalize_real_sync_bridge_artifact(artifact_path: str | Path) -> pd.DataFrame:
+    artifact_path = Path(artifact_path)
+    with open(artifact_path, "r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+
+    readback = MiniQMTReadback.from_dict(payload)
+    rows: list[dict[str, object]] = []
+
+    trade_by_symbol: dict[str, list] = {}
+    for trade in readback.trades:
+        trade_by_symbol.setdefault(trade.symbol, []).append(trade)
+
+    for position in readback.positions:
+        symbol_trades = trade_by_symbol.get(position.symbol) or [None]
+        for trade in symbol_trades:
+            rows.append(
+                {
+                    "symbol": position.symbol,
+                    "amount": position.total_amount,
+                    "price": position.last_price,
+                    "cost_basis": position.avg_cost,
+                    "cash": readback.account_snapshot.cash,
+                    "total_assets": readback.account_snapshot.total_assets,
+                    "side": trade.side if trade else "hold",
+                    "filled_amount": trade.filled_amount if trade else 0,
+                    "filled_price": trade.filled_price if trade else position.last_price,
+                    "fee": trade.fee if trade else 0.0,
+                    "tax": trade.tax if trade else 0.0,
+                    "total_cost": trade.total_cost if trade else 0.0,
+                    "order_id": trade.order_id if trade else "",
+                    "note": trade.note if trade else "",
+                }
+            )
+
+    # Keep account-only snapshots representable even when there are no positions.
+    if not rows:
+        rows.append(
+            {
+                "symbol": "CASH",
+                "amount": 0,
+                "price": 0.0,
+                "cost_basis": 0.0,
+                "cash": readback.account_snapshot.cash,
+                "total_assets": readback.account_snapshot.total_assets,
+                "side": "hold",
+                "filled_amount": 0,
+                "filled_price": 0.0,
+                "fee": 0.0,
+                "tax": 0.0,
+                "total_cost": 0.0,
+                "order_id": "",
+                "note": "account_snapshot_only",
+            }
+        )
+
+    df = pd.DataFrame(rows)
+    return _normalize_real_sync_frame(df, source_label=str(artifact_path))
+
+
+def normalize_real_sync_input(sync_path: str | Path) -> pd.DataFrame:
+    sync_path = Path(sync_path)
+    if sync_path.suffix.lower() == ".json":
+        return normalize_real_sync_bridge_artifact(sync_path)
+    return normalize_real_sync_csv(sync_path)
+
+
 def sync_real_account_from_csv(
     real_account: RealAccount,
     account_name: str,
@@ -132,9 +204,10 @@ def sync_real_account_from_csv(
     *,
     persist_trade_log: bool = True,
 ) -> pd.DataFrame:
-    normalized = normalize_real_sync_csv(sync_path)
+    normalized = normalize_real_sync_input(sync_path)
 
     df_positions = normalized[["symbol", "amount", "price", "cost_basis"]].copy()
+    df_positions = df_positions[df_positions["symbol"] != "CASH"].reset_index(drop=True)
     latest_cash = float(normalized["cash"].dropna().iloc[0])
     latest_total_assets = float(normalized["total_assets"].dropna().iloc[0])
 
@@ -147,6 +220,7 @@ def sync_real_account_from_csv(
     )
 
     if persist_trade_log:
+        real_account.clear_trade_log(date=date, account_name=account_name)
         trade_rows = normalized[normalized["side"].isin(["buy", "sell"])].copy()
         for _, row in trade_rows.iterrows():
             filled_amount = int(abs(row["filled_amount"]))

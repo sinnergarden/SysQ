@@ -9,7 +9,7 @@ from qlib.data import D
 from qsys.analysis.tearsheet import PerformanceAnalyzer
 from qsys.config import cfg
 from qsys.data.adapter import QlibAdapter
-from qsys.strategy.engine import StrategyEngine
+from qsys.strategy.engine import DEFAULT_TOP_K, StrategyEngine
 from qsys.strategy.generator import SignalGenerator
 from qsys.trader.account import Account
 from qsys.trader.diff import OrderGenerator
@@ -26,7 +26,7 @@ class BacktestEngine:
         end_date="2022-12-31",
         account=None,
         daily_predictions=None,
-        top_k=50,
+        top_k=DEFAULT_TOP_K,
         n_drop=0,
     ):
         self.start_date = start_date

@@ -6,7 +6,7 @@ from qlib.data import D
 from qsys.data.adapter import QlibAdapter
 from qsys.live.account import RealAccount
 from qsys.live.reconciliation import export_plan_bundle
-from qsys.strategy.engine import StrategyEngine
+from qsys.strategy.engine import DEFAULT_TOP_K, StrategyEngine
 from qsys.trader.plan import PlanGenerator
 from qsys.utils.logger import log
 
@@ -21,7 +21,7 @@ class LiveManager:
 
     def __init__(self, model_path, db_path="data/real_account.db", output_dir="data"):
         self.real_account = RealAccount(db_path)
-        self.strategy = StrategyEngine(top_k=30)
+        self.strategy = StrategyEngine(top_k=DEFAULT_TOP_K)
         self.planner = PlanGenerator()
         self.model_path = model_path
         self.model = None

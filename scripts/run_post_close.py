@@ -8,10 +8,11 @@ Purpose:
 
 Typical usage:
 - python scripts/run_post_close.py --date 2026-03-20 --real_sync broker/real_sync_2026-03-20.csv
+- python scripts/run_post_close.py --date 2026-03-20 --real_sync broker/miniqmt_readback_2026-03-20.json
 
 Key args:
 - --date: trading date being reconciled
-- --real_sync: broker/account CSV after market close
+- --real_sync: broker/account CSV or MiniQMT readback JSON after market close
 - --db_path / --output_dir / --report_dir / --plan_dir: redirect operational artifacts outside SysQ/data
 - --execution_date: optional execution date override
 - --no_report: skip JSON run report
@@ -30,6 +31,7 @@ sys.path.append(str(project_root))
 
 from qsys.data.adapter import QlibAdapter
 from qsys.live.account import RealAccount
+from qsys.live.daily_artifacts import archive_daily_artifacts, build_daily_summary_bundle, extract_account_snapshot
 from qsys.live.ops_manifest import update_manifest
 from qsys.live.reconciliation import (
     build_reconciliation_result,
@@ -58,7 +60,7 @@ def main():
         description="Post-close workflow: sync real account CSV and reconcile against shadow account"
     )
     parser.add_argument("--date", required=True, help="Trading date to reconcile (YYYY-MM-DD)")
-    parser.add_argument("--real_sync", required=True, help="Broker/account CSV exported after market close")
+    parser.add_argument("--real_sync", required=True, help="Broker/account CSV or MiniQMT readback JSON exported after market close")
     parser.add_argument("--db_path", default="data/real_account.db", help="SQLite account database path")
     parser.add_argument(
         "--output_dir",
@@ -113,6 +115,7 @@ def main():
         log.warning(f"Could not resolve production model: {e}")
 
     account = RealAccount(db_path=args.db_path, account_name=args.real_account_name)
+    account_snapshots = {}
     
     # Try to get signal_date from plan file
     signal_date = args.date
@@ -138,6 +141,16 @@ def main():
         date=args.date,
         real_account_name=args.real_account_name,
         shadow_account_name=args.shadow_account_name,
+    )
+    account_snapshots[args.real_account_name] = extract_account_snapshot(
+        account,
+        date=args.date,
+        account_name=args.real_account_name,
+    )
+    account_snapshots[args.shadow_account_name] = extract_account_snapshot(
+        account,
+        date=args.date,
+        account_name=args.shadow_account_name,
     )
     written = write_reconciliation_outputs(
         result,
@@ -221,10 +234,20 @@ def main():
             summary={
                 "reconciliation": reconciliation_summary,
                 "signal_quality": signal_quality_summary,
+                "account_snapshots": account_snapshots,
             },
         )
+        archive_info = archive_daily_artifacts(
+            execution_date=execution_date,
+            signal_date=signal_date,
+            stage="post_close",
+            artifacts={**report.artifacts, "report": report_path, "manifest": manifest_path},
+        )
+        digest = build_daily_summary_bundle(execution_date=execution_date)
         log.info(f"Report saved to: {report_path}")
         log.info(f"Manifest saved to: {manifest_path}")
+        log.info(f"Daily index saved to: {archive_info['index_path']}")
+        log.info(f"Daily digest saved to: {digest.report_markdown_path}")
         
         # Also print markdown summary
         print("\n" + "=" * 60)

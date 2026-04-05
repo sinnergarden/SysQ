@@ -2,8 +2,11 @@ import pandas as pd
 import numpy as np
 from qsys.utils.logger import log
 
+DEFAULT_TOP_K = 5
+
+
 class StrategyEngine:
-    def __init__(self, top_k=30, method="equal_weight", risk_max_position=0.3):
+    def __init__(self, top_k=DEFAULT_TOP_K, method="equal_weight", risk_max_position=0.3):
         """
         Strategy Engine: Decides target positions based on scores and rules.
         """

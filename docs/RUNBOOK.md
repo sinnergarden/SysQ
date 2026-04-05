@@ -130,6 +130,8 @@ SysQ 当前把 readiness 分为三层：
 - `plan_<signal_date>_real.csv`
 - `real_sync_template_<signal_date>_shadow.csv`
 - `real_sync_template_<signal_date>_real.csv`
+- `order_intents_<execution_date>_shadow.json`
+- `order_intents_<execution_date>_real.json`
 - `daily_ops_pre_open_*.json`
 
 计划 CSV 必须保留关键字段：
@@ -165,7 +167,35 @@ SysQ 当前把 readiness 分为三层：
 - 结构化 `daily_ops_post_close_*.json`
 - 对账结果中的 real / shadow 差异摘要
 
-### 5.3 报告契约
+### 5.3 order_intents 契约
+
+`order_intents` 是 pre-open 到 broker bridge 的稳定输入，不应要求下游再解析 plan markdown 或 stdout。
+
+必须至少包含：
+
+- `artifact_type=order_intents`
+- `signal_date`
+- `execution_date`
+- `account_name`
+- `model_info`
+- `assumptions`
+- `intent_count`
+- `intents[]`
+
+每条 intent 至少包含：
+
+- `intent_id`
+- `symbol`
+- `side`
+- `amount`
+- `price`
+- `execution_bucket`
+- `cash_dependency`
+- `t1_rule`
+- `price_basis`
+- `status`
+
+### 5.4 报告契约
 
 所有关键流程都应能回答：
 

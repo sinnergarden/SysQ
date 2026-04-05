@@ -1,11 +1,15 @@
 import pandas as pd
 import numpy as np
 import json
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 from qsys.config import cfg
 from qsys.utils.logger import log
 from qsys.data.storage import StockDataStore
+from qsys.feature.builder import build_phase1_features
+from qsys.feature.config import RESEARCH_FEATURE_FLAGS
+from qsys.feature.registry import list_feature_groups
 import qlib
 from qlib.utils import exists_qlib_data
 from qlib.data import D
@@ -14,6 +18,27 @@ import sys
 import os
 import shutil
 import subprocess
+
+
+@dataclass
+class InstrumentCoverageReport:
+    calendar_latest: Optional[str]
+    all_latest: Optional[str]
+    universe: str
+    universe_latest: Optional[str]
+
+    @property
+    def is_closed(self) -> bool:
+        latest_values = [self.calendar_latest, self.all_latest, self.universe_latest]
+        return all(latest_values) and len(set(latest_values)) == 1
+
+    def blocker_message(self) -> str:
+        return (
+            "Qlib instrument coverage mismatch blocks planning: "
+            f"calendar={self.calendar_latest}, all={self.all_latest}, "
+            f"{self.universe}={self.universe_latest}"
+        )
+
 
 class QlibAdapter:
     def __init__(self):
@@ -32,11 +57,45 @@ class QlibAdapter:
             df = pd.read_csv(cal_path, header=None)
             if df.empty:
                 return None
-            # Assuming sorted
             val = df.iloc[-1, 0]
             return pd.Timestamp(str(val))
         except Exception:
             return None
+
+    def get_instrument_latest_end_date(self, instrument: str) -> Optional[pd.Timestamp]:
+        inst_path = self.qlib_dir / "instruments" / f"{instrument}.txt"
+        if not inst_path.exists():
+            return None
+        try:
+            df = pd.read_csv(inst_path, sep="\t", header=None, names=["symbol", "start_date", "end_date"])
+            if df.empty or "end_date" not in df.columns:
+                return None
+            end_dates = pd.to_datetime(df["end_date"], errors="coerce")
+            if end_dates.isna().all():
+                return None
+            return end_dates.max()
+        except Exception:
+            return None
+
+    def get_instrument_coverage_report(self, universe: str = "csi300") -> InstrumentCoverageReport:
+        calendar_latest = self.get_last_qlib_date()
+        all_latest = self.get_instrument_latest_end_date("all")
+        universe_latest = self.get_instrument_latest_end_date(universe)
+        return InstrumentCoverageReport(
+            calendar_latest=calendar_latest.strftime("%Y-%m-%d") if calendar_latest is not None else None,
+            all_latest=all_latest.strftime("%Y-%m-%d") if all_latest is not None else None,
+            universe=universe,
+            universe_latest=universe_latest.strftime("%Y-%m-%d") if universe_latest is not None else None,
+        )
+
+    def ensure_instrument_coverage(self, universe: str = "csi300", *, refresh_on_mismatch: bool = True) -> InstrumentCoverageReport:
+        report = self.get_instrument_coverage_report(universe=universe)
+        if report.is_closed or not refresh_on_mismatch:
+            return report
+
+        log.warning(report.blocker_message())
+        self._refresh_universe_instruments(universe=universe)
+        return self.get_instrument_coverage_report(universe=universe)
 
     def refresh_qlib_date(self):
         """
@@ -51,12 +110,17 @@ class QlibAdapter:
         log.info(f"Raw data latest date: {raw_latest}")
         self.check_and_update(force=False)
 
+        coverage_report = self.ensure_instrument_coverage("csi300", refresh_on_mismatch=True)
+
         # Verify the update
         qlib_latest = self.get_last_qlib_date()
         if qlib_latest:
             log.info(f"Qlib bin latest date after refresh: {qlib_latest.date()}")
         else:
             log.warning("Failed to get qlib latest date after refresh")
+
+        if not coverage_report.is_closed:
+            raise RuntimeError(coverage_report.blocker_message())
 
     def _get_raw_latest_date(self) -> Optional[pd.Timestamp]:
         """Get the latest date from raw feather data"""
@@ -169,16 +233,211 @@ class QlibAdapter:
             return [instruments]
         return instruments
 
+    @staticmethod
+    def _normalize_field_list(fields):
+        if fields is None:
+            return []
+        if isinstance(fields, tuple) and len(fields) == 2:
+            return list(fields[0])
+        if isinstance(fields, dict):
+            inner = fields.get("feature") or fields.get("fields") or []
+            if isinstance(inner, tuple) and len(inner) == 2:
+                return list(inner[0])
+            return list(inner)
+        return list(fields)
+
+    @staticmethod
+    def _split_feature_fields(fields):
+        requested = []
+        native = []
+        derived = []
+        derived_candidates = {
+            feature
+            for group in list_feature_groups().values()
+            for feature in group.get("features", [])
+        }
+        derived_candidates.update(["inventory_yoy", "ar_yoy"])
+
+        for field in fields:
+            if not isinstance(field, str):
+                continue
+            name = field.strip()
+            if not name:
+                continue
+            requested.append(name)
+            if name in derived_candidates:
+                derived.append(name)
+            else:
+                native.append(name)
+        return requested, native, derived
+
+    @staticmethod
+    def _semantic_support_fields():
+        return [
+            "$open",
+            "$high",
+            "$low",
+            "$close",
+            "$volume",
+            "$amount",
+            "$turnover_rate",
+            "$paused",
+            "$high_limit",
+            "$low_limit",
+            "$pe",
+            "$pb",
+            "$ps_ttm",
+            "$total_mv",
+            "$circ_mv",
+            "$grossprofit_margin",
+            "$debt_to_assets",
+            "$current_ratio",
+            "$net_income",
+            "$revenue",
+            "$total_assets",
+            "$equity",
+            "$op_cashflow",
+            "$inventory",
+            "$accounts_receiv",
+        ]
+
+    @staticmethod
+    def _semantic_lookback_start(start_time, end_time):
+        anchor = pd.Timestamp(start_time or end_time)
+        return (anchor - pd.Timedelta(days=400)).strftime("%Y-%m-%d")
+
+    @staticmethod
+    def _to_semantic_builder_frame(df: pd.DataFrame) -> pd.DataFrame:
+        if df is None or df.empty:
+            return pd.DataFrame()
+        out = df.copy()
+        if isinstance(out.index, pd.MultiIndex):
+            out = out.reset_index()
+        rename_map = {
+            "instrument": "ts_code",
+            "datetime": "trade_date",
+            "$open": "open",
+            "$high": "high",
+            "$low": "low",
+            "$close": "close",
+            "$volume": "volume",
+            "$amount": "amount",
+            "$turnover_rate": "turnover_rate",
+            "$paused": "paused",
+            "$high_limit": "high_limit",
+            "$low_limit": "low_limit",
+            "$pe": "pe",
+            "$pb": "pb",
+            "$ps_ttm": "ps_ttm",
+            "$total_mv": "total_mv",
+            "$circ_mv": "circ_mv",
+            "$grossprofit_margin": "grossprofit_margin",
+            "$debt_to_assets": "debt_to_assets",
+            "$current_ratio": "current_ratio",
+            "$net_income": "net_income",
+            "$revenue": "revenue",
+            "$total_assets": "total_assets",
+            "$equity": "equity",
+            "$op_cashflow": "op_cashflow",
+            "$inventory": "inventory",
+            "$accounts_receiv": "accounts_receiv",
+        }
+        out = out.rename(columns=rename_map)
+        if "trade_date" in out.columns:
+            out["trade_date"] = pd.to_datetime(out["trade_date"])
+        return out
+
+    @staticmethod
+    def _semantic_feature_flags(derived_fields):
+        flags = {key: False for key in RESEARCH_FEATURE_FLAGS}
+        groups = list_feature_groups()
+        requested = set(derived_fields)
+        for group in groups.values():
+            if requested.intersection(group.get("features", [])):
+                flags[group["enabled_by"]] = True
+        if requested.intersection({"stock_minus_industry_ret_3d", "stock_minus_industry_ret_5d"}):
+            flags["enable_industry_context_features"] = True
+            flags["enable_relative_strength_features"] = True
+        if requested.intersection({"inventory_yoy", "ar_yoy"}):
+            flags["enable_fundamental_context_features"] = True
+        return flags
+
+    def _build_semantic_features(self, base_df: pd.DataFrame, derived_fields, start_time=None, end_time=None) -> pd.DataFrame:
+        semantic_input = self._to_semantic_builder_frame(base_df)
+        if semantic_input.empty:
+            return pd.DataFrame()
+
+        try:
+            feat = build_phase1_features(semantic_input, flags=self._semantic_feature_flags(derived_fields))
+        except KeyError as exc:
+            log.warning(f"Semantic feature inputs missing; fallback to NaN for unsupported columns: {exc}")
+            feat = semantic_input.copy()
+        for col in derived_fields:
+            if col not in feat.columns:
+                feat[col] = np.nan
+
+        keep_cols = ["trade_date", "ts_code"] + list(derived_fields)
+        feat = feat[keep_cols].copy()
+        if start_time is not None:
+            feat = feat[feat["trade_date"] >= pd.Timestamp(start_time)]
+        if end_time is not None:
+            feat = feat[feat["trade_date"] <= pd.Timestamp(end_time)]
+        if feat.empty:
+            return pd.DataFrame(columns=derived_fields)
+
+        feat = feat.set_index(["trade_date", "ts_code"]).sort_index()
+        feat.index = feat.index.rename(["datetime", "instrument"])
+        return feat[list(derived_fields)]
+
     def get_features(self, instruments, fields, start_time=None, end_time=None, freq="day", inst_processors=None):
         inst = self.normalize_instruments(instruments)
-        return DatasetD.dataset(
+        field_list = self._normalize_field_list(fields)
+        requested_fields, native_fields, derived_fields = self._split_feature_fields(field_list)
+        if not derived_fields:
+            return DatasetD.dataset(
+                inst,
+                field_list,
+                start_time=start_time,
+                end_time=end_time,
+                freq=freq,
+                inst_processors=inst_processors or []
+            )
+
+        support_fields = [f for f in self._semantic_support_fields() if f not in native_fields]
+        native_request = native_fields + support_fields
+        base_start_time = self._semantic_lookback_start(start_time, end_time)
+        native_df = DatasetD.dataset(
             inst,
-            fields,
-            start_time=start_time,
+            native_request,
+            start_time=base_start_time,
             end_time=end_time,
             freq=freq,
             inst_processors=inst_processors or []
         )
+        semantic_df = self._build_semantic_features(native_df, derived_fields, start_time=start_time, end_time=end_time)
+
+        native_current = native_df
+        if start_time is not None or end_time is not None:
+            if native_current is not None and not native_current.empty and isinstance(native_current.index, pd.MultiIndex):
+                dt_index = pd.to_datetime(native_current.index.get_level_values("datetime"))
+                mask = pd.Series(True, index=native_current.index)
+                if start_time is not None:
+                    mask &= dt_index >= pd.Timestamp(start_time)
+                if end_time is not None:
+                    mask &= dt_index <= pd.Timestamp(end_time)
+                native_current = native_current[mask.to_numpy()]
+
+        if native_current is None or native_current.empty:
+            combined = semantic_df.copy()
+        else:
+            combined = native_current.copy()
+            if semantic_df is not None and not semantic_df.empty:
+                combined = combined.join(semantic_df, how="left")
+
+        for field in requested_fields:
+            if field not in combined.columns:
+                combined[field] = np.nan
+        return combined[requested_fields]
 
     @staticmethod
     def _coalesce_duplicate_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -566,8 +825,11 @@ class QlibAdapter:
             self._clean_artifacts()
 
 
-    def _refresh_universe_instruments(self):
+    def _refresh_universe_instruments(self, universe: str = "csi300"):
         """Refresh derived universe instrument files after qlib conversion."""
+        if universe != "csi300":
+            log.warning(f"Universe refresh is not implemented for {universe}")
+            return
         script_path = cfg.project_root / "scripts" / "create_instrument_csi300.py"
         if not script_path.exists():
             log.warning(f"CSI300 instrument refresh script not found: {script_path}")

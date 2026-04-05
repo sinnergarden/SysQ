@@ -210,6 +210,8 @@ class QlibNativeModel(IModel):
     def _apply_preprocess(self, X: pd.DataFrame) -> pd.DataFrame:
         params = getattr(self, "preprocess_params", None) or {}
         method = params.get("method")
+        if method == "identity":
+            return X.astype(float).fillna(float(params.get("fillna", 0.0)))
         if method != "qlib_robust_zscore":
             raise MissingPreprocessParamsError("Missing or unsupported preprocessing contract for inference")
 
