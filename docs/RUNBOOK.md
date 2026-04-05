@@ -32,6 +32,13 @@
 - `docs/ops/FEATURE_PIPELINE_SOP.md`：特征链路 SOP，定义 raw / feature engineering / bin / 填充率审计 / 训练前检查
 - `docs/features/feature_system.md`：Qsys 特征系统长期说明，定义 raw / feature engineering / bin / 研究与生产分层
 
+当前 daily ops 入口只保留：
+
+- `scripts/run_daily_trading.py`：盘前主入口
+- `scripts/run_post_close.py`：盘后主入口
+
+说明：历史别名 `scripts/run_plan.py` 与 `scripts/run_reconcile.py` 已移除；后续文档、cron 与人工操作都不应继续引用它们。
+
 旧文档处理原则：
 
 - `docs/SOP_DAILY_OPS.md`、`docs/SOP_DAILY_OPS_v1.0.md` 保留作历史参考，不再作为当前执行依据
