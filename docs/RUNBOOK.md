@@ -206,7 +206,42 @@ SysQ 当前把 readiness 分为三层：
 - blocker 是什么
 - 下一步怎么做
 
-### 5.4 长任务进度 / 日志契约
+### 5.4 最小生产内核：`scripts/run_minimal_kernel.py`
+
+这是新的最小生产骨架入口，用于验证和手动检查以下能力是否成立：
+
+- `runs/{date}/manifest.json` 是否作为唯一运行态真相源
+- 各 step 是否支持成功跳过、失败留痕、`--from-step` 续跑、`--force` 重跑
+- `runs/{date}/02_broker/broker_snapshot.json` 是否稳定落盘
+- `data/trade.db` 是否写入最小账本
+
+推荐手动验证命令：
+
+```bash
+python3 scripts/run_minimal_kernel.py --date 2026-04-07
+```
+
+常用变体：
+
+```bash
+python3 scripts/run_minimal_kernel.py --date 2026-04-07 --from-step 04_inference
+python3 scripts/run_minimal_kernel.py --date 2026-04-07 --force
+python3 scripts/run_minimal_kernel.py --date 2026-04-07 --broker-readback path/to/readback.json
+```
+
+运行后至少检查：
+
+- `runs/2026-04-07/manifest.json`
+- `runs/2026-04-07/02_broker/broker_snapshot.json`
+- `data/trade.db`
+
+当前内核定位：
+
+- 它是生产骨架，不是完整 daily ops 替代品
+- `03_retrain` 到 `07_reconcile` 目前仍以 stub / 最小产物为主
+- 真实 Broker 目前只接读链路，不接自动下单
+
+### 5.5 长任务进度 / 日志契约
 
 长任务默认采用“低噪音、结构化、对人有用”的表达方式：
 

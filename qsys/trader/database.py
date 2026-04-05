@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Iterable
 
 
 def utc_now() -> str:
-    return datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+    return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 class TradeLedger:
@@ -139,7 +139,7 @@ class TradeLedger:
             cursor.execute(
                 """
                 UPDATE pipeline_runs
-                SET trading_date = ?, recipe_version = ?, status = ?, updated_at = ?, error = NULL
+                SET trading_date = ?, recipe_version = ?, status = ?, updated_at = ?, ended_at = NULL, error = NULL
                 WHERE run_id = ?
                 """,
                 (trading_date, recipe_version, status, now, run_id),
