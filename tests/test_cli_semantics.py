@@ -2,6 +2,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import pandas as pd
+
 from qsys.data.adapter import QlibAdapter
 import scripts.run_daily_trading as run_daily_trading
 from scripts.run_daily_trading import (

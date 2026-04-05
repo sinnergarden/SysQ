@@ -49,6 +49,15 @@ class TestPreprocessingConsistency(unittest.TestCase):
         with self.assertRaises(MissingPreprocessParamsError):
             model.predict(frame)
 
+    def test_predict_supports_identity_contract(self):
+        model = self._make_model()
+        model.preprocess_params = {"method": "identity", "fillna": 0.0}
+        frame = pd.DataFrame({"f1": [1.0, None], "f2": [2.0, 3.0]})
+
+        out = model.predict(frame)
+
+        self.assertEqual(out.tolist(), [3.0, 3.0])
+
     def test_save_and_load_preserve_preprocess_contract(self):
         model = self._make_model()
         model.preprocess_params = {

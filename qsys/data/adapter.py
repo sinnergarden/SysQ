@@ -367,7 +367,11 @@ class QlibAdapter:
         if semantic_input.empty:
             return pd.DataFrame()
 
-        feat = build_phase1_features(semantic_input, flags=self._semantic_feature_flags(derived_fields))
+        try:
+            feat = build_phase1_features(semantic_input, flags=self._semantic_feature_flags(derived_fields))
+        except KeyError as exc:
+            log.warning(f"Semantic feature inputs missing; fallback to NaN for unsupported columns: {exc}")
+            feat = semantic_input.copy()
         for col in derived_fields:
             if col not in feat.columns:
                 feat[col] = np.nan

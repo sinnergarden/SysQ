@@ -36,10 +36,10 @@ class TestAdapterSemanticFeatures(unittest.TestCase):
             index=index,
         )
 
-    @patch("qsys.data.adapter.DatasetD.dataset")
+    @patch("qsys.data.adapter.DatasetD")
     def test_get_features_builds_semantic_columns_from_native_daily_path(self, mock_dataset):
         native_df = self._mock_native_frame()
-        mock_dataset.return_value = native_df
+        mock_dataset.dataset.return_value = native_df
 
         adapter = QlibAdapter()
         out = adapter.get_features(
@@ -56,16 +56,16 @@ class TestAdapterSemanticFeatures(unittest.TestCase):
         self.assertAlmostEqual(out.iloc[0]["volume_shock_3"], 240.0 / ((150.0 + 180.0 + 240.0) / 3.0))
         self.assertFalse(bool(out.iloc[0]["is_limit_up"]))
 
-        requested_fields = mock_dataset.call_args.args[1]
+        requested_fields = mock_dataset.dataset.call_args.args[1]
         self.assertIn("$amount", requested_fields)
         self.assertIn("$high_limit", requested_fields)
-        self.assertEqual(mock_dataset.call_args.kwargs["start_time"], "2025-02-27")
-        self.assertEqual(mock_dataset.call_args.kwargs["end_time"], "2026-04-03")
+        self.assertEqual(mock_dataset.dataset.call_args.kwargs["start_time"], "2025-02-27")
+        self.assertEqual(mock_dataset.dataset.call_args.kwargs["end_time"], "2026-04-03")
 
-    @patch("qsys.data.adapter.DatasetD.dataset")
+    @patch("qsys.data.adapter.DatasetD")
     def test_get_features_keeps_unavailable_semantic_columns_as_nan(self, mock_dataset):
         native_df = self._mock_native_frame().drop(columns=["$amount"])
-        mock_dataset.return_value = native_df
+        mock_dataset.dataset.return_value = native_df
 
         adapter = QlibAdapter()
         out = adapter.get_features(
@@ -78,6 +78,30 @@ class TestAdapterSemanticFeatures(unittest.TestCase):
         self.assertEqual(list(out.columns), ["inventory_yoy", "amount_log"])
         self.assertTrue(out["inventory_yoy"].isna().all())
         self.assertTrue(out["amount_log"].isna().all())
+
+    @patch("qsys.data.adapter.DatasetD")
+    def test_get_features_builds_raw_relative_strength_columns(self, mock_dataset):
+        native_df = self._mock_native_frame()
+        mock_dataset.dataset.return_value = native_df
+
+        adapter = QlibAdapter()
+        out = adapter.get_features(
+            instruments=["AAA"],
+            fields=["ret_3d", "amount_mean_3d", "amount_mean_5d"],
+            start_time="2026-04-03",
+            end_time="2026-04-03",
+        )
+
+        self.assertEqual(list(out.columns), ["ret_3d", "amount_mean_3d", "amount_mean_5d"])
+        self.assertEqual(len(out), 1)
+        self.assertAlmostEqual(out.iloc[0]["ret_3d"], (10.8 / 10.2) - 1.0)
+        self.assertAlmostEqual(out.iloc[0]["amount_mean_3d"], (1800.0 + 2250.0 + 3120.0) / 3.0)
+        self.assertAlmostEqual(out.iloc[0]["amount_mean_5d"], (1000.0 + 1320.0 + 1800.0 + 2250.0 + 3120.0) / 5.0)
+
+        requested_fields = mock_dataset.dataset.call_args.args[1]
+        self.assertIn("$close", requested_fields)
+        self.assertIn("$amount", requested_fields)
+        self.assertIn("$volume", requested_fields)
 
 
 if __name__ == "__main__":
