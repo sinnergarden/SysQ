@@ -1,3 +1,4 @@
+from .gateway import BrokerGateway
 from .miniqmt import (
     AccountSnapshot,
     BrokerOrder,
@@ -11,6 +12,7 @@ from .miniqmt import (
 )
 
 __all__ = [
+    "BrokerGateway",
     "AccountSnapshot",
     "BrokerOrder",
     "BrokerOrderStatus",
