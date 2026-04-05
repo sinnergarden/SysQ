@@ -215,6 +215,10 @@ def inspect_qlib_data_health(
     blocking_issues: list[str] = []
     warnings: list[str] = []
     gap_days = 0
+
+    coverage = adapter.get_instrument_coverage_report(universe=universe)
+    if not coverage.is_closed:
+        blocking_issues.append(coverage.blocker_message())
     if expected_latest_date is None:
         blocking_issues.append("Failed to resolve expected latest trading date from calendar")
     elif last_qlib_date is None:

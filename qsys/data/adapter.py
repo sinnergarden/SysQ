@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 import json
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 from qsys.config import cfg
@@ -14,6 +15,27 @@ import sys
 import os
 import shutil
 import subprocess
+
+
+@dataclass
+class InstrumentCoverageReport:
+    calendar_latest: Optional[str]
+    all_latest: Optional[str]
+    universe: str
+    universe_latest: Optional[str]
+
+    @property
+    def is_closed(self) -> bool:
+        latest_values = [self.calendar_latest, self.all_latest, self.universe_latest]
+        return all(latest_values) and len(set(latest_values)) == 1
+
+    def blocker_message(self) -> str:
+        return (
+            "Qlib instrument coverage mismatch blocks planning: "
+            f"calendar={self.calendar_latest}, all={self.all_latest}, "
+            f"{self.universe}={self.universe_latest}"
+        )
+
 
 class QlibAdapter:
     def __init__(self):
@@ -32,11 +54,45 @@ class QlibAdapter:
             df = pd.read_csv(cal_path, header=None)
             if df.empty:
                 return None
-            # Assuming sorted
             val = df.iloc[-1, 0]
             return pd.Timestamp(str(val))
         except Exception:
             return None
+
+    def get_instrument_latest_end_date(self, instrument: str) -> Optional[pd.Timestamp]:
+        inst_path = self.qlib_dir / "instruments" / f"{instrument}.txt"
+        if not inst_path.exists():
+            return None
+        try:
+            df = pd.read_csv(inst_path, sep="\t", header=None, names=["symbol", "start_date", "end_date"])
+            if df.empty or "end_date" not in df.columns:
+                return None
+            end_dates = pd.to_datetime(df["end_date"], errors="coerce")
+            if end_dates.isna().all():
+                return None
+            return end_dates.max()
+        except Exception:
+            return None
+
+    def get_instrument_coverage_report(self, universe: str = "csi300") -> InstrumentCoverageReport:
+        calendar_latest = self.get_last_qlib_date()
+        all_latest = self.get_instrument_latest_end_date("all")
+        universe_latest = self.get_instrument_latest_end_date(universe)
+        return InstrumentCoverageReport(
+            calendar_latest=calendar_latest.strftime("%Y-%m-%d") if calendar_latest is not None else None,
+            all_latest=all_latest.strftime("%Y-%m-%d") if all_latest is not None else None,
+            universe=universe,
+            universe_latest=universe_latest.strftime("%Y-%m-%d") if universe_latest is not None else None,
+        )
+
+    def ensure_instrument_coverage(self, universe: str = "csi300", *, refresh_on_mismatch: bool = True) -> InstrumentCoverageReport:
+        report = self.get_instrument_coverage_report(universe=universe)
+        if report.is_closed or not refresh_on_mismatch:
+            return report
+
+        log.warning(report.blocker_message())
+        self._refresh_universe_instruments(universe=universe)
+        return self.get_instrument_coverage_report(universe=universe)
 
     def refresh_qlib_date(self):
         """
@@ -51,12 +107,17 @@ class QlibAdapter:
         log.info(f"Raw data latest date: {raw_latest}")
         self.check_and_update(force=False)
 
+        coverage_report = self.ensure_instrument_coverage("csi300", refresh_on_mismatch=True)
+
         # Verify the update
         qlib_latest = self.get_last_qlib_date()
         if qlib_latest:
             log.info(f"Qlib bin latest date after refresh: {qlib_latest.date()}")
         else:
             log.warning("Failed to get qlib latest date after refresh")
+
+        if not coverage_report.is_closed:
+            raise RuntimeError(coverage_report.blocker_message())
 
     def _get_raw_latest_date(self) -> Optional[pd.Timestamp]:
         """Get the latest date from raw feather data"""
@@ -566,8 +627,11 @@ class QlibAdapter:
             self._clean_artifacts()
 
 
-    def _refresh_universe_instruments(self):
+    def _refresh_universe_instruments(self, universe: str = "csi300"):
         """Refresh derived universe instrument files after qlib conversion."""
+        if universe != "csi300":
+            log.warning(f"Universe refresh is not implemented for {universe}")
+            return
         script_path = cfg.project_root / "scripts" / "create_instrument_csi300.py"
         if not script_path.exists():
             log.warning(f"CSI300 instrument refresh script not found: {script_path}")

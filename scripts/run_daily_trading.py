@@ -74,22 +74,29 @@ def update_data(force=True):
         return False, {"error": str(e), "aligned": False}
 
 
+def _resolve_trading_day(anchor_date: str, *, direction: str) -> str:
+    QlibAdapter().init_qlib()
+    ts = pd.Timestamp(anchor_date)
+    if direction == "next":
+        calendar = D.calendar(start_time=ts, end_time=ts + pd.Timedelta(days=10))
+        candidates = [pd.Timestamp(x) for x in calendar if pd.Timestamp(x) > ts]
+        fallback = ts
+    else:
+        calendar = D.calendar(start_time=ts - pd.Timedelta(days=10), end_time=ts)
+        candidates = [pd.Timestamp(x) for x in calendar if pd.Timestamp(x) < ts]
+        fallback = ts - pd.Timedelta(days=1)
+    if not candidates:
+        return fallback.strftime("%Y-%m-%d")
+    selector = min if direction == "next" else max
+    return selector(candidates).strftime("%Y-%m-%d")
+
+
 def next_trading_day(signal_date: str) -> str:
-    ts = pd.Timestamp(signal_date)
-    calendar = D.calendar(start_time=ts, end_time=ts + pd.Timedelta(days=10))
-    future_days = [pd.Timestamp(x) for x in calendar if pd.Timestamp(x) > ts]
-    if not future_days:
-        return ts.strftime("%Y-%m-%d")
-    return min(future_days).strftime("%Y-%m-%d")
+    return _resolve_trading_day(signal_date, direction="next")
 
 
 def previous_trading_day(signal_date: str) -> str:
-    ts = pd.Timestamp(signal_date)
-    calendar = D.calendar(start_time=ts - pd.Timedelta(days=10), end_time=ts)
-    past_days = [pd.Timestamp(x) for x in calendar if pd.Timestamp(x) < ts]
-    if not past_days:
-        return (ts - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
-    return max(past_days).strftime("%Y-%m-%d")
+    return _resolve_trading_day(signal_date, direction="previous")
 
 
 def extract_plan_summary(plan_df, account_name, signal_date, execution_date):
