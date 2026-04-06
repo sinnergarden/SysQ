@@ -1,5 +1,8 @@
 # Data
 data/
+daily/
+experiments/
+runs/
 *.db
 *.feather
 *.parquet

@@ -38,7 +38,7 @@ class TestDailyArtifacts(unittest.TestCase):
     def test_archive_and_build_daily_summary_bundle(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
-            archive_root = tmp / "daily" / "ops"
+            archive_root = tmp / "daily"
             source = tmp / "source"
             source.mkdir()
 
@@ -126,10 +126,32 @@ class TestDailyArtifacts(unittest.TestCase):
             self.assertIn("Current Day Predictions", bundle.report_text)
             self.assertIn("status=available", bundle.report_text)
             self.assertIn("2026-04-02: cash_diff=100.0", bundle.report_text)
+            self.assertTrue(bundle.report_markdown_path.endswith("pre_open/reports/daily_ops_digest_2026-04-03.md"))
 
             index_payload = json.loads(Path(bundle.snapshot_index_path).read_text(encoding="utf-8"))
             self.assertIn("pre_open", index_payload["stages"])
             self.assertEqual(index_payload["stages"]["pre_open"]["artifacts"]["report"]["category"], "reports")
+
+    def test_archive_daily_artifacts_keeps_account_db_as_external_reference(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            db_path = tmp / "data" / "meta" / "real_account.db"
+            db_path.parent.mkdir(parents=True, exist_ok=True)
+            db_path.write_text("placeholder", encoding="utf-8")
+
+            archive_info = archive_daily_artifacts(
+                execution_date="2026-04-03",
+                signal_date="2026-04-02",
+                stage="pre_open",
+                artifacts={"account_db": str(db_path)},
+                archive_root=tmp / "daily",
+            )
+
+            index_payload = json.loads(Path(archive_info["index_path"]).read_text(encoding="utf-8"))
+            db_artifact = index_payload["stages"]["pre_open"]["artifacts"]["account_db"]
+            self.assertEqual(db_artifact["category"], "external_reference")
+            self.assertIsNone(db_artifact["archived_path"])
+            self.assertFalse((tmp / "daily" / "2026-04-03" / "pre_open" / "accounts").exists())
 
 
 if __name__ == "__main__":

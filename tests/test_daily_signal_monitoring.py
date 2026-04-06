@@ -165,6 +165,54 @@ class TestDailySignalMonitoring(unittest.TestCase):
         self.assertAlmostEqual(snapshot.summary["recent_vintage_win_rate"], 2 / 3)
         self.assertAlmostEqual(snapshot.summary["recent_vintage_avg_weighted_return"], 0.0066666667, places=6)
 
+    def test_collect_signal_quality_snapshot_reads_nested_daily_layout(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            daily_root = Path(tmpdir) / "daily"
+            pre_open_root = daily_root / "2025-01-03" / "pre_open"
+            save_signal_basket(
+                pd.DataFrame(
+                    [
+                        {
+                            "symbol": "AAA",
+                            "score": 0.5,
+                            "score_rank": 1,
+                            "weight": 1.0,
+                            "price": 10.0,
+                            "signal_date": "2025-01-02",
+                            "execution_date": "2025-01-03",
+                            "price_basis_date": "2025-01-02",
+                            "model_name": "demo",
+                            "model_path": "data/models/demo",
+                            "universe": "csi300",
+                        }
+                    ]
+                ),
+                output_dir=pre_open_root,
+                signal_date="2025-01-02",
+            )
+
+            with patch(
+                "qsys.live.signal_monitoring.evaluate_signal_basket",
+                return_value={
+                    "signal_date": "2025-01-02",
+                    "execution_date": "2025-01-03",
+                    "as_of_date": "2025-01-06",
+                    "holding_days": 1,
+                    "status": "success",
+                    "reason": "ok",
+                    "basket_size": 1,
+                    "coverage_count": 1,
+                    "coverage_ratio": 1.0,
+                    "equal_weight_return": 0.01,
+                    "weighted_return": 0.01,
+                    "benchmark_return": 0.0,
+                    "weighted_excess_return": 0.01,
+                },
+            ):
+                snapshot = collect_signal_quality_snapshot(as_of_date="2025-01-06", signal_dir=daily_root)
+
+        self.assertEqual(snapshot.summary["horizon_1d"]["signal_date"], "2025-01-02")
+
     def test_price_readiness_classifies_missing_end_price(self):
         basket = pd.DataFrame(
             [

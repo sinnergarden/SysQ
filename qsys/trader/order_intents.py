@@ -6,6 +6,8 @@ from typing import Any
 
 import pandas as pd
 
+from qsys.live.ops_paths import ensure_stage_subdir
+
 
 def build_order_intents(
     plan_df: pd.DataFrame | None,
@@ -77,7 +79,7 @@ def save_order_intents(
     execution_date: str,
     account_name: str,
 ) -> str:
-    output_dir = Path(output_dir)
+    output_dir = ensure_stage_subdir(output_dir, "order_intents")
     output_dir.mkdir(parents=True, exist_ok=True)
     path = output_dir / f"order_intents_{execution_date}_{account_name}.json"
     with open(path, "w", encoding="utf-8") as handle:

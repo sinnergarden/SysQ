@@ -1,117 +1,77 @@
-# 盘前 SOP
+# PRE_OPEN SOP
 
-## 1. 目的
+## 1. 目标
 
-在执行日开盘前，基于上一交易日收盘数据生成可执行计划，并给出明确的风险提示与人工复核点。
+盘前阶段必须回答三件事：
 
-## 2. 输入
+- 数据是否健康，日期语义是否明确。
+- 模型是否给出了可解释的分数与排序。
+- 各账户是否拿到了可执行的计划与 order intents。
 
-- `signal_date`：上一交易日
-- `execution_date`：实际执行日
-- 生产模型或指定 `--model_path`
-- 账户数据库 `--db_path`
-- 盘前产物目录 `--output_dir`
-- 报告目录 `--report_dir`
+## 2. 前置检查
 
-## 3. 输出
+继续盘前前，至少确认：
 
-- `plan_<signal_date>_shadow.csv`
-- `plan_<signal_date>_real.csv`
-- `real_sync_template_<signal_date>_shadow.csv`
-- `real_sync_template_<signal_date>_real.csv`
-- `daily_ops_pre_open_*.json`
+- 请求日与执行日正确。
+- `data/raw/`、`data/qlib_bin/` 已更新到请求口径。
+- `data/meta/real_account.db` 可读。
+- 缺口、空值、字段缺失没有触发 blocker。
 
-## 4. 标准步骤
-
-### Step A：确认日期
-
-规则：
-
-- 若 `--execution_date` 明确传入，则 `--date` 就是 `signal_date`
-- 若仅传 `--date` 且该日期晚于今天，则该日期视为 `execution_date`，脚本自动回退到上一交易日作为 `signal_date`
-
-### Step B：执行数据更新与 readiness 检查
-
-建议命令：
+## 3. 执行命令
 
 ```bash
-python scripts/run_daily_trading.py \
-  --date 2026-03-27 \
-  --execution_date 2026-03-30 \
-  --require_update_success
+python3 scripts/run_daily_trading.py --date 2026-04-02
 ```
 
-通过条件：
+如需显式指定执行日：
 
-- 显式刷新未失败
-- `health_ok == true`
-- `aligned == true`
-- `core_daily_status` 不阻断
+```bash
+python3 scripts/run_daily_trading.py --date 2026-04-02 --execution_date 2026-04-03
+```
 
-### Step C：确认模型
+## 4. 当前应产出的目录与文件
 
-通过条件：
+默认输出到 `daily/{execution_date}/pre_open/`。
 
-- 生产 manifest 能解析，或手工指定 `--model_path`
-- 模型可加载
-- 特征配置可读取
+- `plans/`
+  - `plan_{signal_date}_{account}.csv`
+  - `real_sync_template_{signal_date}_{account}.csv`
+- `order_intents/`
+  - `order_intents_{execution_date}_{account}.json`
+- `signals/`
+  - `signal_basket_{signal_date}.csv`
+- `reports/`
+  - `daily_ops_pre_open_*.json`
+  - `signal_quality_summary_{signal_date}.json`
+  - `signal_quality_vintages_{signal_date}.csv`
+  - `daily_ops_digest_{execution_date}.md`
+  - `daily_ops_digest_{execution_date}.json`
+- `manifests/`
+  - `daily_ops_manifest_{execution_date}.json`
 
-### Step D：生成 shadow / real 计划
+## 5. 最低验收口径
 
-计划字段至少应有：
+盘前结果不能只有股票代码，至少应包含：
 
-- `symbol`
-- `side`
-- `amount`
-- `price`
+- `signal_basket` 中的 `score` 或 `score_rank`
 - `weight`
-- `score`
-- `score_rank`
-- `signal_date`
-- `execution_date`
+- `plan` 中的 `amount`
+- `price` 或其他参考价格字段
+- `order_intents` 中的执行顺序与现金依赖信息
 
-### Step E：人工复核
+## 6. 阻断条件
 
-至少检查：
+出现以下任一情况，盘前应直接阻断：
 
-- 是否出现异常集中持仓
-- 是否存在大面积空计划
-- `sell` 是否先于 `buy` 的现金依赖逻辑
-- 小账户在 `min_trade` 约束下是否失真
-- 计划路径是否写到运营目录，而不是默认仓库目录
+- 数据日期不清或数据滞后。
+- 缺失率异常，核心字段不可用。
+- 模型路径缺失或模型不可加载。
+- 计划文件缺少 `amount`、`price`、`weight`、`score` 等关键字段。
+- 账户状态缺失，无法生成可执行计划。
 
-## 5. 成功标准
+## 7. 快速排查
 
-- real / shadow 计划已生成
-- 日期字段一致
-- 报告已落盘
-- 人能看懂计划含义和下一步动作
-
-## 6. 常见故障
-
-### 数据 stale
-
-表现：`last_qlib_date < expected_latest_date`
-
-处理：转 `DATA_PIPELINE_SOP.md`，禁止硬跑盘前。
-
-### 模型不存在
-
-表现：manifest 无法解析或 model path 不存在
-
-处理：切到 `MODEL_OPS_SOP.md`，恢复生产模型或回滚。
-
-### 计划为空
-
-表现：real / shadow 某一侧无交易
-
-处理：检查账户状态、`min_trade`、昨日回填是否完成。若为空属正常，也必须在报告中讲清原因。
-
-## 7. 人工接管
-
-当盘前流程失败时：
-
-- 人工先确认是否允许继续交易日运营
-- 若数据未 ready，直接阻断，不用猜测推荐
-- 若仅路径或账户状态问题，可在修复后重跑
-- 接管后必须保留本次使用的命令、目录和报告路径
+- 数据问题：先看 `docs/ops/DATA_PIPELINE_SOP.md`
+- 计划问题：查 `daily/{execution_date}/pre_open/plans/`
+- 信号问题：查 `daily/{execution_date}/pre_open/signals/` 与 `daily/{execution_date}/pre_open/reports/`
+- 账户问题：查 `data/meta/real_account.db`

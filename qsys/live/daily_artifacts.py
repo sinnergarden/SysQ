@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from qsys.live.ops_manifest import build_manifest_path, load_manifest
+from qsys.live.ops_paths import DEFAULT_DAILY_ROOT, build_stage_paths
 
 if TYPE_CHECKING:
     from qsys.live.account import RealAccount
@@ -20,13 +21,12 @@ ARTIFACT_CATEGORIES = {
     "signal_basket": "signals",
     "shadow_order_intents": "order_intents",
     "real_order_intents": "order_intents",
-    "shadow_real_sync_template": "templates",
-    "real_real_sync_template": "templates",
+    "shadow_real_sync_template": "plans",
+    "real_real_sync_template": "plans",
     "summary": "reconciliation",
     "positions": "reconciliation",
     "real_trades": "reconciliation",
     "real_sync_snapshot": "snapshots",
-    "account_db": "accounts",
 }
 
 
@@ -58,7 +58,7 @@ def _json_default(value: Any):
 
 def _artifact_category(name: str) -> str:
     if name.startswith("signal_quality"):
-        return "signal_quality"
+        return "reports"
     return ARTIFACT_CATEGORIES.get(name, "misc")
 
 
@@ -66,6 +66,9 @@ def _copy_if_exists(source: str | Path, destination: Path) -> str | None:
     source_path = Path(source)
     if not source_path.exists() or source_path.is_dir():
         return None
+    if source_path.resolve() == destination.resolve():
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        return str(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source_path, destination)
     return str(destination)
@@ -114,7 +117,7 @@ def archive_daily_artifacts(
     signal_date: str | None,
     stage: str,
     artifacts: dict[str, str] | None,
-    archive_root: str | Path = "daily/ops",
+    archive_root: str | Path = DEFAULT_DAILY_ROOT,
 ) -> dict[str, Any]:
     archive_root = Path(archive_root)
     day_root = archive_root / execution_date
@@ -128,6 +131,16 @@ def archive_daily_artifacts(
 
     archived_artifacts: dict[str, Any] = {}
     for name, original_path in (artifacts or {}).items():
+        if name == "account_db":
+            source_path = Path(original_path)
+            archived_artifacts[name] = {
+                "category": "external_reference",
+                "source_path": str(source_path),
+                "archived_path": None,
+                "exists": source_path.exists(),
+            }
+            continue
+
         category = _artifact_category(name)
         source_path = Path(original_path)
         archived_path = _copy_if_exists(source_path, stage_root / category / source_path.name)
@@ -254,10 +267,19 @@ def _build_report_text(
     return "\n".join(lines) + "\n"
 
 
+def _select_digest_dir(day_root: Path) -> Path:
+    execution_date = day_root.name
+    if (day_root / "post_close" / "manifests").exists() or (day_root / "post_close" / "reports").exists():
+        stage_paths = build_stage_paths(execution_date, stage="post_close", daily_root=day_root.parent)
+        return stage_paths.reports_dir
+    stage_paths = build_stage_paths(execution_date, stage="pre_open", daily_root=day_root.parent)
+    return stage_paths.reports_dir
+
+
 def build_daily_summary_bundle(
     *,
     execution_date: str,
-    archive_root: str | Path = "daily/ops",
+    archive_root: str | Path = DEFAULT_DAILY_ROOT,
     lookback_days: int = 3,
 ) -> DailySummaryBundle:
     archive_root = Path(archive_root)
@@ -286,7 +308,7 @@ def build_daily_summary_bundle(
         index_payload=index_payload,
         recent_reviews=recent_reviews,
     )
-    summary_dir = day_root / "summary"
+    summary_dir = _select_digest_dir(day_root)
     summary_dir.mkdir(parents=True, exist_ok=True)
     markdown_path = summary_dir / f"daily_ops_digest_{execution_date}.md"
     json_path = summary_dir / f"daily_ops_digest_{execution_date}.json"

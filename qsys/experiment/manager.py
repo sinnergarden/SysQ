@@ -1,16 +1,15 @@
-
-import os
 import yaml
 import pandas as pd
 from pathlib import Path
 from datetime import datetime
+from qsys.live.ops_paths import DEFAULT_EXPERIMENTS_ROOT
 from qsys.utils.logger import log
 
 class ExperimentManager:
     """
     Manages experiment runs, configs, and results.
     Structure:
-        data/experiments/
+        experiments/
             exp_20231027_alpha158_lgbm/
                 config.yaml
                 model.bin
@@ -19,7 +18,7 @@ class ExperimentManager:
             ...
         leaderboard.csv
     """
-    def __init__(self, experiment_root="data/experiments"):
+    def __init__(self, experiment_root=str(DEFAULT_EXPERIMENTS_ROOT)):
         self.root = Path(experiment_root)
         self.root.mkdir(parents=True, exist_ok=True)
         self.leaderboard_path = self.root / "leaderboard.csv"

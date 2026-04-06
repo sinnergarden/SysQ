@@ -1,0 +1,32 @@
+server:
+  host: 127.0.0.1
+  port: 8811
+  version: 0.1.0
+  data_dir: miniqmt_server/data
+
+broker:
+  mode: mock
+  mock:
+    account_id: mock_account
+    allow_submit: true
+    auto_fill: false
+    miniqmt_connected: false
+    query_ready: true
+    submit_enabled: true
+    account:
+      account_id: mock_account
+      total_assets: 100000.0
+      available_cash: 50000.0
+      market_value: 50000.0
+      frozen_cash: 0.0
+      daily_pnl: 0.0
+    positions:
+      - symbol: 600000.SH
+        volume: 1000
+        available_volume: 1000
+        cost_price: 10.0
+        market_price: 10.5
+        market_value: 10500.0
+        pnl: 500.0
+        pnl_pct: 0.05
+        update_time: 2026-04-06T09:25:00Z

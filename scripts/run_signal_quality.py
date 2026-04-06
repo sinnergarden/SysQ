@@ -8,6 +8,7 @@ project_root = Path(__file__).resolve().parent.parent
 sys.path.append(str(project_root))
 
 from qsys.data.adapter import QlibAdapter
+from qsys.live.ops_paths import build_stage_paths
 from qsys.live.signal_monitoring import (
     build_signal_quality_blockers,
     collect_signal_quality_snapshot,
@@ -29,8 +30,8 @@ def _parse_horizons(raw: str) -> tuple[int, ...]:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Refresh signal basket quality monitoring artifacts")
     parser.add_argument("--date", required=True, help="As-of date to evaluate signal baskets (YYYY-MM-DD)")
-    parser.add_argument("--signal_dir", default="data", help="Directory containing signal_basket_<signal_date>.csv files")
-    parser.add_argument("--output_dir", default="data/signal_quality", help="Directory to write signal quality outputs")
+    parser.add_argument("--signal_dir", help="Directory containing signal_basket_<signal_date>.csv files (default: daily)")
+    parser.add_argument("--output_dir", help="Directory to write signal quality outputs (default: daily/<date>/post_close)")
     parser.add_argument("--horizons", default="1,2,3", help="Comma-separated horizons to summarize, e.g. 1,2,3,5")
     parser.add_argument("--recent_window", type=int, default=5, help="Recent vintage window for win-rate summary")
     parser.add_argument(
@@ -42,13 +43,16 @@ def main() -> int:
 
     QlibAdapter().init_qlib()
     horizons = _parse_horizons(args.horizons)
+    signal_dir = args.signal_dir or str(project_root / "daily")
+    output_dir = args.output_dir or str(build_stage_paths(args.date, stage="post_close", daily_root=project_root / "daily").root)
+
     snapshot = collect_signal_quality_snapshot(
         as_of_date=args.date,
-        signal_dir=args.signal_dir,
+        signal_dir=signal_dir,
         horizons=horizons,
         recent_window=args.recent_window,
     )
-    written = write_signal_quality_outputs(snapshot, output_dir=args.output_dir, as_of_date=args.date)
+    written = write_signal_quality_outputs(snapshot, output_dir=output_dir, as_of_date=args.date)
 
     print(json.dumps(snapshot.summary, indent=2, ensure_ascii=False))
     for name, path in written.items():

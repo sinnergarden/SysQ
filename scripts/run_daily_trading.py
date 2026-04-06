@@ -39,6 +39,7 @@ from qsys.live.account import RealAccount
 from qsys.live.daily_artifacts import archive_daily_artifacts, build_daily_summary_bundle, extract_account_snapshot
 from qsys.live.manager import LiveManager
 from qsys.live.ops_manifest import update_manifest
+from qsys.live.ops_paths import build_stage_paths, find_plan_path_for_execution_date, resolve_account_db_path
 from qsys.live.reconciliation import sync_real_account_from_csv
 from qsys.live.signal_monitoring import (
     build_signal_quality_blockers,
@@ -227,15 +228,43 @@ def _resolve_cli_path(path_str: str) -> str:
     return str(path)
 
 
+def _resolve_ops_paths(
+    *,
+    execution_date: str,
+    output_dir: str | None,
+    report_dir: str | None,
+    db_path: str | None,
+):
+    daily_root = project_root / "daily"
+    stage_paths = build_stage_paths(execution_date, stage="pre_open", daily_root=daily_root)
+
+    if db_path is None:
+        resolved_db_path = str(resolve_account_db_path(project_root=project_root))
+    else:
+        resolved_db_path = _resolve_cli_path(db_path)
+
+    resolved_output_dir = str(stage_paths.root) if output_dir is None else _resolve_cli_path(output_dir)
+    resolved_report_dir = str(stage_paths.reports_dir) if report_dir is None else _resolve_cli_path(report_dir)
+    resolved_manifest_dir = str(stage_paths.manifests_dir) if report_dir is None else resolved_report_dir
+    return {
+        "daily_root": str(daily_root),
+        "stage_paths": stage_paths,
+        "db_path": resolved_db_path,
+        "output_dir": resolved_output_dir,
+        "report_dir": resolved_report_dir,
+        "manifest_dir": resolved_manifest_dir,
+    }
+
+
 def run_preopen_workflow(
     *,
     date: str | None = None,
     execution_date: str | None = None,
     model_path: str | None = None,
     real_sync: str | None = None,
-    db_path: str = "data/real_account.db",
-    output_dir: str = "data",
-    report_dir: str = "data/reports",
+    db_path: str | None = None,
+    output_dir: str | None = None,
+    report_dir: str | None = None,
     skip_update: bool = False,
     require_update_success: bool = False,
     shadow_cash: float = 1_000_000.0,
@@ -248,9 +277,19 @@ def run_preopen_workflow(
 ):
     start_time = time.time()
     blockers = []
-    db_path = _resolve_cli_path(db_path)
-    output_dir = _resolve_cli_path(output_dir)
-    report_dir = _resolve_cli_path(report_dir)
+    signal_date, execution_date = resolve_signal_and_execution_date(date, execution_date)
+    resolved_paths = _resolve_ops_paths(
+        execution_date=execution_date,
+        output_dir=output_dir,
+        report_dir=report_dir,
+        db_path=db_path,
+    )
+    daily_root = resolved_paths["daily_root"]
+    pre_open_paths = resolved_paths["stage_paths"]
+    db_path = resolved_paths["db_path"]
+    output_dir = resolved_paths["output_dir"]
+    report_dir = resolved_paths["report_dir"]
+    manifest_dir = resolved_paths["manifest_dir"]
     if real_sync:
         real_sync = _resolve_cli_path(real_sync)
 
@@ -260,7 +299,6 @@ def run_preopen_workflow(
     signal_basket_path = None
     signal_quality_summary = {}
     signal_quality_artifacts = {}
-    signal_date, execution_date = resolve_signal_and_execution_date(date, execution_date)
     assumptions = {
         "top_k": top_k,
         "min_trade": min_trade,
@@ -432,7 +470,7 @@ def run_preopen_workflow(
             report.artifacts["account_db"] = db_path
             report_path = DailyOpsReport.save(report, output_dir=report_dir)
             manifest_path = update_manifest(
-                report_dir=report_dir,
+                report_dir=manifest_dir,
                 execution_date=execution_date,
                 signal_date=signal_date,
                 stage="pre_open",
@@ -450,8 +488,9 @@ def run_preopen_workflow(
                 signal_date=signal_date,
                 stage="pre_open",
                 artifacts=result["artifacts"],
+                archive_root=daily_root,
             )
-            digest = build_daily_summary_bundle(execution_date=execution_date)
+            digest = build_daily_summary_bundle(execution_date=execution_date, archive_root=daily_root)
             result["artifacts"]["daily_index"] = archive_info["index_path"]
             result["artifacts"]["daily_summary_md"] = digest.report_markdown_path
             result["artifacts"]["daily_summary_json"] = digest.report_json_path
@@ -463,7 +502,7 @@ def run_preopen_workflow(
     if not skip_signal_quality_gate:
         signal_quality_snapshot = collect_signal_quality_snapshot(
             as_of_date=signal_date,
-            signal_dir="data",
+            signal_dir=daily_root,
             horizons=(1, 2, 3),
             recent_window=5,
         )
@@ -471,7 +510,7 @@ def run_preopen_workflow(
         result["signal_quality_summary"] = signal_quality_summary
         signal_quality_artifacts = write_signal_quality_outputs(
             signal_quality_snapshot,
-            output_dir="data/signal_quality",
+            output_dir=output_dir,
             as_of_date=signal_date,
         )
         blockers.extend(build_signal_quality_blockers(signal_quality_summary, required_horizons=(1, 2, 3)))
@@ -493,7 +532,7 @@ def run_preopen_workflow(
                 report.artifacts["account_db"] = db_path
                 report_path = DailyOpsReport.save(report, output_dir=report_dir)
                 manifest_path = update_manifest(
-                    report_dir=report_dir,
+                    report_dir=manifest_dir,
                     execution_date=execution_date,
                     signal_date=signal_date,
                     stage="pre_open",
@@ -513,8 +552,9 @@ def run_preopen_workflow(
                     signal_date=signal_date,
                     stage="pre_open",
                     artifacts=result["artifacts"],
+                    archive_root=daily_root,
                 )
-                digest = build_daily_summary_bundle(execution_date=execution_date)
+                digest = build_daily_summary_bundle(execution_date=execution_date, archive_root=daily_root)
                 result["artifacts"]["daily_index"] = archive_info["index_path"]
                 result["artifacts"]["daily_summary_md"] = digest.report_markdown_path
                 result["artifacts"]["daily_summary_json"] = digest.report_json_path
@@ -529,7 +569,7 @@ def run_preopen_workflow(
         execution_date=execution_date,
         universe="csi300",
     )
-    signal_basket_path = save_signal_basket(signal_basket, output_dir="data", signal_date=signal_date)
+    signal_basket_path = save_signal_basket(signal_basket, output_dir=output_dir, signal_date=signal_date)
     result["artifacts"]["signal_basket"] = signal_basket_path
     result["signal_basket_summary"] = extract_plan_summary(signal_basket, "target", signal_date, execution_date)
     log.info(f"Signal basket saved to {signal_basket_path}")
@@ -540,13 +580,16 @@ def run_preopen_workflow(
     if shadow_sim.initialize_if_needed(signal_date):
         log_stage("shadow_account", "initialized", signal_date=signal_date)
     else:
-        previous_signal_date = previous_trading_day(signal_date)
-        plan_path = Path(output_dir) / f"plan_{previous_signal_date}_{shadow_account_name}.csv"
-        if plan_path.exists():
+        plan_path = find_plan_path_for_execution_date(
+            execution_date=signal_date,
+            account_name=shadow_account_name,
+            daily_root=daily_root,
+        )
+        if plan_path and plan_path.exists():
             log_stage("shadow_account", "simulate_previous_plan", plan_path=str(plan_path), signal_date=signal_date)
             shadow_sim.simulate_execution(str(plan_path), signal_date)
         else:
-            log_stage("shadow_account", "skip_simulation", reason="previous plan missing", plan_path=str(plan_path))
+            log_stage("shadow_account", "skip_simulation", reason="previous plan missing", plan_path=str(plan_path) if plan_path else None)
 
     real_account_name = "real"
     real_account = RealAccount(db_path=db_path, account_name=real_account_name)
@@ -650,10 +693,11 @@ def run_preopen_workflow(
                 f"real_cash={real_cash}",
             ],
         )
-        report.artifacts["shadow_plan"] = str(Path(output_dir) / f"plan_{signal_date}_{shadow_account_name}.csv")
-        report.artifacts["real_plan"] = str(Path(output_dir) / f"plan_{signal_date}_{real_account_name}.csv")
-        report.artifacts["shadow_real_sync_template"] = str(Path(output_dir) / f"real_sync_template_{signal_date}_{shadow_account_name}.csv")
-        report.artifacts["real_real_sync_template"] = str(Path(output_dir) / f"real_sync_template_{signal_date}_{real_account_name}.csv")
+        plans_dir = pre_open_paths.plans_dir if output_dir == str(pre_open_paths.root) else Path(output_dir)
+        report.artifacts["shadow_plan"] = str(plans_dir / f"plan_{signal_date}_{shadow_account_name}.csv")
+        report.artifacts["real_plan"] = str(plans_dir / f"plan_{signal_date}_{real_account_name}.csv")
+        report.artifacts["shadow_real_sync_template"] = str(plans_dir / f"real_sync_template_{signal_date}_{shadow_account_name}.csv")
+        report.artifacts["real_real_sync_template"] = str(plans_dir / f"real_sync_template_{signal_date}_{real_account_name}.csv")
         report.artifacts["shadow_order_intents"] = shadow_intents_path
         report.artifacts["real_order_intents"] = real_intents_path
         report.artifacts["account_db"] = db_path
@@ -663,7 +707,7 @@ def run_preopen_workflow(
 
         report_path = DailyOpsReport.save(report, output_dir=report_dir)
         manifest_path = update_manifest(
-            report_dir=report_dir,
+            report_dir=manifest_dir,
             execution_date=execution_date,
             signal_date=signal_date,
             stage="pre_open",
@@ -689,8 +733,9 @@ def run_preopen_workflow(
             signal_date=signal_date,
             stage="pre_open",
             artifacts=result["artifacts"],
+            archive_root=daily_root,
         )
-        digest = build_daily_summary_bundle(execution_date=execution_date)
+        digest = build_daily_summary_bundle(execution_date=execution_date, archive_root=daily_root)
         result["artifacts"]["daily_index"] = archive_info["index_path"]
         result["artifacts"]["daily_summary_md"] = digest.report_markdown_path
         result["artifacts"]["daily_summary_json"] = digest.report_json_path
@@ -714,9 +759,9 @@ def main():
     parser.add_argument("--execution_date", type=str, help="Execution Date (YYYY-MM-DD). Defaults to next trading day after signal date")
     parser.add_argument("--model_path", type=str, help="Path to model directory")
     parser.add_argument("--real_sync", type=str, help="Path to CSV file with Real Account state (cash, positions)")
-    parser.add_argument("--db_path", default="data/real_account.db", help="SQLite account database path")
-    parser.add_argument("--output_dir", default="data", help="Directory to write plan and sync-template artifacts")
-    parser.add_argument("--report_dir", default="data/reports", help="Directory to write structured JSON reports")
+    parser.add_argument("--db_path", help="SQLite account database path (default: data/meta/real_account.db)")
+    parser.add_argument("--output_dir", help="Directory to write pre-open artifacts (default: daily/<execution_date>/pre_open)")
+    parser.add_argument("--report_dir", help="Directory to write structured JSON reports (default: daily/<execution_date>/pre_open/reports)")
     parser.add_argument("--skip_update", action="store_true", help="Skip data update")
     parser.add_argument("--require_update_success", action="store_true", help="Abort if the explicit data refresh step fails")
     parser.add_argument("--shadow_cash", type=float, default=1_000_000.0, help="Initial cash for Shadow Account")

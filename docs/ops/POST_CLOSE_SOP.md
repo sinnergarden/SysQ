@@ -1,98 +1,81 @@
-# 收盘后 SOP
+# POST_CLOSE SOP
 
-## 1. 目的
+## 1. 目标
 
-在交易日结束后，把真实账户状态回填进系统，并完成 real / shadow 对账，为下一交易日接续运行提供可信基线。
+盘后阶段要固化三类事实：
+
+- 实盘账户回写了什么状态。
+- real 与 shadow 的差异有多大。
+- 哪些结构化字段需要 rollup 到 `data/derived/`。
 
 ## 2. 输入
 
-- `--date`：执行日
-- `--real_sync`：券商导出 CSV
-- `--db_path`
-- `--plan_dir`
-- `--output_dir`
-- `--report_dir`
+盘后执行前，至少准备：
 
-## 3. 输出
+- `daily/{execution_date}/pre_open/plans/` 中的盘前计划
+- broker 导出的 `real_sync` 文件
+- 可写的长期主账本 `data/meta/real_account.db`
 
-- 真实账户状态写入账户数据库
-- 对账 CSV / 摘要
-- `daily_ops_post_close_*.json`
+## 3. 执行命令
 
-## 4. 标准步骤
+```bash
+python3 scripts/run_post_close.py --date 2026-04-03 --real_sync broker/real_sync_2026-04-03.csv
+```
 
-### Step A：读取真实券商回填文件
+## 4. 当前应产出的目录与文件
 
-最小字段：
+默认输出到 `daily/{execution_date}/post_close/`。
 
-- `symbol`
-- `amount`
-- `price`
-- `cost_basis`
-- `cash`
-- `total_assets`
+- `reconciliation/`
+  - `reconcile_summary_{date}.csv`
+  - `reconcile_positions_{date}.csv`
+  - `reconcile_real_trades_{date}.csv`
+- `snapshots/`
+  - `real_sync_snapshot_{date}.csv`
+- `reports/`
+  - `daily_ops_post_close_*.json`
+  - `signal_quality_summary_{date}.json`
+  - `signal_quality_vintages_{date}.csv`
+  - `daily_ops_digest_{execution_date}.md`
+  - `daily_ops_digest_{execution_date}.json`
+- `manifests/`
+  - `daily_ops_manifest_{execution_date}.json`
 
-建议字段：
+## 5. 对账最低验收口径
 
-- `side`
-- `filled_amount`
-- `filled_price`
-- `fee`
-- `tax`
-- `total_cost`
-- `order_id`
+盘后至少要能回答：
 
-### Step B：确定对应的 signal_date
+- `cash`、`total_assets` 差异是多少。
+- 哪些持仓存在 `amount_diff` 或 `market_value_diff`。
+- 实盘成交是否写回到 `reconcile_real_trades_{date}.csv`。
+- 长期主账本是否已更新到 `data/meta/real_account.db`。
 
-规则：
+## 6. Rollup
 
-- 默认以 `--date` 作为兜底
-- 若 `plan_dir/plan_<date>_shadow.csv` 中存在 `signal_date`，盘后报告应沿用该字段
+盘后如需跨日复盘，执行：
 
-### Step C：同步真实账户状态
+```bash
+python3 scripts/rollup_daily_artifacts.py --execution_date 2026-04-03
+```
 
-通过条件：
+当前 rollup 只会抽取：
 
-- balance_history 写入成功
-- position_history 写入成功
-- trade_log 可追溯
+- `signal_baskets`
+- `order_intents`
+- `reconciliation_summary`
+- `position_gaps`
 
-### Step D：执行对账
+## 7. 阻断条件
 
-至少比较：
+出现以下任一情况，不应把结果当作可运营输出：
 
-- cash
-- total_assets
-- 持仓数量差异
-- 真实成交记录数量
+- 找不到盘前计划。
+- `real_sync` 缺字段或日期语义不清。
+- reconciliation 缺少 `cash` / `total_assets` 等关键指标。
+- 主账本没有写回 `data/meta/real_account.db`。
 
-## 5. 成功标准
+## 8. 快速排查
 
-- 真实账户最新状态已落盘
-- 对账摘要可读
-- 报告路径正确
-- 第二天盘前能接续读取到最新状态
-
-## 6. 常见故障
-
-### real_sync 缺字段
-
-处理：补 CSV 列，不允许凭猜测落库。
-
-### 找不到计划文件
-
-处理：盘后仍可运行，但 `signal_date` 会退回 `--date`；需要在报告里说明。
-
-### 对账差异过大
-
-处理：优先查成交回填、部分成交、手续费税费、T+1 限制。
-
-## 7. 人工接管
-
-人工接管时至少保留：
-
-- 券商 CSV 原文件路径
-- 实际写入的 db_path
-- 对账输出目录
-- 差异解释
-- 是否允许第二天继续自动盘前
+- 先看 `daily/{execution_date}/post_close/reconciliation/`
+- 再看 `daily/{execution_date}/post_close/snapshots/`
+- 查长期差异汇总时，看 `data/derived/reconciliation_summary.csv` 与 `data/derived/position_gaps.csv`

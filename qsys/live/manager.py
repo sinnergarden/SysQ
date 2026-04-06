@@ -19,7 +19,7 @@ class LiveManager:
     execution_date: the date the human/shadow account is expected to execute the plan.
     """
 
-    def __init__(self, model_path, db_path="data/real_account.db", output_dir="data"):
+    def __init__(self, model_path, db_path="data/meta/real_account.db", output_dir="daily"):
         self.real_account = RealAccount(db_path)
         self.strategy = StrategyEngine(top_k=DEFAULT_TOP_K)
         self.planner = PlanGenerator()

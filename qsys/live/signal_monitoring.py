@@ -9,6 +9,7 @@ import pandas as pd
 from qlib.data import D
 
 from qsys.data.adapter import QlibAdapter
+from qsys.live.ops_paths import ensure_stage_subdir, list_signal_basket_candidates
 
 
 SIGNAL_BASKET_COLUMNS = [
@@ -45,7 +46,7 @@ def _classify_missing_price_reason(*, missing_start_count: int, missing_end_coun
 
 
 def save_signal_basket(basket_df: pd.DataFrame, *, output_dir: str | Path, signal_date: str) -> str:
-    output_dir = Path(output_dir)
+    output_dir = ensure_stage_subdir(output_dir, "signals")
     output_dir.mkdir(parents=True, exist_ok=True)
 
     normalized = basket_df.copy()
@@ -63,9 +64,7 @@ def save_signal_basket(basket_df: pd.DataFrame, *, output_dir: str | Path, signa
 
 
 def list_signal_basket_files(signal_dir: str | Path, *, limit: int | None = None) -> list[Path]:
-    signal_dir = Path(signal_dir)
-    files = sorted(signal_dir.glob("signal_basket_*.csv"), reverse=True)
-    return files[:limit] if limit is not None else files
+    return list_signal_basket_candidates(signal_dir, limit=limit)
 
 
 def _default_price_loader(symbols: list[str], start_date: str, end_date: str) -> pd.DataFrame:
@@ -456,7 +455,7 @@ def write_signal_quality_outputs(
     output_dir: str | Path,
     as_of_date: str,
 ) -> dict[str, str]:
-    output_dir = Path(output_dir)
+    output_dir = ensure_stage_subdir(output_dir, "reports")
     output_dir.mkdir(parents=True, exist_ok=True)
 
     detailed_path = output_dir / f"signal_quality_vintages_{as_of_date}.csv"
