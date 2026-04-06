@@ -176,6 +176,124 @@ class MiniQMTServerTestCase(unittest.TestCase):
         self.assertEqual(validate_result["rejected_count"], 1)
         self.assertEqual(validate_result["rejected"][0]["reasons"][0]["code"], "invalid_lot_size")
 
+    def test_submit_rejects_buy_when_available_cash_is_insufficient(self) -> None:
+        payload = {
+            "request_id": "request-no-cash",
+            "strategy_id": "strategy_a",
+            "trade_date": "2026-04-06",
+            "account_id": "mock_account",
+            "dry_run": False,
+            "orders": [
+                {
+                    "intent_id": "intent-no-cash",
+                    "symbol": "600000.SH",
+                    "side": "BUY",
+                    "quantity": 100,
+                    "order_type": "LIMIT",
+                    "limit_price": 600.0,
+                    "time_in_force": "DAY",
+                    "reason": "oversized rebalance",
+                }
+            ],
+        }
+
+        validate_result = self._post("/orders/validate", payload)
+        self.assertEqual(validate_result["status"], "rejected")
+        self.assertEqual(validate_result["rejected"][0]["reasons"][0]["code"], "insufficient_available_cash")
+
+        submit_result = self._post("/orders/submit", payload)
+        self.assertEqual(submit_result["status"], "rejected")
+        self.assertEqual(submit_result["broker_order_ids"], [])
+        self.assertEqual(self._get("/orders")["count"], 0)
+
+    def test_validate_rejects_sell_when_available_volume_is_insufficient(self) -> None:
+        payload = {
+            "request_id": "request-no-volume",
+            "strategy_id": "strategy_a",
+            "trade_date": "2026-04-06",
+            "account_id": "mock_account",
+            "dry_run": True,
+            "orders": [
+                {
+                    "intent_id": "intent-no-volume",
+                    "symbol": "600000.SH",
+                    "side": "SELL",
+                    "quantity": 1100,
+                    "order_type": "LIMIT",
+                    "limit_price": 10.0,
+                    "time_in_force": "DAY",
+                    "reason": "oversell test",
+                }
+            ],
+        }
+
+        validate_result = self._post("/orders/validate", payload)
+        self.assertEqual(validate_result["status"], "rejected")
+        self.assertEqual(validate_result["rejected"][0]["reasons"][0]["code"], "insufficient_available_volume")
+
+    def test_validate_tracks_cash_across_multiple_buy_orders(self) -> None:
+        payload = {
+            "request_id": "request-batch-cash",
+            "strategy_id": "strategy_a",
+            "trade_date": "2026-04-06",
+            "account_id": "mock_account",
+            "dry_run": True,
+            "orders": [
+                {
+                    "intent_id": "intent-batch-1",
+                    "symbol": "600000.SH",
+                    "side": "BUY",
+                    "quantity": 200,
+                    "order_type": "LIMIT",
+                    "limit_price": 100.0,
+                    "time_in_force": "DAY",
+                    "reason": "batch cash test",
+                },
+                {
+                    "intent_id": "intent-batch-2",
+                    "symbol": "600000.SH",
+                    "side": "BUY",
+                    "quantity": 400,
+                    "order_type": "LIMIT",
+                    "limit_price": 100.0,
+                    "time_in_force": "DAY",
+                    "reason": "batch cash test",
+                },
+            ],
+        }
+
+        validate_result = self._post("/orders/validate", payload)
+        self.assertEqual(validate_result["status"], "partial")
+        self.assertEqual(validate_result["accepted_count"], 1)
+        self.assertEqual(validate_result["rejected_count"], 1)
+        self.assertEqual(validate_result["accepted"][0]["intent_id"], "intent-batch-1")
+        self.assertEqual(validate_result["rejected"][0]["intent_id"], "intent-batch-2")
+        self.assertEqual(validate_result["rejected"][0]["reasons"][0]["code"], "insufficient_available_cash")
+
+    def test_validate_rejects_market_buy_without_reference_price(self) -> None:
+        payload = {
+            "request_id": "request-no-price",
+            "strategy_id": "strategy_a",
+            "trade_date": "2026-04-06",
+            "account_id": "mock_account",
+            "dry_run": True,
+            "orders": [
+                {
+                    "intent_id": "intent-no-price",
+                    "symbol": "601398.SH",
+                    "side": "BUY",
+                    "quantity": 100,
+                    "order_type": "MARKET",
+                    "time_in_force": "DAY",
+                    "reason": "market order safety",
+                }
+            ],
+        }
+
+        validate_result = self._post("/orders/validate", payload)
+        self.assertEqual(validate_result["status"], "rejected")
+        self.assertEqual(validate_result["rejected"][0]["reasons"][0]["code"], "missing_reference_price")
+
     def test_load_config_example(self) -> None:
         config = load_config("miniqmt_server/config.example.yaml")
         self.assertEqual(config.broker_mode, "mock")

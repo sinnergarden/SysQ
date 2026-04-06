@@ -61,6 +61,7 @@ class MockBrokerAdapter(BrokerAdapter):
     def validate_orders(self, request: OrderRequest) -> dict[str, Any]:
         issues = request.validate()
         normalized_orders = [self._normalize_order(request, index, order) for index, order in enumerate(request.orders)]
+        issues.extend(self._validate_pre_trade_risk(normalized_orders, issues))
         request_level_errors = [item.to_dict() for item in issues if not item.field or not item.field.startswith("orders[")]
         per_order_errors = self._group_order_issues(request, issues)
 
@@ -196,7 +197,8 @@ class MockBrokerAdapter(BrokerAdapter):
             broker_order_ids.append(broker_order_id)
             accepted_payloads.append(record.to_dict())
             if status == "filled":
-                self._record_trade(record, price=item["limit_price"] or 0.0)
+                trade_price = self._resolve_reference_price(item["symbol"], item.get("limit_price")) or 0.0
+                self._record_trade(record, price=trade_price)
 
         self._refresh_snapshot(trigger="submit")
         return {
@@ -324,12 +326,92 @@ class MockBrokerAdapter(BrokerAdapter):
             grouped.setdefault(intent_id, []).append(issue.to_dict())
         return grouped
 
+    def _validate_pre_trade_risk(
+        self,
+        normalized_orders: list[dict[str, Any]],
+        existing_issues: list[ValidationIssue],
+    ) -> list[ValidationIssue]:
+        invalid_indexes = {
+            index
+            for issue in existing_issues
+            if issue.field and issue.field.startswith("orders[")
+            for index in [self._index_from_issue_field(issue.field)]
+            if index is not None
+        }
+        projected_cash = round(float(self.account.get("available_cash", 0.0) or 0.0), 2)
+        projected_available_volume = {
+            symbol: int(position.get("available_volume", position.get("volume", 0)) or 0)
+            for symbol, position in self.positions.items()
+        }
+        risk_issues: list[ValidationIssue] = []
+
+        for index, order in enumerate(normalized_orders):
+            if index in invalid_indexes:
+                continue
+            symbol = str(order["symbol"])
+            side = str(order["side"])
+            quantity = int(order["quantity"])
+            if side == "SELL":
+                available_volume = projected_available_volume.get(symbol, 0)
+                if quantity > available_volume:
+                    risk_issues.append(
+                        ValidationIssue(
+                            "insufficient_available_volume",
+                            f"SELL quantity {quantity} exceeds available_volume {available_volume} for {symbol}",
+                            f"orders[{index}].quantity",
+                        )
+                    )
+                    continue
+                projected_available_volume[symbol] = available_volume - quantity
+                continue
+
+            reference_price = self._resolve_reference_price(symbol, order.get("limit_price"))
+            if reference_price is None:
+                risk_issues.append(
+                    ValidationIssue(
+                        "missing_reference_price",
+                        f"cannot estimate cash usage for {symbol}; provide limit_price or preload market_price",
+                        f"orders[{index}].limit_price",
+                    )
+                )
+                continue
+
+            required_cash = round(quantity * reference_price, 2)
+            if required_cash > projected_cash:
+                risk_issues.append(
+                    ValidationIssue(
+                        "insufficient_available_cash",
+                        f"BUY order needs {required_cash:.2f} cash but only {projected_cash:.2f} is available",
+                        f"orders[{index}].quantity",
+                    )
+                )
+                continue
+            projected_cash = round(projected_cash - required_cash, 2)
+
+        return risk_issues
+
     def _index_from_issue_field(self, field_name: str) -> int | None:
         try:
             index_text = field_name.split("orders[", 1)[1].split("]", 1)[0]
             return int(index_text)
         except (IndexError, ValueError):
             return None
+
+    def _resolve_reference_price(self, symbol: str, limit_price: Any) -> float | None:
+        if limit_price is not None:
+            price = float(limit_price)
+            if price > 0:
+                return price
+
+        position = self.positions.get(symbol) or {}
+        for field_name in ("market_price", "cost_price"):
+            raw_value = position.get(field_name)
+            if raw_value is None:
+                continue
+            price = float(raw_value)
+            if price > 0:
+                return price
+        return None
 
     def _record_trade(self, order: OrderRecord, price: float) -> None:
         trade_id = f"mock-trade-{uuid.uuid4().hex[:10]}"

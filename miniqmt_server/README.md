@@ -193,9 +193,17 @@ python scripts/call_miniqmt_server_mock.py --base-url http://127.0.0.1:8811
 - 返回固定但可配置的健康状态
 - 返回账户资金摘要和持仓
 - 接受 validate / submit / cancel
+- 在 validate / submit 前做最小资金和可卖数量检查
 - 将订单、成交、快照写入 `miniqmt_server/data/`
 - `dry_run=true` 时只返回模拟结果，不生成真实 mock broker order
 - 对重复 `request_id` 做最小幂等保护，避免重复提交
+
+当前 mock 风控规则：
+
+- BUY 会按 `limit_price` 或已有持仓 `market_price/cost_price` 估算占用现金
+- SELL 不能超过当前 `available_volume`
+- 同一批请求中的 BUY 会按顺序累积占用 `available_cash`
+- 出于保守性，同一批请求中的 SELL 不会反向释放现金给后续 BUY 使用
 
 本地存储文件：
 
