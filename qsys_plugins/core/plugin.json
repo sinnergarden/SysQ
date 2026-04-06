@@ -12,6 +12,7 @@
     "trading-calendar-guard",
     "feature-readiness-audit",
     "train-split-discipline",
-    "shadow-execution-planner"
+    "shadow-execution-planner",
+    "miniqmt-server-change-guard"
   ]
 }

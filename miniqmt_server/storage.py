@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any
 import json
 
-from miniqmt_server.models import OrderRecord, TradeRecord
+from miniqmt_server.models import OrderRecord, SubmitReceipt, TradeRecord
 
 
 class JsonlStorage:
@@ -13,9 +13,10 @@ class JsonlStorage:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self._orders_path = self.data_dir / "orders.jsonl"
         self._trades_path = self.data_dir / "trades.jsonl"
+        self._submissions_path = self.data_dir / "submissions.jsonl"
         self._snapshots_path = self.data_dir / "snapshots.jsonl"
         self._latest_snapshot_path = self.data_dir / "latest_snapshot.json"
-        for path in [self._orders_path, self._trades_path, self._snapshots_path]:
+        for path in [self._orders_path, self._trades_path, self._submissions_path, self._snapshots_path]:
             path.touch(exist_ok=True)
 
     def append_jsonl(self, path: Path, payload: dict[str, Any]) -> None:
@@ -39,6 +40,9 @@ class JsonlStorage:
     def record_trade(self, trade: TradeRecord) -> None:
         self.append_jsonl(self._trades_path, trade.to_dict())
 
+    def record_submission(self, receipt: SubmitReceipt) -> None:
+        self.append_jsonl(self._submissions_path, receipt.to_dict())
+
     def list_orders(self) -> list[OrderRecord]:
         latest_by_order_id: dict[str, OrderRecord] = {}
         for payload in self.load_jsonl(self._orders_path):
@@ -53,6 +57,14 @@ class JsonlStorage:
         trades = [TradeRecord.from_dict(payload) for payload in self.load_jsonl(self._trades_path)]
         trades.sort(key=lambda item: (item.executed_at, item.trade_id))
         return trades
+
+    def get_submission(self, request_id: str) -> SubmitReceipt | None:
+        latest_receipt: SubmitReceipt | None = None
+        for payload in self.load_jsonl(self._submissions_path):
+            receipt = SubmitReceipt.from_dict(payload)
+            if receipt.request_id == request_id:
+                latest_receipt = receipt
+        return latest_receipt
 
     def record_snapshot(self, snapshot: dict[str, Any]) -> None:
         self.append_jsonl(self._snapshots_path, snapshot)

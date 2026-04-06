@@ -2,12 +2,22 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import datetime, timezone
+import hashlib
+import json
 from typing import Any
 import uuid
 
 from miniqmt_server.broker.base import BrokerAdapter
 from miniqmt_server.config import ServerConfig
-from miniqmt_server.models import CancelRequest, FINAL_ORDER_STATUSES, OrderRecord, OrderRequest, TradeRecord, ValidationIssue
+from miniqmt_server.models import (
+    CancelRequest,
+    FINAL_ORDER_STATUSES,
+    OrderRecord,
+    OrderRequest,
+    SubmitReceipt,
+    TradeRecord,
+    ValidationIssue,
+)
 from miniqmt_server.storage import JsonlStorage
 
 
@@ -61,6 +71,7 @@ class MockBrokerAdapter(BrokerAdapter):
     def validate_orders(self, request: OrderRequest) -> dict[str, Any]:
         issues = request.validate()
         normalized_orders = [self._normalize_order(request, index, order) for index, order in enumerate(request.orders)]
+        issues.extend(self._validate_pre_trade_risk(normalized_orders, issues))
         request_level_errors = [item.to_dict() for item in issues if not item.field or not item.field.startswith("orders[")]
         per_order_errors = self._group_order_issues(request, issues)
 
@@ -104,31 +115,12 @@ class MockBrokerAdapter(BrokerAdapter):
 
     def submit_orders(self, request: OrderRequest) -> dict[str, Any]:
         validation = self.validate_orders(request)
-        if self._request_exists(request.request_id):
-            existing_orders = self.list_orders({"request_id": request.request_id})
-            return {
-                "request_id": request.request_id,
-                "strategy_id": request.strategy_id,
-                "trade_date": request.trade_date,
-                "account_id": request.account_id,
-                "dry_run": request.dry_run,
-                "status": "duplicate_request",
-                "accepted_count": 0,
-                "rejected_count": len(existing_orders),
-                "broker_order_ids": [item["broker_order_id"] for item in existing_orders],
-                "accepted": [],
-                "rejected": [
-                    {
-                        "intent_id": item["intent_id"],
-                        "status": "rejected",
-                        "reasons": [{"code": "duplicate_request", "message": "request_id already submitted"}],
-                    }
-                    for item in existing_orders
-                ],
-                "normalized_orders": validation["normalized_orders"],
-                "errors": [{"code": "duplicate_request", "message": "request_id already submitted"}],
-                "submit_time": self._now(),
-            }
+        request_fingerprint = self._fingerprint_submit_request(request, validation["normalized_orders"])
+        existing_receipt = self.storage.get_submission(request.request_id)
+        if existing_receipt is not None:
+            if existing_receipt.request_fingerprint == request_fingerprint:
+                return self._build_replayed_submit_response(existing_receipt)
+            return self._build_request_conflict_response(request, validation, existing_receipt)
         if validation["accepted_count"] == 0:
             validation["broker_order_ids"] = []
             validation["submit_time"] = self._now()
@@ -196,10 +188,11 @@ class MockBrokerAdapter(BrokerAdapter):
             broker_order_ids.append(broker_order_id)
             accepted_payloads.append(record.to_dict())
             if status == "filled":
-                self._record_trade(record, price=item["limit_price"] or 0.0)
+                trade_price = self._resolve_reference_price(item["symbol"], item.get("limit_price")) or 0.0
+                self._record_trade(record, price=trade_price)
 
         self._refresh_snapshot(trigger="submit")
-        return {
+        response = {
             "request_id": request.request_id,
             "strategy_id": request.strategy_id,
             "trade_date": request.trade_date,
@@ -215,6 +208,21 @@ class MockBrokerAdapter(BrokerAdapter):
             "errors": list(validation["errors"]),
             "submit_time": submit_time,
         }
+        response["idempotency_status"] = "new"
+        self.storage.record_submission(
+            SubmitReceipt(
+                request_id=request.request_id,
+                request_fingerprint=request_fingerprint,
+                strategy_id=request.strategy_id,
+                trade_date=request.trade_date,
+                account_id=request.account_id,
+                dry_run=request.dry_run,
+                normalized_orders=deepcopy(validation["normalized_orders"]),
+                response=deepcopy(response),
+                recorded_at=submit_time,
+            )
+        )
+        return response
 
     def cancel_orders(self, request: CancelRequest) -> dict[str, Any]:
         issues = request.validate()
@@ -287,11 +295,6 @@ class MockBrokerAdapter(BrokerAdapter):
             snapshot = self.storage.get_latest_snapshot() or {}
         return snapshot
 
-    def _request_exists(self, request_id: str) -> bool:
-        if not request_id:
-            return False
-        return any(order.request_id == request_id for order in self.storage.list_orders())
-
     def _normalize_order(self, request: OrderRequest, index: int, order: Any) -> dict[str, Any]:
         intent_id = order.intent_id or f"order-{index:04d}"
         return {
@@ -324,12 +327,92 @@ class MockBrokerAdapter(BrokerAdapter):
             grouped.setdefault(intent_id, []).append(issue.to_dict())
         return grouped
 
+    def _validate_pre_trade_risk(
+        self,
+        normalized_orders: list[dict[str, Any]],
+        existing_issues: list[ValidationIssue],
+    ) -> list[ValidationIssue]:
+        invalid_indexes = {
+            index
+            for issue in existing_issues
+            if issue.field and issue.field.startswith("orders[")
+            for index in [self._index_from_issue_field(issue.field)]
+            if index is not None
+        }
+        projected_cash = round(float(self.account.get("available_cash", 0.0) or 0.0), 2)
+        projected_available_volume = {
+            symbol: int(position.get("available_volume", position.get("volume", 0)) or 0)
+            for symbol, position in self.positions.items()
+        }
+        risk_issues: list[ValidationIssue] = []
+
+        for index, order in enumerate(normalized_orders):
+            if index in invalid_indexes:
+                continue
+            symbol = str(order["symbol"])
+            side = str(order["side"])
+            quantity = int(order["quantity"])
+            if side == "SELL":
+                available_volume = projected_available_volume.get(symbol, 0)
+                if quantity > available_volume:
+                    risk_issues.append(
+                        ValidationIssue(
+                            "insufficient_available_volume",
+                            f"SELL quantity {quantity} exceeds available_volume {available_volume} for {symbol}",
+                            f"orders[{index}].quantity",
+                        )
+                    )
+                    continue
+                projected_available_volume[symbol] = available_volume - quantity
+                continue
+
+            reference_price = self._resolve_reference_price(symbol, order.get("limit_price"))
+            if reference_price is None:
+                risk_issues.append(
+                    ValidationIssue(
+                        "missing_reference_price",
+                        f"cannot estimate cash usage for {symbol}; provide limit_price or preload market_price",
+                        f"orders[{index}].limit_price",
+                    )
+                )
+                continue
+
+            required_cash = round(quantity * reference_price, 2)
+            if required_cash > projected_cash:
+                risk_issues.append(
+                    ValidationIssue(
+                        "insufficient_available_cash",
+                        f"BUY order needs {required_cash:.2f} cash but only {projected_cash:.2f} is available",
+                        f"orders[{index}].quantity",
+                    )
+                )
+                continue
+            projected_cash = round(projected_cash - required_cash, 2)
+
+        return risk_issues
+
     def _index_from_issue_field(self, field_name: str) -> int | None:
         try:
             index_text = field_name.split("orders[", 1)[1].split("]", 1)[0]
             return int(index_text)
         except (IndexError, ValueError):
             return None
+
+    def _resolve_reference_price(self, symbol: str, limit_price: Any) -> float | None:
+        if limit_price is not None:
+            price = float(limit_price)
+            if price > 0:
+                return price
+
+        position = self.positions.get(symbol) or {}
+        for field_name in ("market_price", "cost_price"):
+            raw_value = position.get(field_name)
+            if raw_value is None:
+                continue
+            price = float(raw_value)
+            if price > 0:
+                return price
+        return None
 
     def _record_trade(self, order: OrderRecord, price: float) -> None:
         trade_id = f"mock-trade-{uuid.uuid4().hex[:10]}"
@@ -448,6 +531,58 @@ class MockBrokerAdapter(BrokerAdapter):
         if accepted_count > 0:
             return "accepted"
         return "rejected"
+
+    def _fingerprint_submit_request(self, request: OrderRequest, normalized_orders: list[dict[str, Any]]) -> str:
+        canonical_payload = {
+            "request_id": request.request_id,
+            "strategy_id": request.strategy_id,
+            "trade_date": request.trade_date,
+            "account_id": request.account_id,
+            "dry_run": request.dry_run,
+            "normalized_orders": normalized_orders,
+        }
+        encoded = json.dumps(canonical_payload, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
+
+    def _build_replayed_submit_response(self, receipt: SubmitReceipt) -> dict[str, Any]:
+        response = deepcopy(receipt.response)
+        response["idempotency_status"] = "replayed"
+        response["original_submit_time"] = response.get("submit_time") or receipt.recorded_at
+        response["replay_time"] = self._now()
+        return response
+
+    def _build_request_conflict_response(
+        self,
+        request: OrderRequest,
+        validation: dict[str, Any],
+        receipt: SubmitReceipt,
+    ) -> dict[str, Any]:
+        reasons = [{"code": "request_id_conflict", "message": "request_id was already used for a different submit payload"}]
+        return {
+            "request_id": request.request_id,
+            "strategy_id": request.strategy_id,
+            "trade_date": request.trade_date,
+            "account_id": request.account_id,
+            "dry_run": request.dry_run,
+            "status": "rejected",
+            "accepted_count": 0,
+            "rejected_count": len(validation["normalized_orders"]),
+            "broker_order_ids": [],
+            "accepted": [],
+            "rejected": [
+                {
+                    "intent_id": item["intent_id"],
+                    "status": "rejected",
+                    "reasons": reasons,
+                }
+                for item in validation["normalized_orders"]
+            ],
+            "normalized_orders": validation["normalized_orders"],
+            "errors": reasons,
+            "submit_time": self._now(),
+            "idempotency_status": "conflict",
+            "original_submit_time": receipt.recorded_at,
+        }
 
     def _next_broker_order_id(self) -> str:
         return f"mock-order-{uuid.uuid4().hex[:10]}"

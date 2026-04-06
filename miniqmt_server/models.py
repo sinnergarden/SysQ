@@ -265,3 +265,33 @@ class TradeRecord:
             amount=float(payload.get("amount") or 0.0),
             executed_at=str(payload.get("executed_at") or ""),
         )
+
+
+@dataclass
+class SubmitReceipt:
+    request_id: str
+    request_fingerprint: str
+    strategy_id: str
+    trade_date: str
+    account_id: str
+    dry_run: bool
+    normalized_orders: list[dict[str, Any]] = field(default_factory=list)
+    response: dict[str, Any] = field(default_factory=dict)
+    recorded_at: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "SubmitReceipt":
+        return cls(
+            request_id=str(payload.get("request_id") or ""),
+            request_fingerprint=str(payload.get("request_fingerprint") or ""),
+            strategy_id=str(payload.get("strategy_id") or ""),
+            trade_date=str(payload.get("trade_date") or ""),
+            account_id=str(payload.get("account_id") or ""),
+            dry_run=bool(payload.get("dry_run", False)),
+            normalized_orders=list(payload.get("normalized_orders") or []),
+            response=dict(payload.get("response") or {}),
+            recorded_at=str(payload.get("recorded_at") or ""),
+        )
