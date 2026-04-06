@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from urllib import error as urlerror
 from urllib import request
 
 from miniqmt_server.app import MiniQMTServerApp, build_server
@@ -385,13 +387,19 @@ class MiniQMTServerTestCase(unittest.TestCase):
         self.assertEqual(config.port, 8811)
 
 
-class MiniQMTServerHTTPSmokeTestCase(unittest.TestCase):
+class MiniQMTServerHTTPIntegrationTestCase(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = TemporaryDirectory()
         self.server = None
         self.thread = None
+
+    def tearDown(self) -> None:
+        self._stop_server()
+        self.temp_dir.cleanup()
+
+    def _build_config(self, *, auto_fill: bool = False) -> ServerConfig:
         data_dir = Path(self.temp_dir.name) / "data"
-        self.config = ServerConfig(
+        return ServerConfig(
             host="127.0.0.1",
             port=0,
             broker_mode="mock",
@@ -399,7 +407,7 @@ class MiniQMTServerHTTPSmokeTestCase(unittest.TestCase):
             mock=MockBrokerConfig(
                 account_id="mock_account",
                 allow_submit=True,
-                auto_fill=False,
+                auto_fill=auto_fill,
                 miniqmt_connected=False,
                 query_ready=True,
                 submit_enabled=True,
@@ -411,64 +419,249 @@ class MiniQMTServerHTTPSmokeTestCase(unittest.TestCase):
                     "frozen_cash": 0.0,
                     "daily_pnl": 0.0,
                 },
+                positions=[
+                    {
+                        "symbol": "600000.SH",
+                        "volume": 1000,
+                        "available_volume": 1000,
+                        "cost_price": 10.0,
+                        "market_price": 10.5,
+                        "market_value": 10500.0,
+                        "pnl": 500.0,
+                        "pnl_pct": 0.05,
+                        "update_time": "2026-04-06T09:25:00Z",
+                    }
+                ],
             ),
         )
+
+    def _start_server(self, *, auto_fill: bool = False) -> None:
+        self.config = self._build_config(auto_fill=auto_fill)
         try:
             self.server = build_server(self.config)
         except PermissionError as exc:
-            self.temp_dir.cleanup()
             self.skipTest(f"sandbox disallows binding a local TCP port: {exc}")
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
         self.base_url = f"http://127.0.0.1:{self.server.server_port}"
+        self._wait_until_ready()
 
-    def tearDown(self) -> None:
+    def _stop_server(self) -> None:
         if self.server is not None:
             self.server.shutdown()
             self.server.server_close()
+            self.server = None
         if self.thread is not None:
             self.thread.join(timeout=5)
-        self.temp_dir.cleanup()
+            self.thread = None
+
+    def _restart_server(self) -> None:
+        auto_fill = self.config.mock.auto_fill
+        self._stop_server()
+        self._start_server(auto_fill=auto_fill)
 
     def _request_json(self, path: str, method: str = "GET", payload: dict | None = None) -> tuple[int, dict]:
         body = None if payload is None else json.dumps(payload).encode("utf-8")
         headers = {"Content-Type": "application/json"} if body is not None else {}
         http_request = request.Request(f"{self.base_url}{path}", data=body, headers=headers, method=method)
-        with request.urlopen(http_request, timeout=5) as response:
-            return response.status, json.loads(response.read().decode("utf-8"))
+        try:
+            with request.urlopen(http_request, timeout=5) as response:
+                return response.status, json.loads(response.read().decode("utf-8"))
+        except urlerror.HTTPError as exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
-    def test_http_server_smoke_get_and_post(self) -> None:
+    def _wait_until_ready(self) -> None:
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            try:
+                health_status, health = self._request_json("/health")
+            except OSError:
+                time.sleep(0.05)
+                continue
+            if health_status == 200 and health.get("status") == "ok":
+                return
+            time.sleep(0.05)
+        self.fail("miniqmt_server HTTP endpoint did not become ready in time")
+
+    def test_http_server_end_to_end_autofill_flow(self) -> None:
+        self._start_server(auto_fill=True)
+
         health_status, health = self._request_json("/health")
         self.assertEqual(health_status, 200)
         self.assertEqual(health["status"], "ok")
         self.assertEqual(health["broker_mode"], "mock")
+        self.assertEqual(health["submit_enabled"], True)
 
-        validate_status, validate = self._request_json(
-            "/orders/validate",
-            method="POST",
-            payload={
-                "request_id": "request-http-smoke",
-                "strategy_id": "strategy_http_smoke",
-                "trade_date": "2026-04-06",
-                "account_id": "mock_account",
-                "dry_run": True,
-                "orders": [
-                    {
-                        "intent_id": "intent-http-smoke",
-                        "symbol": "600000.SH",
-                        "side": "BUY",
-                        "quantity": 100,
-                        "order_type": "LIMIT",
-                        "limit_price": 12.34,
-                        "time_in_force": "DAY",
-                        "reason": "http smoke test",
-                    }
-                ],
-            },
-        )
+        account_status, account_before = self._request_json("/account")
+        self.assertEqual(account_status, 200)
+        self.assertEqual(account_before["account_id"], "mock_account")
+
+        positions_status, positions_before = self._request_json("/positions")
+        self.assertEqual(positions_status, 200)
+        self.assertEqual(positions_before["count"], 1)
+        initial_position = positions_before["positions"][0]
+        self.assertEqual(initial_position["symbol"], "600000.SH")
+
+        payload = {
+            "request_id": "request-http-autofill",
+            "strategy_id": "strategy_http_e2e",
+            "trade_date": "2026-04-06",
+            "account_id": "mock_account",
+            "dry_run": False,
+            "orders": [
+                {
+                    "intent_id": "intent-http-sell",
+                    "symbol": "600000.SH",
+                    "side": "SELL",
+                    "quantity": 200,
+                    "order_type": "LIMIT",
+                    "limit_price": 10.5,
+                    "time_in_force": "DAY",
+                    "reason": "trim position",
+                },
+                {
+                    "intent_id": "intent-http-buy",
+                    "symbol": "601398.SH",
+                    "side": "BUY",
+                    "quantity": 300,
+                    "order_type": "LIMIT",
+                    "limit_price": 4.2,
+                    "time_in_force": "DAY",
+                    "reason": "rotate into bank",
+                },
+            ],
+        }
+
+        validate_status, validate = self._request_json("/orders/validate", method="POST", payload=payload)
         self.assertEqual(validate_status, 200)
         self.assertEqual(validate["status"], "accepted")
-        self.assertEqual(validate["accepted_count"], 1)
+        self.assertEqual(validate["accepted_count"], 2)
+
+        submit_status, submit = self._request_json("/orders/submit", method="POST", payload=payload)
+        self.assertEqual(submit_status, 200)
+        self.assertEqual(submit["status"], "accepted")
+        self.assertEqual(submit["idempotency_status"], "new")
+        self.assertEqual(submit["accepted_count"], 2)
+        self.assertEqual(len(submit["broker_order_ids"]), 2)
+
+        orders_status, orders = self._request_json(
+            "/orders?request_id=request-http-autofill&status=filled&strategy_id=strategy_http_e2e"
+        )
+        self.assertEqual(orders_status, 200)
+        self.assertEqual(orders["count"], 2)
+        self.assertTrue(all(order["status"] == "filled" for order in orders["orders"]))
+
+        trades_status, trades = self._request_json("/trades?trade_date=2026-04-06&strategy_id=strategy_http_e2e")
+        self.assertEqual(trades_status, 200)
+        self.assertEqual(trades["count"], 2)
+        self.assertEqual({trade["symbol"] for trade in trades["trades"]}, {"600000.SH", "601398.SH"})
+
+        sell_trade_status, sell_trade = self._request_json("/trades?symbol=600000.SH&trade_date=2026-04-06")
+        self.assertEqual(sell_trade_status, 200)
+        self.assertEqual(sell_trade["count"], 1)
+        self.assertEqual(sell_trade["trades"][0]["broker_order_id"], submit["broker_order_ids"][0])
+
+        account_after_status, account_after = self._request_json("/account")
+        self.assertEqual(account_after_status, 200)
+        expected_cash = round(account_before["available_cash"] + 200 * 10.5 - 300 * 4.2, 2)
+        self.assertEqual(account_after["available_cash"], expected_cash)
+
+        positions_after_status, positions_after = self._request_json("/positions")
+        self.assertEqual(positions_after_status, 200)
+        self.assertEqual(positions_after["count"], 2)
+        positions_by_symbol = {item["symbol"]: item for item in positions_after["positions"]}
+        self.assertEqual(positions_by_symbol["600000.SH"]["volume"], initial_position["volume"] - 200)
+        self.assertEqual(
+            positions_by_symbol["600000.SH"]["available_volume"],
+            initial_position["available_volume"] - 200,
+        )
+        self.assertEqual(positions_by_symbol["601398.SH"]["volume"], 300)
+        self.assertEqual(positions_by_symbol["601398.SH"]["market_price"], 4.2)
+
+        snapshot_status, snapshot = self._request_json("/snapshots/latest")
+        self.assertEqual(snapshot_status, 200)
+        self.assertEqual(snapshot["status"], "ok")
+        self.assertEqual(snapshot["snapshot"]["trigger"], "submit")
+        self.assertEqual(len(snapshot["snapshot"]["orders"]), 2)
+        self.assertEqual(len(snapshot["snapshot"]["trades"]), 2)
+
+        self._restart_server()
+        replay_status, replay = self._request_json("/orders/submit", method="POST", payload=payload)
+        self.assertEqual(replay_status, 200)
+        self.assertEqual(replay["status"], "accepted")
+        self.assertEqual(replay["idempotency_status"], "replayed")
+        self.assertEqual(replay["broker_order_ids"], submit["broker_order_ids"])
+        self.assertEqual(replay["original_submit_time"], submit["submit_time"])
+
+        replay_orders_status, replay_orders = self._request_json("/orders?request_id=request-http-autofill")
+        self.assertEqual(replay_orders_status, 200)
+        self.assertEqual(replay_orders["count"], 2)
+
+    def test_http_server_end_to_end_submit_cancel_snapshot_flow(self) -> None:
+        self._start_server(auto_fill=False)
+
+        payload = {
+            "request_id": "request-http-cancel",
+            "strategy_id": "strategy_http_cancel",
+            "trade_date": "2026-04-06",
+            "account_id": "mock_account",
+            "dry_run": False,
+            "orders": [
+                {
+                    "intent_id": "intent-http-cancel",
+                    "symbol": "600000.SH",
+                    "side": "BUY",
+                    "quantity": 100,
+                    "order_type": "LIMIT",
+                    "limit_price": 12.34,
+                    "time_in_force": "DAY",
+                    "reason": "place then cancel",
+                }
+            ],
+        }
+
+        submit_status, submit = self._request_json("/orders/submit", method="POST", payload=payload)
+        self.assertEqual(submit_status, 200)
+        self.assertEqual(submit["status"], "accepted")
+        self.assertEqual(submit["accepted_count"], 1)
+        client_order_id = submit["accepted"][0]["client_order_id"]
+
+        orders_status, orders = self._request_json(f"/orders?client_order_id={client_order_id}&status=submitted")
+        self.assertEqual(orders_status, 200)
+        self.assertEqual(orders["count"], 1)
+        self.assertEqual(orders["orders"][0]["filled_quantity"], 0)
+
+        trades_status, trades = self._request_json("/trades?strategy_id=strategy_http_cancel")
+        self.assertEqual(trades_status, 200)
+        self.assertEqual(trades["count"], 0)
+
+        cancel_status, cancel = self._request_json(
+            "/orders/cancel",
+            method="POST",
+            payload={
+                "request_id": "cancel-http-001",
+                "account_id": "mock_account",
+                "client_order_ids": [client_order_id],
+                "reason": "cancel through HTTP e2e test",
+            },
+        )
+        self.assertEqual(cancel_status, 200)
+        self.assertEqual(cancel["status"], "accepted")
+        self.assertEqual(cancel["canceled_count"], 1)
+        self.assertEqual(cancel["canceled"][0]["status"], "canceled")
+
+        canceled_orders_status, canceled_orders = self._request_json(
+            "/orders?request_id=request-http-cancel&status=canceled"
+        )
+        self.assertEqual(canceled_orders_status, 200)
+        self.assertEqual(canceled_orders["count"], 1)
+        self.assertEqual(canceled_orders["orders"][0]["cancel_reason"], "cancel through HTTP e2e test")
+
+        snapshot_status, snapshot = self._request_json("/snapshots/latest")
+        self.assertEqual(snapshot_status, 200)
+        self.assertEqual(snapshot["snapshot"]["trigger"], "cancel")
+        self.assertEqual(snapshot["snapshot"]["orders"][0]["status"], "canceled")
+        self.assertEqual(snapshot["snapshot"]["trades"], [])
 
 
 if __name__ == "__main__":

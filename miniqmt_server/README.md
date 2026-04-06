@@ -278,10 +278,17 @@ curl http://127.0.0.1:8811/snapshots/latest
 
 ## 测试
 
-测试这里只保留最小入口说明：
+测试默认采用“mock broker + 真实 HTTP 接口”两层方式：
+
+- 一层保留 `MiniQMTServerApp.handle(...)` 的 in-process 回归，快速覆盖校验和状态机
+- 一层会真实启动 `miniqmt_server`，绑定 `127.0.0.1:0` 临时端口，再通过 HTTP 调用完整接口
+- HTTP 用例使用临时 `data_dir` 和 `broker_mode=mock`，只走 fake broker 状态，不触碰真实账户或真实 MiniQMT adapter
+- 当前端到端用例会覆盖 validate / submit / orders / trades / account / positions / snapshots / cancel / restart 后幂等回放 这类核心流程
+
+本地运行最小相关测试：
 
 ```bash
 python -m unittest tests/test_miniqmt_server.py
 ```
 
-该用例已覆盖 in-process 接口测试，以及基于真实本地 HTTP 端口的 smoke 测试。
+如果你只想验证真实 HTTP 端到端链路，也可以直接运行该模块里 `MiniQMTServerHTTPIntegrationTestCase` 相关用例。
