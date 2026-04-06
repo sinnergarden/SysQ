@@ -67,7 +67,7 @@ class QlibNativeModel(IModel):
         QlibAdapter().init_qlib()
         
         # 1. Prepare DataHandler Config
-        # DataHandlerLP (Alpha158) uses QlibDataLoader by default.
+        # DataHandlerLP (phase123) uses QlibDataLoader by default.
         # We need to pass feature/label config via 'data_loader' argument, NOT top-level kwargs.
         
         feature_fields = self.feature_config

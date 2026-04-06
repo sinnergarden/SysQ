@@ -12,8 +12,8 @@ Usage:
     
     evaluator = StrictEvaluator()
     report = evaluator.run_comparison(
-        baseline_model_path="data/models/qlib_lgbm",
-        extended_model_path="data/models/qlib_lgbm_extended"
+        baseline_model_path="data/models/qlib_lgbm_phase123",
+        extended_model_path="data/models/qlib_lgbm_phase123_extended"
     )
     print(report.to_markdown())
 """
@@ -227,7 +227,7 @@ class StrictEvaluator:
         Run baseline vs extended comparison across specified periods.
         
         Args:
-            baseline_model_path: Path to baseline (Alpha158) model
+            baseline_model_path: Path to baseline (phase123) model
             extended_model_path: Path to extended model
             end_date: End date for evaluation (defaults to latest available)
             periods: List of periods to evaluate. If None, uses default:

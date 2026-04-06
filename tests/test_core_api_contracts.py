@@ -10,7 +10,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from qsys.trader.account import Account
 from qsys.strategy.engine import StrategyEngine
-from qsys.feature.library import FeatureLibrary, Alpha158
+from qsys.feature.library import FeatureLibrary, phase123
 from qsys.backtest import BacktestEngine
 from qsys.live.account import RealAccount
 from qsys.data.adapter import QlibAdapter
@@ -77,8 +77,8 @@ class TestCoreAPIContracts(unittest.TestCase):
 
     def test_feature_library_contract(self):
         """Verify FeatureLibrary API Contract"""
-        # Test base class or a concrete implementation like Alpha158
-        lib = Alpha158(instruments='all')
+        # Test base class or a concrete implementation like phase123
+        lib = phase123(instruments='all')
         
         # Method: get_feature_config
         self.assertTrue(hasattr(lib, 'get_feature_config'))
@@ -86,7 +86,7 @@ class TestCoreAPIContracts(unittest.TestCase):
         # Should return tuple (fields, names) or dict or list depending on implementation, 
         # but context.md says Tuple[List, List]. 
         # Let's check what the current implementation actually returns to align context.md or code.
-        # Currently Alpha158.get_feature_config returns (fields, fields).
+        # Currently phase123.get_feature_config returns (fields, fields).
         self.assertIsInstance(f_conf, tuple)
         self.assertEqual(len(f_conf), 2)
         

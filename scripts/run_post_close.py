@@ -147,7 +147,7 @@ def main():
     model_info = {}
     try:
         from qsys.live.scheduler import ModelScheduler
-        prod_model = ModelScheduler.resolve_production_model()
+        prod_model = Path(ModelScheduler.resolve_production_model())
         model_info = {"model_path": str(prod_model), "model_name": prod_model.name}
     except Exception as e:
         log.warning(f"Could not resolve production model: {e}")
