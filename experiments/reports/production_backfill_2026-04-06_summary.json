@@ -1,0 +1,416 @@
+[
+  {
+    "execution_date": "2026-03-23",
+    "plan_file": "daily/2026-03-23/pre_open/plans/plan_2026-03-13_shadow.csv",
+    "rows": 5,
+    "top": [
+      {
+        "symbol": "601728.SH",
+        "side": "buy",
+        "score": 0.1991515600573362,
+        "rank": 1,
+        "amount": 32300,
+        "price": 6.179999828338623
+      },
+      {
+        "symbol": "601288.SH",
+        "side": "buy",
+        "score": 0.19413018018248457,
+        "rank": 2,
+        "amount": 30200,
+        "price": 6.619999885559082
+      },
+      {
+        "symbol": "601985.SH",
+        "side": "buy",
+        "score": 0.19096531947846684,
+        "rank": 3,
+        "amount": 21600,
+        "price": 9.239999771118164
+      },
+      {
+        "symbol": "300502.SZ",
+        "side": "buy",
+        "score": 0.19067863995115164,
+        "rank": 4,
+        "amount": 500,
+        "price": 394.0299987792969
+      },
+      {
+        "symbol": "600219.SH",
+        "side": "buy",
+        "score": 0.1837656408315491,
+        "rank": 5,
+        "amount": 27100,
+        "price": 7.369999885559082
+      }
+    ]
+  },
+  {
+    "execution_date": "2026-03-24",
+    "plan_file": "daily/2026-03-24/pre_open/plans/plan_2026-03-23_shadow.csv",
+    "rows": 3,
+    "top": [
+      {
+        "symbol": "000338.SZ",
+        "side": "buy",
+        "score": 0.5650092037942077,
+        "rank": 2,
+        "amount": 300,
+        "price": 22.540000915527344
+      },
+      {
+        "symbol": "600219.SH",
+        "side": "buy",
+        "score": 0.5164274571471508,
+        "rank": 3,
+        "amount": 34700,
+        "price": 5.760000228881836
+      },
+      {
+        "symbol": "000301.SZ",
+        "side": "buy",
+        "score": 0.5039481249969756,
+        "rank": 4,
+        "amount": 19500,
+        "price": 10.220000267028809
+      }
+    ]
+  },
+  {
+    "execution_date": "2026-03-25",
+    "plan_file": "daily/2026-03-25/pre_open/plans/plan_2026-03-24_shadow.csv",
+    "rows": 3,
+    "top": [
+      {
+        "symbol": "600346.SH",
+        "side": "buy",
+        "score": 0.5085660673773579,
+        "rank": 3,
+        "amount": 9700,
+        "price": 20.290000915527344
+      },
+      {
+        "symbol": "600219.SH",
+        "side": "buy",
+        "score": 0.5006717555466855,
+        "rank": 4,
+        "amount": 33700,
+        "price": 5.880000114440918
+      },
+      {
+        "symbol": "000630.SZ",
+        "side": "buy",
+        "score": 0.4833139837464148,
+        "rank": 5,
+        "amount": 34100,
+        "price": 5.809999942779541
+      }
+    ]
+  },
+  {
+    "execution_date": "2026-03-26",
+    "plan_file": "daily/2026-03-26/pre_open/plans/plan_2026-03-25_shadow.csv",
+    "rows": 5,
+    "top": [
+      {
+        "symbol": "600893.SH",
+        "side": "buy",
+        "score": 0.667156427847869,
+        "rank": 1,
+        "amount": 4000,
+        "price": 49.58000183105469
+      },
+      {
+        "symbol": "000630.SZ",
+        "side": "buy",
+        "score": 0.5907763220132821,
+        "rank": 2,
+        "amount": 33500,
+        "price": 5.909999847412109
+      },
+      {
+        "symbol": "002493.SZ",
+        "side": "sell",
+        "score": 0.5766125944306164,
+        "rank": 3,
+        "amount": 900,
+        "price": 11.949999809265137
+      },
+      {
+        "symbol": "600219.SH",
+        "side": "buy",
+        "score": 0.5699562023310322,
+        "rank": 4,
+        "amount": 32700,
+        "price": 6.059999942779541
+      },
+      {
+        "symbol": "600489.SH",
+        "side": "buy",
+        "score": 0.5092586814453429,
+        "rank": 5,
+        "amount": 7700,
+        "price": 25.520000457763672
+      }
+    ]
+  },
+  {
+    "execution_date": "2026-03-27",
+    "plan_file": "daily/2026-03-27/pre_open/plans/plan_2026-03-26_shadow.csv",
+    "rows": 4,
+    "top": [
+      {
+        "symbol": "600219.SH",
+        "side": "buy",
+        "score": 0.9215430245525041,
+        "rank": 1,
+        "amount": 33400,
+        "price": 6.0
+      },
+      {
+        "symbol": "600893.SH",
+        "side": "buy",
+        "score": 0.7908671943977367,
+        "rank": 2,
+        "amount": 4100,
+        "price": 48.0
+      },
+      {
+        "symbol": "000630.SZ",
+        "side": "buy",
+        "score": 0.7070780796933106,
+        "rank": 4,
+        "amount": 34700,
+        "price": 5.78000020980835
+      },
+      {
+        "symbol": "603993.SH",
+        "side": "buy",
+        "score": 0.6099745600725685,
+        "rank": 5,
+        "amount": 11400,
+        "price": 17.489999771118164
+      }
+    ]
+  },
+  {
+    "execution_date": "2026-03-30",
+    "plan_file": "daily/2026-03-30/pre_open/plans/plan_2026-03-27_shadow.csv",
+    "rows": 4,
+    "top": [
+      {
+        "symbol": "600219.SH",
+        "side": "buy",
+        "score": 1.031778673048094,
+        "rank": 1,
+        "amount": 34000,
+        "price": 5.900000095367432
+      },
+      {
+        "symbol": "600893.SH",
+        "side": "buy",
+        "score": 0.7767332101943214,
+        "rank": 2,
+        "amount": 4100,
+        "price": 48.029998779296875
+      },
+      {
+        "symbol": "000630.SZ",
+        "side": "buy",
+        "score": 0.7019139759742575,
+        "rank": 3,
+        "amount": 34200,
+        "price": 5.860000133514404
+      },
+      {
+        "symbol": "603993.SH",
+        "side": "buy",
+        "score": 0.6868671064791925,
+        "rank": 4,
+        "amount": 11400,
+        "price": 17.579999923706055
+      }
+    ]
+  },
+  {
+    "execution_date": "2026-03-31",
+    "plan_file": "daily/2026-03-31/pre_open/plans/plan_2026-03-30_shadow.csv",
+    "rows": 4,
+    "top": [
+      {
+        "symbol": "600489.SH",
+        "side": "buy",
+        "score": 0.7715663213096963,
+        "rank": 1,
+        "amount": 7500,
+        "price": 26.75
+      },
+      {
+        "symbol": "600893.SH",
+        "side": "buy",
+        "score": 0.545736550533405,
+        "rank": 3,
+        "amount": 4100,
+        "price": 48.619998931884766
+      },
+      {
+        "symbol": "603993.SH",
+        "side": "buy",
+        "score": 0.5329208021697184,
+        "rank": 4,
+        "amount": 11500,
+        "price": 17.43000030517578
+      },
+      {
+        "symbol": "000630.SZ",
+        "side": "buy",
+        "score": 0.5244778236562561,
+        "rank": 5,
+        "amount": 33900,
+        "price": 5.920000076293945
+      }
+    ]
+  },
+  {
+    "execution_date": "2026-04-01",
+    "plan_file": "daily/2026-04-01/pre_open/plans/plan_2026-03-31_shadow.csv",
+    "rows": 5,
+    "top": [
+      {
+        "symbol": "600489.SH",
+        "side": "buy",
+        "score": 0.8770591917873695,
+        "rank": 1,
+        "amount": 7500,
+        "price": 26.709999084472656
+      },
+      {
+        "symbol": "600893.SH",
+        "side": "buy",
+        "score": 0.6842969031767286,
+        "rank": 2,
+        "amount": 4100,
+        "price": 48.060001373291016
+      },
+      {
+        "symbol": "603993.SH",
+        "side": "buy",
+        "score": 0.6366362070721484,
+        "rank": 3,
+        "amount": 11700,
+        "price": 17.149999618530273
+      },
+      {
+        "symbol": "600362.SH",
+        "side": "buy",
+        "score": 0.5824865693682999,
+        "rank": 4,
+        "amount": 4600,
+        "price": 43.0
+      },
+      {
+        "symbol": "000630.SZ",
+        "side": "buy",
+        "score": 0.5773100946233893,
+        "rank": 5,
+        "amount": 34500,
+        "price": 5.809999942779541
+      }
+    ]
+  },
+  {
+    "execution_date": "2026-04-02",
+    "plan_file": "daily/2026-04-02/pre_open/plans/plan_2026-04-01_shadow.csv",
+    "rows": 5,
+    "top": [
+      {
+        "symbol": "600489.SH",
+        "side": "buy",
+        "score": 0.8427940102189694,
+        "rank": 1,
+        "amount": 7300,
+        "price": 27.260000228881836
+      },
+      {
+        "symbol": "600547.SH",
+        "side": "buy",
+        "score": 0.5867668014366544,
+        "rank": 2,
+        "amount": 4800,
+        "price": 41.130001068115234
+      },
+      {
+        "symbol": "600219.SH",
+        "side": "buy",
+        "score": 0.5426008688385097,
+        "rank": 3,
+        "amount": 32500,
+        "price": 6.170000076293945
+      },
+      {
+        "symbol": "600010.SH",
+        "side": "buy",
+        "score": 0.4774325257931632,
+        "rank": 4,
+        "amount": 76300,
+        "price": 2.630000114440918
+      },
+      {
+        "symbol": "002916.SZ",
+        "side": "buy",
+        "score": 0.441304107733527,
+        "rank": 5,
+        "amount": 800,
+        "price": 231.0
+      }
+    ]
+  },
+  {
+    "execution_date": "2026-04-03",
+    "plan_file": "daily/2026-04-03/pre_open/plans/plan_2026-04-02_shadow.csv",
+    "rows": 5,
+    "top": [
+      {
+        "symbol": "600489.SH",
+        "side": "buy",
+        "score": 0.6953990945175997,
+        "rank": 1,
+        "amount": 7600,
+        "price": 26.399999618530273
+      },
+      {
+        "symbol": "600010.SH",
+        "side": "buy",
+        "score": 0.5466804318880684,
+        "rank": 2,
+        "amount": 76600,
+        "price": 2.619999885559082
+      },
+      {
+        "symbol": "603260.SH",
+        "side": "buy",
+        "score": 0.5347982065875339,
+        "rank": 3,
+        "amount": 5000,
+        "price": 39.7400016784668
+      },
+      {
+        "symbol": "000630.SZ",
+        "side": "buy",
+        "score": 0.4193337610295236,
+        "rank": 4,
+        "amount": 34400,
+        "price": 5.829999923706055
+      },
+      {
+        "symbol": "600219.SH",
+        "side": "buy",
+        "score": 0.4153744242557996,
+        "rank": 5,
+        "amount": 32400,
+        "price": 6.179999828338623
+      }
+    ]
+  }
+]

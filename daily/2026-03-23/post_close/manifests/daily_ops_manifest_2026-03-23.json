@@ -1,0 +1,127 @@
+{
+  "execution_date": "2026-03-23",
+  "signal_date": "2026-03-20",
+  "updated_at": "2026-04-06T17:06:47.627489",
+  "stages": {
+    "post_close": {
+      "status": "partial",
+      "report_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-23/post_close/reports/daily_ops_post_close_20260406_170647.json",
+      "updated_at": "2026-04-06T17:06:47.627484",
+      "summary": {
+        "reconciliation": {
+          "cash": {
+            "real": 20000.0,
+            "shadow": 16919.154980926483,
+            "diff": 3080.8450190735166
+          },
+          "total_assets": {
+            "real": 20000.0,
+            "shadow": 999705.1641972351,
+            "diff": -979705.1641972351
+          },
+          "position_count": {
+            "real": 0.0,
+            "shadow": 5.0,
+            "diff": -5.0
+          }
+        },
+        "signal_quality": {
+          "as_of_date": "2026-03-23",
+          "status": "success",
+          "data_quality_status": "success",
+          "horizon_1d": {
+            "status": "missing",
+            "reason": "no_matching_vintage"
+          },
+          "horizon_2d": {
+            "status": "missing",
+            "reason": "no_matching_vintage"
+          },
+          "horizon_3d": {
+            "status": "missing",
+            "reason": "no_matching_vintage"
+          },
+          "recent_vintage_count": 0,
+          "recent_vintage_win_rate": null,
+          "recent_vintage_avg_weighted_return": null,
+          "recent_vintage_avg_excess_return": null
+        },
+        "account_snapshots": {
+          "real": {
+            "account_name": "real",
+            "as_of_date": "2026-03-23",
+            "cash": 20000.0,
+            "total_assets": 20000.0,
+            "position_count": 0,
+            "positions": [],
+            "status": "available"
+          },
+          "shadow": {
+            "account_name": "shadow",
+            "as_of_date": "2026-03-23",
+            "cash": 16919.154980926483,
+            "total_assets": 999705.1641972351,
+            "position_count": 5,
+            "positions": [
+              {
+                "symbol": "000338.SZ",
+                "amount": 8500,
+                "price": 23.36000061035156,
+                "cost_basis": 23.36000061035156
+              },
+              {
+                "symbol": "002001.SZ",
+                "amount": 5800,
+                "price": 34.25,
+                "cost_basis": 34.25
+              },
+              {
+                "symbol": "002493.SZ",
+                "amount": 17600,
+                "price": 11.3100004196167,
+                "cost_basis": 11.3100004196167
+              },
+              {
+                "symbol": "300394.SZ",
+                "amount": 600,
+                "price": 312.0,
+                "cost_basis": 312.0
+              },
+              {
+                "symbol": "600176.SH",
+                "amount": 8800,
+                "price": 22.649999618530277,
+                "cost_basis": 22.649999618530277
+              }
+            ],
+            "status": "available"
+          }
+        }
+      },
+      "blockers": [
+        "real_sync missing: carried forward latest real state as no-fill placeholder"
+      ],
+      "notes": []
+    }
+  },
+  "artifacts": {
+    "summary": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-23/post_close/reconciliation/reconcile_summary_2026-03-23.csv",
+    "positions": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-23/post_close/reconciliation/reconcile_positions_2026-03-23.csv",
+    "real_trades": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-23/post_close/reconciliation/reconcile_real_trades_2026-03-23.csv",
+    "real_sync_snapshot": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-23/post_close/snapshots/real_sync_snapshot_2026-03-23.csv",
+    "signal_quality_vintages": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-23/post_close/reports/signal_quality_vintages_2026-03-23.csv",
+    "signal_quality_summary": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-23/post_close/reports/signal_quality_summary_2026-03-23.json",
+    "account_db": "/home/liuming/.openclaw/workspace/SysQ/data/meta/real_account.db"
+  },
+  "data_status": {
+    "raw_latest": "2026-04-03",
+    "qlib_latest": "2026-04-03",
+    "aligned": true,
+    "health_ok": true
+  },
+  "model_info": {},
+  "blockers": [
+    "real_sync missing: carried forward latest real state as no-fill placeholder"
+  ],
+  "notes": []
+}

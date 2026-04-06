@@ -1,0 +1,21 @@
+{
+  "as_of_date": "2026-03-23",
+  "status": "success",
+  "data_quality_status": "success",
+  "horizon_1d": {
+    "status": "missing",
+    "reason": "no_matching_vintage"
+  },
+  "horizon_2d": {
+    "status": "missing",
+    "reason": "no_matching_vintage"
+  },
+  "horizon_3d": {
+    "status": "missing",
+    "reason": "no_matching_vintage"
+  },
+  "recent_vintage_count": 0,
+  "recent_vintage_win_rate": null,
+  "recent_vintage_avg_weighted_return": null,
+  "recent_vintage_avg_excess_return": null
+}

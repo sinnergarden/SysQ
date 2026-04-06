@@ -1,0 +1,6 @@
+symbol,score,score_rank,weight,price,signal_date,execution_date,price_basis_date,price_basis_field,price_basis_label,model_name,model_path,universe
+300394.SZ,0.9463694677386593,1,0.2,298.7099914550781,2026-03-24,2026-03-25,2026-03-24,close,close@2026-03-24 -> next-session signal basket,qlib_lgbm,/home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm,csi300
+002493.SZ,0.559497062064273,2,0.2,11.40999984741211,2026-03-24,2026-03-25,2026-03-24,close,close@2026-03-24 -> next-session signal basket,qlib_lgbm,/home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm,csi300
+600346.SH,0.5085660673773579,3,0.2,20.290000915527344,2026-03-24,2026-03-25,2026-03-24,close,close@2026-03-24 -> next-session signal basket,qlib_lgbm,/home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm,csi300
+600219.SH,0.5006717555466855,4,0.2,5.880000114440918,2026-03-24,2026-03-25,2026-03-24,close,close@2026-03-24 -> next-session signal basket,qlib_lgbm,/home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm,csi300
+000630.SZ,0.4833139837464148,5,0.2,5.809999942779541,2026-03-24,2026-03-25,2026-03-24,close,close@2026-03-24 -> next-session signal basket,qlib_lgbm,/home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm,csi300

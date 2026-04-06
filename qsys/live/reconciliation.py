@@ -197,6 +197,82 @@ def normalize_real_sync_input(sync_path: str | Path) -> pd.DataFrame:
     return normalize_real_sync_csv(sync_path)
 
 
+def build_placeholder_real_sync_frame(
+    real_account: RealAccount,
+    *,
+    date: str,
+    account_name: str,
+) -> pd.DataFrame:
+    source_date = real_account.get_latest_date(account_name=account_name, before_date=date)
+    if source_date is None:
+        source_date = real_account.get_latest_date(account_name=account_name)
+
+    state = real_account.get_state(source_date, account_name) if source_date else None
+    if not state:
+        rows = [
+            {
+                "symbol": "CASH",
+                "amount": 0,
+                "price": 0.0,
+                "cost_basis": 0.0,
+                "cash": 0.0,
+                "total_assets": 0.0,
+                "side": "hold",
+                "filled_amount": 0,
+                "filled_price": 0.0,
+                "fee": 0.0,
+                "tax": 0.0,
+                "total_cost": 0.0,
+                "order_id": "",
+                "note": "placeholder_real_sync_missing_state",
+            }
+        ]
+    else:
+        cash = float(state["cash"])
+        total_assets = float(state["total_assets"])
+        rows = []
+        for symbol, pos in sorted((state.get("positions") or {}).items()):
+            rows.append(
+                {
+                    "symbol": symbol,
+                    "amount": int(pos.get("amount", pos.get("total_amount", 0)) or 0),
+                    "price": float(pos.get("price", 0.0) or 0.0),
+                    "cost_basis": float(pos.get("cost_basis", pos.get("price", 0.0)) or 0.0),
+                    "cash": cash,
+                    "total_assets": total_assets,
+                    "side": "hold",
+                    "filled_amount": 0,
+                    "filled_price": 0.0,
+                    "fee": 0.0,
+                    "tax": 0.0,
+                    "total_cost": 0.0,
+                    "order_id": "",
+                    "note": f"placeholder_real_sync_from_{source_date}",
+                }
+            )
+        if not rows:
+            rows.append(
+                {
+                    "symbol": "CASH",
+                    "amount": 0,
+                    "price": 0.0,
+                    "cost_basis": 0.0,
+                    "cash": cash,
+                    "total_assets": total_assets,
+                    "side": "hold",
+                    "filled_amount": 0,
+                    "filled_price": 0.0,
+                    "fee": 0.0,
+                    "tax": 0.0,
+                    "total_cost": 0.0,
+                    "order_id": "",
+                    "note": f"placeholder_real_sync_from_{source_date}_cash_only",
+                }
+            )
+
+    return _normalize_real_sync_frame(pd.DataFrame(rows), source_label=f"placeholder:{account_name}:{date}")
+
+
 def sync_real_account_from_csv(
     real_account: RealAccount,
     account_name: str,
@@ -263,6 +339,15 @@ def build_reconciliation_result(
 ) -> ReconciliationResult:
     real_state = account.get_state(date, real_account_name)
     shadow_state = account.get_state(date, shadow_account_name)
+
+    if not real_state:
+        real_latest = account.get_latest_date(account_name=real_account_name, before_date=date)
+        if real_latest:
+            real_state = account.get_state(real_latest, real_account_name)
+    if not shadow_state:
+        shadow_latest = account.get_latest_date(account_name=shadow_account_name, before_date=date)
+        if shadow_latest:
+            shadow_state = account.get_state(shadow_latest, shadow_account_name)
 
     if not real_state:
         raise ValueError(f"Missing real account state for {date}")

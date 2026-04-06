@@ -1,0 +1,29 @@
+{
+  "as_of_date": "2026-03-24",
+  "status": "success",
+  "data_quality_status": "success",
+  "horizon_1d": {
+    "status": "success",
+    "reason": "ok",
+    "signal_date": "2026-03-23",
+    "holding_days": 1,
+    "equal_weight_return": 0.017604150326715695,
+    "weighted_return": 0.017604150326715695,
+    "benchmark_return": 0.014918139441484278,
+    "weighted_excess_return": 0.0026860108852314168,
+    "basket_size": 5,
+    "coverage_ratio": 1.0
+  },
+  "horizon_2d": {
+    "status": "missing",
+    "reason": "no_matching_vintage"
+  },
+  "horizon_3d": {
+    "status": "missing",
+    "reason": "no_matching_vintage"
+  },
+  "recent_vintage_count": 1,
+  "recent_vintage_win_rate": 1.0,
+  "recent_vintage_avg_weighted_return": 0.017604150326715695,
+  "recent_vintage_avg_excess_return": 0.0026860108852314168
+}

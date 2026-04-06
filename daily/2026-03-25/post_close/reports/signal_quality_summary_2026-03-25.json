@@ -1,0 +1,37 @@
+{
+  "as_of_date": "2026-03-25",
+  "status": "success",
+  "data_quality_status": "success",
+  "horizon_1d": {
+    "status": "success",
+    "reason": "ok",
+    "signal_date": "2026-03-24",
+    "holding_days": 1,
+    "equal_weight_return": 0.04393971092688158,
+    "weighted_return": 0.043939710926881585,
+    "benchmark_return": 0.013486734027933309,
+    "weighted_excess_return": 0.030452976898948277,
+    "basket_size": 5,
+    "coverage_ratio": 1.0
+  },
+  "horizon_2d": {
+    "status": "success",
+    "reason": "ok",
+    "signal_date": "2026-03-23",
+    "holding_days": 2,
+    "equal_weight_return": 0.06416694961278843,
+    "weighted_return": 0.06416694961278843,
+    "benchmark_return": 0.028662737498504284,
+    "weighted_excess_return": 0.035504212114284145,
+    "basket_size": 5,
+    "coverage_ratio": 1.0
+  },
+  "horizon_3d": {
+    "status": "missing",
+    "reason": "no_matching_vintage"
+  },
+  "recent_vintage_count": 2,
+  "recent_vintage_win_rate": 1.0,
+  "recent_vintage_avg_weighted_return": 0.05405333026983501,
+  "recent_vintage_avg_excess_return": 0.03297859450661621
+}

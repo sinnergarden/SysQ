@@ -1,0 +1,45 @@
+{
+  "as_of_date": "2026-03-31",
+  "status": "success",
+  "data_quality_status": "success",
+  "horizon_1d": {
+    "status": "success",
+    "reason": "ok",
+    "signal_date": "2026-03-30",
+    "holding_days": 1,
+    "equal_weight_return": -0.010361599626059736,
+    "weighted_return": -0.010361599626059738,
+    "benchmark_return": -0.010373138543498571,
+    "weighted_excess_return": 1.153891743883341e-05,
+    "basket_size": 5,
+    "coverage_ratio": 1.0
+  },
+  "horizon_2d": {
+    "status": "success",
+    "reason": "ok",
+    "signal_date": "2026-03-27",
+    "holding_days": 2,
+    "equal_weight_return": -0.0003297726415258939,
+    "weighted_return": -0.000329772641525895,
+    "benchmark_return": -0.012725247990296918,
+    "weighted_excess_return": 0.012395475348771022,
+    "basket_size": 5,
+    "coverage_ratio": 1.0
+  },
+  "horizon_3d": {
+    "status": "success",
+    "reason": "ok",
+    "signal_date": "2026-03-26",
+    "holding_days": 3,
+    "equal_weight_return": 0.004436158207610008,
+    "weighted_return": 0.004436158207610009,
+    "benchmark_return": -0.006263344664735205,
+    "weighted_excess_return": 0.010699502872345213,
+    "basket_size": 5,
+    "coverage_ratio": 1.0
+  },
+  "recent_vintage_count": 5,
+  "recent_vintage_win_rate": 0.6,
+  "recent_vintage_avg_weighted_return": 0.0061776135005683335,
+  "recent_vintage_avg_excess_return": 0.01740793157701759
+}

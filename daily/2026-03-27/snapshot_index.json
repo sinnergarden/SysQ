@@ -1,0 +1,129 @@
+{
+  "execution_date": "2026-03-27",
+  "signal_date": "2026-03-26",
+  "archive_root": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-27",
+  "stages": {
+    "pre_open": {
+      "artifacts": {
+        "account_db": {
+          "category": "external_reference",
+          "source_path": "/home/liuming/.openclaw/workspace/SysQ/data/meta/real_account.db",
+          "archived_path": null,
+          "exists": true
+        },
+        "signal_basket": {
+          "category": "signals",
+          "source_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-27/pre_open/signals/signal_basket_2026-03-26.csv",
+          "archived_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-27/pre_open/signals/signal_basket_2026-03-26.csv",
+          "exists": true
+        },
+        "shadow_order_intents": {
+          "category": "order_intents",
+          "source_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-27/pre_open/order_intents/order_intents_2026-03-27_shadow.json",
+          "archived_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-27/pre_open/order_intents/order_intents_2026-03-27_shadow.json",
+          "exists": true
+        },
+        "real_order_intents": {
+          "category": "order_intents",
+          "source_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-27/pre_open/order_intents/order_intents_2026-03-27_real.json",
+          "archived_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-27/pre_open/order_intents/order_intents_2026-03-27_real.json",
+          "exists": true
+        },
+        "shadow_plan": {
+          "category": "plans",
+          "source_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-27/pre_open/plans/plan_2026-03-26_shadow.csv",
+          "archived_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-27/pre_open/plans/plan_2026-03-26_shadow.csv",
+          "exists": true
+        },
+        "real_plan": {
+          "category": "plans",
+          "source_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-27/pre_open/plans/plan_2026-03-26_real.csv",
+          "archived_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-27/pre_open/plans/plan_2026-03-26_real.csv",
+          "exists": true
+        },
+        "shadow_real_sync_template": {
+          "category": "plans",
+          "source_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-27/pre_open/plans/real_sync_template_2026-03-26_shadow.csv",
+          "archived_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-27/pre_open/plans/real_sync_template_2026-03-26_shadow.csv",
+          "exists": true
+        },
+        "real_real_sync_template": {
+          "category": "plans",
+          "source_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-27/pre_open/plans/real_sync_template_2026-03-26_real.csv",
+          "archived_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-27/pre_open/plans/real_sync_template_2026-03-26_real.csv",
+          "exists": true
+        },
+        "report": {
+          "category": "reports",
+          "source_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-27/pre_open/reports/daily_ops_pre_open_20260406_163608.json",
+          "archived_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-27/pre_open/reports/daily_ops_pre_open_20260406_163608.json",
+          "exists": true
+        },
+        "manifest": {
+          "category": "manifests",
+          "source_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-27/pre_open/manifests/daily_ops_manifest_2026-03-27.json",
+          "archived_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-27/pre_open/manifests/daily_ops_manifest_2026-03-27.json",
+          "exists": true
+        }
+      }
+    },
+    "post_close": {
+      "artifacts": {
+        "summary": {
+          "category": "reconciliation",
+          "source_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-27/post_close/reconciliation/reconcile_summary_2026-03-27.csv",
+          "archived_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-27/post_close/reconciliation/reconcile_summary_2026-03-27.csv",
+          "exists": true
+        },
+        "positions": {
+          "category": "reconciliation",
+          "source_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-27/post_close/reconciliation/reconcile_positions_2026-03-27.csv",
+          "archived_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-27/post_close/reconciliation/reconcile_positions_2026-03-27.csv",
+          "exists": true
+        },
+        "real_trades": {
+          "category": "reconciliation",
+          "source_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-27/post_close/reconciliation/reconcile_real_trades_2026-03-27.csv",
+          "archived_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-27/post_close/reconciliation/reconcile_real_trades_2026-03-27.csv",
+          "exists": true
+        },
+        "real_sync_snapshot": {
+          "category": "snapshots",
+          "source_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-27/post_close/snapshots/real_sync_snapshot_2026-03-27.csv",
+          "archived_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-27/post_close/snapshots/real_sync_snapshot_2026-03-27.csv",
+          "exists": true
+        },
+        "signal_quality_vintages": {
+          "category": "reports",
+          "source_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-27/post_close/reports/signal_quality_vintages_2026-03-27.csv",
+          "archived_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-27/post_close/reports/signal_quality_vintages_2026-03-27.csv",
+          "exists": true
+        },
+        "signal_quality_summary": {
+          "category": "reports",
+          "source_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-27/post_close/reports/signal_quality_summary_2026-03-27.json",
+          "archived_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-27/post_close/reports/signal_quality_summary_2026-03-27.json",
+          "exists": true
+        },
+        "account_db": {
+          "category": "external_reference",
+          "source_path": "/home/liuming/.openclaw/workspace/SysQ/data/meta/real_account.db",
+          "archived_path": null,
+          "exists": true
+        },
+        "report": {
+          "category": "reports",
+          "source_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-27/post_close/reports/daily_ops_post_close_20260406_170656.json",
+          "archived_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-27/post_close/reports/daily_ops_post_close_20260406_170656.json",
+          "exists": true
+        },
+        "manifest": {
+          "category": "manifests",
+          "source_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-27/post_close/manifests/daily_ops_manifest_2026-03-27.json",
+          "archived_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-27/post_close/manifests/daily_ops_manifest_2026-03-27.json",
+          "exists": true
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,52 @@
+{
+  "workflow": "daily_ops_pre_open",
+  "run_id": "20260327_001847",
+  "timestamp": "2026-03-27T00:18:47.199985",
+  "status": "partial",
+  "signal_date": "2026-03-24",
+  "execution_date": "2026-03-25",
+  "data_status": {
+    "raw_latest": "2026-03-25",
+    "qlib_latest": "2026-03-25",
+    "aligned": true,
+    "health_ok": false,
+    "expected_latest_date": "2026-03-24",
+    "feature_rows": 300,
+    "feature_cols": 180,
+    "missing_ratio": 0.10031481481481483
+  },
+  "model_info": {
+    "model_path": "/home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm_margin_extended",
+    "model_name": "qlib_lgbm_margin_extended",
+    "feature_set": "alpha158"
+  },
+  "plan_summary": {},
+  "blockers": [
+    "Data health check failed"
+  ],
+  "notes": [
+    "⚠️ Data health check reported issues"
+  ],
+  "sections": [
+    {
+      "name": "Shadow Account Plan",
+      "status": "skipped",
+      "message": "",
+      "metrics": {
+        "status": "empty_plan"
+      },
+      "details": {}
+    },
+    {
+      "name": "Real Account Plan",
+      "status": "skipped",
+      "message": "",
+      "metrics": {
+        "status": "empty_plan"
+      },
+      "details": {}
+    }
+  ],
+  "artifacts": {},
+  "duration_seconds": 4.587143659591675
+}

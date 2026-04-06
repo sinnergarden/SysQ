@@ -1,0 +1,598 @@
+== run signal_date=2026-03-20 execution_date=2026-03-23 ==
+2026-04-06 16:35:01 | INFO     | [daily_workflow] start | signal_date=2026-03-20 execution_date=2026-03-23 top_k=5 min_trade=5000 skip_update=true report_dir=/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-23/pre_open/reports
+[800528:MainThread](2026-04-06 16:35:02,287) INFO - qlib.Initialization - [config.py:452] - default_conf: client.
+[800528:MainThread](2026-04-06 16:35:02,289) INFO - qlib.Initialization - [__init__.py:75] - qlib successfully initialized based on client settings.
+[800528:MainThread](2026-04-06 16:35:02,289) INFO - qlib.Initialization - [__init__.py:77] - data_path={'__DEFAULT_FREQ': PosixPath('/home/liuming/.openclaw/workspace/SysQ/data/qlib_bin')}
+2026-04-06 16:35:02 | INFO     | Production model resolved from manifest: /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:35:02 | INFO     |   Manifest version: 2025-03-22-v1
+2026-04-06 16:35:02 | INFO     |   Status: active
+2026-04-06 16:35:02 | INFO     | [model_resolution] manifest | model_path=/home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:35:02 | INFO     | Current Model Age: -13 days (End Date: 2026-04-02)
+2026-04-06 16:35:02 | INFO     | [model_ready] done | model_path=/home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:35:02 | INFO     | Model loaded from /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:35:02 | INFO     | Model loaded from /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+[800528:MainThread](2026-04-06 16:35:02,756) INFO - qlib.Initialization - [config.py:452] - default_conf: client.
+[800528:MainThread](2026-04-06 16:35:02,757) INFO - qlib.Initialization - [__init__.py:75] - qlib successfully initialized based on client settings.
+[800528:MainThread](2026-04-06 16:35:02,757) INFO - qlib.Initialization - [__init__.py:77] - data_path={'__DEFAULT_FREQ': PosixPath('/home/liuming/.openclaw/workspace/SysQ/data/qlib_bin')}
+ModuleNotFoundError. CatBoostModel are skipped. (optional: maybe installing CatBoostModel can fix it.)
+ModuleNotFoundError. XGBModel is skipped(optional: maybe installing xgboost can fix it).
+ModuleNotFoundError.  PyTorch models are skipped (optional: maybe installing pytorch can fix it).
+2026-04-06 16:35:05 | INFO     | [readiness] ok | core_daily_status=ok pit_status=not_requested margin_status=not_requested aligned=true feature_rows=300 missing_ratio=0.0001 blockers=0 warnings=0
+2026-04-06 16:35:08 | INFO     | Generating signals for 300 symbols...
+2026-04-06 16:35:08 | INFO     | Signal basket saved to /home/liuming/.openclaw/workspace/SysQ/daily/2026-03-23/pre_open/signals/signal_basket_2026-03-20.csv
+2026-04-06 16:35:08 | INFO     | Synced broker state for 2026-03-20 (Account: shadow). Total Assets: 1,000,000.00
+2026-04-06 16:35:08 | INFO     | [shadow_account] initialized | signal_date=2026-03-20
+2026-04-06 16:35:08 | INFO     | [plan_generation] start | account=shadow
+2026-04-06 16:35:08 | INFO     | Model loaded from /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:35:08 | INFO     | Model loaded from /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:35:08 | INFO     | Generating plan using signal_date=2026-03-20, execution_date=2026-03-23
+2026-04-06 16:35:08 | INFO     | Using account state from 2026-03-20
+2026-04-06 16:35:08 | INFO     | Total Assets: 1,000,000.00, Cash: 1,000,000.00
+2026-04-06 16:35:11 | INFO     | Generating signals for 300 symbols...
+2026-04-06 16:35:11 | INFO     | Plan saved to /home/liuming/.openclaw/workspace/SysQ/daily/2026-03-23/pre_open/plans/plan_2026-03-20_shadow.csv
+2026-04-06 16:35:11 | INFO     | Real sync template saved to /home/liuming/.openclaw/workspace/SysQ/daily/2026-03-23/pre_open/plans/real_sync_template_2026-03-20_shadow.csv
+2026-04-06 16:35:11 | INFO     | 
+   symbol side    score  score_rank  weight  amount      price     est_value  target_value  current_value  diff_value weight_method
+600176.SH  buy 0.810047           1     0.2    8800  22.650000 199319.996643      200000.0            0.0    200000.0  equal_weight
+002493.SZ  buy 0.699667           2     0.2   17600  11.310000 199056.007385      200000.0            0.0    200000.0  equal_weight
+300394.SZ  buy 0.527268           3     0.2     600 312.000000 187200.000000      200000.0            0.0    200000.0  equal_weight
+000338.SZ  buy 0.510708           4     0.2    8500  23.360001 198560.005188      200000.0            0.0    200000.0  equal_weight
+002001.SZ  buy 0.456478           5     0.2    5800  34.250000 198650.000000      200000.0            0.0    200000.0  equal_weight
+2026-04-06 16:35:11 | INFO     | [plan] ready | account=shadow trades=5 buys=5 sells=0 total_value=982786.0092 symbols=["600176.SH", "002493.SZ", "300394.SZ", "000338.SZ", "002001.SZ"] signal_date=2026-03-20 execution_date=2026-03-23
+2026-04-06 16:35:11 | INFO     | [plan_generation] start | account=real
+2026-04-06 16:35:11 | INFO     | Model loaded from /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:35:11 | INFO     | Model loaded from /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:35:11 | INFO     | Generating plan using signal_date=2026-03-20, execution_date=2026-03-23
+2026-04-06 16:35:11 | INFO     | Using account state from 2026-03-13
+2026-04-06 16:35:11 | INFO     | Total Assets: 20,000.00, Cash: 20,000.00
+2026-04-06 16:35:14 | INFO     | Generating signals for 300 symbols...
+2026-04-06 16:35:14 | INFO     | Plan saved to /home/liuming/.openclaw/workspace/SysQ/daily/2026-03-23/pre_open/plans/plan_2026-03-20_real.csv
+2026-04-06 16:35:14 | INFO     | Real sync template saved to /home/liuming/.openclaw/workspace/SysQ/daily/2026-03-23/pre_open/plans/real_sync_template_2026-03-20_real.csv
+2026-04-06 16:35:14 | INFO     | 
+No trades planned.
+2026-04-06 16:35:14 | INFO     | [plan] no_plan | account=real trades=0 buys=0 sells=0 total_value=0 symbols=[] signal_date=2026-03-20 execution_date=2026-03-23
+2026-04-06 16:35:14 | INFO     | [report] saved | path=/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-23/pre_open/reports/daily_ops_pre_open_20260406_163514.json
+2026-04-06 16:35:14 | INFO     | [manifest] saved | path=/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-23/pre_open/manifests/daily_ops_manifest_2026-03-23.json
+2026-04-06 16:35:14 | INFO     | [daily_workflow] done | duration_seconds=12.8036 blockers=0
+== run signal_date=2026-03-23 execution_date=2026-03-24 ==
+2026-04-06 16:35:15 | INFO     | [daily_workflow] start | signal_date=2026-03-23 execution_date=2026-03-24 top_k=5 min_trade=5000 skip_update=true report_dir=/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-24/pre_open/reports
+[800761:MainThread](2026-04-06 16:35:15,866) INFO - qlib.Initialization - [config.py:452] - default_conf: client.
+[800761:MainThread](2026-04-06 16:35:15,867) INFO - qlib.Initialization - [__init__.py:75] - qlib successfully initialized based on client settings.
+[800761:MainThread](2026-04-06 16:35:15,867) INFO - qlib.Initialization - [__init__.py:77] - data_path={'__DEFAULT_FREQ': PosixPath('/home/liuming/.openclaw/workspace/SysQ/data/qlib_bin')}
+2026-04-06 16:35:15 | INFO     | Production model resolved from manifest: /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:35:15 | INFO     |   Manifest version: 2025-03-22-v1
+2026-04-06 16:35:15 | INFO     |   Status: active
+2026-04-06 16:35:15 | INFO     | [model_resolution] manifest | model_path=/home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:35:15 | INFO     | Current Model Age: -10 days (End Date: 2026-04-02)
+2026-04-06 16:35:15 | INFO     | [model_ready] done | model_path=/home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:35:16 | INFO     | Model loaded from /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:35:16 | INFO     | Model loaded from /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+[800761:MainThread](2026-04-06 16:35:16,189) INFO - qlib.Initialization - [config.py:452] - default_conf: client.
+[800761:MainThread](2026-04-06 16:35:16,190) INFO - qlib.Initialization - [__init__.py:75] - qlib successfully initialized based on client settings.
+[800761:MainThread](2026-04-06 16:35:16,190) INFO - qlib.Initialization - [__init__.py:77] - data_path={'__DEFAULT_FREQ': PosixPath('/home/liuming/.openclaw/workspace/SysQ/data/qlib_bin')}
+ModuleNotFoundError. CatBoostModel are skipped. (optional: maybe installing CatBoostModel can fix it.)
+ModuleNotFoundError. XGBModel is skipped(optional: maybe installing xgboost can fix it).
+ModuleNotFoundError.  PyTorch models are skipped (optional: maybe installing pytorch can fix it).
+2026-04-06 16:35:19 | INFO     | [readiness] ok | core_daily_status=ok pit_status=not_requested margin_status=not_requested aligned=true feature_rows=300 missing_ratio=0.0001 blockers=0 warnings=0
+2026-04-06 16:35:21 | INFO     | Generating signals for 300 symbols...
+2026-04-06 16:35:22 | INFO     | Signal basket saved to /home/liuming/.openclaw/workspace/SysQ/daily/2026-03-24/pre_open/signals/signal_basket_2026-03-23.csv
+2026-04-06 16:35:22 | INFO     | [shadow_account] simulate_previous_plan | plan_path=/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-23/pre_open/plans/plan_2026-03-20_shadow.csv signal_date=2026-03-23
+2026-04-06 16:35:22 | INFO     | Synced broker state for 2026-03-23 (Account: shadow). Total Assets: 999,705.16
+2026-04-06 16:35:22 | INFO     | Shadow Simulation for 2026-03-23 completed. Cash: 16,919.15, Total: 999,705.16
+2026-04-06 16:35:22 | INFO     | [plan_generation] start | account=shadow
+2026-04-06 16:35:22 | INFO     | Model loaded from /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:35:22 | INFO     | Model loaded from /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:35:22 | INFO     | Generating plan using signal_date=2026-03-23, execution_date=2026-03-24
+2026-04-06 16:35:22 | INFO     | Using account state from 2026-03-23
+2026-04-06 16:35:22 | INFO     | Total Assets: 999,705.16, Cash: 16,919.15
+2026-04-06 16:35:24 | INFO     | Generating signals for 300 symbols...
+2026-04-06 16:35:24 | WARNING  | Skipping plan for 600176.SH: No price
+2026-04-06 16:35:24 | WARNING  | Skipping plan for 002001.SZ: No price
+2026-04-06 16:35:24 | INFO     | Plan saved to /home/liuming/.openclaw/workspace/SysQ/daily/2026-03-24/pre_open/plans/plan_2026-03-23_shadow.csv
+2026-04-06 16:35:24 | INFO     | Real sync template saved to /home/liuming/.openclaw/workspace/SysQ/daily/2026-03-24/pre_open/plans/real_sync_template_2026-03-23_shadow.csv
+2026-04-06 16:35:24 | INFO     | 
+   symbol side    score  score_rank  weight  amount     price     est_value  target_value  current_value    diff_value weight_method
+000338.SZ  buy 0.565009           2     0.2     300 22.540001   6762.000275 199941.032839  191590.007782   8351.025057  equal_weight
+600219.SH  buy 0.516427           3     0.2   34700  5.760000 199872.007942 199941.032839       0.000000 199941.032839  equal_weight
+000301.SZ  buy 0.503948           4     0.2   19500 10.220000 199290.005207 199941.032839       0.000000 199941.032839  equal_weight
+2026-04-06 16:35:24 | INFO     | [plan] ready | account=shadow trades=3 buys=3 sells=0 total_value=405924.0134 symbols=["000338.SZ", "600219.SH", "000301.SZ"] signal_date=2026-03-23 execution_date=2026-03-24
+2026-04-06 16:35:24 | INFO     | [plan_generation] start | account=real
+2026-04-06 16:35:25 | INFO     | Model loaded from /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:35:25 | INFO     | Model loaded from /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:35:25 | INFO     | Generating plan using signal_date=2026-03-23, execution_date=2026-03-24
+2026-04-06 16:35:25 | INFO     | Using account state from 2026-03-13
+2026-04-06 16:35:25 | INFO     | Total Assets: 20,000.00, Cash: 20,000.00
+2026-04-06 16:35:27 | INFO     | Generating signals for 300 symbols...
+2026-04-06 16:35:28 | INFO     | Plan saved to /home/liuming/.openclaw/workspace/SysQ/daily/2026-03-24/pre_open/plans/plan_2026-03-23_real.csv
+2026-04-06 16:35:28 | INFO     | Real sync template saved to /home/liuming/.openclaw/workspace/SysQ/daily/2026-03-24/pre_open/plans/real_sync_template_2026-03-23_real.csv
+2026-04-06 16:35:28 | INFO     | 
+No trades planned.
+2026-04-06 16:35:28 | INFO     | [plan] no_plan | account=real trades=0 buys=0 sells=0 total_value=0 symbols=[] signal_date=2026-03-23 execution_date=2026-03-24
+2026-04-06 16:35:28 | INFO     | [report] saved | path=/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-24/pre_open/reports/daily_ops_pre_open_20260406_163528.json
+2026-04-06 16:35:28 | INFO     | [manifest] saved | path=/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-24/pre_open/manifests/daily_ops_manifest_2026-03-24.json
+2026-04-06 16:35:28 | INFO     | [daily_workflow] done | duration_seconds=12.5044 blockers=0
+== run signal_date=2026-03-24 execution_date=2026-03-25 ==
+2026-04-06 16:35:29 | INFO     | [daily_workflow] start | signal_date=2026-03-24 execution_date=2026-03-25 top_k=5 min_trade=5000 skip_update=true report_dir=/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-25/pre_open/reports
+[800980:MainThread](2026-04-06 16:35:29,354) INFO - qlib.Initialization - [config.py:452] - default_conf: client.
+[800980:MainThread](2026-04-06 16:35:29,355) INFO - qlib.Initialization - [__init__.py:75] - qlib successfully initialized based on client settings.
+[800980:MainThread](2026-04-06 16:35:29,355) INFO - qlib.Initialization - [__init__.py:77] - data_path={'__DEFAULT_FREQ': PosixPath('/home/liuming/.openclaw/workspace/SysQ/data/qlib_bin')}
+2026-04-06 16:35:29 | INFO     | Production model resolved from manifest: /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:35:29 | INFO     |   Manifest version: 2025-03-22-v1
+2026-04-06 16:35:29 | INFO     |   Status: active
+2026-04-06 16:35:29 | INFO     | [model_resolution] manifest | model_path=/home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:35:29 | INFO     | Current Model Age: -9 days (End Date: 2026-04-02)
+2026-04-06 16:35:29 | INFO     | [model_ready] done | model_path=/home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:35:29 | INFO     | Model loaded from /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:35:29 | INFO     | Model loaded from /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+[800980:MainThread](2026-04-06 16:35:29,683) INFO - qlib.Initialization - [config.py:452] - default_conf: client.
+[800980:MainThread](2026-04-06 16:35:29,684) INFO - qlib.Initialization - [__init__.py:75] - qlib successfully initialized based on client settings.
+[800980:MainThread](2026-04-06 16:35:29,684) INFO - qlib.Initialization - [__init__.py:77] - data_path={'__DEFAULT_FREQ': PosixPath('/home/liuming/.openclaw/workspace/SysQ/data/qlib_bin')}
+ModuleNotFoundError. CatBoostModel are skipped. (optional: maybe installing CatBoostModel can fix it.)
+ModuleNotFoundError. XGBModel is skipped(optional: maybe installing xgboost can fix it).
+ModuleNotFoundError.  PyTorch models are skipped (optional: maybe installing pytorch can fix it).
+2026-04-06 16:35:32 | INFO     | [readiness] ok | core_daily_status=ok pit_status=not_requested margin_status=not_requested aligned=true feature_rows=300 missing_ratio=0 blockers=0 warnings=0
+2026-04-06 16:35:35 | INFO     | Generating signals for 300 symbols...
+2026-04-06 16:35:35 | INFO     | Signal basket saved to /home/liuming/.openclaw/workspace/SysQ/daily/2026-03-25/pre_open/signals/signal_basket_2026-03-24.csv
+2026-04-06 16:35:35 | INFO     | [shadow_account] simulate_previous_plan | plan_path=/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-24/pre_open/plans/plan_2026-03-23_shadow.csv signal_date=2026-03-24
+2026-04-06 16:35:35 | INFO     | Synced broker state for 2026-03-24 (Account: shadow). Total Assets: 992,733.14
+2026-04-06 16:35:35 | INFO     | Shadow Simulation for 2026-03-24 completed. Cash: 10,155.13, Total: 992,733.14
+2026-04-06 16:35:35 | INFO     | [plan_generation] start | account=shadow
+2026-04-06 16:35:35 | INFO     | Model loaded from /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:35:35 | INFO     | Model loaded from /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:35:35 | INFO     | Generating plan using signal_date=2026-03-24, execution_date=2026-03-25
+2026-04-06 16:35:35 | INFO     | Using account state from 2026-03-24
+2026-04-06 16:35:35 | INFO     | Total Assets: 992,733.14, Cash: 10,155.13
+2026-04-06 16:35:38 | INFO     | Generating signals for 300 symbols...
+2026-04-06 16:35:38 | WARNING  | Skipping plan for 000338.SZ: No price
+2026-04-06 16:35:38 | WARNING  | Skipping plan for 600176.SH: No price
+2026-04-06 16:35:38 | WARNING  | Skipping plan for 002001.SZ: No price
+2026-04-06 16:35:38 | INFO     | Plan saved to /home/liuming/.openclaw/workspace/SysQ/daily/2026-03-25/pre_open/plans/plan_2026-03-24_shadow.csv
+2026-04-06 16:35:38 | INFO     | Real sync template saved to /home/liuming/.openclaw/workspace/SysQ/daily/2026-03-25/pre_open/plans/real_sync_template_2026-03-24_shadow.csv
+2026-04-06 16:35:38 | INFO     | 
+   symbol side    score  score_rank  weight  amount     price     est_value  target_value  current_value    diff_value weight_method
+600346.SH  buy 0.508566           3     0.2    9700 20.290001 196813.008881 198546.627638            0.0 198546.627638  equal_weight
+600219.SH  buy 0.500672           4     0.2   33700  5.880000 198156.003857 198546.627638            0.0 198546.627638  equal_weight
+000630.SZ  buy 0.483314           5     0.2   34100  5.810000 198120.998049 198546.627638            0.0 198546.627638  equal_weight
+2026-04-06 16:35:38 | INFO     | [plan] ready | account=shadow trades=3 buys=3 sells=0 total_value=593090.0108 symbols=["600346.SH", "600219.SH", "000630.SZ"] signal_date=2026-03-24 execution_date=2026-03-25
+2026-04-06 16:35:38 | INFO     | [plan_generation] start | account=real
+2026-04-06 16:35:38 | INFO     | Model loaded from /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:35:38 | INFO     | Model loaded from /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:35:38 | INFO     | Generating plan using signal_date=2026-03-24, execution_date=2026-03-25
+2026-04-06 16:35:38 | INFO     | Using account state from 2026-03-13
+2026-04-06 16:35:38 | INFO     | Total Assets: 20,000.00, Cash: 20,000.00
+2026-04-06 16:35:41 | INFO     | Generating signals for 300 symbols...
+2026-04-06 16:35:41 | INFO     | Plan saved to /home/liuming/.openclaw/workspace/SysQ/daily/2026-03-25/pre_open/plans/plan_2026-03-24_real.csv
+2026-04-06 16:35:41 | INFO     | Real sync template saved to /home/liuming/.openclaw/workspace/SysQ/daily/2026-03-25/pre_open/plans/real_sync_template_2026-03-24_real.csv
+2026-04-06 16:35:41 | INFO     | 
+No trades planned.
+2026-04-06 16:35:41 | INFO     | [plan] no_plan | account=real trades=0 buys=0 sells=0 total_value=0 symbols=[] signal_date=2026-03-24 execution_date=2026-03-25
+2026-04-06 16:35:41 | INFO     | [report] saved | path=/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-25/pre_open/reports/daily_ops_pre_open_20260406_163541.json
+2026-04-06 16:35:41 | INFO     | [manifest] saved | path=/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-25/pre_open/manifests/daily_ops_manifest_2026-03-25.json
+2026-04-06 16:35:41 | INFO     | [daily_workflow] done | duration_seconds=12.5311 blockers=0
+== run signal_date=2026-03-25 execution_date=2026-03-26 ==
+2026-04-06 16:35:42 | INFO     | [daily_workflow] start | signal_date=2026-03-25 execution_date=2026-03-26 top_k=5 min_trade=5000 skip_update=true report_dir=/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-26/pre_open/reports
+[801199:MainThread](2026-04-06 16:35:42,899) INFO - qlib.Initialization - [config.py:452] - default_conf: client.
+[801199:MainThread](2026-04-06 16:35:42,900) INFO - qlib.Initialization - [__init__.py:75] - qlib successfully initialized based on client settings.
+[801199:MainThread](2026-04-06 16:35:42,900) INFO - qlib.Initialization - [__init__.py:77] - data_path={'__DEFAULT_FREQ': PosixPath('/home/liuming/.openclaw/workspace/SysQ/data/qlib_bin')}
+2026-04-06 16:35:42 | INFO     | Production model resolved from manifest: /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:35:42 | INFO     |   Manifest version: 2025-03-22-v1
+2026-04-06 16:35:42 | INFO     |   Status: active
+2026-04-06 16:35:42 | INFO     | [model_resolution] manifest | model_path=/home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:35:42 | INFO     | Current Model Age: -8 days (End Date: 2026-04-02)
+2026-04-06 16:35:42 | INFO     | [model_ready] done | model_path=/home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:35:43 | INFO     | Model loaded from /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:35:43 | INFO     | Model loaded from /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+[801199:MainThread](2026-04-06 16:35:43,234) INFO - qlib.Initialization - [config.py:452] - default_conf: client.
+[801199:MainThread](2026-04-06 16:35:43,235) INFO - qlib.Initialization - [__init__.py:75] - qlib successfully initialized based on client settings.
+[801199:MainThread](2026-04-06 16:35:43,235) INFO - qlib.Initialization - [__init__.py:77] - data_path={'__DEFAULT_FREQ': PosixPath('/home/liuming/.openclaw/workspace/SysQ/data/qlib_bin')}
+ModuleNotFoundError. CatBoostModel are skipped. (optional: maybe installing CatBoostModel can fix it.)
+ModuleNotFoundError. XGBModel is skipped(optional: maybe installing xgboost can fix it).
+ModuleNotFoundError.  PyTorch models are skipped (optional: maybe installing pytorch can fix it).
+2026-04-06 16:35:46 | INFO     | [readiness] ok | core_daily_status=ok pit_status=not_requested margin_status=not_requested aligned=true feature_rows=300 missing_ratio=0 blockers=0 warnings=0
+2026-04-06 16:35:48 | INFO     | Generating signals for 300 symbols...
+2026-04-06 16:35:49 | INFO     | Signal basket saved to /home/liuming/.openclaw/workspace/SysQ/daily/2026-03-26/pre_open/signals/signal_basket_2026-03-25.csv
+2026-04-06 16:35:49 | INFO     | [shadow_account] simulate_previous_plan | plan_path=/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-25/pre_open/plans/plan_2026-03-24_shadow.csv signal_date=2026-03-25
+2026-04-06 16:35:49 | INFO     | Synced broker state for 2026-03-25 (Account: shadow). Total Assets: 992,733.14
+2026-04-06 16:35:49 | INFO     | Shadow Simulation for 2026-03-25 completed. Cash: 10,155.13, Total: 992,733.14
+2026-04-06 16:35:49 | INFO     | [plan_generation] start | account=shadow
+2026-04-06 16:35:49 | INFO     | Model loaded from /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:35:49 | INFO     | Model loaded from /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:35:49 | INFO     | Generating plan using signal_date=2026-03-25, execution_date=2026-03-26
+2026-04-06 16:35:49 | INFO     | Using account state from 2026-03-25
+2026-04-06 16:35:49 | INFO     | Total Assets: 992,733.14, Cash: 10,155.13
+2026-04-06 16:35:51 | INFO     | Generating signals for 300 symbols...
+2026-04-06 16:35:52 | WARNING  | Skipping plan for 002001.SZ: No price
+2026-04-06 16:35:52 | WARNING  | Skipping plan for 600176.SH: No price
+2026-04-06 16:35:52 | WARNING  | Skipping plan for 000338.SZ: No price
+2026-04-06 16:35:52 | WARNING  | Skipping plan for 300394.SZ: No price
+2026-04-06 16:35:52 | INFO     | Plan saved to /home/liuming/.openclaw/workspace/SysQ/daily/2026-03-26/pre_open/plans/plan_2026-03-25_shadow.csv
+2026-04-06 16:35:52 | INFO     | Real sync template saved to /home/liuming/.openclaw/workspace/SysQ/daily/2026-03-26/pre_open/plans/real_sync_template_2026-03-25_shadow.csv
+2026-04-06 16:35:52 | INFO     | 
+   symbol side    score  score_rank  weight  amount     price     est_value  target_value  current_value    diff_value weight_method
+002493.SZ sell 0.576613           3     0.2     900 11.950000  10754.999828 198546.627638  210319.996643 -11773.369005  equal_weight
+600893.SH  buy 0.667156           1     0.2    4000 49.580002 198320.007324 198546.627638       0.000000 198546.627638  equal_weight
+000630.SZ  buy 0.590776           2     0.2   33500  5.910000 197984.994888 198546.627638       0.000000 198546.627638  equal_weight
+600219.SH  buy 0.569956           4     0.2   32700  6.060000 198161.998129 198546.627638       0.000000 198546.627638  equal_weight
+600489.SH  buy 0.509259           5     0.2    7700 25.520000 196504.003525 198546.627638       0.000000 198546.627638  equal_weight
+2026-04-06 16:35:52 | INFO     | [plan] ready | account=shadow trades=5 buys=4 sells=1 total_value=801726.0037 symbols=["002493.SZ", "600893.SH", "000630.SZ", "600219.SH", "600489.SH"] signal_date=2026-03-25 execution_date=2026-03-26
+2026-04-06 16:35:52 | INFO     | [plan_generation] start | account=real
+2026-04-06 16:35:52 | INFO     | Model loaded from /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:35:52 | INFO     | Model loaded from /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:35:52 | INFO     | Generating plan using signal_date=2026-03-25, execution_date=2026-03-26
+2026-04-06 16:35:52 | INFO     | Using account state from 2026-03-13
+2026-04-06 16:35:52 | INFO     | Total Assets: 20,000.00, Cash: 20,000.00
+2026-04-06 16:35:54 | INFO     | Generating signals for 300 symbols...
+2026-04-06 16:35:55 | INFO     | Plan saved to /home/liuming/.openclaw/workspace/SysQ/daily/2026-03-26/pre_open/plans/plan_2026-03-25_real.csv
+2026-04-06 16:35:55 | INFO     | Real sync template saved to /home/liuming/.openclaw/workspace/SysQ/daily/2026-03-26/pre_open/plans/real_sync_template_2026-03-25_real.csv
+2026-04-06 16:35:55 | INFO     | 
+No trades planned.
+2026-04-06 16:35:55 | INFO     | [plan] no_plan | account=real trades=0 buys=0 sells=0 total_value=0 symbols=[] signal_date=2026-03-25 execution_date=2026-03-26
+2026-04-06 16:35:55 | INFO     | [report] saved | path=/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-26/pre_open/reports/daily_ops_pre_open_20260406_163555.json
+2026-04-06 16:35:55 | INFO     | [manifest] saved | path=/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-26/pre_open/manifests/daily_ops_manifest_2026-03-26.json
+2026-04-06 16:35:55 | INFO     | [daily_workflow] done | duration_seconds=12.5133 blockers=0
+== run signal_date=2026-03-26 execution_date=2026-03-27 ==
+2026-04-06 16:35:56 | INFO     | [daily_workflow] start | signal_date=2026-03-26 execution_date=2026-03-27 top_k=5 min_trade=5000 skip_update=true report_dir=/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-27/pre_open/reports
+[801414:MainThread](2026-04-06 16:35:56,385) INFO - qlib.Initialization - [config.py:452] - default_conf: client.
+[801414:MainThread](2026-04-06 16:35:56,386) INFO - qlib.Initialization - [__init__.py:75] - qlib successfully initialized based on client settings.
+[801414:MainThread](2026-04-06 16:35:56,386) INFO - qlib.Initialization - [__init__.py:77] - data_path={'__DEFAULT_FREQ': PosixPath('/home/liuming/.openclaw/workspace/SysQ/data/qlib_bin')}
+2026-04-06 16:35:56 | INFO     | Production model resolved from manifest: /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:35:56 | INFO     |   Manifest version: 2025-03-22-v1
+2026-04-06 16:35:56 | INFO     |   Status: active
+2026-04-06 16:35:56 | INFO     | [model_resolution] manifest | model_path=/home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:35:56 | INFO     | Current Model Age: -7 days (End Date: 2026-04-02)
+2026-04-06 16:35:56 | INFO     | [model_ready] done | model_path=/home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:35:56 | INFO     | Model loaded from /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:35:56 | INFO     | Model loaded from /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+[801414:MainThread](2026-04-06 16:35:56,712) INFO - qlib.Initialization - [config.py:452] - default_conf: client.
+[801414:MainThread](2026-04-06 16:35:56,713) INFO - qlib.Initialization - [__init__.py:75] - qlib successfully initialized based on client settings.
+[801414:MainThread](2026-04-06 16:35:56,714) INFO - qlib.Initialization - [__init__.py:77] - data_path={'__DEFAULT_FREQ': PosixPath('/home/liuming/.openclaw/workspace/SysQ/data/qlib_bin')}
+ModuleNotFoundError. CatBoostModel are skipped. (optional: maybe installing CatBoostModel can fix it.)
+ModuleNotFoundError. XGBModel is skipped(optional: maybe installing xgboost can fix it).
+ModuleNotFoundError.  PyTorch models are skipped (optional: maybe installing pytorch can fix it).
+2026-04-06 16:35:59 | INFO     | [readiness] ok | core_daily_status=ok pit_status=not_requested margin_status=not_requested aligned=true feature_rows=300 missing_ratio=0 blockers=0 warnings=0
+2026-04-06 16:36:02 | INFO     | Generating signals for 300 symbols...
+2026-04-06 16:36:02 | INFO     | Signal basket saved to /home/liuming/.openclaw/workspace/SysQ/daily/2026-03-27/pre_open/signals/signal_basket_2026-03-26.csv
+2026-04-06 16:36:02 | INFO     | [shadow_account] simulate_previous_plan | plan_path=/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-26/pre_open/plans/plan_2026-03-25_shadow.csv signal_date=2026-03-26
+2026-04-06 16:36:02 | INFO     | Synced broker state for 2026-03-26 (Account: shadow). Total Assets: 1,003,983.15
+2026-04-06 16:36:02 | INFO     | Shadow Simulation for 2026-03-26 completed. Cash: 20,896.14, Total: 1,003,983.15
+2026-04-06 16:36:02 | INFO     | [plan_generation] start | account=shadow
+2026-04-06 16:36:02 | INFO     | Model loaded from /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:36:02 | INFO     | Model loaded from /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:36:02 | INFO     | Generating plan using signal_date=2026-03-26, execution_date=2026-03-27
+2026-04-06 16:36:02 | INFO     | Using account state from 2026-03-26
+2026-04-06 16:36:02 | INFO     | Total Assets: 1,003,983.15, Cash: 20,896.14
+2026-04-06 16:36:05 | INFO     | Generating signals for 300 symbols...
+2026-04-06 16:36:05 | WARNING  | Skipping plan for 300394.SZ: No price
+2026-04-06 16:36:05 | WARNING  | Skipping plan for 000338.SZ: No price
+2026-04-06 16:36:05 | WARNING  | Skipping plan for 600176.SH: No price
+2026-04-06 16:36:05 | WARNING  | Skipping plan for 002001.SZ: No price
+2026-04-06 16:36:05 | INFO     | Plan saved to /home/liuming/.openclaw/workspace/SysQ/daily/2026-03-27/pre_open/plans/plan_2026-03-26_shadow.csv
+2026-04-06 16:36:05 | INFO     | Real sync template saved to /home/liuming/.openclaw/workspace/SysQ/daily/2026-03-27/pre_open/plans/real_sync_template_2026-03-26_shadow.csv
+2026-04-06 16:36:05 | INFO     | 
+   symbol side    score  score_rank  weight  amount  price     est_value  target_value  current_value   diff_value weight_method
+600219.SH  buy 0.921543           1     0.2   33400   6.00 200400.000000  200796.62919            0.0 200796.62919  equal_weight
+600893.SH  buy 0.790867           2     0.2    4100  48.00 196800.000000  200796.62919            0.0 200796.62919  equal_weight
+000630.SZ  buy 0.707078           4     0.2   34700   5.78 200566.007280  200796.62919            0.0 200796.62919  equal_weight
+603993.SH  buy 0.609975           5     0.2   11400  17.49 199385.997391  200796.62919            0.0 200796.62919  equal_weight
+2026-04-06 16:36:05 | INFO     | [plan] ready | account=shadow trades=4 buys=4 sells=0 total_value=797152.0047 symbols=["600219.SH", "600893.SH", "000630.SZ", "603993.SH"] signal_date=2026-03-26 execution_date=2026-03-27
+2026-04-06 16:36:05 | INFO     | [plan_generation] start | account=real
+2026-04-06 16:36:05 | INFO     | Model loaded from /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:36:05 | INFO     | Model loaded from /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:36:05 | INFO     | Generating plan using signal_date=2026-03-26, execution_date=2026-03-27
+2026-04-06 16:36:05 | INFO     | Using account state from 2026-03-13
+2026-04-06 16:36:05 | INFO     | Total Assets: 20,000.00, Cash: 20,000.00
+2026-04-06 16:36:08 | INFO     | Generating signals for 300 symbols...
+2026-04-06 16:36:08 | INFO     | Plan saved to /home/liuming/.openclaw/workspace/SysQ/daily/2026-03-27/pre_open/plans/plan_2026-03-26_real.csv
+2026-04-06 16:36:08 | INFO     | Real sync template saved to /home/liuming/.openclaw/workspace/SysQ/daily/2026-03-27/pre_open/plans/real_sync_template_2026-03-26_real.csv
+2026-04-06 16:36:08 | INFO     | 
+No trades planned.
+2026-04-06 16:36:08 | INFO     | [plan] no_plan | account=real trades=0 buys=0 sells=0 total_value=0 symbols=[] signal_date=2026-03-26 execution_date=2026-03-27
+2026-04-06 16:36:08 | INFO     | [report] saved | path=/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-27/pre_open/reports/daily_ops_pre_open_20260406_163608.json
+2026-04-06 16:36:08 | INFO     | [manifest] saved | path=/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-27/pre_open/manifests/daily_ops_manifest_2026-03-27.json
+2026-04-06 16:36:08 | INFO     | [daily_workflow] done | duration_seconds=12.4686 blockers=0
+== run signal_date=2026-03-27 execution_date=2026-03-30 ==
+2026-04-06 16:36:09 | INFO     | [daily_workflow] start | signal_date=2026-03-27 execution_date=2026-03-30 top_k=5 min_trade=5000 skip_update=true report_dir=/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-30/pre_open/reports
+[801633:MainThread](2026-04-06 16:36:09,818) INFO - qlib.Initialization - [config.py:452] - default_conf: client.
+[801633:MainThread](2026-04-06 16:36:09,819) INFO - qlib.Initialization - [__init__.py:75] - qlib successfully initialized based on client settings.
+[801633:MainThread](2026-04-06 16:36:09,819) INFO - qlib.Initialization - [__init__.py:77] - data_path={'__DEFAULT_FREQ': PosixPath('/home/liuming/.openclaw/workspace/SysQ/data/qlib_bin')}
+2026-04-06 16:36:09 | INFO     | Production model resolved from manifest: /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:36:09 | INFO     |   Manifest version: 2025-03-22-v1
+2026-04-06 16:36:09 | INFO     |   Status: active
+2026-04-06 16:36:09 | INFO     | [model_resolution] manifest | model_path=/home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:36:09 | INFO     | Current Model Age: -6 days (End Date: 2026-04-02)
+2026-04-06 16:36:09 | INFO     | [model_ready] done | model_path=/home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:36:10 | INFO     | Model loaded from /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:36:10 | INFO     | Model loaded from /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+[801633:MainThread](2026-04-06 16:36:10,152) INFO - qlib.Initialization - [config.py:452] - default_conf: client.
+[801633:MainThread](2026-04-06 16:36:10,153) INFO - qlib.Initialization - [__init__.py:75] - qlib successfully initialized based on client settings.
+[801633:MainThread](2026-04-06 16:36:10,153) INFO - qlib.Initialization - [__init__.py:77] - data_path={'__DEFAULT_FREQ': PosixPath('/home/liuming/.openclaw/workspace/SysQ/data/qlib_bin')}
+ModuleNotFoundError. CatBoostModel are skipped. (optional: maybe installing CatBoostModel can fix it.)
+ModuleNotFoundError. XGBModel is skipped(optional: maybe installing xgboost can fix it).
+ModuleNotFoundError.  PyTorch models are skipped (optional: maybe installing pytorch can fix it).
+2026-04-06 16:36:13 | INFO     | [readiness] ok | core_daily_status=ok pit_status=not_requested margin_status=not_requested aligned=true feature_rows=300 missing_ratio=0 blockers=0 warnings=0
+2026-04-06 16:36:15 | INFO     | Generating signals for 300 symbols...
+2026-04-06 16:36:15 | INFO     | Signal basket saved to /home/liuming/.openclaw/workspace/SysQ/daily/2026-03-30/pre_open/signals/signal_basket_2026-03-27.csv
+2026-04-06 16:36:15 | INFO     | [shadow_account] simulate_previous_plan | plan_path=/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-27/pre_open/plans/plan_2026-03-26_shadow.csv signal_date=2026-03-27
+2026-04-06 16:36:16 | INFO     | Synced broker state for 2026-03-27 (Account: shadow). Total Assets: 1,003,983.15
+2026-04-06 16:36:16 | INFO     | Shadow Simulation for 2026-03-27 completed. Cash: 20,896.14, Total: 1,003,983.15
+2026-04-06 16:36:16 | INFO     | [plan_generation] start | account=shadow
+2026-04-06 16:36:16 | INFO     | Model loaded from /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:36:16 | INFO     | Model loaded from /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:36:16 | INFO     | Generating plan using signal_date=2026-03-27, execution_date=2026-03-30
+2026-04-06 16:36:16 | INFO     | Using account state from 2026-03-27
+2026-04-06 16:36:16 | INFO     | Total Assets: 1,003,983.15, Cash: 20,896.14
+2026-04-06 16:36:18 | INFO     | Generating signals for 300 symbols...
+2026-04-06 16:36:18 | WARNING  | Skipping plan for 002001.SZ: No price
+2026-04-06 16:36:18 | WARNING  | Skipping plan for 600176.SH: No price
+2026-04-06 16:36:18 | WARNING  | Skipping plan for 300394.SZ: No price
+2026-04-06 16:36:18 | WARNING  | Skipping plan for 000338.SZ: No price
+2026-04-06 16:36:18 | INFO     | Plan saved to /home/liuming/.openclaw/workspace/SysQ/daily/2026-03-30/pre_open/plans/plan_2026-03-27_shadow.csv
+2026-04-06 16:36:18 | INFO     | Real sync template saved to /home/liuming/.openclaw/workspace/SysQ/daily/2026-03-30/pre_open/plans/real_sync_template_2026-03-27_shadow.csv
+2026-04-06 16:36:18 | INFO     | 
+   symbol side    score  score_rank  weight  amount     price     est_value  target_value  current_value   diff_value weight_method
+600219.SH  buy 1.031779           1     0.2   34000  5.900000 200600.003242  200796.62919            0.0 200796.62919  equal_weight
+600893.SH  buy 0.776733           2     0.2    4100 48.029999 196922.994995  200796.62919            0.0 200796.62919  equal_weight
+000630.SZ  buy 0.701914           3     0.2   34200  5.860000 200412.004566  200796.62919            0.0 200796.62919  equal_weight
+603993.SH  buy 0.686867           4     0.2   11400 17.580000 200411.999130  200796.62919            0.0 200796.62919  equal_weight
+2026-04-06 16:36:18 | INFO     | [plan] ready | account=shadow trades=4 buys=4 sells=0 total_value=798347.0019 symbols=["600219.SH", "600893.SH", "000630.SZ", "603993.SH"] signal_date=2026-03-27 execution_date=2026-03-30
+2026-04-06 16:36:18 | INFO     | [plan_generation] start | account=real
+2026-04-06 16:36:19 | INFO     | Model loaded from /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:36:19 | INFO     | Model loaded from /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:36:19 | INFO     | Generating plan using signal_date=2026-03-27, execution_date=2026-03-30
+2026-04-06 16:36:19 | INFO     | Using account state from 2026-03-13
+2026-04-06 16:36:19 | INFO     | Total Assets: 20,000.00, Cash: 20,000.00
+2026-04-06 16:36:21 | INFO     | Generating signals for 300 symbols...
+2026-04-06 16:36:21 | INFO     | Plan saved to /home/liuming/.openclaw/workspace/SysQ/daily/2026-03-30/pre_open/plans/plan_2026-03-27_real.csv
+2026-04-06 16:36:21 | INFO     | Real sync template saved to /home/liuming/.openclaw/workspace/SysQ/daily/2026-03-30/pre_open/plans/real_sync_template_2026-03-27_real.csv
+2026-04-06 16:36:21 | INFO     | 
+No trades planned.
+2026-04-06 16:36:21 | INFO     | [plan] no_plan | account=real trades=0 buys=0 sells=0 total_value=0 symbols=[] signal_date=2026-03-27 execution_date=2026-03-30
+2026-04-06 16:36:21 | INFO     | [report] saved | path=/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-30/pre_open/reports/daily_ops_pre_open_20260406_163621.json
+2026-04-06 16:36:21 | INFO     | [manifest] saved | path=/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-30/pre_open/manifests/daily_ops_manifest_2026-03-30.json
+2026-04-06 16:36:21 | INFO     | [daily_workflow] done | duration_seconds=12.4289 blockers=0
+== run signal_date=2026-03-30 execution_date=2026-03-31 ==
+2026-04-06 16:36:22 | INFO     | [daily_workflow] start | signal_date=2026-03-30 execution_date=2026-03-31 top_k=5 min_trade=5000 skip_update=true report_dir=/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-31/pre_open/reports
+[801852:MainThread](2026-04-06 16:36:23,215) INFO - qlib.Initialization - [config.py:452] - default_conf: client.
+[801852:MainThread](2026-04-06 16:36:23,216) INFO - qlib.Initialization - [__init__.py:75] - qlib successfully initialized based on client settings.
+[801852:MainThread](2026-04-06 16:36:23,216) INFO - qlib.Initialization - [__init__.py:77] - data_path={'__DEFAULT_FREQ': PosixPath('/home/liuming/.openclaw/workspace/SysQ/data/qlib_bin')}
+2026-04-06 16:36:23 | INFO     | Production model resolved from manifest: /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:36:23 | INFO     |   Manifest version: 2025-03-22-v1
+2026-04-06 16:36:23 | INFO     |   Status: active
+2026-04-06 16:36:23 | INFO     | [model_resolution] manifest | model_path=/home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:36:23 | INFO     | Current Model Age: -3 days (End Date: 2026-04-02)
+2026-04-06 16:36:23 | INFO     | [model_ready] done | model_path=/home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:36:23 | INFO     | Model loaded from /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:36:23 | INFO     | Model loaded from /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+[801852:MainThread](2026-04-06 16:36:23,546) INFO - qlib.Initialization - [config.py:452] - default_conf: client.
+[801852:MainThread](2026-04-06 16:36:23,547) INFO - qlib.Initialization - [__init__.py:75] - qlib successfully initialized based on client settings.
+[801852:MainThread](2026-04-06 16:36:23,548) INFO - qlib.Initialization - [__init__.py:77] - data_path={'__DEFAULT_FREQ': PosixPath('/home/liuming/.openclaw/workspace/SysQ/data/qlib_bin')}
+ModuleNotFoundError. CatBoostModel are skipped. (optional: maybe installing CatBoostModel can fix it.)
+ModuleNotFoundError. XGBModel is skipped(optional: maybe installing xgboost can fix it).
+ModuleNotFoundError.  PyTorch models are skipped (optional: maybe installing pytorch can fix it).
+2026-04-06 16:36:26 | INFO     | [readiness] ok | core_daily_status=ok pit_status=not_requested margin_status=not_requested aligned=true feature_rows=300 missing_ratio=0.0001 blockers=0 warnings=0
+2026-04-06 16:36:29 | INFO     | Generating signals for 300 symbols...
+2026-04-06 16:36:29 | INFO     | Signal basket saved to /home/liuming/.openclaw/workspace/SysQ/daily/2026-03-31/pre_open/signals/signal_basket_2026-03-30.csv
+2026-04-06 16:36:29 | INFO     | [shadow_account] simulate_previous_plan | plan_path=/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-30/pre_open/plans/plan_2026-03-27_shadow.csv signal_date=2026-03-30
+2026-04-06 16:36:29 | INFO     | Synced broker state for 2026-03-30 (Account: shadow). Total Assets: 1,003,983.15
+2026-04-06 16:36:29 | INFO     | Shadow Simulation for 2026-03-30 completed. Cash: 20,896.14, Total: 1,003,983.15
+2026-04-06 16:36:29 | INFO     | [plan_generation] start | account=shadow
+2026-04-06 16:36:29 | INFO     | Model loaded from /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:36:29 | INFO     | Model loaded from /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:36:29 | INFO     | Generating plan using signal_date=2026-03-30, execution_date=2026-03-31
+2026-04-06 16:36:29 | INFO     | Using account state from 2026-03-30
+2026-04-06 16:36:29 | INFO     | Total Assets: 1,003,983.15, Cash: 20,896.14
+2026-04-06 16:36:32 | INFO     | Generating signals for 300 symbols...
+2026-04-06 16:36:32 | WARNING  | Skipping plan for 002001.SZ: No price
+2026-04-06 16:36:32 | WARNING  | Skipping plan for 000338.SZ: No price
+2026-04-06 16:36:32 | WARNING  | Skipping plan for 600176.SH: No price
+2026-04-06 16:36:32 | WARNING  | Skipping plan for 300394.SZ: No price
+2026-04-06 16:36:32 | INFO     | Plan saved to /home/liuming/.openclaw/workspace/SysQ/daily/2026-03-31/pre_open/plans/plan_2026-03-30_shadow.csv
+2026-04-06 16:36:32 | INFO     | Real sync template saved to /home/liuming/.openclaw/workspace/SysQ/daily/2026-03-31/pre_open/plans/real_sync_template_2026-03-30_shadow.csv
+2026-04-06 16:36:32 | INFO     | 
+   symbol side    score  score_rank  weight  amount     price     est_value  target_value  current_value   diff_value weight_method
+600489.SH  buy 0.771566           1     0.2    7500 26.750000 200625.000000  200796.62919            0.0 200796.62919  equal_weight
+600893.SH  buy 0.545737           3     0.2    4100 48.619999 199341.995621  200796.62919            0.0 200796.62919  equal_weight
+603993.SH  buy 0.532921           4     0.2   11500 17.430000 200445.003510  200796.62919            0.0 200796.62919  equal_weight
+000630.SZ  buy 0.524478           5     0.2   33900  5.920000 200688.002586  200796.62919            0.0 200796.62919  equal_weight
+2026-04-06 16:36:32 | INFO     | [plan] ready | account=shadow trades=4 buys=4 sells=0 total_value=801100.0017 symbols=["600489.SH", "600893.SH", "603993.SH", "000630.SZ"] signal_date=2026-03-30 execution_date=2026-03-31
+2026-04-06 16:36:32 | INFO     | [plan_generation] start | account=real
+2026-04-06 16:36:32 | INFO     | Model loaded from /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:36:32 | INFO     | Model loaded from /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:36:32 | INFO     | Generating plan using signal_date=2026-03-30, execution_date=2026-03-31
+2026-04-06 16:36:32 | INFO     | Using account state from 2026-03-13
+2026-04-06 16:36:32 | INFO     | Total Assets: 20,000.00, Cash: 20,000.00
+2026-04-06 16:36:35 | INFO     | Generating signals for 300 symbols...
+2026-04-06 16:36:35 | INFO     | Plan saved to /home/liuming/.openclaw/workspace/SysQ/daily/2026-03-31/pre_open/plans/plan_2026-03-30_real.csv
+2026-04-06 16:36:35 | INFO     | Real sync template saved to /home/liuming/.openclaw/workspace/SysQ/daily/2026-03-31/pre_open/plans/real_sync_template_2026-03-30_real.csv
+2026-04-06 16:36:35 | INFO     | 
+No trades planned.
+2026-04-06 16:36:35 | INFO     | [plan] no_plan | account=real trades=0 buys=0 sells=0 total_value=0 symbols=[] signal_date=2026-03-30 execution_date=2026-03-31
+2026-04-06 16:36:35 | INFO     | [report] saved | path=/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-31/pre_open/reports/daily_ops_pre_open_20260406_163635.json
+2026-04-06 16:36:35 | INFO     | [manifest] saved | path=/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-31/pre_open/manifests/daily_ops_manifest_2026-03-31.json
+2026-04-06 16:36:35 | INFO     | [daily_workflow] done | duration_seconds=12.6302 blockers=0
+== run signal_date=2026-03-31 execution_date=2026-04-01 ==
+2026-04-06 16:36:36 | INFO     | [daily_workflow] start | signal_date=2026-03-31 execution_date=2026-04-01 top_k=5 min_trade=5000 skip_update=true report_dir=/home/liuming/.openclaw/workspace/SysQ/daily/2026-04-01/pre_open/reports
+[802067:MainThread](2026-04-06 16:36:36,806) INFO - qlib.Initialization - [config.py:452] - default_conf: client.
+[802067:MainThread](2026-04-06 16:36:36,808) INFO - qlib.Initialization - [__init__.py:75] - qlib successfully initialized based on client settings.
+[802067:MainThread](2026-04-06 16:36:36,808) INFO - qlib.Initialization - [__init__.py:77] - data_path={'__DEFAULT_FREQ': PosixPath('/home/liuming/.openclaw/workspace/SysQ/data/qlib_bin')}
+2026-04-06 16:36:36 | INFO     | Production model resolved from manifest: /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:36:36 | INFO     |   Manifest version: 2025-03-22-v1
+2026-04-06 16:36:36 | INFO     |   Status: active
+2026-04-06 16:36:36 | INFO     | [model_resolution] manifest | model_path=/home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:36:36 | INFO     | Current Model Age: -2 days (End Date: 2026-04-02)
+2026-04-06 16:36:36 | INFO     | [model_ready] done | model_path=/home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:36:37 | INFO     | Model loaded from /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:36:37 | INFO     | Model loaded from /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+[802067:MainThread](2026-04-06 16:36:37,134) INFO - qlib.Initialization - [config.py:452] - default_conf: client.
+[802067:MainThread](2026-04-06 16:36:37,135) INFO - qlib.Initialization - [__init__.py:75] - qlib successfully initialized based on client settings.
+[802067:MainThread](2026-04-06 16:36:37,135) INFO - qlib.Initialization - [__init__.py:77] - data_path={'__DEFAULT_FREQ': PosixPath('/home/liuming/.openclaw/workspace/SysQ/data/qlib_bin')}
+ModuleNotFoundError. CatBoostModel are skipped. (optional: maybe installing CatBoostModel can fix it.)
+ModuleNotFoundError. XGBModel is skipped(optional: maybe installing xgboost can fix it).
+ModuleNotFoundError.  PyTorch models are skipped (optional: maybe installing pytorch can fix it).
+2026-04-06 16:36:40 | INFO     | [readiness] ok | core_daily_status=ok pit_status=not_requested margin_status=not_requested aligned=true feature_rows=300 missing_ratio=0.0001 blockers=0 warnings=0
+2026-04-06 16:36:42 | INFO     | Generating signals for 300 symbols...
+2026-04-06 16:36:42 | INFO     | Signal basket saved to /home/liuming/.openclaw/workspace/SysQ/daily/2026-04-01/pre_open/signals/signal_basket_2026-03-31.csv
+2026-04-06 16:36:42 | INFO     | [shadow_account] simulate_previous_plan | plan_path=/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-31/pre_open/plans/plan_2026-03-30_shadow.csv signal_date=2026-03-31
+2026-04-06 16:36:42 | INFO     | Synced broker state for 2026-03-31 (Account: shadow). Total Assets: 1,003,983.15
+2026-04-06 16:36:42 | INFO     | Shadow Simulation for 2026-03-31 completed. Cash: 20,896.14, Total: 1,003,983.15
+2026-04-06 16:36:42 | INFO     | [plan_generation] start | account=shadow
+2026-04-06 16:36:42 | INFO     | Model loaded from /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:36:42 | INFO     | Model loaded from /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:36:42 | INFO     | Generating plan using signal_date=2026-03-31, execution_date=2026-04-01
+2026-04-06 16:36:42 | INFO     | Using account state from 2026-03-31
+2026-04-06 16:36:42 | INFO     | Total Assets: 1,003,983.15, Cash: 20,896.14
+2026-04-06 16:36:45 | INFO     | Generating signals for 300 symbols...
+2026-04-06 16:36:45 | WARNING  | Skipping plan for 002493.SZ: No price
+2026-04-06 16:36:45 | WARNING  | Skipping plan for 600176.SH: No price
+2026-04-06 16:36:45 | WARNING  | Skipping plan for 002001.SZ: No price
+2026-04-06 16:36:45 | WARNING  | Skipping plan for 000338.SZ: No price
+2026-04-06 16:36:45 | WARNING  | Skipping plan for 300394.SZ: No price
+2026-04-06 16:36:45 | INFO     | Plan saved to /home/liuming/.openclaw/workspace/SysQ/daily/2026-04-01/pre_open/plans/plan_2026-03-31_shadow.csv
+2026-04-06 16:36:45 | INFO     | Real sync template saved to /home/liuming/.openclaw/workspace/SysQ/daily/2026-04-01/pre_open/plans/real_sync_template_2026-03-31_shadow.csv
+2026-04-06 16:36:45 | INFO     | 
+   symbol side    score  score_rank  weight  amount     price     est_value  target_value  current_value   diff_value weight_method
+600489.SH  buy 0.877059           1     0.2    7500 26.709999 200324.993134  200796.62919            0.0 200796.62919  equal_weight
+600893.SH  buy 0.684297           2     0.2    4100 48.060001 197046.005630  200796.62919            0.0 200796.62919  equal_weight
+603993.SH  buy 0.636636           3     0.2   11700 17.150000 200654.995537  200796.62919            0.0 200796.62919  equal_weight
+600362.SH  buy 0.582487           4     0.2    4600 43.000000 197800.000000  200796.62919            0.0 200796.62919  equal_weight
+000630.SZ  buy 0.577310           5     0.2   34500  5.810000 200444.998026  200796.62919            0.0 200796.62919  equal_weight
+2026-04-06 16:36:45 | INFO     | [plan] ready | account=shadow trades=5 buys=5 sells=0 total_value=996270.9923 symbols=["600489.SH", "600893.SH", "603993.SH", "600362.SH", "000630.SZ"] signal_date=2026-03-31 execution_date=2026-04-01
+2026-04-06 16:36:45 | INFO     | [plan_generation] start | account=real
+2026-04-06 16:36:45 | INFO     | Model loaded from /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:36:45 | INFO     | Model loaded from /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:36:45 | INFO     | Generating plan using signal_date=2026-03-31, execution_date=2026-04-01
+2026-04-06 16:36:45 | INFO     | Using account state from 2026-03-13
+2026-04-06 16:36:45 | INFO     | Total Assets: 20,000.00, Cash: 20,000.00
+2026-04-06 16:36:48 | INFO     | Generating signals for 300 symbols...
+2026-04-06 16:36:48 | INFO     | Plan saved to /home/liuming/.openclaw/workspace/SysQ/daily/2026-04-01/pre_open/plans/plan_2026-03-31_real.csv
+2026-04-06 16:36:48 | INFO     | Real sync template saved to /home/liuming/.openclaw/workspace/SysQ/daily/2026-04-01/pre_open/plans/real_sync_template_2026-03-31_real.csv
+2026-04-06 16:36:48 | INFO     | 
+No trades planned.
+2026-04-06 16:36:48 | INFO     | [plan] no_plan | account=real trades=0 buys=0 sells=0 total_value=0 symbols=[] signal_date=2026-03-31 execution_date=2026-04-01
+2026-04-06 16:36:48 | INFO     | [report] saved | path=/home/liuming/.openclaw/workspace/SysQ/daily/2026-04-01/pre_open/reports/daily_ops_pre_open_20260406_163648.json
+2026-04-06 16:36:48 | INFO     | [manifest] saved | path=/home/liuming/.openclaw/workspace/SysQ/daily/2026-04-01/pre_open/manifests/daily_ops_manifest_2026-04-01.json
+2026-04-06 16:36:48 | INFO     | [daily_workflow] done | duration_seconds=12.328 blockers=0
+== run signal_date=2026-04-01 execution_date=2026-04-02 ==
+2026-04-06 16:36:49 | INFO     | [daily_workflow] start | signal_date=2026-04-01 execution_date=2026-04-02 top_k=5 min_trade=5000 skip_update=true report_dir=/home/liuming/.openclaw/workspace/SysQ/daily/2026-04-02/pre_open/reports
+[802286:MainThread](2026-04-06 16:36:50,107) INFO - qlib.Initialization - [config.py:452] - default_conf: client.
+[802286:MainThread](2026-04-06 16:36:50,109) INFO - qlib.Initialization - [__init__.py:75] - qlib successfully initialized based on client settings.
+[802286:MainThread](2026-04-06 16:36:50,110) INFO - qlib.Initialization - [__init__.py:77] - data_path={'__DEFAULT_FREQ': PosixPath('/home/liuming/.openclaw/workspace/SysQ/data/qlib_bin')}
+2026-04-06 16:36:50 | INFO     | Production model resolved from manifest: /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:36:50 | INFO     |   Manifest version: 2025-03-22-v1
+2026-04-06 16:36:50 | INFO     |   Status: active
+2026-04-06 16:36:50 | INFO     | [model_resolution] manifest | model_path=/home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:36:50 | INFO     | Current Model Age: -1 days (End Date: 2026-04-02)
+2026-04-06 16:36:50 | INFO     | [model_ready] done | model_path=/home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:36:50 | INFO     | Model loaded from /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:36:50 | INFO     | Model loaded from /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+[802286:MainThread](2026-04-06 16:36:50,445) INFO - qlib.Initialization - [config.py:452] - default_conf: client.
+[802286:MainThread](2026-04-06 16:36:50,446) INFO - qlib.Initialization - [__init__.py:75] - qlib successfully initialized based on client settings.
+[802286:MainThread](2026-04-06 16:36:50,446) INFO - qlib.Initialization - [__init__.py:77] - data_path={'__DEFAULT_FREQ': PosixPath('/home/liuming/.openclaw/workspace/SysQ/data/qlib_bin')}
+ModuleNotFoundError. CatBoostModel are skipped. (optional: maybe installing CatBoostModel can fix it.)
+ModuleNotFoundError. XGBModel is skipped(optional: maybe installing xgboost can fix it).
+ModuleNotFoundError.  PyTorch models are skipped (optional: maybe installing pytorch can fix it).
+2026-04-06 16:36:53 | INFO     | [readiness] ok | core_daily_status=ok pit_status=not_requested margin_status=not_requested aligned=true feature_rows=300 missing_ratio=0.0001 blockers=0 warnings=0
+2026-04-06 16:36:56 | INFO     | Generating signals for 300 symbols...
+2026-04-06 16:36:56 | INFO     | Signal basket saved to /home/liuming/.openclaw/workspace/SysQ/daily/2026-04-02/pre_open/signals/signal_basket_2026-04-01.csv
+2026-04-06 16:36:56 | INFO     | [shadow_account] simulate_previous_plan | plan_path=/home/liuming/.openclaw/workspace/SysQ/daily/2026-04-01/pre_open/plans/plan_2026-03-31_shadow.csv signal_date=2026-04-01
+2026-04-06 16:36:56 | INFO     | Synced broker state for 2026-04-01 (Account: shadow). Total Assets: 1,003,983.15
+2026-04-06 16:36:56 | INFO     | Shadow Simulation for 2026-04-01 completed. Cash: 20,896.14, Total: 1,003,983.15
+2026-04-06 16:36:56 | INFO     | [plan_generation] start | account=shadow
+2026-04-06 16:36:56 | INFO     | Model loaded from /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:36:56 | INFO     | Model loaded from /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:36:56 | INFO     | Generating plan using signal_date=2026-04-01, execution_date=2026-04-02
+2026-04-06 16:36:56 | INFO     | Using account state from 2026-04-01
+2026-04-06 16:36:56 | INFO     | Total Assets: 1,003,983.15, Cash: 20,896.14
+2026-04-06 16:36:59 | INFO     | Generating signals for 300 symbols...
+2026-04-06 16:36:59 | WARNING  | Skipping plan for 002493.SZ: No price
+2026-04-06 16:36:59 | WARNING  | Skipping plan for 000338.SZ: No price
+2026-04-06 16:36:59 | WARNING  | Skipping plan for 300394.SZ: No price
+2026-04-06 16:36:59 | WARNING  | Skipping plan for 002001.SZ: No price
+2026-04-06 16:36:59 | WARNING  | Skipping plan for 600176.SH: No price
+2026-04-06 16:36:59 | INFO     | Plan saved to /home/liuming/.openclaw/workspace/SysQ/daily/2026-04-02/pre_open/plans/plan_2026-04-01_shadow.csv
+2026-04-06 16:36:59 | INFO     | Real sync template saved to /home/liuming/.openclaw/workspace/SysQ/daily/2026-04-02/pre_open/plans/real_sync_template_2026-04-01_shadow.csv
+2026-04-06 16:36:59 | INFO     | 
+   symbol side    score  score_rank  weight  amount      price     est_value  target_value  current_value   diff_value weight_method
+600489.SH  buy 0.842794           1     0.2    7300  27.260000 198998.001671  200796.62919            0.0 200796.62919  equal_weight
+600547.SH  buy 0.586767           2     0.2    4800  41.130001 197424.005127  200796.62919            0.0 200796.62919  equal_weight
+600219.SH  buy 0.542601           3     0.2   32500   6.170000 200525.002480  200796.62919            0.0 200796.62919  equal_weight
+600010.SH  buy 0.477433           4     0.2   76300   2.630000 200669.008732  200796.62919            0.0 200796.62919  equal_weight
+002916.SZ  buy 0.441304           5     0.2     800 231.000000 184800.000000  200796.62919            0.0 200796.62919  equal_weight
+2026-04-06 16:36:59 | INFO     | [plan] ready | account=shadow trades=5 buys=5 sells=0 total_value=982416.018 symbols=["600489.SH", "600547.SH", "600219.SH", "600010.SH", "002916.SZ"] signal_date=2026-04-01 execution_date=2026-04-02
+2026-04-06 16:36:59 | INFO     | [plan_generation] start | account=real
+2026-04-06 16:36:59 | INFO     | Model loaded from /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:36:59 | INFO     | Model loaded from /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:36:59 | INFO     | Generating plan using signal_date=2026-04-01, execution_date=2026-04-02
+2026-04-06 16:36:59 | INFO     | Using account state from 2026-03-13
+2026-04-06 16:36:59 | INFO     | Total Assets: 20,000.00, Cash: 20,000.00
+2026-04-06 16:37:02 | INFO     | Generating signals for 300 symbols...
+2026-04-06 16:37:02 | INFO     | Plan saved to /home/liuming/.openclaw/workspace/SysQ/daily/2026-04-02/pre_open/plans/plan_2026-04-01_real.csv
+2026-04-06 16:37:02 | INFO     | Real sync template saved to /home/liuming/.openclaw/workspace/SysQ/daily/2026-04-02/pre_open/plans/real_sync_template_2026-04-01_real.csv
+2026-04-06 16:37:02 | INFO     | 
+No trades planned.
+2026-04-06 16:37:02 | INFO     | [plan] no_plan | account=real trades=0 buys=0 sells=0 total_value=0 symbols=[] signal_date=2026-04-01 execution_date=2026-04-02
+2026-04-06 16:37:02 | INFO     | [report] saved | path=/home/liuming/.openclaw/workspace/SysQ/daily/2026-04-02/pre_open/reports/daily_ops_pre_open_20260406_163702.json
+2026-04-06 16:37:02 | INFO     | [manifest] saved | path=/home/liuming/.openclaw/workspace/SysQ/daily/2026-04-02/pre_open/manifests/daily_ops_manifest_2026-04-02.json
+2026-04-06 16:37:02 | INFO     | [daily_workflow] done | duration_seconds=12.4192 blockers=0
+== run signal_date=2026-04-02 execution_date=2026-04-03 ==
+2026-04-06 16:37:03 | INFO     | [daily_workflow] start | signal_date=2026-04-02 execution_date=2026-04-03 top_k=5 min_trade=5000 skip_update=true report_dir=/home/liuming/.openclaw/workspace/SysQ/daily/2026-04-03/pre_open/reports
+[802505:MainThread](2026-04-06 16:37:03,494) INFO - qlib.Initialization - [config.py:452] - default_conf: client.
+[802505:MainThread](2026-04-06 16:37:03,496) INFO - qlib.Initialization - [__init__.py:75] - qlib successfully initialized based on client settings.
+[802505:MainThread](2026-04-06 16:37:03,496) INFO - qlib.Initialization - [__init__.py:77] - data_path={'__DEFAULT_FREQ': PosixPath('/home/liuming/.openclaw/workspace/SysQ/data/qlib_bin')}
+2026-04-06 16:37:03 | INFO     | Production model resolved from manifest: /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:37:03 | INFO     |   Manifest version: 2025-03-22-v1
+2026-04-06 16:37:03 | INFO     |   Status: active
+2026-04-06 16:37:03 | INFO     | [model_resolution] manifest | model_path=/home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:37:03 | INFO     | Current Model Age: 0 days (End Date: 2026-04-02)
+2026-04-06 16:37:03 | INFO     | [model_ready] done | model_path=/home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:37:03 | INFO     | Model loaded from /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:37:03 | INFO     | Model loaded from /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+[802505:MainThread](2026-04-06 16:37:03,824) INFO - qlib.Initialization - [config.py:452] - default_conf: client.
+[802505:MainThread](2026-04-06 16:37:03,825) INFO - qlib.Initialization - [__init__.py:75] - qlib successfully initialized based on client settings.
+[802505:MainThread](2026-04-06 16:37:03,826) INFO - qlib.Initialization - [__init__.py:77] - data_path={'__DEFAULT_FREQ': PosixPath('/home/liuming/.openclaw/workspace/SysQ/data/qlib_bin')}
+ModuleNotFoundError. CatBoostModel are skipped. (optional: maybe installing CatBoostModel can fix it.)
+ModuleNotFoundError. XGBModel is skipped(optional: maybe installing xgboost can fix it).
+ModuleNotFoundError.  PyTorch models are skipped (optional: maybe installing pytorch can fix it).
+2026-04-06 16:37:06 | INFO     | [readiness] ok | core_daily_status=ok pit_status=not_requested margin_status=not_requested aligned=true feature_rows=300 missing_ratio=0.0001 blockers=0 warnings=0
+2026-04-06 16:37:09 | INFO     | Generating signals for 300 symbols...
+2026-04-06 16:37:09 | INFO     | Signal basket saved to /home/liuming/.openclaw/workspace/SysQ/daily/2026-04-03/pre_open/signals/signal_basket_2026-04-02.csv
+2026-04-06 16:37:09 | INFO     | [shadow_account] simulate_previous_plan | plan_path=/home/liuming/.openclaw/workspace/SysQ/daily/2026-04-02/pre_open/plans/plan_2026-04-01_shadow.csv signal_date=2026-04-02
+2026-04-06 16:37:09 | INFO     | Synced broker state for 2026-04-02 (Account: shadow). Total Assets: 1,003,983.15
+2026-04-06 16:37:09 | INFO     | Shadow Simulation for 2026-04-02 completed. Cash: 20,896.14, Total: 1,003,983.15
+2026-04-06 16:37:09 | INFO     | [plan_generation] start | account=shadow
+2026-04-06 16:37:09 | INFO     | Model loaded from /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:37:09 | INFO     | Model loaded from /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:37:09 | INFO     | Generating plan using signal_date=2026-04-02, execution_date=2026-04-03
+2026-04-06 16:37:09 | INFO     | Using account state from 2026-04-02
+2026-04-06 16:37:09 | INFO     | Total Assets: 1,003,983.15, Cash: 20,896.14
+2026-04-06 16:37:12 | INFO     | Generating signals for 300 symbols...
+2026-04-06 16:37:12 | WARNING  | Skipping plan for 002001.SZ: No price
+2026-04-06 16:37:12 | WARNING  | Skipping plan for 600176.SH: No price
+2026-04-06 16:37:12 | WARNING  | Skipping plan for 000338.SZ: No price
+2026-04-06 16:37:12 | WARNING  | Skipping plan for 300394.SZ: No price
+2026-04-06 16:37:12 | WARNING  | Skipping plan for 002493.SZ: No price
+2026-04-06 16:37:12 | INFO     | Plan saved to /home/liuming/.openclaw/workspace/SysQ/daily/2026-04-03/pre_open/plans/plan_2026-04-02_shadow.csv
+2026-04-06 16:37:12 | INFO     | Real sync template saved to /home/liuming/.openclaw/workspace/SysQ/daily/2026-04-03/pre_open/plans/real_sync_template_2026-04-02_shadow.csv
+2026-04-06 16:37:12 | INFO     | 
+   symbol side    score  score_rank  weight  amount     price     est_value  target_value  current_value   diff_value weight_method
+600489.SH  buy 0.695399           1     0.2    7600 26.400000 200639.997101  200796.62919            0.0 200796.62919  equal_weight
+600010.SH  buy 0.546680           2     0.2   76600  2.620000 200691.991234  200796.62919            0.0 200796.62919  equal_weight
+603260.SH  buy 0.534798           3     0.2    5000 39.740002 198700.008392  200796.62919            0.0 200796.62919  equal_weight
+000630.SZ  buy 0.419334           4     0.2   34400  5.830000 200551.997375  200796.62919            0.0 200796.62919  equal_weight
+600219.SH  buy 0.415374           5     0.2   32400  6.180000 200231.994438  200796.62919            0.0 200796.62919  equal_weight
+2026-04-06 16:37:12 | INFO     | [plan] ready | account=shadow trades=5 buys=5 sells=0 total_value=1000815.9885 symbols=["600489.SH", "600010.SH", "603260.SH", "000630.SZ", "600219.SH"] signal_date=2026-04-02 execution_date=2026-04-03
+2026-04-06 16:37:12 | INFO     | [plan_generation] start | account=real
+2026-04-06 16:37:12 | INFO     | Model loaded from /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:37:12 | INFO     | Model loaded from /home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm
+2026-04-06 16:37:12 | INFO     | Generating plan using signal_date=2026-04-02, execution_date=2026-04-03
+2026-04-06 16:37:12 | INFO     | Using account state from 2026-03-13
+2026-04-06 16:37:12 | INFO     | Total Assets: 20,000.00, Cash: 20,000.00
+2026-04-06 16:37:15 | INFO     | Generating signals for 300 symbols...
+2026-04-06 16:37:15 | INFO     | Plan saved to /home/liuming/.openclaw/workspace/SysQ/daily/2026-04-03/pre_open/plans/plan_2026-04-02_real.csv
+2026-04-06 16:37:15 | INFO     | Real sync template saved to /home/liuming/.openclaw/workspace/SysQ/daily/2026-04-03/pre_open/plans/real_sync_template_2026-04-02_real.csv
+2026-04-06 16:37:15 | INFO     | 
+No trades planned.
+2026-04-06 16:37:15 | INFO     | [plan] no_plan | account=real trades=0 buys=0 sells=0 total_value=0 symbols=[] signal_date=2026-04-02 execution_date=2026-04-03
+2026-04-06 16:37:15 | INFO     | [report] saved | path=/home/liuming/.openclaw/workspace/SysQ/daily/2026-04-03/pre_open/reports/daily_ops_pre_open_20260406_163715.json
+2026-04-06 16:37:15 | INFO     | [manifest] saved | path=/home/liuming/.openclaw/workspace/SysQ/daily/2026-04-03/pre_open/manifests/daily_ops_manifest_2026-04-03.json
+2026-04-06 16:37:15 | INFO     | [daily_workflow] done | duration_seconds=12.6559 blockers=0

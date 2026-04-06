@@ -1,0 +1,2 @@
+symbol,amount,price,cost_basis,cash,total_assets,side,filled_amount,filled_price,fee,tax,total_cost,order_id,note
+CASH,0,0.0,0.0,20000.0,20000.0,hold,0,0.0,0.0,0.0,0.0,,placeholder_real_sync_from_2026-03-31_cash_only

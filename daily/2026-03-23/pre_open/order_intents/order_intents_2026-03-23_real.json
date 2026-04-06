@@ -1,0 +1,22 @@
+{
+  "artifact_type": "order_intents",
+  "signal_date": "2026-03-20",
+  "execution_date": "2026-03-23",
+  "account_name": "real",
+  "model_info": {
+    "model_path": "/home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm",
+    "model_name": "qlib_lgbm",
+    "top_k": 5,
+    "feature_set": "price_volume_expression_core_v1"
+  },
+  "assumptions": {
+    "top_k": 5,
+    "min_trade": 5000,
+    "shadow_cash": 1000000.0,
+    "real_cash": 20000.0,
+    "t1_rule": "new_buy_not_sellable_until_next_session",
+    "execution_bucket": "after_sell_cash"
+  },
+  "intent_count": 0,
+  "intents": []
+}

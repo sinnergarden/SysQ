@@ -1,0 +1,101 @@
+{
+  "artifact_type": "order_intents",
+  "signal_date": "2026-03-24",
+  "execution_date": "2026-03-25",
+  "account_name": "shadow",
+  "model_info": {
+    "model_path": "/home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm",
+    "model_name": "qlib_lgbm",
+    "top_k": 5,
+    "feature_set": "price_volume_expression_core_v1"
+  },
+  "assumptions": {
+    "top_k": 5,
+    "min_trade": 5000,
+    "shadow_cash": 1000000.0,
+    "real_cash": 20000.0,
+    "t1_rule": "new_buy_not_sellable_until_next_session",
+    "execution_bucket": "after_sell_cash"
+  },
+  "intent_count": 3,
+  "intents": [
+    {
+      "intent_id": "2026-03-25:shadow:buy:600346.SH",
+      "account_name": "shadow",
+      "symbol": "600346.SH",
+      "side": "buy",
+      "amount": 9700,
+      "price": 20.290000915527344,
+      "est_value": 196813.00888061523,
+      "score": 0.5085660673773579,
+      "score_rank": 3,
+      "weight": 0.2,
+      "target_value": 198546.62763822937,
+      "current_value": 0.0,
+      "diff_value": 198546.62763822937,
+      "execution_bucket": "review",
+      "cash_dependency": "review",
+      "t1_rule": "review",
+      "plan_role": "target_portfolio_delta",
+      "price_basis": {
+        "date": "2026-03-24",
+        "field": "close",
+        "label": "close@2026-03-24 -> next-session execution plan"
+      },
+      "status": "planned",
+      "note": ""
+    },
+    {
+      "intent_id": "2026-03-25:shadow:buy:600219.SH",
+      "account_name": "shadow",
+      "symbol": "600219.SH",
+      "side": "buy",
+      "amount": 33700,
+      "price": 5.880000114440918,
+      "est_value": 198156.00385665894,
+      "score": 0.5006717555466855,
+      "score_rank": 4,
+      "weight": 0.2,
+      "target_value": 198546.62763822937,
+      "current_value": 0.0,
+      "diff_value": 198546.62763822937,
+      "execution_bucket": "review",
+      "cash_dependency": "review",
+      "t1_rule": "review",
+      "plan_role": "target_portfolio_delta",
+      "price_basis": {
+        "date": "2026-03-24",
+        "field": "close",
+        "label": "close@2026-03-24 -> next-session execution plan"
+      },
+      "status": "planned",
+      "note": ""
+    },
+    {
+      "intent_id": "2026-03-25:shadow:buy:000630.SZ",
+      "account_name": "shadow",
+      "symbol": "000630.SZ",
+      "side": "buy",
+      "amount": 34100,
+      "price": 5.809999942779541,
+      "est_value": 198120.99804878235,
+      "score": 0.4833139837464148,
+      "score_rank": 5,
+      "weight": 0.2,
+      "target_value": 198546.62763822937,
+      "current_value": 0.0,
+      "diff_value": 198546.62763822937,
+      "execution_bucket": "review",
+      "cash_dependency": "review",
+      "t1_rule": "review",
+      "plan_role": "target_portfolio_delta",
+      "price_basis": {
+        "date": "2026-03-24",
+        "field": "close",
+        "label": "close@2026-03-24 -> next-session execution plan"
+      },
+      "status": "planned",
+      "note": ""
+    }
+  ]
+}

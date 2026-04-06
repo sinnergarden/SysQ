@@ -1,0 +1,85 @@
+{
+  "workflow": "daily_ops_post_close",
+  "run_id": "20260406_170647",
+  "timestamp": "2026-04-06T17:06:47.626546",
+  "status": "partial",
+  "signal_date": "2026-03-20",
+  "execution_date": "2026-03-23",
+  "data_status": {
+    "raw_latest": "2026-04-03",
+    "qlib_latest": "2026-04-03",
+    "aligned": true,
+    "health_ok": true
+  },
+  "model_info": {},
+  "plan_summary": {},
+  "blockers": [
+    "real_sync missing: carried forward latest real state as no-fill placeholder"
+  ],
+  "notes": [],
+  "sections": [
+    {
+      "name": "Reconciliation",
+      "status": "success",
+      "message": "",
+      "metrics": {
+        "cash": {
+          "real": 20000.0,
+          "shadow": 16919.154980926483,
+          "diff": 3080.8450190735166
+        },
+        "total_assets": {
+          "real": 20000.0,
+          "shadow": 999705.1641972351,
+          "diff": -979705.1641972351
+        },
+        "position_count": {
+          "real": 0.0,
+          "shadow": 5.0,
+          "diff": -5.0
+        }
+      },
+      "details": {
+        "real_trades_count": 0,
+        "position_gaps_count": 5
+      }
+    },
+    {
+      "name": "Signal Quality",
+      "status": "success",
+      "message": "",
+      "metrics": {
+        "as_of_date": "2026-03-23",
+        "status": "success",
+        "data_quality_status": "success",
+        "horizon_1d": {
+          "status": "missing",
+          "reason": "no_matching_vintage"
+        },
+        "horizon_2d": {
+          "status": "missing",
+          "reason": "no_matching_vintage"
+        },
+        "horizon_3d": {
+          "status": "missing",
+          "reason": "no_matching_vintage"
+        },
+        "recent_vintage_count": 0,
+        "recent_vintage_win_rate": null,
+        "recent_vintage_avg_weighted_return": null,
+        "recent_vintage_avg_excess_return": null
+      },
+      "details": {}
+    }
+  ],
+  "artifacts": {
+    "summary": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-23/post_close/reconciliation/reconcile_summary_2026-03-23.csv",
+    "positions": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-23/post_close/reconciliation/reconcile_positions_2026-03-23.csv",
+    "real_trades": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-23/post_close/reconciliation/reconcile_real_trades_2026-03-23.csv",
+    "real_sync_snapshot": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-23/post_close/snapshots/real_sync_snapshot_2026-03-23.csv",
+    "signal_quality_vintages": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-23/post_close/reports/signal_quality_vintages_2026-03-23.csv",
+    "signal_quality_summary": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-23/post_close/reports/signal_quality_summary_2026-03-23.json",
+    "account_db": "/home/liuming/.openclaw/workspace/SysQ/data/meta/real_account.db"
+  },
+  "duration_seconds": 0.3462564945220947
+}

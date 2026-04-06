@@ -1,0 +1,90 @@
+{
+  "workflow": "daily_ops_pre_open",
+  "run_id": "20260406_163648",
+  "timestamp": "2026-04-06T16:36:48.830307",
+  "status": "partial",
+  "signal_date": "2026-03-31",
+  "execution_date": "2026-04-01",
+  "data_status": {
+    "raw_latest": "2026-04-03",
+    "qlib_latest": "2026-04-03",
+    "aligned": true,
+    "health_ok": true,
+    "expected_latest_date": "2026-03-31",
+    "feature_rows": 300,
+    "feature_cols": 158,
+    "missing_ratio": 6.329113924050633e-05,
+    "core_daily_status": "ok",
+    "pit_status": "not_requested",
+    "margin_status": "not_requested",
+    "blocking_issues": [],
+    "warnings": []
+  },
+  "model_info": {
+    "model_path": "/home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm",
+    "model_name": "qlib_lgbm",
+    "top_k": 5,
+    "feature_set": "price_volume_expression_core_v1"
+  },
+  "plan_summary": {},
+  "blockers": [],
+  "notes": [
+    "top_k=5",
+    "min_trade=5000",
+    "shadow_cash=1000000.0",
+    "real_cash=20000.0"
+  ],
+  "sections": [
+    {
+      "name": "Shadow Account Plan",
+      "status": "success",
+      "message": "",
+      "metrics": {
+        "account": "shadow",
+        "status": "ready",
+        "trades": 5,
+        "symbols": [
+          "600489.SH",
+          "600893.SH",
+          "603993.SH",
+          "600362.SH",
+          "000630.SZ"
+        ],
+        "buy_trades": 5,
+        "sell_trades": 0,
+        "total_value": 996270.9923267365,
+        "signal_date": "2026-03-31",
+        "execution_date": "2026-04-01"
+      },
+      "details": {}
+    },
+    {
+      "name": "Real Account Plan",
+      "status": "skipped",
+      "message": "",
+      "metrics": {
+        "account": "real",
+        "status": "empty_plan",
+        "trades": 0,
+        "symbols": [],
+        "buy_trades": 0,
+        "sell_trades": 0,
+        "total_value": 0.0,
+        "signal_date": "2026-03-31",
+        "execution_date": "2026-04-01"
+      },
+      "details": {}
+    }
+  ],
+  "artifacts": {
+    "shadow_plan": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-04-01/pre_open/plans/plan_2026-03-31_shadow.csv",
+    "real_plan": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-04-01/pre_open/plans/plan_2026-03-31_real.csv",
+    "shadow_real_sync_template": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-04-01/pre_open/plans/real_sync_template_2026-03-31_shadow.csv",
+    "real_real_sync_template": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-04-01/pre_open/plans/real_sync_template_2026-03-31_real.csv",
+    "shadow_order_intents": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-04-01/pre_open/order_intents/order_intents_2026-04-01_shadow.json",
+    "real_order_intents": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-04-01/pre_open/order_intents/order_intents_2026-04-01_real.json",
+    "account_db": "/home/liuming/.openclaw/workspace/SysQ/data/meta/real_account.db",
+    "signal_basket": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-04-01/pre_open/signals/signal_basket_2026-03-31.csv"
+  },
+  "duration_seconds": 12.327975511550903
+}

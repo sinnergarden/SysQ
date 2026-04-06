@@ -9,10 +9,11 @@ Purpose:
 Typical usage:
 - python scripts/run_post_close.py --date 2026-03-20 --real_sync broker/real_sync_2026-03-20.csv
 - python scripts/run_post_close.py --date 2026-03-20 --real_sync broker/miniqmt_readback_2026-03-20.json
+- python scripts/run_post_close.py --date 2026-03-20  # fallback: carry forward latest real state when no broker sync is available
 
 Key args:
 - --date: trading date being reconciled
-- --real_sync: broker/account CSV or MiniQMT readback JSON after market close
+- --real_sync: optional broker/account CSV or MiniQMT readback JSON after market close
 - --db_path / --output_dir / --report_dir / --plan_dir: redirect operational artifacts outside SysQ/data
 - --execution_date: optional execution date override
 - --no_report: skip JSON run report
@@ -35,6 +36,7 @@ from qsys.live.daily_artifacts import archive_daily_artifacts, build_daily_summa
 from qsys.live.ops_manifest import update_manifest
 from qsys.live.ops_paths import build_stage_paths, find_plan_path_for_execution_date, resolve_account_db_path
 from qsys.live.reconciliation import (
+    build_placeholder_real_sync_frame,
     build_reconciliation_result,
     reconciliation_to_markdown,
     sync_real_account_from_csv,
@@ -93,7 +95,10 @@ def main():
         description="Post-close workflow: sync real account CSV and reconcile against shadow account"
     )
     parser.add_argument("--date", required=True, help="Trading date to reconcile (YYYY-MM-DD)")
-    parser.add_argument("--real_sync", required=True, help="Broker/account CSV or MiniQMT readback JSON exported after market close")
+    parser.add_argument(
+        "--real_sync",
+        help="Broker/account CSV or MiniQMT readback JSON exported after market close; if omitted, carry forward the latest real state as a no-fill placeholder",
+    )
     parser.add_argument("--db_path", help="SQLite account database path (default: data/meta/real_account.db)")
     parser.add_argument(
         "--output_dir",
@@ -126,7 +131,7 @@ def main():
     args.report_dir = resolved_paths["report_dir"]
     manifest_dir = resolved_paths["manifest_dir"]
     args.plan_dir = resolved_paths["plan_dir"]
-    args.real_sync = _resolve_cli_path(args.real_sync)
+    args.real_sync = _resolve_cli_path(args.real_sync) if args.real_sync else None
     
     # Get data status for report
     try:
@@ -171,13 +176,30 @@ def main():
         except Exception:
             pass
 
-    normalized = sync_real_account_from_csv(
-        account,
-        account_name=args.real_account_name,
-        sync_path=args.real_sync,
-        date=args.date,
-        persist_trade_log=True,
-    )
+    if args.real_sync:
+        normalized = sync_real_account_from_csv(
+            account,
+            account_name=args.real_account_name,
+            sync_path=args.real_sync,
+            date=args.date,
+            persist_trade_log=True,
+        )
+    else:
+        normalized = build_placeholder_real_sync_frame(
+            account,
+            date=args.date,
+            account_name=args.real_account_name,
+        )
+        account.sync_broker_state(
+            date=args.date,
+            cash=float(normalized["cash"].dropna().iloc[0]),
+            positions=normalized[["symbol", "amount", "price", "cost_basis"]][normalized["symbol"] != "CASH"].reset_index(drop=True),
+            total_assets=float(normalized["total_assets"].dropna().iloc[0]),
+            account_name=args.real_account_name,
+        )
+        account.clear_trade_log(date=args.date, account_name=args.real_account_name)
+        blockers.append("real_sync missing: carried forward latest real state as no-fill placeholder")
+        log.warning("real_sync missing for %s; carrying forward latest real state as placeholder", args.date)
 
     result = build_reconciliation_result(
         account,

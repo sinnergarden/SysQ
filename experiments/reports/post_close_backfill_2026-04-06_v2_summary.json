@@ -1,0 +1,80 @@
+{
+  "post_close": [
+    {
+      "execution_date": "2026-03-23",
+      "has_reconciliation": true,
+      "has_snapshots": true,
+      "has_reports": true,
+      "has_manifests": true
+    },
+    {
+      "execution_date": "2026-03-24",
+      "has_reconciliation": true,
+      "has_snapshots": true,
+      "has_reports": true,
+      "has_manifests": true
+    },
+    {
+      "execution_date": "2026-03-25",
+      "has_reconciliation": true,
+      "has_snapshots": true,
+      "has_reports": true,
+      "has_manifests": true
+    },
+    {
+      "execution_date": "2026-03-26",
+      "has_reconciliation": true,
+      "has_snapshots": true,
+      "has_reports": true,
+      "has_manifests": true
+    },
+    {
+      "execution_date": "2026-03-27",
+      "has_reconciliation": true,
+      "has_snapshots": true,
+      "has_reports": true,
+      "has_manifests": true
+    },
+    {
+      "execution_date": "2026-03-30",
+      "has_reconciliation": true,
+      "has_snapshots": true,
+      "has_reports": true,
+      "has_manifests": true
+    },
+    {
+      "execution_date": "2026-03-31",
+      "has_reconciliation": true,
+      "has_snapshots": true,
+      "has_reports": true,
+      "has_manifests": true
+    },
+    {
+      "execution_date": "2026-04-01",
+      "has_reconciliation": true,
+      "has_snapshots": true,
+      "has_reports": true,
+      "has_manifests": true
+    },
+    {
+      "execution_date": "2026-04-02",
+      "has_reconciliation": true,
+      "has_snapshots": true,
+      "has_reports": true,
+      "has_manifests": true
+    },
+    {
+      "execution_date": "2026-04-03",
+      "has_reconciliation": true,
+      "has_snapshots": true,
+      "has_reports": true,
+      "has_manifests": true
+    }
+  ],
+  "derived_counts": {
+    "position_gaps.csv": 50,
+    "order_intents.csv": 43,
+    "signal_baskets.csv": 50,
+    "reconciliation_summary.csv": 30
+  }
+}

@@ -1,0 +1,109 @@
+{
+  "workflow": "daily_ops_post_close",
+  "run_id": "20260406_170656",
+  "timestamp": "2026-04-06T17:06:56.462200",
+  "status": "partial",
+  "signal_date": "2026-03-26",
+  "execution_date": "2026-03-27",
+  "data_status": {
+    "raw_latest": "2026-04-03",
+    "qlib_latest": "2026-04-03",
+    "aligned": true,
+    "health_ok": true
+  },
+  "model_info": {},
+  "plan_summary": {},
+  "blockers": [
+    "real_sync missing: carried forward latest real state as no-fill placeholder"
+  ],
+  "notes": [],
+  "sections": [
+    {
+      "name": "Reconciliation",
+      "status": "success",
+      "message": "",
+      "metrics": {
+        "cash": {
+          "real": 20000.0,
+          "shadow": 20896.144434747664,
+          "diff": -896.1444347476645
+        },
+        "total_assets": {
+          "real": 20000.0,
+          "shadow": 1003983.1459491824,
+          "diff": -983983.1459491824
+        },
+        "position_count": {
+          "real": 0.0,
+          "shadow": 5.0,
+          "diff": -5.0
+        }
+      },
+      "details": {
+        "real_trades_count": 0,
+        "position_gaps_count": 5
+      }
+    },
+    {
+      "name": "Signal Quality",
+      "status": "success",
+      "message": "",
+      "metrics": {
+        "as_of_date": "2026-03-27",
+        "status": "success",
+        "data_quality_status": "success",
+        "horizon_1d": {
+          "status": "success",
+          "reason": "ok",
+          "signal_date": "2026-03-26",
+          "holding_days": 1,
+          "equal_weight_return": 0.004980885088463794,
+          "weighted_return": 0.0049808850884637944,
+          "benchmark_return": 0.006527236537960161,
+          "weighted_excess_return": -0.0015463514494963668,
+          "basket_size": 5,
+          "coverage_ratio": 1.0
+        },
+        "horizon_2d": {
+          "status": "success",
+          "reason": "ok",
+          "signal_date": "2026-03-25",
+          "holding_days": 2,
+          "equal_weight_return": -0.010557880798868569,
+          "weighted_return": -0.01055788079886857,
+          "benchmark_return": -0.007479163362310755,
+          "weighted_excess_return": -0.003078717436557816,
+          "basket_size": 5,
+          "coverage_ratio": 1.0
+        },
+        "horizon_3d": {
+          "status": "success",
+          "reason": "ok",
+          "signal_date": "2026-03-24",
+          "holding_days": 3,
+          "equal_weight_return": 0.03769090449030297,
+          "weighted_return": 0.037690904490302976,
+          "benchmark_return": 0.005831788421806496,
+          "weighted_excess_return": 0.03185911606849648,
+          "basket_size": 5,
+          "coverage_ratio": 1.0
+        },
+        "recent_vintage_count": 4,
+        "recent_vintage_win_rate": 0.75,
+        "recent_vintage_avg_weighted_return": 0.020803539781249727,
+        "recent_vintage_avg_excess_return": 0.014365995937897058
+      },
+      "details": {}
+    }
+  ],
+  "artifacts": {
+    "summary": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-27/post_close/reconciliation/reconcile_summary_2026-03-27.csv",
+    "positions": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-27/post_close/reconciliation/reconcile_positions_2026-03-27.csv",
+    "real_trades": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-27/post_close/reconciliation/reconcile_real_trades_2026-03-27.csv",
+    "real_sync_snapshot": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-27/post_close/snapshots/real_sync_snapshot_2026-03-27.csv",
+    "signal_quality_vintages": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-27/post_close/reports/signal_quality_vintages_2026-03-27.csv",
+    "signal_quality_summary": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-27/post_close/reports/signal_quality_summary_2026-03-27.json",
+    "account_db": "/home/liuming/.openclaw/workspace/SysQ/data/meta/real_account.db"
+  },
+  "duration_seconds": 1.8515286445617676
+}

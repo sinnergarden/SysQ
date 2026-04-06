@@ -1,0 +1,92 @@
+{
+  "workflow": "daily_ops_pre_open",
+  "run_id": "20260322_212231",
+  "timestamp": "2026-03-22T21:22:31.400126",
+  "status": "success",
+  "signal_date": "2026-03-20",
+  "execution_date": "2026-03-23",
+  "data_status": {
+    "raw_latest": "2026-03-20",
+    "qlib_latest": "2026-03-20",
+    "aligned": true,
+    "health_ok": true,
+    "expected_latest_date": "2026-03-20",
+    "feature_rows": 300,
+    "feature_cols": 158,
+    "missing_ratio": 8.438818565400845e-05
+  },
+  "model_info": {
+    "model_path": "/home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm",
+    "model_name": "qlib_lgbm",
+    "feature_set": "alpha158"
+  },
+  "plan_summary": {},
+  "blockers": [],
+  "notes": [
+    "top_k=30",
+    "min_trade=5000",
+    "shadow_cash=1000000.0",
+    "real_cash=20000.0"
+  ],
+  "sections": [
+    {
+      "name": "Shadow Account Plan",
+      "status": "success",
+      "message": "",
+      "metrics": {
+        "account": "shadow",
+        "trades": 30,
+        "symbols": [
+          "600176.SH",
+          "002493.SZ",
+          "002001.SZ",
+          "000338.SZ",
+          "300394.SZ",
+          "601868.SH",
+          "002384.SZ",
+          "300316.SZ",
+          "000630.SZ",
+          "600115.SH",
+          "600893.SH",
+          "600346.SH",
+          "603993.SH",
+          "688008.SH",
+          "601988.SH",
+          "600362.SH",
+          "601018.SH",
+          "601009.SH",
+          "601888.SH",
+          "000768.SZ",
+          "603799.SH",
+          "002463.SZ",
+          "600029.SH",
+          "600515.SH",
+          "300418.SZ",
+          "601939.SH",
+          "300347.SZ",
+          "600372.SH",
+          "300122.SZ",
+          "600025.SH"
+        ],
+        "total_value": 943252.9974937439
+      },
+      "details": {}
+    },
+    {
+      "name": "Real Account Plan",
+      "status": "success",
+      "message": "",
+      "metrics": {
+        "account": "real",
+        "trades": 0,
+        "symbols": []
+      },
+      "details": {}
+    }
+  ],
+  "artifacts": {
+    "shadow_plan": "data/plan_2026-03-20_shadow.csv",
+    "real_plan": "data/plan_2026-03-20_real.csv"
+  },
+  "duration_seconds": 10.65154504776001
+}

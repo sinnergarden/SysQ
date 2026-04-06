@@ -1,0 +1,153 @@
+{
+  "artifact_type": "order_intents",
+  "signal_date": "2026-04-01",
+  "execution_date": "2026-04-02",
+  "account_name": "shadow",
+  "model_info": {
+    "model_path": "/home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm",
+    "model_name": "qlib_lgbm",
+    "top_k": 5,
+    "feature_set": "price_volume_expression_core_v1"
+  },
+  "assumptions": {
+    "top_k": 5,
+    "min_trade": 5000,
+    "shadow_cash": 1000000.0,
+    "real_cash": 20000.0,
+    "t1_rule": "new_buy_not_sellable_until_next_session",
+    "execution_bucket": "after_sell_cash"
+  },
+  "intent_count": 5,
+  "intents": [
+    {
+      "intent_id": "2026-04-02:shadow:buy:600489.SH",
+      "account_name": "shadow",
+      "symbol": "600489.SH",
+      "side": "buy",
+      "amount": 7300,
+      "price": 27.260000228881836,
+      "est_value": 198998.0016708374,
+      "score": 0.8427940102189694,
+      "score_rank": 1,
+      "weight": 0.2,
+      "target_value": 200796.6291898365,
+      "current_value": 0.0,
+      "diff_value": 200796.6291898365,
+      "execution_bucket": "review",
+      "cash_dependency": "review",
+      "t1_rule": "review",
+      "plan_role": "target_portfolio_delta",
+      "price_basis": {
+        "date": "2026-04-01",
+        "field": "close",
+        "label": "close@2026-04-01 -> next-session execution plan"
+      },
+      "status": "planned",
+      "note": ""
+    },
+    {
+      "intent_id": "2026-04-02:shadow:buy:600547.SH",
+      "account_name": "shadow",
+      "symbol": "600547.SH",
+      "side": "buy",
+      "amount": 4800,
+      "price": 41.130001068115234,
+      "est_value": 197424.00512695312,
+      "score": 0.5867668014366544,
+      "score_rank": 2,
+      "weight": 0.2,
+      "target_value": 200796.6291898365,
+      "current_value": 0.0,
+      "diff_value": 200796.6291898365,
+      "execution_bucket": "review",
+      "cash_dependency": "review",
+      "t1_rule": "review",
+      "plan_role": "target_portfolio_delta",
+      "price_basis": {
+        "date": "2026-04-01",
+        "field": "close",
+        "label": "close@2026-04-01 -> next-session execution plan"
+      },
+      "status": "planned",
+      "note": ""
+    },
+    {
+      "intent_id": "2026-04-02:shadow:buy:600219.SH",
+      "account_name": "shadow",
+      "symbol": "600219.SH",
+      "side": "buy",
+      "amount": 32500,
+      "price": 6.170000076293945,
+      "est_value": 200525.00247955322,
+      "score": 0.5426008688385097,
+      "score_rank": 3,
+      "weight": 0.2,
+      "target_value": 200796.6291898365,
+      "current_value": 0.0,
+      "diff_value": 200796.6291898365,
+      "execution_bucket": "review",
+      "cash_dependency": "review",
+      "t1_rule": "review",
+      "plan_role": "target_portfolio_delta",
+      "price_basis": {
+        "date": "2026-04-01",
+        "field": "close",
+        "label": "close@2026-04-01 -> next-session execution plan"
+      },
+      "status": "planned",
+      "note": ""
+    },
+    {
+      "intent_id": "2026-04-02:shadow:buy:600010.SH",
+      "account_name": "shadow",
+      "symbol": "600010.SH",
+      "side": "buy",
+      "amount": 76300,
+      "price": 2.630000114440918,
+      "est_value": 200669.00873184204,
+      "score": 0.4774325257931632,
+      "score_rank": 4,
+      "weight": 0.2,
+      "target_value": 200796.6291898365,
+      "current_value": 0.0,
+      "diff_value": 200796.6291898365,
+      "execution_bucket": "review",
+      "cash_dependency": "review",
+      "t1_rule": "review",
+      "plan_role": "target_portfolio_delta",
+      "price_basis": {
+        "date": "2026-04-01",
+        "field": "close",
+        "label": "close@2026-04-01 -> next-session execution plan"
+      },
+      "status": "planned",
+      "note": ""
+    },
+    {
+      "intent_id": "2026-04-02:shadow:buy:002916.SZ",
+      "account_name": "shadow",
+      "symbol": "002916.SZ",
+      "side": "buy",
+      "amount": 800,
+      "price": 231.0,
+      "est_value": 184800.0,
+      "score": 0.441304107733527,
+      "score_rank": 5,
+      "weight": 0.2,
+      "target_value": 200796.6291898365,
+      "current_value": 0.0,
+      "diff_value": 200796.6291898365,
+      "execution_bucket": "review",
+      "cash_dependency": "review",
+      "t1_rule": "review",
+      "plan_role": "target_portfolio_delta",
+      "price_basis": {
+        "date": "2026-04-01",
+        "field": "close",
+        "label": "close@2026-04-01 -> next-session execution plan"
+      },
+      "status": "planned",
+      "note": ""
+    }
+  ]
+}

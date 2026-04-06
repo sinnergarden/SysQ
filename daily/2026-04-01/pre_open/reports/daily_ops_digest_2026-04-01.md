@@ -1,0 +1,27 @@
+# Daily Ops Digest 2026-04-01
+
+- signal_date: 2026-03-31
+- execution_date: 2026-04-01
+- blockers: 0
+
+## Current Day Predictions
+- shadow: status=ready, trades=5, buys=5, sells=0, value=996,271, symbols=600489.SH, 600893.SH, 603993.SH, 600362.SH, 000630.SZ
+- real: status=no_plan, trades=0, buys=0, sells=0, value=0, symbols=-
+
+## Recent Review
+- No archived post-close reviews yet.
+
+## Shadow Account
+- status=available, as_of=2026-03-31, cash=20896.144434747664, total_assets=1003983.1459491824, positions=5
+
+## Detail Paths
+- pre_open.account_db: /home/liuming/.openclaw/workspace/SysQ/data/meta/real_account.db
+- pre_open.manifest: /home/liuming/.openclaw/workspace/SysQ/daily/2026-04-01/pre_open/manifests/daily_ops_manifest_2026-04-01.json
+- pre_open.real_order_intents: /home/liuming/.openclaw/workspace/SysQ/daily/2026-04-01/pre_open/order_intents/order_intents_2026-04-01_real.json
+- pre_open.real_plan: /home/liuming/.openclaw/workspace/SysQ/daily/2026-04-01/pre_open/plans/plan_2026-03-31_real.csv
+- pre_open.real_real_sync_template: /home/liuming/.openclaw/workspace/SysQ/daily/2026-04-01/pre_open/plans/real_sync_template_2026-03-31_real.csv
+- pre_open.report: /home/liuming/.openclaw/workspace/SysQ/daily/2026-04-01/pre_open/reports/daily_ops_pre_open_20260406_163648.json
+- pre_open.shadow_order_intents: /home/liuming/.openclaw/workspace/SysQ/daily/2026-04-01/pre_open/order_intents/order_intents_2026-04-01_shadow.json
+- pre_open.shadow_plan: /home/liuming/.openclaw/workspace/SysQ/daily/2026-04-01/pre_open/plans/plan_2026-03-31_shadow.csv
+- pre_open.shadow_real_sync_template: /home/liuming/.openclaw/workspace/SysQ/daily/2026-04-01/pre_open/plans/real_sync_template_2026-03-31_shadow.csv
+- pre_open.signal_basket: /home/liuming/.openclaw/workspace/SysQ/daily/2026-04-01/pre_open/signals/signal_basket_2026-03-31.csv

@@ -1,0 +1,1 @@
+symbol,side,amount,price,est_value,weight,score,score_rank,target_value,current_value,diff_value,weight_method,plan_role,execution_bucket,cash_dependency,t1_rule,account_name,signal_date,plan_date,execution_date,price_basis_date,price_basis_field,price_basis_label,status,filled_amount,filled_price,fee,tax,total_cost,order_id,note,cash,total_assets,cost_basis
