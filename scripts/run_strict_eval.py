@@ -8,7 +8,7 @@ Purpose:
 - emit structured strict-eval report
 
 Typical usage:
-- python scripts/run_strict_eval.py --baseline data/models/qlib_lgbm --extended data/models/qlib_lgbm_extended
+- python scripts/run_strict_eval.py --baseline data/models/qlib_lgbm_phase123 --extended data/models/qlib_lgbm_phase123_extended
 
 Key args:
 - --baseline / --extended: model paths to compare
@@ -37,13 +37,13 @@ def main():
     )
     parser.add_argument(
         "--baseline",
-        default=str(project_root / "data" / "models" / "qlib_lgbm"),
-        help="Path to baseline model (default: data/models/qlib_lgbm)"
+        default=str(project_root / "data" / "models" / "qlib_lgbm_phase123"),
+        help="Path to baseline model (default: data/models/qlib_lgbm_phase123)"
     )
     parser.add_argument(
-        "--extended", 
-        default=str(project_root / "data" / "models" / "qlib_lgbm_extended"),
-        help="Path to extended model (default: data/models/qlib_lgbm_extended)"
+        "--extended",
+        default=str(project_root / "data" / "models" / "qlib_lgbm_phase123_extended"),
+        help="Path to extended model (default: data/models/qlib_lgbm_phase123_extended)"
     )
     parser.add_argument(
         "--end",

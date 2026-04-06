@@ -10,11 +10,11 @@ P0.1 introduces a production model manifest mechanism to ensure daily operations
 
 **Structure**:
 ```yaml
-model_path: "data/models/qlib_lgbm"
+model_path: "data/models/qlib_lgbm_phase123"
 version: "2025-03-22-v1"
 promoted_at: "2025-03-22T00:00:00"
 status: "active"
-note: "Initial production model - Alpha158 baseline features"
+note: "Initial production model - phase123 production features"
 ```
 
 ### Fields
@@ -44,7 +44,7 @@ The daily trading script now uses this by default:
 ```bash
 python scripts/run_daily_trading.py
 # or explicitly
-python scripts/run_daily_trading.py --model_path data/models/qlib_lgbm
+python scripts/run_daily_trading.py --model_path data/models/qlib_lgbm_phase123
 ```
 
 ### Promoting a New Model

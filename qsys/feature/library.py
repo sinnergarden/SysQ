@@ -1,7 +1,7 @@
 from qlib.data.dataset import DatasetH
 from qlib.data.dataset.handler import DataHandlerLP
 from qlib.data.dataset.loader import QlibDataLoader
-from qlib.contrib.data.handler import Alpha158DL
+from qlib.contrib.data.handler import phase123DL
 from qlib.contrib.eva.alpha import calc_ic
 from qsys.data.adapter import QlibAdapter
 from qsys.utils.logger import log
@@ -48,7 +48,7 @@ class FeatureLibrary:
     
     @staticmethod
     def get_alpha158_config():
-        config = Alpha158DL.get_feature_config()
+        config = phase123DL.get_feature_config()
         if isinstance(config, tuple) and len(config) == 2:
             return list(config[0])
         if isinstance(config, dict):
@@ -99,7 +99,7 @@ class FeatureLibrary:
         """Research config placeholder: current minimum uses margin_extended raw feature base until custom qlib build is wired."""
         return cls.get_alpha158_margin_extended_config()
 
-class Alpha158(DataHandlerLP):
+class phase123(DataHandlerLP):
     def __init__(
         self,
         instruments="csi300",
