@@ -74,6 +74,44 @@ def _copy_if_exists(source: str | Path, destination: Path) -> str | None:
     return str(destination)
 
 
+def _merge_payload(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(base)
+    for key, value in patch.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _merge_payload(merged[key], value)
+            continue
+        if isinstance(value, list) and isinstance(merged.get(key), list):
+            merged_list = list(merged[key])
+            for item in value:
+                if item not in merged_list:
+                    merged_list.append(item)
+            merged[key] = merged_list
+            continue
+        merged[key] = value
+    return merged
+
+
+def _artifact_entry(*, category: str, path: str | None, exists: bool, copied_from: str | None = None) -> dict[str, Any]:
+    payload = {
+        "category": category,
+        "path": path,
+        "exists": exists,
+    }
+    if copied_from and path:
+        copied_path = Path(copied_from)
+        stored_path = Path(path)
+        same_location = copied_path == stored_path
+        if not same_location and copied_path.exists() and stored_path.exists():
+            same_location = copied_path.resolve() == stored_path.resolve()
+        if not same_location:
+            payload["copied_from"] = copied_from
+    return payload
+
+
+def _artifact_display_path(payload: dict[str, Any]) -> str | None:
+    return payload.get("path") or payload.get("archived_path") or payload.get("source_path")
+
+
 def extract_account_snapshot(account: RealAccount, *, date: str, account_name: str) -> dict[str, Any]:
     state = account.get_state(date, account_name=account_name)
     if not state:
@@ -130,34 +168,41 @@ def archive_daily_artifacts(
             existing = json.load(handle) or {}
 
     archived_artifacts: dict[str, Any] = {}
+    stage_record: dict[str, Any] = {
+        "stage_root": str(stage_root),
+        "artifacts": archived_artifacts,
+    }
     for name, original_path in (artifacts or {}).items():
         if name == "account_db":
             source_path = Path(original_path)
-            archived_artifacts[name] = {
-                "category": "external_reference",
-                "source_path": str(source_path),
-                "archived_path": None,
-                "exists": source_path.exists(),
-            }
+            archived_artifacts[name] = _artifact_entry(
+                category="external_reference",
+                path=str(source_path),
+                exists=source_path.exists(),
+            )
             continue
 
         category = _artifact_category(name)
         source_path = Path(original_path)
         archived_path = _copy_if_exists(source_path, stage_root / category / source_path.name)
-        archived_artifacts[name] = {
-            "category": category,
-            "source_path": str(source_path),
-            "archived_path": archived_path,
-            "exists": archived_path is not None,
-        }
+        if name == "report":
+            stage_record["report_path"] = archived_path or str(source_path)
+            continue
+        if name == "manifest":
+            stage_record["manifest_path"] = archived_path or str(source_path)
+            continue
+        archived_artifacts[name] = _artifact_entry(
+            category=category,
+            path=archived_path or str(source_path),
+            exists=archived_path is not None,
+            copied_from=str(source_path),
+        )
 
     existing.setdefault("execution_date", execution_date)
     existing["signal_date"] = signal_date
     existing.setdefault("archive_root", str(day_root))
     existing.setdefault("stages", {})
-    existing["stages"][stage] = {
-        "artifacts": archived_artifacts,
-    }
+    existing["stages"][stage] = stage_record
 
     index_path.parent.mkdir(parents=True, exist_ok=True)
     with open(index_path, "w", encoding="utf-8") as handle:
@@ -180,19 +225,48 @@ def _load_index(day_root: Path) -> dict[str, Any]:
 
 
 def _load_day_manifest(day_root: Path) -> dict[str, Any]:
-    report_dir = day_root / "pre_open" / "manifests"
     index = _load_index(day_root)
-    post_dir = day_root / "post_close" / "manifests"
-    for candidate_dir in [report_dir, post_dir]:
+    merged: dict[str, Any] = {}
+    manifest_dirs = [
+        day_root / "pre_open" / "manifests",
+        day_root / "post_close" / "manifests",
+    ]
+    for candidate_dir in manifest_dirs:
         if candidate_dir.exists():
             files = sorted(candidate_dir.glob("daily_ops_manifest_*.json"))
             if files:
-                return load_manifest(files[-1])
+                merged = _merge_payload(merged, load_manifest(files[-1]))
+    if merged:
+        return merged
     execution_date = index.get("execution_date") or day_root.name
     candidate = build_manifest_path(day_root, execution_date)
     if candidate.exists():
         return load_manifest(candidate)
     return {}
+
+
+def _build_digest_stage_payload(*, manifest: dict[str, Any], index_payload: dict[str, Any]) -> dict[str, Any]:
+    manifest_stages = manifest.get("stages") or {}
+    index_stages = index_payload.get("stages") or {}
+    stage_names = sorted(set(manifest_stages) | set(index_stages))
+    digest_stages: dict[str, Any] = {}
+    for stage_name in stage_names:
+        manifest_stage = manifest_stages.get(stage_name) or {}
+        index_stage = index_stages.get(stage_name) or {}
+        artifact_paths = {
+            artifact_name: _artifact_display_path(artifact_payload) or ""
+            for artifact_name, artifact_payload in sorted((index_stage.get("artifacts") or {}).items())
+        }
+        digest_stages[stage_name] = {
+            "status": manifest_stage.get("status"),
+            "blockers": list(manifest_stage.get("blockers") or []),
+            "notes": list(manifest_stage.get("notes") or []),
+            "summary": manifest_stage.get("summary") or {},
+            "report_path": index_stage.get("report_path") or manifest_stage.get("report_path"),
+            "manifest_path": index_stage.get("manifest_path"),
+            "artifacts": artifact_paths,
+        }
+    return digest_stages
 
 
 def _compact_prediction_line(label: str, summary: dict[str, Any]) -> str:
@@ -262,8 +336,13 @@ def _build_report_text(
     )
 
     for stage_name, stage_payload in sorted((index_payload.get("stages") or {}).items()):
+        if stage_payload.get("report_path"):
+            lines.append(f"- {stage_name}.report: {stage_payload.get('report_path')}")
+        if stage_payload.get("manifest_path"):
+            lines.append(f"- {stage_name}.manifest: {stage_payload.get('manifest_path')}")
         for artifact_name, artifact_payload in sorted((stage_payload.get("artifacts") or {}).items()):
-            lines.append(f"- {stage_name}.{artifact_name}: {artifact_payload.get('archived_path') or artifact_payload.get('source_path')}")
+            artifact_path = _artifact_display_path(artifact_payload)
+            lines.append(f"- {stage_name}.{artifact_name}: {artifact_path}")
     return "\n".join(lines) + "\n"
 
 
@@ -317,9 +396,10 @@ def build_daily_summary_bundle(
     json_payload = {
         "execution_date": execution_date,
         "signal_date": signal_date,
+        "blockers": list(manifest.get("blockers") or []),
         "recent_reviews": recent_reviews,
-        "manifest": manifest,
-        "index": index_payload,
+        "snapshot_index_path": str(day_root / "snapshot_index.json"),
+        "stages": _build_digest_stage_payload(manifest=manifest, index_payload=index_payload),
         "report_text": report_text,
     }
     with open(json_path, "w", encoding="utf-8") as handle:

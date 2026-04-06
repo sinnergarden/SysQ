@@ -1,273 +1,252 @@
 {
   "execution_date": "2026-03-31",
   "signal_date": "2026-03-30",
-  "recent_reviews": [],
-  "manifest": {
-    "execution_date": "2026-03-31",
-    "signal_date": "2026-03-30",
-    "updated_at": "2026-04-06T16:36:35.537882",
-    "stages": {
-      "pre_open": {
-        "status": "partial",
-        "report_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-31/pre_open/reports/daily_ops_pre_open_20260406_163635.json",
-        "updated_at": "2026-04-06T16:36:35.537877",
-        "summary": {
-          "shadow_plan": {
-            "account": "shadow",
-            "status": "ready",
-            "trades": 4,
-            "symbols": [
-              "600489.SH",
-              "600893.SH",
-              "603993.SH",
-              "000630.SZ"
-            ],
-            "buy_trades": 4,
-            "sell_trades": 0,
-            "total_value": 801100.0017166138,
-            "signal_date": "2026-03-30",
-            "execution_date": "2026-03-31"
+  "blockers": [
+    "real_sync missing: carried forward latest real state as no-fill placeholder"
+  ],
+  "recent_reviews": [
+    "- 2026-03-31: cash_diff=-896.1444347476645, total_assets_diff=-983983.1459491824, signal_quality=success",
+    "- 2026-03-30: cash_diff=-896.1444347476645, total_assets_diff=-983983.1459491824, signal_quality=success",
+    "- 2026-03-27: cash_diff=-896.1444347476645, total_assets_diff=-983983.1459491824, signal_quality=success"
+  ],
+  "snapshot_index_path": "daily/2026-03-31/snapshot_index.json",
+  "stages": {
+    "post_close": {
+      "status": "partial",
+      "blockers": [
+        "real_sync missing: carried forward latest real state as no-fill placeholder"
+      ],
+      "notes": [],
+      "summary": {
+        "reconciliation": {
+          "cash": {
+            "real": 20000.0,
+            "shadow": 20896.144434747664,
+            "diff": -896.1444347476645
           },
-          "real_plan": {
-            "account": "real",
-            "status": "no_plan",
-            "trades": 0,
-            "symbols": [],
-            "buy_trades": 0,
-            "sell_trades": 0,
-            "total_value": 0.0,
-            "signal_date": "2026-03-30",
-            "execution_date": "2026-03-31"
+          "total_assets": {
+            "real": 20000.0,
+            "shadow": 1003983.1459491824,
+            "diff": -983983.1459491824
           },
-          "signal_quality_gate": {},
-          "account_snapshots": {
-            "shadow": {
-              "account_name": "shadow",
-              "as_of_date": "2026-03-30",
-              "cash": 20896.144434747664,
-              "total_assets": 1003983.1459491824,
-              "position_count": 5,
-              "positions": [
-                {
-                  "symbol": "000338.SZ",
-                  "amount": 8800,
-                  "price": 22.540000915527344,
-                  "cost_basis": 23.332046075300735
-                },
-                {
-                  "symbol": "002001.SZ",
-                  "amount": 5800,
-                  "price": 34.25,
-                  "cost_basis": 34.25
-                },
-                {
-                  "symbol": "002493.SZ",
-                  "amount": 16700,
-                  "price": 11.949999809265137,
-                  "cost_basis": 11.3100004196167
-                },
-                {
-                  "symbol": "300394.SZ",
-                  "amount": 600,
-                  "price": 312.0,
-                  "cost_basis": 312.0
-                },
-                {
-                  "symbol": "600176.SH",
-                  "amount": 8800,
-                  "price": 22.649999618530277,
-                  "cost_basis": 22.649999618530277
-                }
-              ],
-              "status": "available"
-            },
-            "real": {
-              "account_name": "real",
-              "as_of_date": "2026-03-30",
-              "status": "missing",
-              "cash": null,
-              "total_assets": null,
-              "position_count": 0,
-              "positions": []
-            }
+          "position_count": {
+            "real": 0.0,
+            "shadow": 5.0,
+            "diff": -5.0
           }
         },
-        "blockers": [],
-        "notes": [
-          "top_k=5",
-          "min_trade=5000",
-          "shadow_cash=1000000.0",
-          "real_cash=20000.0"
-        ]
-      }
-    },
-    "artifacts": {
-      "shadow_plan": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-31/pre_open/plans/plan_2026-03-30_shadow.csv",
-      "real_plan": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-31/pre_open/plans/plan_2026-03-30_real.csv",
-      "shadow_real_sync_template": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-31/pre_open/plans/real_sync_template_2026-03-30_shadow.csv",
-      "real_real_sync_template": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-31/pre_open/plans/real_sync_template_2026-03-30_real.csv",
-      "shadow_order_intents": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-31/pre_open/order_intents/order_intents_2026-03-31_shadow.json",
-      "real_order_intents": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-31/pre_open/order_intents/order_intents_2026-03-31_real.json",
-      "account_db": "/home/liuming/.openclaw/workspace/SysQ/data/meta/real_account.db",
-      "signal_basket": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-31/pre_open/signals/signal_basket_2026-03-30.csv"
-    },
-    "data_status": {
-      "raw_latest": "2026-04-03",
-      "qlib_latest": "2026-04-03",
-      "aligned": true,
-      "health_ok": true,
-      "expected_latest_date": "2026-03-30",
-      "feature_rows": 300,
-      "feature_cols": 158,
-      "missing_ratio": 6.329113924050633e-05,
-      "core_daily_status": "ok",
-      "pit_status": "not_requested",
-      "margin_status": "not_requested",
-      "blocking_issues": [],
-      "warnings": []
-    },
-    "model_info": {
-      "model_path": "/home/liuming/.openclaw/workspace/SysQ/data/models/qlib_lgbm",
-      "model_name": "qlib_lgbm",
-      "top_k": 5,
-      "feature_set": "price_volume_expression_core_v1"
-    },
-    "blockers": [],
-    "notes": [
-      "top_k=5",
-      "min_trade=5000",
-      "shadow_cash=1000000.0",
-      "real_cash=20000.0"
-    ]
-  },
-  "index": {
-    "execution_date": "2026-03-31",
-    "signal_date": "2026-03-30",
-    "archive_root": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-31",
-    "stages": {
-      "pre_open": {
-        "artifacts": {
-          "account_db": {
-            "category": "external_reference",
-            "source_path": "/home/liuming/.openclaw/workspace/SysQ/data/meta/real_account.db",
-            "archived_path": null,
-            "exists": true
+        "signal_quality": {
+          "as_of_date": "2026-03-31",
+          "status": "success",
+          "data_quality_status": "success",
+          "horizon_1d": {
+            "status": "success",
+            "reason": "ok",
+            "signal_date": "2026-03-30",
+            "holding_days": 1,
+            "equal_weight_return": -0.010361599626059736,
+            "weighted_return": -0.010361599626059738,
+            "benchmark_return": -0.010373138543498571,
+            "weighted_excess_return": 1.153891743883341e-05,
+            "basket_size": 5,
+            "coverage_ratio": 1.0
           },
-          "signal_basket": {
-            "category": "signals",
-            "source_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-31/pre_open/signals/signal_basket_2026-03-30.csv",
-            "archived_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-31/pre_open/signals/signal_basket_2026-03-30.csv",
-            "exists": true
+          "horizon_2d": {
+            "status": "success",
+            "reason": "ok",
+            "signal_date": "2026-03-27",
+            "holding_days": 2,
+            "equal_weight_return": -0.0003297726415258939,
+            "weighted_return": -0.000329772641525895,
+            "benchmark_return": -0.012725247990296918,
+            "weighted_excess_return": 0.012395475348771022,
+            "basket_size": 5,
+            "coverage_ratio": 1.0
           },
-          "shadow_order_intents": {
-            "category": "order_intents",
-            "source_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-31/pre_open/order_intents/order_intents_2026-03-31_shadow.json",
-            "archived_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-31/pre_open/order_intents/order_intents_2026-03-31_shadow.json",
-            "exists": true
+          "horizon_3d": {
+            "status": "success",
+            "reason": "ok",
+            "signal_date": "2026-03-26",
+            "holding_days": 3,
+            "equal_weight_return": 0.004436158207610008,
+            "weighted_return": 0.004436158207610009,
+            "benchmark_return": -0.006263344664735205,
+            "weighted_excess_return": 0.010699502872345213,
+            "basket_size": 5,
+            "coverage_ratio": 1.0
           },
-          "real_order_intents": {
-            "category": "order_intents",
-            "source_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-31/pre_open/order_intents/order_intents_2026-03-31_real.json",
-            "archived_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-31/pre_open/order_intents/order_intents_2026-03-31_real.json",
-            "exists": true
+          "recent_vintage_count": 5,
+          "recent_vintage_win_rate": 0.6,
+          "recent_vintage_avg_weighted_return": 0.0061776135005683335,
+          "recent_vintage_avg_excess_return": 0.01740793157701759
+        },
+        "account_snapshots": {
+          "real": {
+            "account_name": "real",
+            "as_of_date": "2026-03-31",
+            "cash": 20000.0,
+            "total_assets": 20000.0,
+            "position_count": 0,
+            "positions": [],
+            "status": "available"
           },
-          "shadow_plan": {
-            "category": "plans",
-            "source_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-31/pre_open/plans/plan_2026-03-30_shadow.csv",
-            "archived_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-31/pre_open/plans/plan_2026-03-30_shadow.csv",
-            "exists": true
-          },
-          "real_plan": {
-            "category": "plans",
-            "source_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-31/pre_open/plans/plan_2026-03-30_real.csv",
-            "archived_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-31/pre_open/plans/plan_2026-03-30_real.csv",
-            "exists": true
-          },
-          "shadow_real_sync_template": {
-            "category": "plans",
-            "source_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-31/pre_open/plans/real_sync_template_2026-03-30_shadow.csv",
-            "archived_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-31/pre_open/plans/real_sync_template_2026-03-30_shadow.csv",
-            "exists": true
-          },
-          "real_real_sync_template": {
-            "category": "plans",
-            "source_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-31/pre_open/plans/real_sync_template_2026-03-30_real.csv",
-            "archived_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-31/pre_open/plans/real_sync_template_2026-03-30_real.csv",
-            "exists": true
-          },
-          "report": {
-            "category": "reports",
-            "source_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-31/pre_open/reports/daily_ops_pre_open_20260406_163635.json",
-            "archived_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-31/pre_open/reports/daily_ops_pre_open_20260406_163635.json",
-            "exists": true
-          },
-          "manifest": {
-            "category": "manifests",
-            "source_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-31/pre_open/manifests/daily_ops_manifest_2026-03-31.json",
-            "archived_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-31/pre_open/manifests/daily_ops_manifest_2026-03-31.json",
-            "exists": true
+          "shadow": {
+            "account_name": "shadow",
+            "as_of_date": "2026-03-31",
+            "cash": 20896.144434747664,
+            "total_assets": 1003983.1459491824,
+            "position_count": 5,
+            "positions": [
+              {
+                "symbol": "000338.SZ",
+                "amount": 8800,
+                "price": 22.540000915527344,
+                "cost_basis": 23.332046075300735
+              },
+              {
+                "symbol": "002001.SZ",
+                "amount": 5800,
+                "price": 34.25,
+                "cost_basis": 34.25
+              },
+              {
+                "symbol": "002493.SZ",
+                "amount": 16700,
+                "price": 11.949999809265137,
+                "cost_basis": 11.3100004196167
+              },
+              {
+                "symbol": "300394.SZ",
+                "amount": 600,
+                "price": 312.0,
+                "cost_basis": 312.0
+              },
+              {
+                "symbol": "600176.SH",
+                "amount": 8800,
+                "price": 22.649999618530277,
+                "cost_basis": 22.649999618530277
+              }
+            ],
+            "status": "available"
           }
         }
       },
-      "post_close": {
-        "artifacts": {
-          "summary": {
-            "category": "reconciliation",
-            "source_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-31/post_close/reconciliation/reconcile_summary_2026-03-31.csv",
-            "archived_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-31/post_close/reconciliation/reconcile_summary_2026-03-31.csv",
-            "exists": true
+      "report_path": "daily/2026-03-31/post_close/reports/daily_ops_post_close_20260406_170703.json",
+      "manifest_path": "daily/2026-03-31/post_close/manifests/daily_ops_manifest_2026-03-31.json",
+      "artifacts": {
+        "account_db": "/home/liuming/.openclaw/workspace/SysQ/data/meta/real_account.db",
+        "positions": "daily/2026-03-31/post_close/reconciliation/reconcile_positions_2026-03-31.csv",
+        "real_sync_snapshot": "daily/2026-03-31/post_close/snapshots/real_sync_snapshot_2026-03-31.csv",
+        "real_trades": "daily/2026-03-31/post_close/reconciliation/reconcile_real_trades_2026-03-31.csv",
+        "signal_quality_summary": "daily/2026-03-31/post_close/reports/signal_quality_summary_2026-03-31.json",
+        "signal_quality_vintages": "daily/2026-03-31/post_close/reports/signal_quality_vintages_2026-03-31.csv",
+        "summary": "daily/2026-03-31/post_close/reconciliation/reconcile_summary_2026-03-31.csv"
+      }
+    },
+    "pre_open": {
+      "status": "partial",
+      "blockers": [],
+      "notes": [
+        "top_k=5",
+        "min_trade=5000",
+        "shadow_cash=1000000.0",
+        "real_cash=20000.0"
+      ],
+      "summary": {
+        "shadow_plan": {
+          "account": "shadow",
+          "status": "ready",
+          "trades": 4,
+          "symbols": [
+            "600489.SH",
+            "600893.SH",
+            "603993.SH",
+            "000630.SZ"
+          ],
+          "buy_trades": 4,
+          "sell_trades": 0,
+          "total_value": 801100.0017166138,
+          "signal_date": "2026-03-30",
+          "execution_date": "2026-03-31"
+        },
+        "real_plan": {
+          "account": "real",
+          "status": "no_plan",
+          "trades": 0,
+          "symbols": [],
+          "buy_trades": 0,
+          "sell_trades": 0,
+          "total_value": 0.0,
+          "signal_date": "2026-03-30",
+          "execution_date": "2026-03-31"
+        },
+        "signal_quality_gate": {},
+        "account_snapshots": {
+          "shadow": {
+            "account_name": "shadow",
+            "as_of_date": "2026-03-30",
+            "cash": 20896.144434747664,
+            "total_assets": 1003983.1459491824,
+            "position_count": 5,
+            "positions": [
+              {
+                "symbol": "000338.SZ",
+                "amount": 8800,
+                "price": 22.540000915527344,
+                "cost_basis": 23.332046075300735
+              },
+              {
+                "symbol": "002001.SZ",
+                "amount": 5800,
+                "price": 34.25,
+                "cost_basis": 34.25
+              },
+              {
+                "symbol": "002493.SZ",
+                "amount": 16700,
+                "price": 11.949999809265137,
+                "cost_basis": 11.3100004196167
+              },
+              {
+                "symbol": "300394.SZ",
+                "amount": 600,
+                "price": 312.0,
+                "cost_basis": 312.0
+              },
+              {
+                "symbol": "600176.SH",
+                "amount": 8800,
+                "price": 22.649999618530277,
+                "cost_basis": 22.649999618530277
+              }
+            ],
+            "status": "available"
           },
-          "positions": {
-            "category": "reconciliation",
-            "source_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-31/post_close/reconciliation/reconcile_positions_2026-03-31.csv",
-            "archived_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-31/post_close/reconciliation/reconcile_positions_2026-03-31.csv",
-            "exists": true
-          },
-          "real_trades": {
-            "category": "reconciliation",
-            "source_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-31/post_close/reconciliation/reconcile_real_trades_2026-03-31.csv",
-            "archived_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-31/post_close/reconciliation/reconcile_real_trades_2026-03-31.csv",
-            "exists": true
-          },
-          "real_sync_snapshot": {
-            "category": "snapshots",
-            "source_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-31/post_close/snapshots/real_sync_snapshot_2026-03-31.csv",
-            "archived_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-31/post_close/snapshots/real_sync_snapshot_2026-03-31.csv",
-            "exists": true
-          },
-          "signal_quality_vintages": {
-            "category": "reports",
-            "source_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-31/post_close/reports/signal_quality_vintages_2026-03-31.csv",
-            "archived_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-31/post_close/reports/signal_quality_vintages_2026-03-31.csv",
-            "exists": true
-          },
-          "signal_quality_summary": {
-            "category": "reports",
-            "source_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-31/post_close/reports/signal_quality_summary_2026-03-31.json",
-            "archived_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-31/post_close/reports/signal_quality_summary_2026-03-31.json",
-            "exists": true
-          },
-          "account_db": {
-            "category": "external_reference",
-            "source_path": "/home/liuming/.openclaw/workspace/SysQ/data/meta/real_account.db",
-            "archived_path": null,
-            "exists": true
-          },
-          "report": {
-            "category": "reports",
-            "source_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-31/post_close/reports/daily_ops_post_close_20260406_170703.json",
-            "archived_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-31/post_close/reports/daily_ops_post_close_20260406_170703.json",
-            "exists": true
-          },
-          "manifest": {
-            "category": "manifests",
-            "source_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-31/post_close/manifests/daily_ops_manifest_2026-03-31.json",
-            "archived_path": "/home/liuming/.openclaw/workspace/SysQ/daily/2026-03-31/post_close/manifests/daily_ops_manifest_2026-03-31.json",
-            "exists": true
+          "real": {
+            "account_name": "real",
+            "as_of_date": "2026-03-30",
+            "status": "missing",
+            "cash": null,
+            "total_assets": null,
+            "position_count": 0,
+            "positions": []
           }
         }
+      },
+      "report_path": "daily/2026-03-31/pre_open/reports/daily_ops_pre_open_20260406_163635.json",
+      "manifest_path": "daily/2026-03-31/pre_open/manifests/daily_ops_manifest_2026-03-31.json",
+      "artifacts": {
+        "account_db": "/home/liuming/.openclaw/workspace/SysQ/data/meta/real_account.db",
+        "real_order_intents": "daily/2026-03-31/pre_open/order_intents/order_intents_2026-03-31_real.json",
+        "real_plan": "daily/2026-03-31/pre_open/plans/plan_2026-03-30_real.csv",
+        "real_real_sync_template": "daily/2026-03-31/pre_open/plans/real_sync_template_2026-03-30_real.csv",
+        "shadow_order_intents": "daily/2026-03-31/pre_open/order_intents/order_intents_2026-03-31_shadow.json",
+        "shadow_plan": "daily/2026-03-31/pre_open/plans/plan_2026-03-30_shadow.csv",
+        "shadow_real_sync_template": "daily/2026-03-31/pre_open/plans/real_sync_template_2026-03-30_shadow.csv",
+        "signal_basket": "daily/2026-03-31/pre_open/signals/signal_basket_2026-03-30.csv"
       }
     }
   },
-  "report_text": "# Daily Ops Digest 2026-03-31\n\n- signal_date: 2026-03-30\n- execution_date: 2026-03-31\n- blockers: 0\n\n## Current Day Predictions\n- shadow: status=ready, trades=4, buys=4, sells=0, value=801,100, symbols=600489.SH, 600893.SH, 603993.SH, 000630.SZ\n- real: status=no_plan, trades=0, buys=0, sells=0, value=0, symbols=-\n\n## Recent Review\n- No archived post-close reviews yet.\n\n## Shadow Account\n- status=available, as_of=2026-03-30, cash=20896.144434747664, total_assets=1003983.1459491824, positions=5\n\n## Detail Paths\n- post_close.account_db: /home/liuming/.openclaw/workspace/SysQ/data/meta/real_account.db\n- post_close.manifest: /home/liuming/.openclaw/workspace/SysQ/daily/2026-03-31/post_close/manifests/daily_ops_manifest_2026-03-31.json\n- post_close.positions: /home/liuming/.openclaw/workspace/SysQ/daily/2026-03-31/post_close/reconciliation/reconcile_positions_2026-03-31.csv\n- post_close.real_sync_snapshot: /home/liuming/.openclaw/workspace/SysQ/daily/2026-03-31/post_close/snapshots/real_sync_snapshot_2026-03-31.csv\n- post_close.real_trades: /home/liuming/.openclaw/workspace/SysQ/daily/2026-03-31/post_close/reconciliation/reconcile_real_trades_2026-03-31.csv\n- post_close.report: /home/liuming/.openclaw/workspace/SysQ/daily/2026-03-31/post_close/reports/daily_ops_post_close_20260406_170703.json\n- post_close.signal_quality_summary: /home/liuming/.openclaw/workspace/SysQ/daily/2026-03-31/post_close/reports/signal_quality_summary_2026-03-31.json\n- post_close.signal_quality_vintages: /home/liuming/.openclaw/workspace/SysQ/daily/2026-03-31/post_close/reports/signal_quality_vintages_2026-03-31.csv\n- post_close.summary: /home/liuming/.openclaw/workspace/SysQ/daily/2026-03-31/post_close/reconciliation/reconcile_summary_2026-03-31.csv\n- pre_open.account_db: /home/liuming/.openclaw/workspace/SysQ/data/meta/real_account.db\n- pre_open.manifest: /home/liuming/.openclaw/workspace/SysQ/daily/2026-03-31/pre_open/manifests/daily_ops_manifest_2026-03-31.json\n- pre_open.real_order_intents: /home/liuming/.openclaw/workspace/SysQ/daily/2026-03-31/pre_open/order_intents/order_intents_2026-03-31_real.json\n- pre_open.real_plan: /home/liuming/.openclaw/workspace/SysQ/daily/2026-03-31/pre_open/plans/plan_2026-03-30_real.csv\n- pre_open.real_real_sync_template: /home/liuming/.openclaw/workspace/SysQ/daily/2026-03-31/pre_open/plans/real_sync_template_2026-03-30_real.csv\n- pre_open.report: /home/liuming/.openclaw/workspace/SysQ/daily/2026-03-31/pre_open/reports/daily_ops_pre_open_20260406_163635.json\n- pre_open.shadow_order_intents: /home/liuming/.openclaw/workspace/SysQ/daily/2026-03-31/pre_open/order_intents/order_intents_2026-03-31_shadow.json\n- pre_open.shadow_plan: /home/liuming/.openclaw/workspace/SysQ/daily/2026-03-31/pre_open/plans/plan_2026-03-30_shadow.csv\n- pre_open.shadow_real_sync_template: /home/liuming/.openclaw/workspace/SysQ/daily/2026-03-31/pre_open/plans/real_sync_template_2026-03-30_shadow.csv\n- pre_open.signal_basket: /home/liuming/.openclaw/workspace/SysQ/daily/2026-03-31/pre_open/signals/signal_basket_2026-03-30.csv\n"
+  "report_text": "# Daily Ops Digest 2026-03-31\n\n- signal_date: 2026-03-30\n- execution_date: 2026-03-31\n- blockers: 1\n\n## Current Day Predictions\n- shadow: status=ready, trades=4, buys=4, sells=0, value=801,100, symbols=600489.SH, 600893.SH, 603993.SH, 000630.SZ\n- real: status=no_plan, trades=0, buys=0, sells=0, value=0, symbols=-\n\n## Recent Review\n- 2026-03-31: cash_diff=-896.1444347476645, total_assets_diff=-983983.1459491824, signal_quality=success\n- 2026-03-30: cash_diff=-896.1444347476645, total_assets_diff=-983983.1459491824, signal_quality=success\n- 2026-03-27: cash_diff=-896.1444347476645, total_assets_diff=-983983.1459491824, signal_quality=success\n\n## Shadow Account\n- status=available, as_of=2026-03-30, cash=20896.144434747664, total_assets=1003983.1459491824, positions=5\n\n## Detail Paths\n- post_close.report: daily/2026-03-31/post_close/reports/daily_ops_post_close_20260406_170703.json\n- post_close.manifest: daily/2026-03-31/post_close/manifests/daily_ops_manifest_2026-03-31.json\n- post_close.account_db: /home/liuming/.openclaw/workspace/SysQ/data/meta/real_account.db\n- post_close.positions: daily/2026-03-31/post_close/reconciliation/reconcile_positions_2026-03-31.csv\n- post_close.real_sync_snapshot: daily/2026-03-31/post_close/snapshots/real_sync_snapshot_2026-03-31.csv\n- post_close.real_trades: daily/2026-03-31/post_close/reconciliation/reconcile_real_trades_2026-03-31.csv\n- post_close.signal_quality_summary: daily/2026-03-31/post_close/reports/signal_quality_summary_2026-03-31.json\n- post_close.signal_quality_vintages: daily/2026-03-31/post_close/reports/signal_quality_vintages_2026-03-31.csv\n- post_close.summary: daily/2026-03-31/post_close/reconciliation/reconcile_summary_2026-03-31.csv\n- pre_open.report: daily/2026-03-31/pre_open/reports/daily_ops_pre_open_20260406_163635.json\n- pre_open.manifest: daily/2026-03-31/pre_open/manifests/daily_ops_manifest_2026-03-31.json\n- pre_open.account_db: /home/liuming/.openclaw/workspace/SysQ/data/meta/real_account.db\n- pre_open.real_order_intents: daily/2026-03-31/pre_open/order_intents/order_intents_2026-03-31_real.json\n- pre_open.real_plan: daily/2026-03-31/pre_open/plans/plan_2026-03-30_real.csv\n- pre_open.real_real_sync_template: daily/2026-03-31/pre_open/plans/real_sync_template_2026-03-30_real.csv\n- pre_open.shadow_order_intents: daily/2026-03-31/pre_open/order_intents/order_intents_2026-03-31_shadow.json\n- pre_open.shadow_plan: daily/2026-03-31/pre_open/plans/plan_2026-03-30_shadow.csv\n- pre_open.shadow_real_sync_template: daily/2026-03-31/pre_open/plans/real_sync_template_2026-03-30_shadow.csv\n- pre_open.signal_basket: daily/2026-03-31/pre_open/signals/signal_basket_2026-03-30.csv\n"
 }

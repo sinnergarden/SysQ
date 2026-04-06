@@ -92,6 +92,8 @@ SysQ 只保留下面几层职责：
 - 不在 `daily/` 中复制账户主库。
 - 不单独保留额外的 legacy 子目录。
 - 只有实际写入文件时才创建对应子目录，不默认铺空目录。
+- `snapshot_index.json` 只保留每个 stage 的 `report_path`、`manifest_path` 和有业务含义的 artifact 路径；不再重复写同一路径的 `source_path`/`archived_path` 对。
+- `daily_ops_digest_{execution_date}.json` 只保留紧凑 stage 摘要和 artifact 指针，详细 stage 诊断仍以各自 `daily_ops_manifest_{execution_date}.json` 为准。
 
 ## 4. `data/derived/` 当前 rollup
 
