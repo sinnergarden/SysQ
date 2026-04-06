@@ -3,17 +3,17 @@
 ## 1. 当前已有哪些 feature
 
 ### 1.1 当前主干 feature 集
-当前主干仍以 **Qlib Alpha158** 为基础，由 `qsys/feature/library.py` 中的 `FeatureLibrary.get_alpha158_config()` 提供。
+当前主干仍以 **Qlib phase123** 为基础，由 `qsys/feature/library.py` 中的 `FeatureLibrary.get_alpha158_config()` 提供。
 
 在此基础上，项目已经扩展出两套增强版：
 
 - `extended`
-  - Alpha158 + 一批日频可直接复用的基本面 / 估值 / 资金流字段
+  - phase123 + 一批日频可直接复用的基本面 / 估值 / 资金流字段
 - `margin_extended`
   - `extended` + 两融字段
 
-### 1.2 当前 Alpha158 之外的已接入字段
-当前已经显式纳入 `FeatureLibrary` 的 Alpha158 之外字段包括：
+### 1.2 当前 phase123 之外的已接入字段
+当前已经显式纳入 `FeatureLibrary` 的 phase123 之外字段包括：
 
 #### 扩展基本面 / 估值 / 资金流
 - `$pe`
@@ -52,7 +52,7 @@
 - 行业上下文特征
 - 更细的估值 / 财务质量变化率特征
 
-也就是说，当前系统已经不再是纯 Alpha158，但仍更像“Alpha158 + 少量原始扩展字段”，还不是结构化的短周期 A 股特征体系。
+也就是说，当前系统已经不再是纯 phase123，但仍更像“phase123 + 少量原始扩展字段”，还不是结构化的短周期 A 股特征体系。
 
 ---
 
@@ -381,7 +381,7 @@
 ## 9. 小结
 
 当前 SysQ 已经具备：
-- Alpha158 基线
+- phase123 基线
 - 一批扩展原始字段
 - 可训练、可回测、可盘前推理的完整主链路
 

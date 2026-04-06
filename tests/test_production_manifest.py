@@ -38,12 +38,12 @@ class TestProductionManifest(unittest.TestCase):
     def test_resolve_production_model_fallback(self):
         from qsys.live.scheduler import ModelScheduler
 
-        with patch.object(ModelScheduler, "find_latest_model", return_value=Path("data/models/qlib_lgbm")):
+        with patch.object(ModelScheduler, "find_latest_model", return_value=Path("data/models/qlib_lgbm_phase123")):
             with patch("qsys.live.scheduler.cfg") as mock_cfg:
                 mock_cfg.get_path.return_value = Path("/tmp/nonexistent")
                 resolved = ModelScheduler.resolve_production_model()
 
-        self.assertEqual(resolved, "data/models/qlib_lgbm")
+        self.assertEqual(resolved, "data/models/qlib_lgbm_phase123")
 
     def test_manifest_file_structure(self):
         manifest_path = Path(__file__).resolve().parent.parent / "data" / "models" / "production_manifest.yaml"

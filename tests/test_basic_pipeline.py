@@ -24,19 +24,19 @@ class TestSysQPipeline(unittest.TestCase):
         cls.adapter.init_qlib()
         
     def test_01_alpha158_import(self):
-        """Test if Alpha158 class can be imported and instantiated"""
+        """Test if phase123 class can be imported and instantiated"""
         try:
-            from qsys.feature.library import Alpha158
+            from qsys.feature.library import phase123
             # Check if class exists
-            self.assertIsNotNone(Alpha158)
+            self.assertIsNotNone(phase123)
             
             # Instantiate to check if it has get_feature_config
-            obj = Alpha158(instruments='all', start_time='2023-01-01', end_time='2023-01-05', infer_processors=[], learn_processors=[])
+            obj = phase123(instruments='all', start_time='2023-01-01', end_time='2023-01-05', infer_processors=[], learn_processors=[])
             config = obj.get_feature_config()
-            self.assertTrue(len(config) > 0, "Alpha158 config should not be empty")
-            print("✅ Alpha158 Import & Instantiation Passed")
+            self.assertTrue(len(config) > 0, "phase123 config should not be empty")
+            print("✅ phase123 Import & Instantiation Passed")
         except ImportError:
-            self.fail("Could not import Alpha158 from qsys.feature.library")
+            self.fail("Could not import phase123 from qsys.feature.library")
         except Exception as e:
             self.fail(f"Instantiation failed: {e}")
             

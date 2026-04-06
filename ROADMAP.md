@@ -51,7 +51,7 @@
 ## 已完成 / 已形成共识
 
 - 数据 readiness 是训练、回测、 daily ops 的前置条件
-- 不能只依赖 Alpha158 量价特征；在数据 ready 且缺失可控时，应优先接入保守的资金流 / 基本面 / 估值因子
+- 不能只依赖 phase123 量价特征；在数据 ready 且缺失可控时，应优先接入保守的资金流 / 基本面 / 估值因子
 - 默认不做 feature selection，先做可解释的 feature set 管理与分层观察
 - 评估必须尽量 out-of-sample，避免 train/test overlap
 - strict eval 近期统一优先用 `top_k=5`

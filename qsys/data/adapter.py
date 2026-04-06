@@ -570,7 +570,7 @@ class QlibAdapter:
                 if 'amount' in df.columns:
                     df['amount'] = df['amount'] * 1000
 
-                # Derive VWAP explicitly for Alpha158/Alpha360 families.
+                # Derive VWAP explicitly for phase123/Alpha360 families.
                 if 'amount' in df.columns and 'volume' in df.columns:
                     amount_num = pd.to_numeric(df['amount'], errors='coerce')
                     volume_num = pd.to_numeric(df['volume'], errors='coerce')

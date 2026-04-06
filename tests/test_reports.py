@@ -22,7 +22,7 @@ class TestRunReports(unittest.TestCase):
         report = RunReport(workflow="daily_ops_pre_open", signal_date="2026-03-20", execution_date="2026-03-23")
         report.status = ReportStatus.SUCCESS
         report.set_data_status(raw_latest="2026-03-20", qlib_latest="2026-03-20", aligned=True, health_ok=True)
-        report.set_model_info(model_path="data/models/qlib_lgbm", feature_set="extended")
+        report.set_model_info(model_path="data/models/qlib_lgbm_phase123", feature_set="extended")
         report.add_section("checklist", status=ReportStatus.SUCCESS, metrics={"steps": 3})
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -52,7 +52,7 @@ class TestRunReports(unittest.TestCase):
             signal_date="2026-03-20",
             execution_date="2026-03-23",
             data_status={"aligned": True},
-            model_info={"model_path": "data/models/qlib_lgbm"},
+            model_info={"model_path": "data/models/qlib_lgbm_phase123"},
             shadow_plan_summary={"trades": 5},
             real_plan_summary={"trades": 2},
             blockers=[],
@@ -67,7 +67,7 @@ class TestRunReports(unittest.TestCase):
             signal_date="2026-03-20",
             execution_date="2026-03-23",
             data_status={"aligned": True},
-            model_info={"model_path": "data/models/qlib_lgbm"},
+            model_info={"model_path": "data/models/qlib_lgbm_phase123"},
             shadow_plan_summary={"trades": 0},  # Empty
             real_plan_summary={"trades": 0},    # Empty
             blockers=[],
@@ -80,7 +80,7 @@ class TestRunReports(unittest.TestCase):
             signal_date="2026-03-20",
             execution_date="2026-03-23",
             data_status={"aligned": True},
-            model_info={"model_path": "data/models/qlib_lgbm"},
+            model_info={"model_path": "data/models/qlib_lgbm_phase123"},
             shadow_plan_summary={"trades": 5},
             real_plan_summary={"trades": 0},  # Empty
             blockers=[],
@@ -93,7 +93,7 @@ class TestRunReports(unittest.TestCase):
             signal_date="2026-03-20",
             execution_date="2026-03-23",
             data_status={"aligned": True},
-            model_info={"model_path": "data/models/qlib_lgbm"},
+            model_info={"model_path": "data/models/qlib_lgbm_phase123"},
             shadow_plan_summary={"trades": 5},
             real_plan_summary={"trades": 2},
             blockers=["Data health check failed"],
@@ -107,7 +107,7 @@ class TestRunReports(unittest.TestCase):
                 signal_date="2026-03-20",
                 execution_date="2026-03-23",
                 data_status={"aligned": True},
-                model_info={"model_path": "data/models/qlib_lgbm"},
+                model_info={"model_path": "data/models/qlib_lgbm_phase123"},
                 shadow_plan_summary={"trades": 5, "signal_date": "2026-03-13"},
                 real_plan_summary={"trades": 2, "signal_date": "2026-03-20"},
                 blockers=[],
@@ -119,7 +119,7 @@ class TestRunReports(unittest.TestCase):
             signal_date="2026-03-20",
             execution_date="2026-03-23",
             data_status={"aligned": False, "health_ok": False},
-            model_info={"model_path": "data/models/qlib_lgbm"},
+            model_info={"model_path": "data/models/qlib_lgbm_phase123"},
             shadow_plan_summary={"trades": 5},
             real_plan_summary={"trades": 2},
             blockers=[],
@@ -146,7 +146,7 @@ class TestRunReports(unittest.TestCase):
         report = BacktestReport.generate(
             start_date="2025-01-01",
             end_date="2025-12-31",
-            model_info={"model_path": "data/models/qlib_lgbm"},
+            model_info={"model_path": "data/models/qlib_lgbm_phase123"},
             metrics={"sharpe": 1.5, "annual_return": "15%", "max_drawdown": "-10%"},
             top_k=30,
             universe="csi300",
@@ -162,8 +162,8 @@ class TestRunReports(unittest.TestCase):
             {"period": "2025-01~2025-06", "model": "Extended", "annual_return": 0.15, "sharpe": 1.2, "max_drawdown": -0.08, "trade_count": 60},
         ]
         report = StrictEvalReport.generate(
-            baseline_model_path="data/models/qlib_lgbm",
-            extended_model_path="data/models/qlib_lgbm_extended",
+            baseline_model_path="data/models/qlib_lgbm_phase123",
+            extended_model_path="data/models/qlib_lgbm_phase123_extended",
             end_date="2025-06-30",
             results=results,
             top_k=5,

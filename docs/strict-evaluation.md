@@ -29,8 +29,8 @@ python scripts/run_strict_eval.py
 
 # Custom models
 python scripts/run_strict_eval.py \
-    --baseline data/models/qlib_lgbm \
-    --extended data/models/qlib_lgbm_extended
+    --baseline data/models/qlib_lgbm_phase123 \
+    --extended data/models/qlib_lgbm_phase123_extended
 
 # Custom end date
 python scripts/run_strict_eval.py --end 2025-06-30
@@ -43,8 +43,8 @@ from qsys.evaluation import StrictEvaluator
 
 evaluator = StrictEvaluator(top_k=5)
 report = evaluator.run_comparison(
-    baseline_model_path="data/models/qlib_lgbm",
-    extended_model_path="data/models/qlib_lgbm_extended"
+    baseline_model_path="data/models/qlib_lgbm_phase123",
+    extended_model_path="data/models/qlib_lgbm_phase123_extended"
 )
 
 # Print markdown table

@@ -84,7 +84,7 @@ class ModelScheduler:
                 subprocess.check_call(cmd)
                 
                 # Find the new model
-                # It should be in data/models/qlib_lgbm_{timestamp}
+                # It should be in data/models/qlib_lgbm_phase123_{timestamp}
                 models_root = Path("data/models")
                 if models_root.exists():
                     candidates = sorted([d for d in models_root.iterdir() if d.is_dir() and "qlib_lgbm" in d.name])

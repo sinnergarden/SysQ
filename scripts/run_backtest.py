@@ -6,7 +6,7 @@ Purpose:
 - save daily result csv + structured backtest report
 
 Typical usage:
-- python scripts/run_backtest.py --model_path data/models/qlib_lgbm_extended --start 2025-01-01 --end 2026-03-20 --top_k 5
+- python scripts/run_backtest.py --model_path data/models/qlib_lgbm_phase123_extended --start 2025-01-01 --end 2026-03-20 --top_k 5
 
 Key args:
 - --model_path: model directory to evaluate
@@ -33,7 +33,7 @@ from qsys.utils.logger import log
 
 
 @click.command()
-@click.option("--model_path", type=str, default=None, help="Model directory. Defaults to data/models/qlib_lgbm")
+@click.option("--model_path", type=str, default=None, help="Model directory. Defaults to data/models/qlib_lgbm_phase123")
 @click.option("--universe", type=str, default="csi300", help="Backtest universe")
 @click.option("--start", type=str, default="2022-01-01", help="Backtest start date")
 @click.option("--end", type=str, default="2022-03-01", help="Backtest end date")
