@@ -196,7 +196,8 @@ python scripts/call_miniqmt_server_mock.py --base-url http://127.0.0.1:8811
 - 在 validate / submit 前做最小资金和可卖数量检查
 - 将订单、成交、快照写入 `miniqmt_server/data/`
 - `dry_run=true` 时只返回模拟结果，不生成真实 mock broker order
-- 对重复 `request_id` 做最小幂等保护，避免重复提交
+- 对正式提交的 `request_id` 做持久化幂等保护，重复请求会回放首个提交结果
+- 若复用同一个 `request_id` 但请求内容不同，会返回 `request_id_conflict`
 
 当前 mock 风控规则：
 
@@ -205,10 +206,17 @@ python scripts/call_miniqmt_server_mock.py --base-url http://127.0.0.1:8811
 - 同一批请求中的 BUY 会按顺序累积占用 `available_cash`
 - 出于保守性，同一批请求中的 SELL 不会反向释放现金给后续 BUY 使用
 
+`POST /orders/submit` 的幂等语义：
+
+- 首次正式提交会返回 `idempotency_status=new`
+- 相同 payload 重试会返回原始 `broker_order_ids` 和 `submit_time`，并标记 `idempotency_status=replayed`
+- 不同 payload 误复用同一个 `request_id` 会被拒绝，并标记 `idempotency_status=conflict`
+
 本地存储文件：
 
 - `miniqmt_server/data/orders.jsonl`
 - `miniqmt_server/data/trades.jsonl`
+- `miniqmt_server/data/submissions.jsonl`
 - `miniqmt_server/data/snapshots.jsonl`
 - `miniqmt_server/data/latest_snapshot.json`
 
@@ -218,7 +226,7 @@ python scripts/call_miniqmt_server_mock.py --base-url http://127.0.0.1:8811
 
 常见问题：
 
-- `duplicate_request`：同一个 `request_id` 已提交过，mock 会拒绝重复正式下单
+- `request_id_conflict`：同一个 `request_id` 已对应过别的正式提交内容，必须改用新的 `request_id`
 - `invalid_lot_size`：当前 mock 默认按 A 股 100 股整数倍校验
 - `submit_disabled`：检查 `broker.mock.allow_submit` 和 `broker.mock.submit_enabled`
 - `not_implemented`：你把配置切到了 `broker.mode=miniqmt`，但真实 Windows adapter 还没接线

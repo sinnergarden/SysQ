@@ -149,6 +149,89 @@ class MiniQMTServerTestCase(unittest.TestCase):
         orders_result = self._get("/orders")
         self.assertEqual(orders_result["count"], 0)
 
+    def test_submit_replays_same_request_id_after_restart(self) -> None:
+        payload = {
+            "request_id": "request-idempotent",
+            "strategy_id": "strategy_a",
+            "trade_date": "2026-04-06",
+            "account_id": "mock_account",
+            "dry_run": False,
+            "orders": [
+                {
+                    "intent_id": "intent-idempotent",
+                    "symbol": "600000.SH",
+                    "side": "BUY",
+                    "quantity": 100,
+                    "order_type": "LIMIT",
+                    "limit_price": 12.34,
+                    "time_in_force": "DAY",
+                    "reason": "idempotent retry",
+                }
+            ],
+        }
+
+        first_submit = self._post("/orders/submit", payload)
+        self.assertEqual(first_submit["status"], "accepted")
+        self.assertEqual(first_submit["idempotency_status"], "new")
+
+        self.app = MiniQMTServerApp(self.app.config)
+        replayed_submit = self._post("/orders/submit", payload)
+        self.assertEqual(replayed_submit["status"], "accepted")
+        self.assertEqual(replayed_submit["idempotency_status"], "replayed")
+        self.assertEqual(replayed_submit["broker_order_ids"], first_submit["broker_order_ids"])
+        self.assertEqual(replayed_submit["original_submit_time"], first_submit["submit_time"])
+        self.assertEqual(self._get("/orders")["count"], 1)
+
+    def test_submit_rejects_reused_request_id_with_different_payload(self) -> None:
+        original_payload = {
+            "request_id": "request-conflict",
+            "strategy_id": "strategy_a",
+            "trade_date": "2026-04-06",
+            "account_id": "mock_account",
+            "dry_run": False,
+            "orders": [
+                {
+                    "intent_id": "intent-conflict",
+                    "symbol": "600000.SH",
+                    "side": "BUY",
+                    "quantity": 100,
+                    "order_type": "LIMIT",
+                    "limit_price": 12.34,
+                    "time_in_force": "DAY",
+                    "reason": "initial submit",
+                }
+            ],
+        }
+        conflicting_payload = {
+            "request_id": "request-conflict",
+            "strategy_id": "strategy_a",
+            "trade_date": "2026-04-06",
+            "account_id": "mock_account",
+            "dry_run": False,
+            "orders": [
+                {
+                    "intent_id": "intent-conflict",
+                    "symbol": "600000.SH",
+                    "side": "BUY",
+                    "quantity": 200,
+                    "order_type": "LIMIT",
+                    "limit_price": 12.34,
+                    "time_in_force": "DAY",
+                    "reason": "mutated submit",
+                }
+            ],
+        }
+
+        first_submit = self._post("/orders/submit", original_payload)
+        self.assertEqual(first_submit["status"], "accepted")
+
+        second_submit = self._post("/orders/submit", conflicting_payload)
+        self.assertEqual(second_submit["status"], "rejected")
+        self.assertEqual(second_submit["idempotency_status"], "conflict")
+        self.assertEqual(second_submit["errors"][0]["code"], "request_id_conflict")
+        self.assertEqual(second_submit["broker_order_ids"], [])
+        self.assertEqual(self._get("/orders")["count"], 1)
+
     def test_submit_rejects_invalid_order(self) -> None:
         payload = {
             "request_id": "request-invalid",
