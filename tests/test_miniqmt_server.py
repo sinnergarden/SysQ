@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import threading
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from urllib import request
 
-from miniqmt_server.app import MiniQMTServerApp
+from miniqmt_server.app import MiniQMTServerApp, build_server
 from miniqmt_server.config import MockBrokerConfig, ServerConfig, load_config
 
 
@@ -381,6 +383,92 @@ class MiniQMTServerTestCase(unittest.TestCase):
         config = load_config("miniqmt_server/config.example.yaml")
         self.assertEqual(config.broker_mode, "mock")
         self.assertEqual(config.port, 8811)
+
+
+class MiniQMTServerHTTPSmokeTestCase(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp_dir = TemporaryDirectory()
+        self.server = None
+        self.thread = None
+        data_dir = Path(self.temp_dir.name) / "data"
+        self.config = ServerConfig(
+            host="127.0.0.1",
+            port=0,
+            broker_mode="mock",
+            data_dir=data_dir,
+            mock=MockBrokerConfig(
+                account_id="mock_account",
+                allow_submit=True,
+                auto_fill=False,
+                miniqmt_connected=False,
+                query_ready=True,
+                submit_enabled=True,
+                account={
+                    "account_id": "mock_account",
+                    "total_assets": 100000.0,
+                    "available_cash": 50000.0,
+                    "market_value": 50000.0,
+                    "frozen_cash": 0.0,
+                    "daily_pnl": 0.0,
+                },
+            ),
+        )
+        try:
+            self.server = build_server(self.config)
+        except PermissionError as exc:
+            self.temp_dir.cleanup()
+            self.skipTest(f"sandbox disallows binding a local TCP port: {exc}")
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        self.base_url = f"http://127.0.0.1:{self.server.server_port}"
+
+    def tearDown(self) -> None:
+        if self.server is not None:
+            self.server.shutdown()
+            self.server.server_close()
+        if self.thread is not None:
+            self.thread.join(timeout=5)
+        self.temp_dir.cleanup()
+
+    def _request_json(self, path: str, method: str = "GET", payload: dict | None = None) -> tuple[int, dict]:
+        body = None if payload is None else json.dumps(payload).encode("utf-8")
+        headers = {"Content-Type": "application/json"} if body is not None else {}
+        http_request = request.Request(f"{self.base_url}{path}", data=body, headers=headers, method=method)
+        with request.urlopen(http_request, timeout=5) as response:
+            return response.status, json.loads(response.read().decode("utf-8"))
+
+    def test_http_server_smoke_get_and_post(self) -> None:
+        health_status, health = self._request_json("/health")
+        self.assertEqual(health_status, 200)
+        self.assertEqual(health["status"], "ok")
+        self.assertEqual(health["broker_mode"], "mock")
+
+        validate_status, validate = self._request_json(
+            "/orders/validate",
+            method="POST",
+            payload={
+                "request_id": "request-http-smoke",
+                "strategy_id": "strategy_http_smoke",
+                "trade_date": "2026-04-06",
+                "account_id": "mock_account",
+                "dry_run": True,
+                "orders": [
+                    {
+                        "intent_id": "intent-http-smoke",
+                        "symbol": "600000.SH",
+                        "side": "BUY",
+                        "quantity": 100,
+                        "order_type": "LIMIT",
+                        "limit_price": 12.34,
+                        "time_in_force": "DAY",
+                        "reason": "http smoke test",
+                    }
+                ],
+            },
+        )
+        self.assertEqual(validate_status, 200)
+        self.assertEqual(validate["status"], "accepted")
+        self.assertEqual(validate["accepted_count"], 1)
 
 
 if __name__ == "__main__":
