@@ -31,16 +31,18 @@
 
 ```text
 miniqmt_server/
-  app.py                 HTTP server 入口
-  config.py              配置加载与默认值
-  config.example.yaml    示例配置
-  models.py              请求/响应/记录数据模型
-  storage.py             json/jsonl 本地存储
+  app.py                           HTTP server 入口
+  config.py                        配置加载与默认值
+  config.example.yaml              通用示例配置
+  config.windows.mock.example.yaml Windows mock / WSL 示例配置
+  start_mock_server_windows.ps1    Windows 启动辅助脚本
+  models.py                        请求/响应/记录数据模型
+  storage.py                       json/jsonl 本地存储
   broker/
-    base.py              broker 抽象接口
-    mock.py              本地 mock broker 实现
-    miniqmt.py           真实 MiniQMT adapter 边界
-  data/                  默认落盘目录
+    base.py                        broker 抽象接口
+    mock.py                        本地 mock broker 实现
+    miniqmt.py                     真实 MiniQMT adapter 边界
+  data/                            默认落盘目录
   README.md
 ```
 
@@ -50,20 +52,140 @@ miniqmt_server/
 - `tests/test_miniqmt_server.py`：接口与真实 HTTP smoke 覆盖
 - `docs/features/miniqmt_server.md`：功能边界与设计背景
 
+## Windows 快速部署（推荐先跑 mock）
+
+下面这套步骤的目标很单纯：在一台新的 Windows 机器上，先把 `mock` HTTP 服务跑起来，再让 WSL 或 SysQ 编排脚本能稳定调用。不要先接 MiniQMT 真机 adapter。
+
+### 1. 前置条件
+
+- Windows 上已安装 Python 3.10+，并且 `py` 或 `python` 可用
+- 已把本仓库拉到本地，例如 `C:\SysQ`
+- 如果只是跑 `mock` 服务，最小依赖只需要 `PyYAML`
+
+在 PowerShell 里进入仓库根目录后，可以直接执行：
+
+```powershell
+py -3 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install pyyaml
+```
+
+如果你已经有 SysQ 的完整环境，也可以直接复用，不必重新建 venv。
+
+### 2. 使用 Windows 专用示例配置
+
+仓库已提供一个更适合 Windows + WSL 的 mock 配置：`miniqmt_server/config.windows.mock.example.yaml`。
+
+关键点：
+
+- `server.host: 0.0.0.0`，方便 WSL 访问
+- `server.port: 8811`，与当前文档示例一致
+- `server.data_dir: miniqmt_server/data/windows_mock`，避免和其他本地实验混在一起
+- `broker.mode: mock`，不会尝试连接真实 MiniQMT
+
+如果你只允许 Windows 本机调用，可以把 `host` 改回 `127.0.0.1`。
+
+### 3. 在 Windows 上启动服务
+
+在仓库根目录执行下面任一方式。
+
+方式 A：直接用 PowerShell 辅助脚本启动。
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\miniqmt_server\start_mock_server_windows.ps1
+```
+
+这个脚本会优先尝试 `py -3`，找不到时再回退到 `python`。
+
+方式 B：手动指定配置启动。
+
+```powershell
+py -3 -m miniqmt_server.app --config miniqmt_server/config.windows.mock.example.yaml
+```
+
+如果你想显式覆盖监听地址或端口：
+
+```powershell
+py -3 -m miniqmt_server.app `
+  --config miniqmt_server/config.windows.mock.example.yaml `
+  --host 0.0.0.0 `
+  --port 8811
+```
+
+启动成功后，日志里会看到类似信息：
+
+```text
+Starting miniqmt_server on http://0.0.0.0:8811 with broker_mode=mock
+```
+
+### 4. 在 Windows 本机验证服务
+
+PowerShell 健康检查：
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8811/health | ConvertTo-Json -Depth 5
+```
+
+再做一次最小 submit/validate 联调：
+
+```powershell
+py -3 .\scripts\call_miniqmt_server_mock.py --base-url http://127.0.0.1:8811
+```
+
+如果首次启动时 Windows 防火墙弹窗提示，请允许 Python 在当前网络类型下监听本地端口；否则 WSL 侧可能无法访问 `8811`。
+
+## WSL 如何调用 Windows 上的服务
+
+推荐顺序是：先在 Windows 启动服务，再从 WSL 调它。这样可以保持未来接 MiniQMT 真机时的部署方向不变，因为 MiniQMT 仍然应该运行在 Windows 侧。
+
+### 路径 A：先试 `localhost`
+
+很多 WSL 环境已经支持 localhost 转发，最简单的验证方式是：
+
+```bash
+curl http://localhost:8811/health
+python3 scripts/call_miniqmt_server_mock.py --base-url http://localhost:8811
+```
+
+如果这条链路能通，后续 SysQ 脚本也优先用 `http://localhost:8811`，配置最简单。
+
+### 路径 B：`localhost` 不通时，使用 Windows host IP
+
+如果 WSL 访问 `localhost:8811` 失败，通常可以改用 WSL 看到的 Windows host IP：
+
+```bash
+WIN_HOST=$(awk '/nameserver/ {print $2; exit}' /etc/resolv.conf)
+curl "http://${WIN_HOST}:8811/health"
+python3 scripts/call_miniqmt_server_mock.py --base-url "http://${WIN_HOST}:8811"
+```
+
+这个方式生效的前提是：Windows 服务监听在 `0.0.0.0` 或该 host IP 对应的网卡地址，而不是只监听 `127.0.0.1`。
+
+### WSL 调用时的排障顺序
+
+按下面顺序排查最省时间：
+
+1. 在 Windows PowerShell 先确认 `Invoke-RestMethod http://127.0.0.1:8811/health` 正常
+2. 检查启动日志里是否是 `--host 0.0.0.0`
+3. 在 WSL 先试 `curl http://localhost:8811/health`
+4. 若失败，再试 `curl "http://${WIN_HOST}:8811/health"`
+5. 若仍失败，优先检查 Windows 防火墙是否阻止了 Python 监听 `8811`
+
 ## 启动 / 运行
 
 建议从仓库根目录启动。
 
-1. 使用示例配置启动 mock 服务：
+1. 使用通用示例配置启动 mock 服务：
 
 ```bash
-python -m miniqmt_server.app --config miniqmt_server/config.example.yaml
+python3 -m miniqmt_server.app --config miniqmt_server/config.example.yaml
 ```
 
 2. 临时覆盖监听地址或端口：
 
 ```bash
-python -m miniqmt_server.app \
+python3 -m miniqmt_server.app \
   --config miniqmt_server/config.example.yaml \
   --host 127.0.0.1 \
   --port 8812
@@ -78,7 +200,7 @@ curl http://127.0.0.1:8811/health
 4. 用仓库内示例脚本联调：
 
 ```bash
-python scripts/call_miniqmt_server_mock.py --base-url http://127.0.0.1:8811
+python3 scripts/call_miniqmt_server_mock.py --base-url http://127.0.0.1:8811
 ```
 
 说明：
@@ -86,14 +208,15 @@ python scripts/call_miniqmt_server_mock.py --base-url http://127.0.0.1:8811
 - 默认模式是 `broker.mode=mock`
 - `broker.mode=miniqmt` 当前会返回 `not_implemented`，适合先保留接口形状，不适合生产使用
 - `server.data_dir` 如果写相对路径，会基于当前工作目录解析；从仓库根目录启动最不容易混淆
+- 如果目标是给 WSL 调用，优先使用 `config.windows.mock.example.yaml` 或显式指定 `--host 0.0.0.0`
 
 ## 配置说明
 
-示例见 `miniqmt_server/config.example.yaml`。
+示例见 `miniqmt_server/config.example.yaml` 与 `miniqmt_server/config.windows.mock.example.yaml`。
 
 ### `server`
 
-- `host`：绑定地址，默认 `127.0.0.1`
+- `host`：绑定地址，默认 `127.0.0.1`；如果需要 WSL 调用，推荐改成 `0.0.0.0`
 - `port`：监听端口，默认 `8811`
 - `version`：服务版本号，默认来自 `miniqmt_server.__version__`
 - `data_dir`：审计文件和快照目录；默认 `miniqmt_server/data`
@@ -118,6 +241,7 @@ python scripts/call_miniqmt_server_mock.py --base-url http://127.0.0.1:8811
 - 本地联调：`mode=mock`、`allow_submit=true`、`auto_fill=false`
 - 只做预检：`mode=mock`、`allow_submit=false`
 - 演示成交回流：`mode=mock`、`allow_submit=true`、`auto_fill=true`
+- Windows 给 WSL 调用：`mode=mock`、`host=0.0.0.0`、`auto_fill=false`
 
 ## API 示例
 
@@ -217,17 +341,20 @@ curl http://127.0.0.1:8811/snapshots/latest
 
 ## 本地 mock 模式
 
-`mock` 模式是当前推荐的默认工作方式，适合在 Linux/WSL、CI 或没有券商环境的机器上做接口开发。
+`mock` 模式是当前推荐的默认工作方式，适合在 Linux、WSL、CI 或没有券商环境的机器上做接口开发。
 
 已实现能力：
 
 - 返回可配置的账户资金和持仓
+- 校验最基础的证券代码、方向、数量、价格字段
 - 支持 validate / submit / cancel / query 全套 HTTP 流程
 - 对 BUY 做可用现金检查，对 SELL 做 `available_volume` 检查
 - 批量 BUY 会按顺序累计占用 `available_cash`
 - 支持 `dry_run=true`，只校验不落正式订单
-- 支持 `request_id` 持久化幂等，服务重启后仍能回放
-- 支持提交、成交、快照落盘，便于回看 mock 执行轨迹
+- 支持 `request_id` 幂等回放
+- 支持撤单状态流转
+- 可选自动生成成交记录并更新快照
+- `data_dir` 落盘文件：订单、成交、提交回执、最新快照
 
 默认落盘文件：
 
@@ -288,7 +415,7 @@ curl http://127.0.0.1:8811/snapshots/latest
 本地运行最小相关测试：
 
 ```bash
-python -m unittest tests/test_miniqmt_server.py
+python3 -m unittest tests/test_miniqmt_server.py
 ```
 
 如果你只想验证真实 HTTP 端到端链路，也可以直接运行该模块里 `MiniQMTServerHTTPIntegrationTestCase` 相关用例。
