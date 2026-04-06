@@ -186,10 +186,10 @@ Qsys 按用途分为三层运行域：
 - `qsys/live/simulation.py`
 
 核心产物：
-- `data/plan_*.csv`
-- `data/real_sync_template_*.csv`
-- reconciliation outputs
-- daily operation logs
+- `daily/{date}/pre_open/plans/plan_{signal_date}_{account}.csv`
+- `daily/{date}/pre_open/plans/real_sync_template_{signal_date}_{account}.csv`
+- `daily/{date}/post_close/reconciliation/`
+- `daily/{date}/pre_open/reports/` 与 `daily/{date}/post_close/reports/`
 
 ---
 

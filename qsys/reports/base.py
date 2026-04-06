@@ -12,6 +12,9 @@ from pathlib import Path
 from typing import Any, Optional
 
 
+DEFAULT_REPORT_OUTPUT_DIR = Path("experiments/reports")
+
+
 class ReportStatus(str, Enum):
     """Report execution status"""
     SUCCESS = "success"
@@ -300,7 +303,7 @@ class RunReport:
         return report
 
 
-def save_report(report: RunReport, output_dir: str | Path = "data/reports") -> str:
+def save_report(report: RunReport, output_dir: str | Path = DEFAULT_REPORT_OUTPUT_DIR) -> str:
     """Save a report to JSON file"""
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)

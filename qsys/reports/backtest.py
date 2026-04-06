@@ -4,7 +4,7 @@ Backtest Report
 Generates structured reports for backtest workflows.
 """
 
-from qsys.reports.base import RunReport, ReportStatus, save_report
+from qsys.reports.base import DEFAULT_REPORT_OUTPUT_DIR, RunReport, ReportStatus, save_report
 
 
 class BacktestReport:
@@ -128,6 +128,6 @@ class BacktestReport:
         )
     
     @staticmethod
-    def save(report: RunReport, output_dir: str = "data/reports") -> str:
+    def save(report: RunReport, output_dir: str = str(DEFAULT_REPORT_OUTPUT_DIR)) -> str:
         """Save the report to file"""
         return save_report(report, output_dir)

@@ -6,7 +6,7 @@ from unittest.mock import patch
 import pandas as pd
 
 from qsys.data.adapter import QlibAdapter
-from qsys.live.ops_paths import find_plan_path_for_execution_date
+from qsys.live.ops_paths import build_stage_paths, find_plan_path_for_execution_date
 import scripts.run_daily_trading as run_daily_trading
 import scripts.run_post_close as run_post_close
 from scripts.run_daily_trading import (
@@ -75,6 +75,18 @@ class TestCliSemantics(unittest.TestCase):
         self.assertTrue(str(resolved["plan_dir"]).endswith("daily/2026-03-23/pre_open/plans"))
         self.assertTrue(str(resolved["manifest_dir"]).endswith("daily/2026-03-23/post_close/manifests"))
         self.assertTrue(str(resolved["db_path"]).endswith("data/meta/real_account.db"))
+
+    def test_build_stage_paths_only_creates_stage_root(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            daily_root = Path(tmpdir) / "daily"
+            paths = build_stage_paths("2026-03-23", stage="pre_open", daily_root=daily_root)
+
+            self.assertTrue(paths.root.exists())
+            self.assertFalse(paths.plans_dir.exists())
+            self.assertFalse(paths.order_intents_dir.exists())
+            self.assertFalse(paths.signals_dir.exists())
+            self.assertFalse(paths.reports_dir.exists())
+            self.assertFalse(paths.manifests_dir.exists())
 
     def test_find_plan_path_only_reads_new_daily_layout(self):
         with tempfile.TemporaryDirectory() as tmpdir:

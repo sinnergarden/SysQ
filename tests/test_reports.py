@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+import os
 from pathlib import Path
 
 from qsys.reports import (
@@ -13,6 +14,7 @@ from qsys.reports import (
     load_report,
     save_report,
 )
+from qsys.reports.base import DEFAULT_REPORT_OUTPUT_DIR
 
 
 class TestRunReports(unittest.TestCase):
@@ -31,6 +33,19 @@ class TestRunReports(unittest.TestCase):
         self.assertEqual(loaded.signal_date, "2026-03-20")
         self.assertEqual(loaded.data_status["aligned"], True)
         self.assertEqual(len(loaded.sections), 1)
+
+    def test_base_report_default_output_uses_experiments_reports(self):
+        report = RunReport(workflow="train", signal_date="2026-03-20")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            previous_cwd = Path.cwd()
+            os.chdir(tmpdir)
+            try:
+                path = Path(save_report(report))
+                self.assertEqual(path, DEFAULT_REPORT_OUTPUT_DIR / path.name)
+                self.assertTrue(path.exists())
+            finally:
+                os.chdir(previous_cwd)
 
     def test_daily_report_generation(self):
         report = DailyOpsReport.generate_pre_open_report(
