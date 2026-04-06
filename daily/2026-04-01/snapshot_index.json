@@ -38,7 +38,7 @@
         },
         "account_db": {
           "category": "external_reference",
-          "path": "/home/liuming/.openclaw/workspace/SysQ/data/meta/real_account.db",
+          "path": "data/meta/real_account.db",
           "exists": true
         },
         "signal_basket": {
@@ -85,7 +85,7 @@
         },
         "account_db": {
           "category": "external_reference",
-          "path": "/home/liuming/.openclaw/workspace/SysQ/data/meta/real_account.db",
+          "path": "data/meta/real_account.db",
           "exists": true
         }
       },

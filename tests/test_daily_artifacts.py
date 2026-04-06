@@ -156,7 +156,7 @@ class TestDailyArtifacts(unittest.TestCase):
             index_payload = json.loads(Path(archive_info["index_path"]).read_text(encoding="utf-8"))
             db_artifact = index_payload["stages"]["pre_open"]["artifacts"]["account_db"]
             self.assertEqual(db_artifact["category"], "external_reference")
-            self.assertEqual(db_artifact["path"], str(db_path))
+            self.assertTrue(db_artifact["path"].endswith("data/meta/real_account.db"))
             self.assertFalse((tmp / "daily" / "2026-04-03" / "pre_open" / "accounts").exists())
 
     def test_build_daily_summary_bundle_merges_stage_manifests(self):

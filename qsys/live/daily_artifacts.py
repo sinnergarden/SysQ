@@ -112,6 +112,20 @@ def _artifact_display_path(payload: dict[str, Any]) -> str | None:
     return payload.get("path") or payload.get("archived_path") or payload.get("source_path")
 
 
+def _compact_path(path: str | Path | None, *, archive_root: Path) -> str | None:
+    if path is None:
+        return None
+    path_obj = Path(path)
+    if not path_obj.is_absolute():
+        return str(path_obj)
+    for base in (archive_root.parent, archive_root):
+        try:
+            return str(path_obj.relative_to(base))
+        except ValueError:
+            continue
+    return str(path_obj)
+
+
 def extract_account_snapshot(account: RealAccount, *, date: str, account_name: str) -> dict[str, Any]:
     state = account.get_state(date, account_name=account_name)
     if not state:
@@ -169,7 +183,7 @@ def archive_daily_artifacts(
 
     archived_artifacts: dict[str, Any] = {}
     stage_record: dict[str, Any] = {
-        "stage_root": str(stage_root),
+        "stage_root": _compact_path(stage_root, archive_root=archive_root),
         "artifacts": archived_artifacts,
     }
     for name, original_path in (artifacts or {}).items():
@@ -177,7 +191,7 @@ def archive_daily_artifacts(
             source_path = Path(original_path)
             archived_artifacts[name] = _artifact_entry(
                 category="external_reference",
-                path=str(source_path),
+                path=_compact_path(source_path, archive_root=archive_root),
                 exists=source_path.exists(),
             )
             continue
@@ -186,16 +200,16 @@ def archive_daily_artifacts(
         source_path = Path(original_path)
         archived_path = _copy_if_exists(source_path, stage_root / category / source_path.name)
         if name == "report":
-            stage_record["report_path"] = archived_path or str(source_path)
+            stage_record["report_path"] = _compact_path(archived_path or source_path, archive_root=archive_root)
             continue
         if name == "manifest":
-            stage_record["manifest_path"] = archived_path or str(source_path)
+            stage_record["manifest_path"] = _compact_path(archived_path or source_path, archive_root=archive_root)
             continue
         archived_artifacts[name] = _artifact_entry(
             category=category,
-            path=archived_path or str(source_path),
+            path=_compact_path(archived_path or source_path, archive_root=archive_root),
             exists=archived_path is not None,
-            copied_from=str(source_path),
+            copied_from=_compact_path(source_path, archive_root=archive_root),
         )
 
     existing.setdefault("execution_date", execution_date)
@@ -398,7 +412,7 @@ def build_daily_summary_bundle(
         "signal_date": signal_date,
         "blockers": list(manifest.get("blockers") or []),
         "recent_reviews": recent_reviews,
-        "snapshot_index_path": str(day_root / "snapshot_index.json"),
+        "snapshot_index_path": _compact_path(day_root / "snapshot_index.json", archive_root=archive_root),
         "stages": _build_digest_stage_payload(manifest=manifest, index_payload=index_payload),
         "report_text": report_text,
     }
