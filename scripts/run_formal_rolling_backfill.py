@@ -28,6 +28,9 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
 
+from qlib.data import D
+
+from qsys.data.adapter import QlibAdapter
 from qsys.live.account import RealAccount
 from qsys.live.ops_paths import build_stage_paths
 from qsys.live.simulation import ShadowSimulator
@@ -104,8 +107,6 @@ def run_cmd(cmd: list[str], *, log_path: Path, cwd: Path = PROJECT_ROOT) -> None
 
 def latest_replay_end() -> str:
     try:
-        from qsys.data.adapter import QlibAdapter
-
         adapter = QlibAdapter()
         adapter.init_qlib()
         status = adapter.get_data_status_report()
@@ -117,19 +118,32 @@ def latest_replay_end() -> str:
     return pd.Timestamp.today().strftime("%Y-%m-%d")
 
 
-def previous_business_day(value: str) -> str:
-    return (pd.Timestamp(value) - pd.offsets.BDay(1)).strftime("%Y-%m-%d")
+def init_trading_calendar() -> None:
+    adapter = QlibAdapter()
+    adapter.init_qlib()
+
+
+def previous_trading_day(value: str) -> str:
+    init_trading_calendar()
+    ts = pd.Timestamp(value)
+    calendar = D.calendar(start_time=ts - pd.Timedelta(days=15), end_time=ts)
+    candidates = [pd.Timestamp(x) for x in calendar if pd.Timestamp(x) < ts]
+    if not candidates:
+        raise ValueError(f"No previous trading day found before {value}")
+    return max(candidates).strftime("%Y-%m-%d")
 
 
 def build_execution_days(start: str, end: str, max_days: int | None = None) -> list[str]:
-    days = [ts.strftime("%Y-%m-%d") for ts in pd.date_range(start, end, freq="B")]
+    init_trading_calendar()
+    calendar = D.calendar(start_time=pd.Timestamp(start), end_time=pd.Timestamp(end))
+    days = [pd.Timestamp(x).strftime("%Y-%m-%d") for x in calendar]
     if max_days is not None:
         days = days[:max_days]
     return days
 
 
 def reset_replay_range(paths: BackfillPaths, start_execution_date: str) -> None:
-    signal_cutoff = previous_business_day(start_execution_date)
+    signal_cutoff = previous_trading_day(start_execution_date)
     if paths.daily_root.exists():
         for day_dir in paths.daily_root.iterdir():
             if not day_dir.is_dir():
@@ -279,7 +293,7 @@ def build_aggregate_outputs(args: argparse.Namespace, paths: BackfillPaths, exec
 
         if day_trades.empty:
             continue
-        signal_date = previous_business_day(execution_date)
+        signal_date = previous_trading_day(execution_date)
         plan_path = find_shadow_plan(execution_date, signal_date)
         target_weight_map: dict[tuple[str, str], float] = {}
         if plan_path.exists():
@@ -360,7 +374,7 @@ def main() -> None:
 
     start_wall = time.time()
     for idx, execution_date in enumerate(execution_days, start=1):
-        signal_date = previous_business_day(execution_date)
+        signal_date = previous_trading_day(execution_date)
         day_log = paths.logs_root / f"{execution_date}.log"
         append_progress(paths, "day_start", idx=idx, total=len(execution_days), signal_date=signal_date, execution_date=execution_date)
         try:

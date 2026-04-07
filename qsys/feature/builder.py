@@ -14,8 +14,23 @@ from qsys.feature.groups.fundamental_context import build_fundamental_context_fe
 from qsys.feature.transforms import apply_cross_sectional_standardization
 
 
+def _coerce_value(value) -> pd.Series:
+    if isinstance(value, pd.DataFrame):
+        series = pd.Series(pd.NA, index=value.index, dtype="object")
+        for i in range(value.shape[1]):
+            series = series.combine_first(pd.to_numeric(value.iloc[:, i], errors="coerce"))
+        return pd.to_numeric(series, errors="coerce")
+    return pd.to_numeric(value, errors="coerce")
+
+
+def _coerce_series(frame: pd.DataFrame, column: str) -> pd.Series:
+    return _coerce_value(frame[column])
+
+
 def _repair_research_input_columns(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
+    if out.columns.duplicated().any():
+        out = out.loc[:, ~out.columns.duplicated()].copy()
     coalesce_pairs = {
         'close': ['close_x', 'close_y'],
         'high_limit': ['up_limit'],
@@ -25,10 +40,10 @@ def _repair_research_input_columns(df: pd.DataFrame) -> pd.DataFrame:
     for target, sources in coalesce_pairs.items():
         if target not in out.columns:
             out[target] = pd.NA
-        base = pd.to_numeric(out[target], errors='coerce')
+        base = _coerce_series(out, target)
         for src in sources:
             if src in out.columns:
-                base = base.combine_first(pd.to_numeric(out[src], errors='coerce'))
+                base = base.combine_first(_coerce_series(out, src))
         out[target] = base
     return out
 
