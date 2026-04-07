@@ -236,7 +236,7 @@ class ResearchCockpitRepository:
         daily_path = (payload.get("artifacts") or {}).get("daily_result")
         if not daily_path:
             return []
-        csv_path = self.project_root / self._logicalize_path(daily_path)
+        csv_path = self._resolve_project_artifact_path(daily_path)
         if not csv_path.exists():
             return []
         frame = pd.read_csv(csv_path)
@@ -256,7 +256,7 @@ class ResearchCockpitRepository:
                     equity=self._to_float(row.get("total_assets")),
                     daily_return=self._to_float(row.get("daily_return")),
                     drawdown=self._to_float(row.get("drawdown")),
-                    turnover=self._to_float(row.get("turnover")),
+                    turnover=self._to_float(row.get("turnover") or row.get("daily_turnover")),
                     ic=self._to_float(row.get("ic")),
                     rank_ic=self._to_float(row.get("rank_ic")),
                     trade_count=self._to_int(row.get("trade_count")),
@@ -471,6 +471,29 @@ class ResearchCockpitRepository:
             return path_obj.relative_to(self.project_root)
         except ValueError:
             return path_obj
+
+    def _resolve_project_artifact_path(self, path: str | Path) -> Path:
+        path_obj = Path(path)
+        candidates: list[Path] = []
+        if path_obj.is_absolute():
+            candidates.append(path_obj)
+            try:
+                relative = path_obj.relative_to(self.project_root)
+                candidates.append(self.project_root / relative)
+            except ValueError:
+                pass
+            # Historical reports sometimes persisted paths under data/experiments while files now live in experiments/.
+            parts = list(path_obj.parts)
+            if "data" in parts and "experiments" in parts:
+                idx = parts.index("data")
+                rebased = Path(*parts[:idx], *parts[idx + 1 :])
+                candidates.append(rebased)
+        else:
+            candidates.append(self.project_root / path_obj)
+        for candidate in candidates:
+            if candidate.exists():
+                return candidate
+        return candidates[0]
 
     def _normalize_scalar(self, value: Any) -> Any:
         if pd.isna(value):

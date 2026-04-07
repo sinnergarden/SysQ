@@ -159,6 +159,17 @@ def create_app(project_root: str | Path = ".") -> FastAPI:
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
+    @app.get("/api/backtest-runs/{run_id}/metrics")
+    def get_backtest_metrics(
+        run_id: str,
+        repo: ResearchCockpitRepository = Depends(get_repo),
+    ) -> dict:
+        try:
+            summary = repo.get_backtest_summary(run_id)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {"run_id": run_id, "metrics": summary.metrics}
+
     @app.get("/api/backtest-runs/{run_id}/daily")
     def get_backtest_daily(
         run_id: str,

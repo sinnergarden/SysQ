@@ -46,6 +46,19 @@ class TestResearchUiApi(unittest.TestCase):
         self.assertGreater(payload['count'], 0)
         self.assertIn('run_id', payload['items'][0])
 
+        run_id = payload['items'][0]['run_id']
+        metrics_response = self.client.get(f'/api/backtest-runs/{run_id}/metrics')
+        self.assertEqual(metrics_response.status_code, 200)
+        metrics_payload = metrics_response.json()
+        self.assertEqual(metrics_payload['run_id'], run_id)
+        self.assertIn('metrics', metrics_payload)
+
+        daily_response = self.client.get(f'/api/backtest-runs/{run_id}/daily')
+        self.assertEqual(daily_response.status_code, 200)
+        daily_payload = daily_response.json()
+        self.assertEqual(daily_payload['run_id'], run_id)
+        self.assertGreater(len(daily_payload['items']), 0)
+
     def test_daily_run_endpoints(self):
         daily_response = self.client.get('/api/runs/daily/2026-04-06')
         self.assertEqual(daily_response.status_code, 200)
