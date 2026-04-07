@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Qsys Research UI</title>
+  <link rel="stylesheet" href="/ui/styles.css" />
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">Q</div>
+        <div>
+          <h1>Research UI</h1>
+          <p>Debug Cockpit</p>
+        </div>
+      </div>
+      <nav class="nav">
+        <button class="nav-btn active" data-view="case">Case Workspace</button>
+        <button class="nav-btn" data-view="feature">Feature Health</button>
+        <button class="nav-btn" data-view="backtest">Backtest Explorer</button>
+        <button class="nav-btn" data-view="replay">Decision Replay</button>
+      </nav>
+      <div class="sidebar-note">
+        所有页面都走稳定 schema / API，不直接读底层临时文件。
+      </div>
+    </aside>
+
+    <main class="main">
+      <section class="toolbar">
+        <div>
+          <h2 id="view-title">Case Workspace</h2>
+          <p id="view-subtitle">单票 case、signal、feature、订单、仓位联动查看。</p>
+        </div>
+        <div class="status-pill" id="status-pill">API Ready</div>
+      </section>
+
+      <section class="view active" id="view-case">
+        <div class="panel form-panel">
+          <div class="form-grid">
+            <label>Execution Date<input id="case-date" value="2026-04-06" /></label>
+            <label>Instrument<input id="case-instrument" value="000001.SZ" /></label>
+            <label>Price Mode
+              <select id="case-price-mode">
+                <option value="fq">fq</option>
+                <option value="raw">raw</option>
+              </select>
+            </label>
+            <button id="load-case">Load Case</button>
+          </div>
+        </div>
+        <div class="grid two-col">
+          <div class="panel">
+            <div class="panel-head"><h3>K / Volume</h3><span id="case-meta"></span></div>
+            <svg id="case-bars-chart" class="chart" viewBox="0 0 760 260"></svg>
+            <svg id="case-volume-chart" class="chart compact" viewBox="0 0 760 120"></svg>
+          </div>
+          <div class="panel">
+            <div class="panel-head"><h3>Signal / Orders</h3></div>
+            <pre id="case-signal" class="code-block"></pre>
+          </div>
+        </div>
+        <div class="grid two-col">
+          <div class="panel">
+            <div class="panel-head"><h3>Feature Snapshot</h3></div>
+            <div id="case-feature-table" class="table-wrap"></div>
+          </div>
+          <div class="panel">
+            <div class="panel-head"><h3>Positions / Orders</h3></div>
+            <div id="case-orders-table" class="table-wrap"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="view" id="view-feature">
+        <div class="panel form-panel">
+          <div class="form-grid feature-grid">
+            <label>Trade Date<input id="feature-date" value="2026-04-03" /></label>
+            <label>Instrument<input id="feature-instrument" value="000001.SZ" /></label>
+            <label>Feature Names<input id="feature-names" value="open_1d_return,close_5d_return,volume_ratio_20d" /></label>
+            <button id="load-feature">Load Feature Health</button>
+          </div>
+        </div>
+        <div class="grid two-col">
+          <div class="panel">
+            <div class="panel-head"><h3>Feature Health</h3></div>
+            <div id="feature-health-table" class="table-wrap"></div>
+          </div>
+          <div class="panel">
+            <div class="panel-head"><h3>Instrument-Date Snapshot</h3></div>
+            <div id="feature-snapshot-table" class="table-wrap"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="view" id="view-backtest">
+        <div class="panel form-panel">
+          <div class="form-grid">
+            <label>Backtest Run<input id="backtest-run-id" value="20260403_195202" /></label>
+            <button id="load-backtest">Load Backtest</button>
+          </div>
+        </div>
+        <div class="grid three-col">
+          <div class="panel stat-card"><span>Total Return</span><strong id="metric-total-return">-</strong></div>
+          <div class="panel stat-card"><span>Sharpe</span><strong id="metric-sharpe">-</strong></div>
+          <div class="panel stat-card"><span>Max Drawdown</span><strong id="metric-max-drawdown">-</strong></div>
+        </div>
+        <div class="grid two-col">
+          <div class="panel">
+            <div class="panel-head"><h3>Equity / Drawdown</h3></div>
+            <svg id="backtest-equity-chart" class="chart" viewBox="0 0 760 260"></svg>
+          </div>
+          <div class="panel">
+            <div class="panel-head"><h3>Turnover / IC / RankIC</h3></div>
+            <svg id="backtest-diagnostics-chart" class="chart" viewBox="0 0 760 260"></svg>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h3>Daily Drill-down</h3></div>
+          <div id="backtest-daily-table" class="table-wrap"></div>
+        </div>
+      </section>
+
+      <section class="view" id="view-replay">
+        <div class="panel form-panel">
+          <div class="form-grid">
+            <label>Execution Date<input id="replay-date" value="2026-04-06" /></label>
+            <label>Account<input id="replay-account" value="shadow" /></label>
+            <button id="load-replay">Load Replay</button>
+          </div>
+        </div>
+        <div class="grid two-col">
+          <div class="panel">
+            <div class="panel-head"><h3>Previous Positions</h3></div>
+            <div id="replay-positions-table" class="table-wrap"></div>
+          </div>
+          <div class="panel">
+            <div class="panel-head"><h3>Final Orders</h3></div>
+            <div id="replay-orders-table" class="table-wrap"></div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h3>Candidate Pool / Explanations</h3></div>
+          <div id="replay-candidates-table" class="table-wrap"></div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="/ui/app.js"></script>
+</body>
+</html>

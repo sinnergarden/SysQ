@@ -42,6 +42,24 @@ class ResearchCockpitRepository:
         self.store = StockDataStore()
         self.research_view = ResearchDataView(n_jobs=1)
 
+    def list_instruments(self, *, query: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
+        frame = self.store.get_stock_list()
+        if frame is None or frame.empty:
+            return []
+        if query:
+            q = str(query).strip().lower()
+            mask = pd.Series(False, index=frame.index)
+            for column in ["ts_code", "symbol", "name", "industry", "market"]:
+                if column in frame.columns:
+                    mask = mask | frame[column].astype(str).str.lower().str.contains(q, na=False)
+            frame = frame[mask]
+        frame = frame.sort_values([col for col in ["ts_code", "symbol"] if col in frame.columns]).head(limit)
+        return [{key: self._normalize_scalar(value) for key, value in row.items()} for row in frame.to_dict(orient="records")]
+
+    def get_instrument(self, instrument_id: str) -> dict[str, Any] | None:
+        items = [item for item in self.list_instruments(limit=5000) if item.get("ts_code") == instrument_id]
+        return items[0] if items else None
+
     def list_feature_registry(self) -> list[FeatureRegistryEntry]:
         entries: list[FeatureRegistryEntry] = []
         for group_name, payload in sorted(list_feature_groups().items()):
@@ -61,6 +79,47 @@ class ResearchCockpitRepository:
                     )
                 )
         return entries
+
+    def get_bar_series(self, *, instrument_id: str, start: str, end: str, price_mode: str = "fq") -> list[dict[str, Any]]:
+        return self._load_bars(instrument_id=instrument_id, trade_date=end, price_mode=price_mode, start_date=start, end_date=end)
+
+    def get_feature_snapshot(self, *, trade_date: str, instrument_id: str, feature_names: list[str] | None = None) -> dict[str, Any]:
+        return self._load_feature_snapshot(trade_date=trade_date, instrument_id=instrument_id, feature_names=feature_names)
+
+    def get_feature_series(self, *, instrument_id: str, start: str, end: str, feature_names: list[str]) -> list[dict[str, Any]]:
+        qlib_fields = [name if name.startswith("$") else f"${name}" for name in feature_names]
+        frame = self.research_view.get_feature([instrument_id], qlib_fields, start, end)
+        if frame.empty:
+            return []
+        rows: list[dict[str, Any]] = []
+        for _, row in frame.reset_index().iterrows():
+            item = {
+                "trade_date": str(row.get("trade_date")),
+                "instrument_id": str(row.get("ts_code")),
+            }
+            for field in qlib_fields:
+                item[field.lstrip("$")] = self._normalize_scalar(row.get(field))
+            rows.append(item)
+        return rows
+
+    def list_feature_runs(self, limit: int = 100) -> list[dict[str, Any]]:
+        runs: list[dict[str, Any]] = []
+        for manifest_path in sorted(self.daily_root.glob("*/pre_open/manifests/daily_ops_manifest_*.json"), reverse=True)[:limit]:
+            manifest = load_manifest(manifest_path)
+            signal_date = manifest.get("signal_date") or manifest.get("execution_date")
+            runs.append(
+                {
+                    "run_id": f"feature-health:{signal_date}:csi300",
+                    "execution_date": manifest.get("execution_date"),
+                    "trade_date": signal_date,
+                    "signal_date": signal_date,
+                    "universe": "csi300",
+                    "model_info": manifest.get("model_info") or {},
+                    "data_status": manifest.get("data_status") or {},
+                    "manifest_ref": str(manifest_path.relative_to(self.project_root)),
+                }
+            )
+        return runs
 
     def build_feature_health_summary(self, *, trade_date: str, feature_names: list[str], universe: str = "csi300") -> FeatureHealthSummary:
         qlib_fields = [field if field.startswith("$") else f"${field}" for field in feature_names]
@@ -164,6 +223,12 @@ class ResearchCockpitRepository:
                 )
             )
         return runs
+
+    def get_backtest_summary(self, run_id: str) -> BacktestRunSummary:
+        for item in self.list_backtest_runs(limit=500):
+            if item.run_id == run_id:
+                return item
+        raise FileNotFoundError(f"Unknown backtest run_id: {run_id}")
 
     def get_backtest_daily_points(self, run_id: str) -> list[BacktestDailyPoint]:
         report_path = self._resolve_backtest_report(run_id)
@@ -291,12 +356,20 @@ class ResearchCockpitRepository:
             ],
         )
 
-    def _load_bars(self, *, instrument_id: str, trade_date: str, price_mode: str) -> list[dict[str, Any]]:
+    def get_case_bundle_by_id(self, case_id: str) -> CaseBundle:
+        try:
+            execution_date, instrument_id, price_mode = case_id.split(":", 2)
+        except ValueError as exc:
+            raise FileNotFoundError(f"Unknown case_id: {case_id}") from exc
+        return self.build_case_bundle(execution_date=execution_date, instrument_id=instrument_id, price_mode=price_mode)
+
+    def _load_bars(self, *, instrument_id: str, trade_date: str, price_mode: str, start_date: str | None = None, end_date: str | None = None) -> list[dict[str, Any]]:
         fields = ["open", "high", "low", "close", "volume", "adj_factor"]
         if price_mode == "fq":
             fields = ["adj_open", "adj_high", "adj_low", "adj_close", "volume", "adj_factor"]
-        start_date = (pd.Timestamp(trade_date) - pd.Timedelta(days=90)).strftime("%Y-%m-%d")
-        frame = self.research_view.get_feature([instrument_id], fields, start_date, trade_date)
+        start_date = start_date or (pd.Timestamp(trade_date) - pd.Timedelta(days=90)).strftime("%Y-%m-%d")
+        end_date = end_date or trade_date
+        frame = self.research_view.get_feature([instrument_id], fields, start_date, end_date)
         if frame.empty:
             return []
         rows: list[dict[str, Any]] = []
@@ -320,9 +393,9 @@ class ResearchCockpitRepository:
             return {}
         return {key: self._normalize_scalar(value) for key, value in matched.iloc[0].to_dict().items()}
 
-    def _load_feature_snapshot(self, *, trade_date: str, instrument_id: str) -> dict[str, Any]:
-        features = self.list_feature_registry()[:20]
-        field_names = [item.feature_name for item in features]
+    def _load_feature_snapshot(self, *, trade_date: str, instrument_id: str, feature_names: list[str] | None = None) -> dict[str, Any]:
+        features = feature_names or [item.feature_name for item in self.list_feature_registry()[:20]]
+        field_names = [str(item).lstrip("$") for item in features]
         qlib_fields = [f"${name}" for name in field_names]
         try:
             frame = self.research_view.get_feature([instrument_id], qlib_fields, trade_date, trade_date)
