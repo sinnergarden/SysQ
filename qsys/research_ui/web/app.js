@@ -1,5 +1,7 @@
 const state = {
   currentView: 'case',
+  loadedViews: new Set(),
+  cache: new Map(),
 };
 
 const viewMeta = {
@@ -21,7 +23,8 @@ function setView(name) {
   document.getElementById('view-subtitle').textContent = viewMeta[name][1];
 }
 
-async function getJson(url) {
+async function getJson(url, { useCache = true } = {}) {
+  if (useCache && state.cache.has(url)) return state.cache.get(url);
   setStatus('Loading');
   const response = await fetch(url);
   const payload = await response.json();
@@ -30,7 +33,16 @@ async function getJson(url) {
     throw new Error(payload.detail || 'request failed');
   }
   setStatus('API Ready');
+  if (useCache) state.cache.set(url, payload);
   return payload;
+}
+
+function unwrapData(payload) {
+  return payload && typeof payload === 'object' && 'data' in payload ? payload.data : payload;
+}
+
+function unwrapItems(payload) {
+  return payload && typeof payload === 'object' && Array.isArray(payload.items) ? payload.items : [];
 }
 
 function renderTable(containerId, rows, columns) {
@@ -101,12 +113,13 @@ async function loadCase() {
     const instrumentId = document.getElementById('case-instrument').value.trim();
     const priceMode = document.getElementById('case-price-mode').value;
     const backtestRunId = document.getElementById('case-backtest-run').value.trim();
-    const payload = await getJson(`/api/cases/${executionDate}:${instrumentId}:${priceMode}`);
+    const casePayload = await getJson(`/api/cases/${executionDate}:${instrumentId}:${priceMode}`, { useCache: false });
+    const payload = unwrapData(casePayload);
     let tradeMarkers = [];
     let backtestTrades = [];
     if (backtestRunId) {
       const tradePayload = await getJson(`/api/backtest-runs/${backtestRunId}/orders?instrument_id=${encodeURIComponent(instrumentId)}&limit=5000`);
-      backtestTrades = tradePayload.items || [];
+      backtestTrades = unwrapItems(tradePayload);
     }
     document.getElementById('case-meta').textContent = `${payload.instrument_id} / ${payload.trade_date} / ${payload.price_mode}`;
     const priceKey = priceMode === 'fq' ? 'adj_close' : 'close';
@@ -143,7 +156,8 @@ async function loadFeatureHealth() {
     const featureNames = document.getElementById('feature-names').value.split(',').map((item) => item.trim()).filter(Boolean);
     const healthParams = new URLSearchParams({ trade_date: tradeDate, universe: 'csi300' });
     featureNames.forEach((name) => healthParams.append('feature_names', name));
-    const health = await getJson(`/api/feature-health?${healthParams.toString()}`);
+    const healthPayload = await getJson(`/api/feature-health?${healthParams.toString()}`, { useCache: false });
+    const health = unwrapData(healthPayload);
     renderTable('feature-health-table', health.features, [
       { key: 'feature_name', label: 'Feature' },
       { key: 'coverage_ratio', label: 'Coverage' },
@@ -154,7 +168,8 @@ async function loadFeatureHealth() {
 
     const snapshotParams = new URLSearchParams({ trade_date: tradeDate, instrument_id: instrumentId });
     featureNames.forEach((name) => snapshotParams.append('feature_names', name));
-    const snapshot = await getJson(`/api/feature-snapshot?${snapshotParams.toString()}`);
+    const snapshotPayload = await getJson(`/api/feature-snapshot?${snapshotParams.toString()}`, { useCache: false });
+    const snapshot = unwrapData(snapshotPayload);
     const rows = Object.entries(snapshot.features || {}).map(([feature_name, value]) => ({ feature_name, value }));
     renderTable('feature-snapshot-table', rows, [{ key: 'feature_name', label: 'Feature' }, { key: 'value', label: 'Value' }]);
   } catch (error) {
@@ -165,14 +180,16 @@ async function loadFeatureHealth() {
 async function loadBacktest() {
   try {
     const runId = document.getElementById('backtest-run-id').value.trim();
-    const summary = await getJson(`/api/backtest-runs/${runId}/summary`);
-    const daily = await getJson(`/api/backtest-runs/${runId}/daily`);
+    const summaryPayload = await getJson(`/api/backtest-runs/${runId}/summary`);
+    const dailyPayload = await getJson(`/api/backtest-runs/${runId}/daily`);
+    const summary = unwrapData(summaryPayload);
+    const dailyItems = unwrapItems(dailyPayload);
     document.getElementById('metric-total-return').textContent = summary.metrics.total_return || '-';
     document.getElementById('metric-sharpe').textContent = summary.metrics.sharpe || '-';
     document.getElementById('metric-max-drawdown').textContent = summary.metrics.max_drawdown || '-';
-    renderLineChart('backtest-equity-chart', daily.items.map((item) => item.equity), daily.items.map((item) => item.drawdown));
-    renderLineChart('backtest-diagnostics-chart', daily.items.map((item) => item.turnover), daily.items.map((item) => item.ic));
-    renderTable('backtest-daily-table', daily.items, [
+    renderLineChart('backtest-equity-chart', dailyItems.map((item) => item.equity), dailyItems.map((item) => item.drawdown));
+    renderLineChart('backtest-diagnostics-chart', dailyItems.map((item) => item.turnover), dailyItems.map((item) => item.ic));
+    renderTable('backtest-daily-table', dailyItems, [
       { key: 'trade_date', label: 'Trade Date' },
       { key: 'equity', label: 'Equity' },
       { key: 'drawdown', label: 'Drawdown' },
@@ -183,7 +200,7 @@ async function loadBacktest() {
       { label: 'Orders', render: (row) => `<span class="action-link" onclick="loadBacktestOrders('${row.trade_date}')">Open</span>` },
       { label: 'Replay', render: (row) => `<span class="action-link" onclick="jumpToReplay('${row.trade_date}')">Open</span>` },
     ]);
-    const seedDate = daily.items[0]?.trade_date;
+    const seedDate = dailyItems[0]?.trade_date;
     if (seedDate) {
       await loadBacktestOrders(seedDate);
     }
@@ -196,7 +213,8 @@ async function loadReplay() {
   try {
     const executionDate = document.getElementById('replay-date').value.trim();
     const accountName = document.getElementById('replay-account').value.trim();
-    const replay = await getJson(`/api/decision-replay?execution_date=${executionDate}&account_name=${accountName}`);
+    const replayPayload = await getJson(`/api/decision-replay?execution_date=${executionDate}&account_name=${accountName}`, { useCache: false });
+    const replay = unwrapData(replayPayload);
     renderTable('replay-positions-table', replay.previous_positions, [
       { key: 'instrument_id', label: 'Instrument' },
       { key: 'quantity', label: 'Qty' },
@@ -242,7 +260,8 @@ window.loadBacktestOrders = async function loadBacktestOrders(tradeDate) {
   try {
     const runId = document.getElementById('backtest-run-id').value.trim();
     const payload = await getJson(`/api/backtest-runs/${runId}/orders?trade_date=${tradeDate}`);
-    renderTable('backtest-orders-table', payload.items, [
+    const items = unwrapItems(payload);
+    renderTable('backtest-orders-table', items, [
       { key: 'date', label: 'Trade Date' },
       { key: 'symbol', label: 'Instrument' },
       { key: 'side', label: 'Side' },
@@ -258,16 +277,25 @@ window.loadBacktestOrders = async function loadBacktestOrders(tradeDate) {
   }
 }
 
+async function loadViewIfNeeded(name, { force = false } = {}) {
+  if (!force && state.loadedViews.has(name)) return;
+  if (name === 'case') await loadCase();
+  if (name === 'feature') await loadFeatureHealth();
+  if (name === 'backtest') await loadBacktest();
+  if (name === 'replay') await loadReplay();
+  state.loadedViews.add(name);
+}
+
 function bindEvents() {
-  document.querySelectorAll('.nav-btn').forEach((btn) => btn.addEventListener('click', () => setView(btn.dataset.view)));
-  document.getElementById('load-case').addEventListener('click', loadCase);
-  document.getElementById('load-feature').addEventListener('click', loadFeatureHealth);
-  document.getElementById('load-backtest').addEventListener('click', loadBacktest);
-  document.getElementById('load-replay').addEventListener('click', loadReplay);
+  document.querySelectorAll('.nav-btn').forEach((btn) => btn.addEventListener('click', async () => {
+    setView(btn.dataset.view);
+    await loadViewIfNeeded(btn.dataset.view);
+  }));
+  document.getElementById('load-case').addEventListener('click', () => loadViewIfNeeded('case', { force: true }));
+  document.getElementById('load-feature').addEventListener('click', () => loadViewIfNeeded('feature', { force: true }));
+  document.getElementById('load-backtest').addEventListener('click', () => loadViewIfNeeded('backtest', { force: true }));
+  document.getElementById('load-replay').addEventListener('click', () => loadViewIfNeeded('replay', { force: true }));
 }
 
 bindEvents();
-loadCase();
-loadFeatureHealth();
-loadBacktest();
-loadReplay();
+loadViewIfNeeded('case');

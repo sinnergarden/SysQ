@@ -19,6 +19,9 @@ Implementation lives in:
 - Raw and fq price mode must be explicit in case-oriented payloads.
 - Daily ops, feature health, model prediction outputs, and trade records are normalized into one contract layer before they reach API or UI.
 - New cockpit features should extend this schema layer first, then API, then UI.
+- API responses should use a stable envelope: `api_version`, `meta`, and either `data` or `items`.
+- Query context used to build a payload should be echoed in `meta` rather than inferred by the caller.
+- Front-end code may consume `items` / `data`, but should not depend on raw artifact paths or undocumented side fields.
 
 ## Core Objects
 
@@ -153,6 +156,26 @@ Current alignment policy in the assembler:
 - `experiments/reports/backtest_*.json` -> `BacktestRunSummary`
 - `order_intents_{execution_date}_{account}.json` + account history -> `DecisionReplay`
 - bars + signal basket + feature snapshot + replay slice -> `CaseBundle`
+
+## API Envelope
+
+List endpoints should return:
+- `api_version`
+- `meta`
+- `items[]`
+- `count`
+
+Detail endpoints should return:
+- `api_version`
+- `meta`
+- `data`
+
+Recommended `meta` fields:
+- `resource`
+- `run_id` when applicable
+- `instrument_id` when applicable
+- `trade_date` / `execution_date` when applicable
+- query filters such as `feature_names`, `price_mode`, `limit`
 
 ## Forward Compatibility Rule
 

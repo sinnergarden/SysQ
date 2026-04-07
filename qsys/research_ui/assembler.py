@@ -41,9 +41,12 @@ class ResearchCockpitRepository:
         self.real_account = RealAccount(db_path=self.project_root / "data" / "meta" / "real_account.db")
         self.store = StockDataStore()
         self.research_view = ResearchDataView(n_jobs=1)
+        self._stock_list_cache: pd.DataFrame | None = None
+        self._instrument_index: dict[str, dict[str, Any]] | None = None
+        self._feature_registry_cache: list[FeatureRegistryEntry] | None = None
 
     def list_instruments(self, *, query: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
-        frame = self.store.get_stock_list()
+        frame = self._get_stock_list_frame()
         if frame is None or frame.empty:
             return []
         if query:
@@ -57,10 +60,11 @@ class ResearchCockpitRepository:
         return [{key: self._normalize_scalar(value) for key, value in row.items()} for row in frame.to_dict(orient="records")]
 
     def get_instrument(self, instrument_id: str) -> dict[str, Any] | None:
-        items = [item for item in self.list_instruments(limit=5000) if item.get("ts_code") == instrument_id]
-        return items[0] if items else None
+        return self._get_instrument_index().get(instrument_id)
 
     def list_feature_registry(self) -> list[FeatureRegistryEntry]:
+        if self._feature_registry_cache is not None:
+            return self._feature_registry_cache
         entries: list[FeatureRegistryEntry] = []
         for group_name, payload in sorted(list_feature_groups().items()):
             for feature_name in payload.get("features", []):
@@ -78,7 +82,8 @@ class ResearchCockpitRepository:
                         tags=[group_name, "research_ui"],
                     )
                 )
-        return entries
+        self._feature_registry_cache = entries
+        return self._feature_registry_cache
 
     def get_bar_series(self, *, instrument_id: str, start: str, end: str, price_mode: str = "fq") -> list[dict[str, Any]]:
         return self._load_bars(instrument_id=instrument_id, trade_date=end, price_mode=price_mode, start_date=start, end_date=end)
@@ -527,6 +532,28 @@ class ResearchCockpitRepository:
             if candidate.exists():
                 return candidate
         return candidates[0]
+
+    def _get_stock_list_frame(self) -> pd.DataFrame:
+        if self._stock_list_cache is None:
+            frame = self.store.get_stock_list()
+            self._stock_list_cache = frame if frame is not None else pd.DataFrame()
+        return self._stock_list_cache
+
+    def _get_instrument_index(self) -> dict[str, dict[str, Any]]:
+        if self._instrument_index is not None:
+            return self._instrument_index
+        index: dict[str, dict[str, Any]] = {}
+        frame = self._get_stock_list_frame()
+        if frame is None or frame.empty:
+            self._instrument_index = index
+            return self._instrument_index
+        for row in frame.to_dict(orient="records"):
+            item = {key: self._normalize_scalar(value) for key, value in row.items()}
+            ts_code = item.get("ts_code")
+            if ts_code:
+                index[str(ts_code)] = item
+        self._instrument_index = index
+        return self._instrument_index
 
     def _normalize_scalar(self, value: Any) -> Any:
         if pd.isna(value):
