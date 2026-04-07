@@ -183,6 +183,26 @@ def create_app(project_root: str | Path = ".") -> FastAPI:
             raise HTTPException(status_code=404, detail=f"No daily backtest payload found for run_id={run_id}")
         return {"run_id": run_id, "items": items}
 
+    @app.get("/api/backtest-runs/{run_id}/orders")
+    def get_backtest_orders(
+        run_id: str,
+        trade_date: str | None = None,
+        instrument_id: str | None = None,
+        limit: int = Query(2000, ge=1, le=10000),
+        repo: ResearchCockpitRepository = Depends(get_repo),
+    ) -> dict:
+        try:
+            items = repo.get_backtest_orders(run_id, trade_date=trade_date, instrument_id=instrument_id, limit=limit)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {
+            "run_id": run_id,
+            "trade_date": trade_date,
+            "instrument_id": instrument_id,
+            "items": items,
+            "count": len(items),
+        }
+
     @app.get("/api/decision-replay")
     def get_decision_replay(
         execution_date: str,

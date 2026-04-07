@@ -67,18 +67,32 @@ function polylinePath(values, width, height, padding = 20) {
   }).join(' ');
 }
 
-function renderLineChart(svgId, primary, secondary = null) {
+function renderLineChart(svgId, primary, secondary = null, markers = []) {
   const svg = document.getElementById(svgId);
   const width = 760;
   const height = svg.viewBox.baseVal.height || 260;
-  const bg = '<rect x="0" y="0" width="760" height="260" rx="16" fill="transparent"></rect>';
+  const padding = 20;
+  const bg = `<rect x="0" y="0" width="${width}" height="${height}" rx="16" fill="transparent"></rect>`;
   const grid = [0.2, 0.4, 0.6, 0.8].map((ratio) => {
-    const y = 20 + ratio * (height - 40);
-    return `<line x1="20" y1="${y}" x2="740" y2="${y}" stroke="rgba(31,36,48,0.08)" stroke-dasharray="4 4" />`;
+    const y = padding + ratio * (height - padding * 2);
+    return `<line x1="${padding}" y1="${y}" x2="${width - padding}" y2="${y}" stroke="rgba(31,36,48,0.08)" stroke-dasharray="4 4" />`;
   }).join('');
-  const pathA = polylinePath(primary, width, height);
-  const pathB = secondary ? polylinePath(secondary, width, height) : '';
-  svg.innerHTML = `${bg}${grid}${pathA ? `<path d="${pathA}" fill="none" stroke="#0f766e" stroke-width="3" />` : ''}${pathB ? `<path d="${pathB}" fill="none" stroke="#c2410c" stroke-width="2" />` : ''}`;
+  const pathA = polylinePath(primary, width, height, padding);
+  const pathB = secondary ? polylinePath(secondary, width, height, padding) : '';
+
+  const allValues = [...primary, ...(secondary || []), ...markers.map((item) => item.value)].filter((v) => typeof v === 'number' && !Number.isNaN(v));
+  const min = allValues.length ? Math.min(...allValues) : 0;
+  const max = allValues.length ? Math.max(...allValues) : 1;
+  const span = max - min || 1;
+  const markerSvg = markers.map((item) => {
+    const x = padding + (item.index * (width - padding * 2)) / Math.max(primary.length - 1, 1);
+    const y = height - padding - (((item.value ?? min) - min) / span) * (height - padding * 2);
+    const color = item.side === 'sell' ? '#c2410c' : '#0f766e';
+    const label = item.side === 'sell' ? 'S' : 'B';
+    return `<g><circle cx="${x.toFixed(2)}" cy="${y.toFixed(2)}" r="5" fill="${color}" /><text x="${x.toFixed(2)}" y="${(y - 10).toFixed(2)}" text-anchor="middle" font-size="11" font-weight="700" fill="${color}">${label}</text></g>`;
+  }).join('');
+
+  svg.innerHTML = `${bg}${grid}${pathA ? `<path d="${pathA}" fill="none" stroke="#0f766e" stroke-width="3" />` : ''}${pathB ? `<path d="${pathB}" fill="none" stroke="#c2410c" stroke-width="2" />` : ''}${markerSvg}`;
 }
 
 async function loadCase() {
@@ -86,20 +100,34 @@ async function loadCase() {
     const executionDate = document.getElementById('case-date').value.trim();
     const instrumentId = document.getElementById('case-instrument').value.trim();
     const priceMode = document.getElementById('case-price-mode').value;
+    const backtestRunId = document.getElementById('case-backtest-run').value.trim();
     const payload = await getJson(`/api/cases/${executionDate}:${instrumentId}:${priceMode}`);
+    let tradeMarkers = [];
+    let backtestTrades = [];
+    if (backtestRunId) {
+      const tradePayload = await getJson(`/api/backtest-runs/${backtestRunId}/orders?instrument_id=${encodeURIComponent(instrumentId)}&limit=5000`);
+      backtestTrades = tradePayload.items || [];
+    }
     document.getElementById('case-meta').textContent = `${payload.instrument_id} / ${payload.trade_date} / ${payload.price_mode}`;
     const priceKey = priceMode === 'fq' ? 'adj_close' : 'close';
-    renderLineChart('case-bars-chart', payload.bars.map((item) => item[priceKey]));
+    const barIndex = new Map(payload.bars.map((item, index) => [item.trade_date, index]));
+    tradeMarkers = backtestTrades
+      .filter((item) => barIndex.has(item.date) && typeof item.deal_price === 'number')
+      .map((item) => ({ index: barIndex.get(item.date), value: item.deal_price, side: item.side, date: item.date }));
+    renderLineChart('case-bars-chart', payload.bars.map((item) => item[priceKey]), null, tradeMarkers);
     renderLineChart('case-volume-chart', payload.bars.map((item) => item.volume));
-    document.getElementById('case-signal').textContent = JSON.stringify({ signal_snapshot: payload.signal_snapshot, links: payload.links }, null, 2);
+    document.getElementById('case-signal').textContent = JSON.stringify({ signal_snapshot: payload.signal_snapshot, trade_markers: backtestTrades, links: payload.links }, null, 2);
     const featureRows = Object.entries(payload.feature_snapshot.features || {}).map(([feature_name, value]) => ({ feature_name, value }));
     renderTable('case-feature-table', featureRows, [{ key: 'feature_name', label: 'Feature' }, { key: 'value', label: 'Value' }]);
-    const orderRows = [...(payload.positions || []), ...(payload.orders || [])];
+    const orderRows = [...backtestTrades, ...(payload.positions || []), ...(payload.orders || [])];
     renderTable('case-orders-table', orderRows, [
+      { key: 'date', label: 'Date' },
       { key: 'instrument_id', label: 'Instrument' },
       { key: 'symbol', label: 'Symbol' },
       { key: 'quantity', label: 'Qty' },
+      { key: 'filled_amount', label: 'Filled Qty' },
       { key: 'side', label: 'Side' },
+      { key: 'deal_price', label: 'Deal Price' },
       { key: 'price', label: 'Price' },
       { key: 'status', label: 'Status' },
     ]);
@@ -152,9 +180,13 @@ async function loadBacktest() {
       { key: 'ic', label: 'IC' },
       { key: 'rank_ic', label: 'RankIC' },
       { key: 'trade_count', label: 'Trades' },
+      { label: 'Orders', render: (row) => `<span class="action-link" onclick="loadBacktestOrders('${row.trade_date}')">Open</span>` },
       { label: 'Replay', render: (row) => `<span class="action-link" onclick="jumpToReplay('${row.trade_date}')">Open</span>` },
-      { label: 'Case', render: () => `<span class="action-link" onclick="jumpToCase()">Open</span>` },
     ]);
+    const seedDate = daily.items[0]?.trade_date;
+    if (seedDate) {
+      await loadBacktestOrders(seedDate);
+    }
   } catch (error) {
     document.getElementById('backtest-daily-table').innerHTML = `<div class="empty">${error.message}</div>`;
   }
@@ -198,10 +230,32 @@ window.jumpToReplay = function jumpToReplay(tradeDate) {
   loadReplay();
 }
 
-window.jumpToCase = function jumpToCase(instrumentId) {
+window.jumpToCase = function jumpToCase(instrumentId, tradeDate) {
   if (instrumentId) document.getElementById('case-instrument').value = instrumentId;
+  if (tradeDate) document.getElementById('case-date').value = tradeDate;
+  document.getElementById('case-backtest-run').value = document.getElementById('backtest-run-id').value.trim();
   setView('case');
   loadCase();
+}
+
+window.loadBacktestOrders = async function loadBacktestOrders(tradeDate) {
+  try {
+    const runId = document.getElementById('backtest-run-id').value.trim();
+    const payload = await getJson(`/api/backtest-runs/${runId}/orders?trade_date=${tradeDate}`);
+    renderTable('backtest-orders-table', payload.items, [
+      { key: 'date', label: 'Trade Date' },
+      { key: 'symbol', label: 'Instrument' },
+      { key: 'side', label: 'Side' },
+      { key: 'filled_amount', label: 'Filled Qty' },
+      { key: 'deal_price', label: 'Deal Price' },
+      { key: 'fee', label: 'Fee' },
+      { key: 'status', label: 'Status' },
+      { key: 'reason', label: 'Reason' },
+      { label: 'Case', render: (row) => `<span class="action-link" onclick="jumpToCase('${row.symbol}', '${row.date}')">Open</span>` },
+    ]);
+  } catch (error) {
+    document.getElementById('backtest-orders-table').innerHTML = `<div class="empty">${error.message}</div>`;
+  }
 }
 
 function bindEvents() {

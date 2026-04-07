@@ -264,6 +264,30 @@ class ResearchCockpitRepository:
             )
         return points
 
+    def get_backtest_orders(
+        self,
+        run_id: str,
+        *,
+        trade_date: str | None = None,
+        instrument_id: str | None = None,
+        limit: int = 2000,
+    ) -> list[dict[str, Any]]:
+        csv_path = self._resolve_backtest_trades_path(run_id)
+        if not csv_path.exists():
+            return []
+        frame = pd.read_csv(csv_path)
+        if frame.empty:
+            return []
+        if "date" in frame.columns and trade_date:
+            frame = frame[frame["date"].astype(str) == str(trade_date)]
+        if "symbol" in frame.columns and instrument_id:
+            frame = frame[frame["symbol"].astype(str) == str(instrument_id)]
+        frame = frame.head(limit)
+        rows: list[dict[str, Any]] = []
+        for row in frame.to_dict(orient="records"):
+            rows.append({key: self._normalize_scalar(value) for key, value in row.items()})
+        return rows
+
     def build_decision_replay(self, *, execution_date: str, account_name: str) -> DecisionReplay:
         manifest = self.build_daily_run_manifest(execution_date)
         intent_path = self.daily_root / execution_date / "pre_open" / "order_intents" / f"order_intents_{execution_date}_{account_name}.json"
@@ -439,6 +463,15 @@ class ResearchCockpitRepository:
             if str(payload.get("run_id") or "") == run_id:
                 return candidate
         raise FileNotFoundError(f"Unknown backtest run_id: {run_id}")
+
+    def _resolve_backtest_trades_path(self, run_id: str) -> Path:
+        report_path = self._resolve_backtest_report(run_id)
+        payload = self._load_json(report_path)
+        trade_path = (payload.get("artifacts") or {}).get("trades")
+        if trade_path:
+            return self._resolve_project_artifact_path(trade_path)
+        default_path = self.project_root / "experiments" / "backtest_trades.csv"
+        return default_path
 
     def _extract_backtest_metrics(self, payload: dict[str, Any]) -> dict[str, Any]:
         sections = payload.get("sections") or []

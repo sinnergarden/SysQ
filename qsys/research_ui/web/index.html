@@ -47,6 +47,7 @@
                 <option value="raw">raw</option>
               </select>
             </label>
+            <label>Backtest Run<input id="case-backtest-run" value="20260403_195202" /></label>
             <button id="load-case">Load Case</button>
           </div>
         </div>
@@ -57,7 +58,7 @@
             <svg id="case-volume-chart" class="chart compact" viewBox="0 0 760 120"></svg>
           </div>
           <div class="panel">
-            <div class="panel-head"><h3>Signal / Orders</h3></div>
+            <div class="panel-head"><h3>Signal / Trade Markers</h3></div>
             <pre id="case-signal" class="code-block"></pre>
           </div>
         </div>
@@ -116,9 +117,15 @@
             <svg id="backtest-diagnostics-chart" class="chart" viewBox="0 0 760 260"></svg>
           </div>
         </div>
-        <div class="panel">
-          <div class="panel-head"><h3>Daily Drill-down</h3></div>
-          <div id="backtest-daily-table" class="table-wrap"></div>
+        <div class="grid two-col">
+          <div class="panel">
+            <div class="panel-head"><h3>Daily Drill-down</h3></div>
+            <div id="backtest-daily-table" class="table-wrap"></div>
+          </div>
+          <div class="panel">
+            <div class="panel-head"><h3>Trade-Day Orders</h3></div>
+            <div id="backtest-orders-table" class="table-wrap"></div>
+          </div>
         </div>
       </section>
 

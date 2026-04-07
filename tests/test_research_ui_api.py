@@ -59,6 +59,14 @@ class TestResearchUiApi(unittest.TestCase):
         self.assertEqual(daily_payload['run_id'], run_id)
         self.assertGreater(len(daily_payload['items']), 0)
 
+        first_trade_date = daily_payload['items'][0]['trade_date']
+        orders_response = self.client.get(f'/api/backtest-runs/{run_id}/orders', params={'trade_date': first_trade_date})
+        self.assertEqual(orders_response.status_code, 200)
+        orders_payload = orders_response.json()
+        self.assertEqual(orders_payload['run_id'], run_id)
+        self.assertEqual(orders_payload['trade_date'], first_trade_date)
+        self.assertIn('items', orders_payload)
+
     def test_daily_run_endpoints(self):
         daily_response = self.client.get('/api/runs/daily/2026-04-06')
         self.assertEqual(daily_response.status_code, 200)
