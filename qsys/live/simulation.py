@@ -4,12 +4,21 @@ from qsys.utils.logger import log
 
 
 class ShadowSimulator:
-    def __init__(self, account_name="shadow", initial_cash=1_000_000.0, db_path="data/meta/real_account.db"):
+    def __init__(
+        self,
+        account_name="shadow",
+        initial_cash=1_000_000.0,
+        db_path="data/meta/real_account.db",
+        fee_rate: float = 0.0003,
+        tax_rate: float = 0.001,
+        slippage: float = 0.001,
+    ):
         self.account_name = account_name
         self.initial_cash = float(initial_cash)
         self.account = RealAccount(db_path=db_path, account_name=account_name)
-        self.fee_rate = 0.0003
-        self.tax_rate = 0.001
+        self.fee_rate = float(fee_rate)
+        self.tax_rate = float(tax_rate)
+        self.slippage = float(slippage)
 
     def initialize_if_needed(self, date: str) -> bool:
         latest = self.account.get_latest_date(self.account_name)
@@ -69,6 +78,11 @@ class ShadowSimulator:
                 trade_price = float(positions.get(symbol, {}).get("price", 0.0))
             if trade_price <= 0:
                 continue
+
+            if side == "buy":
+                trade_price *= 1 + self.slippage
+            elif side == "sell":
+                trade_price *= max(0.0, 1 - self.slippage)
 
             trade_value = trade_price * amount
             fee = trade_value * self.fee_rate

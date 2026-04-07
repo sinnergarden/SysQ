@@ -1,13 +1,17 @@
+from pathlib import Path
+from typing import Any, cast
+
+import numpy as np
+import pandas as pd
+import yaml
+from qlib.contrib.data.handler import phase123DL
+from qlib.contrib.eva.alpha import calc_ic
 from qlib.data.dataset import DatasetH
 from qlib.data.dataset.handler import DataHandlerLP
 from qlib.data.dataset.loader import QlibDataLoader
-from qlib.contrib.data.handler import phase123DL
-from qlib.contrib.eva.alpha import calc_ic
+
 from qsys.data.adapter import QlibAdapter
 from qsys.utils.logger import log
-import pandas as pd
-import numpy as np
-from typing import Any, cast
 
 class FeatureLibrary:
     """
@@ -98,6 +102,21 @@ class FeatureLibrary:
     def get_research_phase123_config(cls):
         """Research config placeholder: current minimum uses margin_extended raw feature base until custom qlib build is wired."""
         return cls.get_alpha158_margin_extended_config()
+
+    @classmethod
+    def get_semantic_all_features_config(cls, meta_path: str | Path | None = None):
+        """Load the full semantic feature set from the canonical model metadata."""
+        if meta_path is None:
+            meta_path = Path(__file__).resolve().parents[2] / "data" / "models" / "qlib_lgbm_semantic_all_features" / "meta.yaml"
+        meta_path = Path(meta_path)
+        if not meta_path.exists():
+            raise FileNotFoundError(f"semantic_all_features meta not found: {meta_path}")
+        with open(meta_path, "r", encoding="utf-8") as handle:
+            payload = yaml.safe_load(handle) or {}
+        feature_config = payload.get("feature_config") or []
+        if not isinstance(feature_config, list) or not feature_config:
+            raise ValueError(f"Invalid semantic_all_features feature_config in {meta_path}")
+        return list(feature_config)
 
 class phase123(DataHandlerLP):
     def __init__(
