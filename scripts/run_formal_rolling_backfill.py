@@ -22,6 +22,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -268,6 +269,76 @@ def run_post_close(paths: BackfillPaths, execution_date: str, real_sync_path: Pa
     run_cmd(cmd, log_path=log_path)
 
 
+def _simulate_zero_cost_curve(execution_days: list[str], initial_cash: float) -> pd.DataFrame:
+    cash = float(initial_cash)
+    positions: dict[str, dict[str, float]] = {}
+    rows: list[dict[str, object]] = [
+        {
+            "date": previous_trading_day(execution_days[0]),
+            "total_assets": float(initial_cash),
+            "cash": float(initial_cash),
+            "position_count": 0,
+            "trade_count": 0,
+            "daily_fee": 0.0,
+            "daily_turnover": 0.0,
+        }
+    ]
+
+    for execution_date in execution_days:
+        signal_date = previous_trading_day(execution_date)
+        plan_path = find_shadow_plan(execution_date, signal_date)
+        trade_count = 0
+        daily_turnover = 0.0
+        if plan_path.exists():
+            plan_df = pd.read_csv(plan_path)
+            for _, row in plan_df.iterrows():
+                symbol = str(row.get("symbol") or "")
+                side = str(row.get("side") or "").lower()
+                amount = int(abs(row.get("amount") or 0))
+                price = float(row.get("price") or 0.0)
+                if not symbol or amount <= 0 or not np.isfinite(price) or price <= 0:
+                    continue
+                trade_value = amount * price
+                if side == "sell":
+                    held = int(positions.get(symbol, {}).get("amount", 0))
+                    sell_amount = min(held, amount)
+                    if sell_amount <= 0:
+                        continue
+                    cash += sell_amount * price
+                    remain = held - sell_amount
+                    if remain > 0:
+                        positions[symbol]["amount"] = remain
+                        positions[symbol]["price"] = price
+                    else:
+                        positions.pop(symbol, None)
+                    trade_count += 1
+                    daily_turnover += sell_amount * price
+                elif side == "buy":
+                    if cash + 1e-9 < trade_value:
+                        continue
+                    cash -= trade_value
+                    current = positions.get(symbol, {"amount": 0, "price": price, "cost_basis": price})
+                    new_amount = int(current["amount"]) + amount
+                    new_cost_basis = ((float(current["cost_basis"]) * int(current["amount"])) + trade_value) / new_amount
+                    positions[symbol] = {"amount": new_amount, "price": price, "cost_basis": new_cost_basis}
+                    trade_count += 1
+                    daily_turnover += trade_value
+
+        total_assets = float(cash + sum(float(pos["amount"]) * float(pos.get("price", 0.0)) for pos in positions.values()))
+        rows.append(
+            {
+                "date": execution_date,
+                "total_assets": total_assets,
+                "cash": float(cash),
+                "position_count": len(positions),
+                "trade_count": trade_count,
+                "daily_fee": 0.0,
+                "daily_turnover": daily_turnover,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 def build_aggregate_outputs(args: argparse.Namespace, paths: BackfillPaths, execution_days: list[str]) -> dict[str, str]:
     account = RealAccount(db_path=str(paths.db_path), account_name="shadow")
     trade_log = account.get_trade_log(account_name="shadow")
@@ -283,6 +354,7 @@ def build_aggregate_outputs(args: argparse.Namespace, paths: BackfillPaths, exec
     finally:
         conn.close()
     history_days = history["date"].astype(str).tolist() if not history.empty else execution_days
+    replay_days = [day for day in history_days if day in execution_days]
 
     for execution_date in history_days:
         state = account.get_state(execution_date, account_name="shadow")
@@ -309,9 +381,10 @@ def build_aggregate_outputs(args: argparse.Namespace, paths: BackfillPaths, exec
         if plan_path.exists():
             try:
                 plan_df = pd.read_csv(plan_path)
-                if "target_weight" in plan_df.columns:
+                weight_col = "target_weight" if "target_weight" in plan_df.columns else "weight"
+                if weight_col in plan_df.columns:
                     for _, row in plan_df.iterrows():
-                        target_weight_map[(str(row.get("symbol")), str(row.get("side", "")).lower())] = float(row.get("target_weight") or 0.0)
+                        target_weight_map[(str(row.get("symbol")), str(row.get("side", "")).lower())] = float(row.get(weight_col) or 0.0)
             except Exception:
                 pass
         for _, row in day_trades.iterrows():
@@ -332,22 +405,37 @@ def build_aggregate_outputs(args: argparse.Namespace, paths: BackfillPaths, exec
             )
 
     daily_df = pd.DataFrame(daily_rows)
+    zero_cost_df = _simulate_zero_cost_curve(replay_days, args.shadow_cash) if replay_days else pd.DataFrame()
+    if not zero_cost_df.empty:
+        zero_cost_df = zero_cost_df.rename(columns={
+            "total_assets": "zero_cost_total_assets",
+            "cash": "zero_cost_cash",
+            "position_count": "zero_cost_position_count",
+            "trade_count": "zero_cost_trade_count",
+            "daily_fee": "zero_cost_daily_fee",
+            "daily_turnover": "zero_cost_daily_turnover",
+        })
+        daily_df = daily_df.merge(zero_cost_df, on="date", how="outer").sort_values("date").reset_index(drop=True)
     trades_df = pd.DataFrame(trades_rows)
     paths.experiments_root.mkdir(parents=True, exist_ok=True)
     paths.reports_root.mkdir(parents=True, exist_ok=True)
     daily_csv = paths.experiments_root / "backtest_result.csv"
+    zero_cost_csv = paths.experiments_root / "backtest_result_zero_cost.csv"
     trades_csv = paths.experiments_root / "backtest_trades.csv"
     daily_df.to_csv(daily_csv, index=False)
     trades_df.to_csv(trades_csv, index=False)
+    if not zero_cost_df.empty:
+        zero_cost_df.to_csv(zero_cost_csv, index=False)
 
     metrics = {}
     report_path = ""
     if not daily_df.empty:
+        live_view = daily_df[[c for c in ["date", "total_assets", "cash", "position_count", "trade_count", "daily_fee", "daily_turnover"] if c in daily_df.columns]].copy()
         report = BacktestReport.from_backtest_result(
-            daily_df,
+            live_view,
             model_path=args.model_path,
-            start_date=str(daily_df['date'].min()),
-            end_date=str(daily_df['date'].max()),
+            start_date=str(live_view['date'].min()),
+            end_date=str(live_view['date'].max()),
             top_k=args.top_k,
             universe="csi300",
             daily_result_path=str(daily_csv),
@@ -357,13 +445,17 @@ def build_aggregate_outputs(args: argparse.Namespace, paths: BackfillPaths, exec
                 f"shadow_fee_rate={args.shadow_fee_rate}",
                 f"shadow_tax_rate={args.shadow_tax_rate}",
                 f"shadow_slippage={args.shadow_slippage}",
+                "zero_cost curve rebuilt from the same plan files with fee=tax=slippage=0",
             ],
         )
         report.artifacts["trades"] = str(trades_csv)
+        if not zero_cost_df.empty:
+            report.artifacts["daily_result_zero_cost"] = str(zero_cost_csv)
         report_path = BacktestReport.save(report, output_dir=str(paths.reports_root))
         metrics = report.sections[0].metrics if report.sections else {}
     return {
         "daily_csv": str(daily_csv),
+        "zero_cost_csv": str(zero_cost_csv),
         "trades_csv": str(trades_csv),
         "report_path": report_path,
         "metrics": metrics,
