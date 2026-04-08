@@ -39,7 +39,7 @@
       <section class="view active" id="view-case">
         <div class="panel form-panel">
           <div class="form-grid">
-            <label>Execution Date<input id="case-date" value="2026-04-06" /></label>
+            <label>Execution Date<input id="case-date" value="2025-01-03" /></label>
             <label>Instrument<input id="case-instrument" value="000001.SZ" /></label>
             <label>Price Mode
               <select id="case-price-mode">
@@ -47,7 +47,7 @@
                 <option value="raw">raw</option>
               </select>
             </label>
-            <label>Backtest Run<input id="case-backtest-run" value="20260403_195202" /></label>
+            <label>Backtest Run<input id="case-backtest-run" value="" placeholder="auto latest" /></label>
             <button id="load-case">Load Case</button>
           </div>
         </div>
@@ -77,9 +77,9 @@
       <section class="view" id="view-feature">
         <div class="panel form-panel">
           <div class="form-grid feature-grid">
-            <label>Trade Date<input id="feature-date" value="2026-04-03" /></label>
+            <label>Trade Date<input id="feature-date" value="2025-01-03" /></label>
             <label>Instrument<input id="feature-instrument" value="000001.SZ" /></label>
-            <label>Feature Names<input id="feature-names" value="open_1d_return,close_5d_return,volume_ratio_20d" /></label>
+            <label>Feature Names<input id="feature-names" value="" placeholder="auto from registry" /></label>
             <button id="load-feature">Load Feature Health</button>
           </div>
         </div>
@@ -93,12 +93,16 @@
             <div id="feature-snapshot-table" class="table-wrap"></div>
           </div>
         </div>
+        <div class="panel">
+          <div class="panel-head"><h3>Feature Registry</h3></div>
+          <div id="feature-registry-table" class="table-wrap"></div>
+        </div>
       </section>
 
       <section class="view" id="view-backtest">
         <div class="panel form-panel">
           <div class="form-grid">
-            <label>Backtest Run<input id="backtest-run-id" value="20260403_195202" /></label>
+            <label>Backtest Run<input id="backtest-run-id" value="" placeholder="auto latest" /></label>
             <button id="load-backtest">Load Backtest</button>
           </div>
         </div>
@@ -132,7 +136,7 @@
       <section class="view" id="view-replay">
         <div class="panel form-panel">
           <div class="form-grid">
-            <label>Execution Date<input id="replay-date" value="2026-04-06" /></label>
+            <label>Execution Date<input id="replay-date" value="2025-01-03" /></label>
             <label>Account<input id="replay-account" value="shadow" /></label>
             <button id="load-replay">Load Replay</button>
           </div>

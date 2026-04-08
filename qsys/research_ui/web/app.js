@@ -2,6 +2,8 @@ const state = {
   currentView: 'case',
   loadedViews: new Set(),
   cache: new Map(),
+  latestBacktestRunId: null,
+  featureRegistry: [],
 };
 
 const viewMeta = {
@@ -149,11 +151,32 @@ async function loadCase() {
   }
 }
 
+function resolveFeatureNames() {
+  const manual = document.getElementById('feature-names').value.split(',').map((item) => item.trim()).filter(Boolean);
+  if (manual.length) return manual;
+  return state.featureRegistry.slice(0, 8).map((item) => item.feature_name);
+}
+
+async function loadFeatureRegistry() {
+  const registryPayload = await getJson('/api/feature-registry');
+  const items = unwrapItems(registryPayload);
+  state.featureRegistry = items;
+  renderTable('feature-registry-table', items.slice(0, 40), [
+    { key: 'feature_name', label: 'Feature' },
+    { key: 'group_name', label: 'Group' },
+    { key: 'source_layer', label: 'Source' },
+    { key: 'description', label: 'Description' },
+  ]);
+  if (!document.getElementById('feature-names').value.trim() && items.length) {
+    document.getElementById('feature-names').value = items.slice(0, 8).map((item) => item.feature_name).join(',');
+  }
+}
+
 async function loadFeatureHealth() {
   try {
     const tradeDate = document.getElementById('feature-date').value.trim();
     const instrumentId = document.getElementById('feature-instrument').value.trim();
-    const featureNames = document.getElementById('feature-names').value.split(',').map((item) => item.trim()).filter(Boolean);
+    const featureNames = resolveFeatureNames();
     const healthParams = new URLSearchParams({ trade_date: tradeDate, universe: 'csi300' });
     featureNames.forEach((name) => healthParams.append('feature_names', name));
     const healthPayload = await getJson(`/api/feature-health?${healthParams.toString()}`, { useCache: false });
@@ -277,6 +300,32 @@ window.loadBacktestOrders = async function loadBacktestOrders(tradeDate) {
   }
 }
 
+async function bootstrapDefaults() {
+  try {
+    const runsPayload = await getJson('/api/backtest-runs?limit=1', { useCache: false });
+    const latestRun = unwrapItems(runsPayload)[0];
+    if (latestRun && latestRun.run_id) {
+      state.latestBacktestRunId = latestRun.run_id;
+      if (!document.getElementById('backtest-run-id').value.trim()) document.getElementById('backtest-run-id').value = latestRun.run_id;
+      if (!document.getElementById('case-backtest-run').value.trim()) document.getElementById('case-backtest-run').value = latestRun.run_id;
+      const endDate = latestRun.test_range?.end;
+      if (endDate) {
+        document.getElementById('case-date').value = endDate;
+        document.getElementById('feature-date').value = endDate;
+        document.getElementById('replay-date').value = endDate;
+      }
+    }
+  } catch (error) {
+    console.error('bootstrap backtest runs failed', error);
+  }
+
+  try {
+    await loadFeatureRegistry();
+  } catch (error) {
+    console.error('bootstrap feature registry failed', error);
+  }
+}
+
 async function loadViewIfNeeded(name, { force = false } = {}) {
   if (!force && state.loadedViews.has(name)) return;
   if (name === 'case') await loadCase();
@@ -298,4 +347,4 @@ function bindEvents() {
 }
 
 bindEvents();
-loadViewIfNeeded('case');
+bootstrapDefaults().then(() => loadViewIfNeeded('case'));
