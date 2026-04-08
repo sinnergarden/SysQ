@@ -2,6 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 import argparse
+import sys
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.append(str(ROOT))
 
 import uvicorn
 
@@ -17,5 +22,4 @@ def parse_args() -> argparse.Namespace:
 
 if __name__ == "__main__":
     args = parse_args()
-    root = Path(__file__).resolve().parents[1]
-    uvicorn.run(create_app(root), host=args.host, port=args.port)
+    uvicorn.run(create_app(ROOT), host=args.host, port=args.port)
