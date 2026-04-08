@@ -161,10 +161,19 @@ class LiveManager:
                 log.error(f"No features found for signal_date={signal_date}!")
                 return None
 
-            current_prices = basket_df.set_index("symbol")["price"].to_dict()
             target_weights = basket_df.set_index("symbol")["weight"].to_dict()
 
             current_positions = state["positions"]
+            price_symbols = sorted(set(target_weights.keys()) | set(current_positions.keys()))
+            prices_df = QlibAdapter().get_features(
+                price_symbols,
+                ["$close", "$factor"],
+                start_time=signal_date,
+                end_time=signal_date,
+            )
+            prices_df = prices_df.rename(columns={"$close": "close", "$factor": "factor"})
+            current_prices = self._normalize_price_lookup(prices_df) if prices_df is not None and not prices_df.empty else {}
+
             total_assets = state["total_assets"]
             plan_df = self.planner.generate_plan(
                 target_weights,
