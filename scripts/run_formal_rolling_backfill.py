@@ -274,7 +274,17 @@ def build_aggregate_outputs(args: argparse.Namespace, paths: BackfillPaths, exec
     daily_rows: list[dict[str, object]] = []
     trades_rows: list[dict[str, object]] = []
 
-    for execution_date in execution_days:
+    conn = sqlite3.connect(paths.db_path)
+    try:
+        history = pd.read_sql_query(
+            "SELECT DISTINCT date FROM balance_history WHERE account_name = 'shadow' ORDER BY date",
+            conn,
+        )
+    finally:
+        conn.close()
+    history_days = history["date"].astype(str).tolist() if not history.empty else execution_days
+
+    for execution_date in history_days:
         state = account.get_state(execution_date, account_name="shadow")
         if not state:
             continue
@@ -336,8 +346,8 @@ def build_aggregate_outputs(args: argparse.Namespace, paths: BackfillPaths, exec
         report = BacktestReport.from_backtest_result(
             daily_df,
             model_path=args.model_path,
-            start_date=execution_days[0],
-            end_date=execution_days[-1],
+            start_date=str(daily_df['date'].min()),
+            end_date=str(daily_df['date'].max()),
             top_k=args.top_k,
             universe="csi300",
             daily_result_path=str(daily_csv),
