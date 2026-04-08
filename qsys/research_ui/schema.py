@@ -121,8 +121,13 @@ class FeatureHealthSummary:
 class BacktestDailyPoint:
     trade_date: str
     equity: float | None = None
+    zero_cost_equity: float | None = None
     daily_return: float | None = None
     drawdown: float | None = None
+    benchmark_equity: float | None = None
+    benchmark_daily_return: float | None = None
+    benchmark2_equity: float | None = None
+    benchmark2_daily_return: float | None = None
     turnover: float | None = None
     ic: float | None = None
     rank_ic: float | None = None
@@ -224,6 +229,10 @@ class CaseBundle:
     execution_date: str | None = None
     price_mode: PriceMode = "fq"
     bars: list[dict[str, Any]] = field(default_factory=list)
+    benchmark_bars: list[dict[str, Any]] = field(default_factory=list)
+    benchmark_label: str = "CSI300"
+    secondary_benchmark_bars: list[dict[str, Any]] = field(default_factory=list)
+    secondary_benchmark_label: str = "SSE"
     signal_snapshot: dict[str, Any] = field(default_factory=dict)
     feature_snapshot: dict[str, Any] = field(default_factory=dict)
     orders: list[dict[str, Any]] = field(default_factory=list)

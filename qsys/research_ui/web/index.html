@@ -53,8 +53,9 @@
         </div>
         <div class="grid two-col">
           <div class="panel">
-            <div class="panel-head"><h3>K / Volume</h3><span id="case-meta"></span></div>
+            <div class="panel-head"><h3>K / CSI300 / Volume</h3><span id="case-meta"></span></div>
             <svg id="case-bars-chart" class="chart" viewBox="0 0 760 260"></svg>
+            <svg id="case-relative-chart" class="chart compact" viewBox="0 0 760 150"></svg>
             <svg id="case-volume-chart" class="chart compact" viewBox="0 0 760 120"></svg>
           </div>
           <div class="panel">
@@ -76,16 +77,31 @@
 
       <section class="view" id="view-feature">
         <div class="panel form-panel">
-          <div class="form-grid feature-grid">
+          <div class="form-grid feature-grid feature-grid-top">
             <label>Trade Date<input id="feature-date" value="2025-01-03" /></label>
             <label>Instrument<input id="feature-instrument" value="000001.SZ" /></label>
-            <label>Feature Names<input id="feature-names" value="" placeholder="auto from registry" /></label>
+            <label>Registry Search<input id="feature-registry-search" value="" placeholder="search name / group / tag" /></label>
+            <label>Source
+              <select id="feature-source-filter">
+                <option value="all">all</option>
+              </select>
+            </label>
+          </div>
+          <div class="form-grid feature-grid feature-grid-bottom">
+            <label class="span-2">Selected Features<textarea id="feature-names" rows="3" placeholder="selected from registry or typed manually"></textarea></label>
+            <div class="button-stack">
+              <button id="select-visible-features" type="button">Use Visible</button>
+              <button id="clear-feature-selection" type="button" class="secondary-btn">Clear</button>
+            </div>
             <button id="load-feature">Load Feature Health</button>
           </div>
+          <div id="feature-selection-summary" class="form-note"></div>
+          <div id="feature-selection-chips" class="chip-wrap"></div>
         </div>
         <div class="grid two-col">
           <div class="panel">
             <div class="panel-head"><h3>Feature Health</h3></div>
+            <div id="feature-health-summary" class="panel-note"></div>
             <div id="feature-health-table" class="table-wrap"></div>
           </div>
           <div class="panel">
@@ -94,7 +110,7 @@
           </div>
         </div>
         <div class="panel">
-          <div class="panel-head"><h3>Feature Registry</h3></div>
+          <div class="panel-head"><h3>Feature Registry</h3><span id="feature-registry-count"></span></div>
           <div id="feature-registry-table" class="table-wrap"></div>
         </div>
       </section>
@@ -113,11 +129,11 @@
         </div>
         <div class="grid two-col">
           <div class="panel">
-            <div class="panel-head"><h3>Equity / Drawdown</h3></div>
+            <div class="panel-head"><h3>Strategy vs CSI300</h3></div>
             <svg id="backtest-equity-chart" class="chart" viewBox="0 0 760 260"></svg>
           </div>
           <div class="panel">
-            <div class="panel-head"><h3>Turnover / IC / RankIC</h3></div>
+            <div class="panel-head"><h3>Drawdown / IC / RankIC</h3></div>
             <svg id="backtest-diagnostics-chart" class="chart" viewBox="0 0 760 260"></svg>
           </div>
         </div>

@@ -13,7 +13,11 @@ class TestResearchUiApi(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+        cls.project_root = project_root
         cls.client = TestClient(create_app(project_root))
+        daily_root = os.path.join(project_root, 'daily')
+        cls.execution_date = sorted([name for name in os.listdir(daily_root) if os.path.isdir(os.path.join(daily_root, name))])[-1]
+        cls.case_instrument = '600219.SH'
 
     def test_root_serves_ui_shell(self):
         response = self.client.get('/')
@@ -42,6 +46,9 @@ class TestResearchUiApi(unittest.TestCase):
         payload = response.json()
         self.assertEqual(payload['api_version'], 'v1')
         self.assertGreater(payload['count'], 0)
+        names = {item['feature_name']: item for item in payload['items']}
+        self.assertIn('close', names)
+        self.assertIn('ret_1d', names)
 
     def test_backtest_runs_endpoint(self):
         response = self.client.get('/api/backtest-runs', params={'limit': 5})
@@ -65,6 +72,7 @@ class TestResearchUiApi(unittest.TestCase):
         self.assertEqual(daily_payload['api_version'], 'v1')
         self.assertEqual(daily_payload['run_id'], run_id)
         self.assertGreater(len(daily_payload['items']), 0)
+        self.assertIn('benchmark_equity', daily_payload['items'][0])
 
         first_trade_date = daily_payload['items'][0]['trade_date']
         orders_response = self.client.get(f'/api/backtest-runs/{run_id}/orders', params={'trade_date': first_trade_date})
@@ -76,26 +84,28 @@ class TestResearchUiApi(unittest.TestCase):
         self.assertIn('items', orders_payload)
 
     def test_daily_run_endpoints(self):
-        daily_response = self.client.get('/api/runs/daily/2026-04-06')
+        daily_response = self.client.get(f'/api/runs/daily/{self.execution_date}')
         self.assertEqual(daily_response.status_code, 200)
         daily_payload = daily_response.json()
         self.assertEqual(daily_payload['api_version'], 'v1')
-        self.assertEqual(daily_payload['data']['run_id'], 'daily:2026-04-06')
-        self.assertEqual(daily_payload['data']['execution_date'], '2026-04-06')
+        self.assertEqual(daily_payload['data']['run_id'], f'daily:{self.execution_date}')
+        self.assertEqual(daily_payload['data']['execution_date'], self.execution_date)
 
-        response = self.client.get('/api/decision-replay', params={'execution_date': '2026-04-06', 'account_name': 'shadow'})
+        response = self.client.get('/api/decision-replay', params={'execution_date': self.execution_date, 'account_name': 'shadow'})
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertEqual(payload['api_version'], 'v1')
-        self.assertEqual(payload['data']['trade_date'], '2026-04-06')
+        self.assertEqual(payload['data']['trade_date'], self.execution_date)
         self.assertIn('summary', payload['data'])
 
-        case_response = self.client.get('/api/cases/2026-04-06:000001.SZ:fq')
+        case_response = self.client.get(f'/api/cases/{self.execution_date}:{self.case_instrument}:fq')
         self.assertEqual(case_response.status_code, 200)
         case_payload = case_response.json()
         self.assertEqual(case_payload['api_version'], 'v1')
-        self.assertEqual(case_payload['data']['instrument_id'], '000001.SZ')
+        self.assertEqual(case_payload['data']['instrument_id'], self.case_instrument)
         self.assertEqual(case_payload['data']['price_mode'], 'fq')
+        self.assertIn('benchmark_bars', case_payload['data'])
+        self.assertEqual(case_payload['data']['benchmark_label'], 'CSI300')
 
     def test_missing_backtest_returns_clear_404(self):
         response = self.client.get('/api/backtest-runs/not-a-real-run/summary')

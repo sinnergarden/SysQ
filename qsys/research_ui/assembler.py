@@ -1,14 +1,19 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
+import yaml
 
+from qsys.config import cfg
+from qsys.data.adapter import QlibAdapter
 from qsys.data.health import inspect_qlib_data_health
 from qsys.data.storage import StockDataStore
 from qsys.dataview.research import ResearchDataView
+from qsys.feature.library import FeatureLibrary
 from qsys.feature.registry import list_feature_groups
 from qsys.live.account import RealAccount
 from qsys.live.ops_manifest import load_manifest
@@ -41,9 +46,11 @@ class ResearchCockpitRepository:
         self.real_account = RealAccount(db_path=self.project_root / "data" / "meta" / "real_account.db")
         self.store = StockDataStore()
         self.research_view = ResearchDataView(n_jobs=1)
+        self.qlib_adapter = QlibAdapter()
         self._stock_list_cache: pd.DataFrame | None = None
         self._instrument_index: dict[str, dict[str, Any]] | None = None
         self._feature_registry_cache: list[FeatureRegistryEntry] | None = None
+        self._qlib_ready = False
 
     def list_instruments(self, *, query: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
         frame = self._get_stock_list_frame()
@@ -65,10 +72,62 @@ class ResearchCockpitRepository:
     def list_feature_registry(self) -> list[FeatureRegistryEntry]:
         if self._feature_registry_cache is not None:
             return self._feature_registry_cache
-        entries: list[FeatureRegistryEntry] = []
+        entries: dict[str, FeatureRegistryEntry] = {}
+        registry_tags: dict[str, set[str]] = {}
+
+        def merge_entry(entry: FeatureRegistryEntry) -> None:
+            existing = entries.get(entry.feature_name)
+            if existing is None:
+                entries[entry.feature_name] = entry
+                registry_tags[entry.feature_name] = set(entry.tags)
+                return
+            merged_tags = registry_tags.setdefault(entry.feature_name, set(existing.tags))
+            merged_tags.update(existing.tags)
+            merged_tags.update(entry.tags)
+            source_layer = existing.source_layer
+            if source_layer == "raw" and entry.source_layer != "raw":
+                source_layer = entry.source_layer
+            description = existing.description
+            if description.startswith("Adapter field available") and entry.description:
+                description = entry.description
+            dependencies = existing.dependencies or entry.dependencies
+            if len(entry.dependencies) > len(dependencies):
+                dependencies = entry.dependencies
+            entries[entry.feature_name] = FeatureRegistryEntry(
+                feature_id=existing.feature_id,
+                feature_name=existing.feature_name,
+                display_name=existing.display_name or entry.display_name,
+                group_name=entry.group_name if existing.group_name == self._classify_raw_field_group(existing.feature_name) and entry.group_name else existing.group_name,
+                source_layer=source_layer,
+                dtype=existing.dtype or entry.dtype,
+                value_kind=existing.value_kind,
+                description=description,
+                formula=existing.formula or entry.formula,
+                dependencies=dependencies,
+                supports_snapshot=existing.supports_snapshot or entry.supports_snapshot,
+                tags=sorted(merged_tags),
+                status=existing.status,
+            )
+
+        for field_name in self._load_adapter_qlib_fields():
+            merge_entry(
+                FeatureRegistryEntry(
+                    feature_id=field_name,
+                    feature_name=field_name,
+                    display_name=field_name,
+                    group_name=self._classify_raw_field_group(field_name),
+                    source_layer="raw",
+                    dtype="float",
+                    value_kind="scalar",
+                    description=f"Adapter field available through qlib layer: {field_name}",
+                    supports_snapshot=True,
+                    tags=["adapter_field", "research_ui"],
+                )
+            )
+
         for group_name, payload in sorted(list_feature_groups().items()):
             for feature_name in payload.get("features", []):
-                entries.append(
+                merge_entry(
                     FeatureRegistryEntry(
                         feature_id=feature_name,
                         feature_name=feature_name,
@@ -79,10 +138,32 @@ class ResearchCockpitRepository:
                         value_kind="scalar",
                         description=f"{group_name} feature: {feature_name}",
                         dependencies=[],
-                        tags=[group_name, "research_ui"],
+                        supports_snapshot=True,
+                        tags=[group_name, "semantic", "research_ui"],
                     )
                 )
-        self._feature_registry_cache = entries
+
+        for source_name, features in self._load_model_feature_configs().items():
+            for feature_name in features:
+                field_name = self._normalize_registry_feature_name(feature_name)
+                merge_entry(
+                    FeatureRegistryEntry(
+                        feature_id=field_name,
+                        feature_name=field_name,
+                        display_name=field_name,
+                        group_name=self._classify_registry_group(field_name),
+                        source_layer=self._classify_feature_source(field_name),
+                        dtype="float",
+                        value_kind="scalar",
+                        description=self._describe_feature(field_name),
+                        formula=feature_name if feature_name != field_name else "",
+                        dependencies=self._extract_feature_dependencies(feature_name),
+                        supports_snapshot=True,
+                        tags=[source_name, "research_ui"],
+                    )
+                )
+
+        self._feature_registry_cache = sorted(entries.values(), key=lambda item: (item.group_name, item.feature_name))
         return self._feature_registry_cache
 
     def get_bar_series(self, *, instrument_id: str, start: str, end: str, price_mode: str = "fq") -> list[dict[str, Any]]:
@@ -92,18 +173,21 @@ class ResearchCockpitRepository:
         return self._load_feature_snapshot(trade_date=trade_date, instrument_id=instrument_id, feature_names=feature_names)
 
     def get_feature_series(self, *, instrument_id: str, start: str, end: str, feature_names: list[str]) -> list[dict[str, Any]]:
-        qlib_fields = [name if name.startswith("$") else f"${name}" for name in feature_names]
-        frame = self.research_view.get_feature([instrument_id], qlib_fields, start, end)
+        qlib_fields = self._normalize_feature_fields(feature_names)
+        frame = self._load_qlib_features([instrument_id], qlib_fields, start, end)
         if frame.empty:
             return []
         rows: list[dict[str, Any]] = []
-        for _, row in frame.reset_index().iterrows():
+        reset = frame.reset_index()
+        date_key = "datetime" if "datetime" in reset.columns else "trade_date"
+        instrument_key = "instrument" if "instrument" in reset.columns else "ts_code"
+        for _, row in reset.iterrows():
             item = {
-                "trade_date": str(row.get("trade_date")),
-                "instrument_id": str(row.get("ts_code")),
+                "trade_date": str(row.get(date_key)),
+                "instrument_id": str(row.get(instrument_key)),
             }
             for field in qlib_fields:
-                item[field.lstrip("$")] = self._normalize_scalar(row.get(field))
+                item[self._normalize_registry_feature_name(field)] = self._normalize_scalar(row.get(field))
             rows.append(item)
         return rows
 
@@ -127,14 +211,14 @@ class ResearchCockpitRepository:
         return runs
 
     def build_feature_health_summary(self, *, trade_date: str, feature_names: list[str], universe: str = "csi300") -> FeatureHealthSummary:
-        qlib_fields = [field if field.startswith("$") else f"${field}" for field in feature_names]
+        qlib_fields = self._normalize_feature_fields(feature_names)
         report = inspect_qlib_data_health(trade_date, qlib_fields, universe=universe)
         entries: list[FeatureHealthEntry] = []
         for field in qlib_fields:
             miss = float(report.column_missing_ratio.get(field, 1.0))
             entries.append(
                 FeatureHealthEntry(
-                    feature_name=field.lstrip("$"),
+                    feature_name=self._normalize_registry_feature_name(field),
                     coverage_ratio=max(0.0, 1.0 - miss),
                     nan_ratio=miss,
                     inf_ratio=0.0,
@@ -254,13 +338,58 @@ class ResearchCockpitRepository:
             drawdown = (equity / cummax) - 1.0
             frame = frame.copy()
             frame["drawdown"] = drawdown
+        benchmark_points = self._load_benchmark_points(
+            start_date=str(frame.iloc[0].get("date") or frame.iloc[0].get("trade_date") or ""),
+            end_date=str(frame.iloc[-1].get("date") or frame.iloc[-1].get("trade_date") or ""),
+            benchmark_code="000300.SH",
+            benchmark_name="CSI300",
+        )
+        benchmark2_points = self._load_benchmark_points(
+            start_date=str(frame.iloc[0].get("date") or frame.iloc[0].get("trade_date") or ""),
+            end_date=str(frame.iloc[-1].get("date") or frame.iloc[-1].get("trade_date") or ""),
+            benchmark_code="000001.SH",
+            benchmark_name="SSE",
+        )
+        benchmark_map = {item["trade_date"]: item for item in benchmark_points}
+        benchmark2_map = {item["trade_date"]: item for item in benchmark2_points}
+        benchmark_base = self._to_float(benchmark_points[0].get("close")) if benchmark_points else None
+        benchmark2_base = self._to_float(benchmark2_points[0].get("close")) if benchmark2_points else None
+        equity_base = self._to_float(frame.iloc[0].get("total_assets")) if not frame.empty else None
+        previous_benchmark_close = benchmark_base
+        previous_benchmark2_close = benchmark2_base
         for _, row in frame.iterrows():
+            trade_date = str(row.get("date") or row.get("trade_date") or "")
+            benchmark_row = benchmark_map.get(trade_date, {})
+            benchmark_close = self._to_float(benchmark_row.get("close"))
+            benchmark2_row = benchmark2_map.get(trade_date, {})
+            benchmark2_close = self._to_float(benchmark2_row.get("close"))
+            benchmark_equity = None
+            benchmark_daily_return = None
+            benchmark2_equity = None
+            benchmark2_daily_return = None
+            if benchmark_base and equity_base and benchmark_close is not None:
+                benchmark_equity = equity_base * (benchmark_close / benchmark_base)
+            if benchmark2_base and equity_base and benchmark2_close is not None:
+                benchmark2_equity = equity_base * (benchmark2_close / benchmark2_base)
+            if previous_benchmark_close and benchmark_close is not None and previous_benchmark_close != 0:
+                benchmark_daily_return = (benchmark_close / previous_benchmark_close) - 1.0
+            if previous_benchmark2_close and benchmark2_close is not None and previous_benchmark2_close != 0:
+                benchmark2_daily_return = (benchmark2_close / previous_benchmark2_close) - 1.0
+            if benchmark_close is not None:
+                previous_benchmark_close = benchmark_close
+            if benchmark2_close is not None:
+                previous_benchmark2_close = benchmark2_close
             points.append(
                 BacktestDailyPoint(
-                    trade_date=str(row.get("date") or row.get("trade_date") or ""),
+                    trade_date=trade_date,
                     equity=self._to_float(row.get("total_assets")),
+                    zero_cost_equity=self._to_float(row.get("zero_cost_total_assets")),
                     daily_return=self._to_float(row.get("daily_return")),
                     drawdown=self._to_float(row.get("drawdown")),
+                    benchmark_equity=benchmark_equity,
+                    benchmark_daily_return=benchmark_daily_return,
+                    benchmark2_equity=benchmark2_equity,
+                    benchmark2_daily_return=benchmark2_daily_return,
                     turnover=self._to_float(row.get("turnover") or row.get("daily_turnover")),
                     ic=self._to_float(row.get("ic")),
                     rank_ic=self._to_float(row.get("rank_ic")),
@@ -360,6 +489,18 @@ class ResearchCockpitRepository:
         manifest = self.build_daily_run_manifest(execution_date)
         signal_date = manifest.signal_date or execution_date
         bars = self._load_bars(instrument_id=instrument_id, trade_date=execution_date, price_mode=price_mode)
+        benchmark_bars = self._load_benchmark_points(
+            start_date=bars[0].get("trade_date") if bars else signal_date,
+            end_date=bars[-1].get("trade_date") if bars else execution_date,
+            benchmark_code="000300.SH",
+            benchmark_name="CSI300",
+        )
+        secondary_benchmark_bars = self._load_benchmark_points(
+            start_date=bars[0].get("trade_date") if bars else signal_date,
+            end_date=bars[-1].get("trade_date") if bars else execution_date,
+            benchmark_code="000001.SH",
+            benchmark_name="SSE",
+        )
         signal_snapshot = self._load_signal_snapshot(execution_date=execution_date, instrument_id=instrument_id)
         feature_snapshot = self._load_feature_snapshot(trade_date=signal_date, instrument_id=instrument_id)
         replay = self.build_decision_replay(execution_date=execution_date, account_name="shadow")
@@ -374,6 +515,8 @@ class ResearchCockpitRepository:
             execution_date=execution_date,
             price_mode=price_mode,
             bars=bars,
+            benchmark_bars=benchmark_bars,
+            secondary_benchmark_bars=secondary_benchmark_bars,
             signal_snapshot=signal_snapshot,
             feature_snapshot=feature_snapshot,
             orders=related_orders,
@@ -423,11 +566,10 @@ class ResearchCockpitRepository:
         return {key: self._normalize_scalar(value) for key, value in matched.iloc[0].to_dict().items()}
 
     def _load_feature_snapshot(self, *, trade_date: str, instrument_id: str, feature_names: list[str] | None = None) -> dict[str, Any]:
-        features = feature_names or [item.feature_name for item in self.list_feature_registry()[:20]]
-        field_names = [str(item).lstrip("$") for item in features]
-        qlib_fields = [f"${name}" for name in field_names]
+        features = feature_names or [item.feature_name for item in self.list_feature_registry()[:24]]
+        qlib_fields = self._normalize_feature_fields(features)
         try:
-            frame = self.research_view.get_feature([instrument_id], qlib_fields, trade_date, trade_date)
+            frame = self._load_qlib_features([instrument_id], qlib_fields, trade_date, trade_date)
         except Exception:
             return {"trade_date": trade_date, "instrument_id": instrument_id, "features": {}}
         if frame.empty:
@@ -435,9 +577,9 @@ class ResearchCockpitRepository:
         row = frame.reset_index().iloc[-1].to_dict()
         payload = {}
         for key, value in row.items():
-            if key in ("trade_date", "ts_code"):
+            if key in ("trade_date", "ts_code", "datetime", "instrument"):
                 continue
-            payload[str(key).lstrip("$")] = self._normalize_scalar(value)
+            payload[self._normalize_registry_feature_name(str(key))] = self._normalize_scalar(value)
         return {"trade_date": trade_date, "instrument_id": instrument_id, "features": payload}
 
     def _load_previous_positions(self, execution_date: str, account_name: str) -> list[dict[str, Any]]:
@@ -532,6 +674,213 @@ class ResearchCockpitRepository:
             if candidate.exists():
                 return candidate
         return candidates[0]
+
+    def _ensure_qlib_ready(self) -> None:
+        if self._qlib_ready:
+            return
+        self.qlib_adapter.init_qlib()
+        self._qlib_ready = True
+
+    def _load_qlib_features(self, instruments: list[str] | str, fields: list[str], start_date: str, end_date: str) -> pd.DataFrame:
+        self._ensure_qlib_ready()
+        frame = self.qlib_adapter.get_features(instruments, fields, start_time=start_date, end_time=end_date)
+        if frame is None:
+            return pd.DataFrame()
+        return frame
+
+    def _load_adapter_qlib_fields(self) -> list[str]:
+        config = cfg.get_tushare_feature_config().get("adapter", {})
+        fields = []
+        for field in config.get("qlib_fields", []):
+            if field in {"date", "trade_date"}:
+                continue
+            normalized = self._normalize_registry_feature_name(str(field))
+            if normalized not in fields:
+                fields.append(normalized)
+        return fields
+
+    def _load_model_feature_configs(self) -> dict[str, list[str]]:
+        sources: dict[str, list[str]] = {}
+        feature_loaders = {
+            "feature_set:alpha158": FeatureLibrary.get_alpha158_config,
+            "feature_set:alpha158_extended": FeatureLibrary.get_alpha158_extended_config,
+            "feature_set:margin_extended": FeatureLibrary.get_alpha158_margin_extended_config,
+            "feature_set:research_phase1": FeatureLibrary.get_research_phase1_config,
+            "feature_set:research_phase12": FeatureLibrary.get_research_phase12_config,
+            "feature_set:research_phase123": FeatureLibrary.get_research_phase123_config,
+            "feature_set:semantic_all_features": FeatureLibrary.get_semantic_all_features_config,
+        }
+        for source_name, loader in feature_loaders.items():
+            try:
+                features = loader()
+            except Exception:
+                continue
+            if isinstance(features, list) and features:
+                sources[source_name] = [str(item) for item in features if str(item).strip()]
+
+        models_root = self.project_root / "data" / "models"
+        if not models_root.exists():
+            return sources
+
+        for meta_path in sorted(models_root.glob("**/meta.yaml")):
+            try:
+                with open(meta_path, "r", encoding="utf-8") as handle:
+                    payload = yaml.safe_load(handle) or {}
+            except Exception:
+                continue
+            feature_config = payload.get("feature_config") or payload.get("features") or []
+            if isinstance(feature_config, list) and feature_config:
+                key = f"model:{meta_path.parent.name}"
+                sources[key] = [str(item) for item in feature_config if str(item).strip()]
+
+        for selection_path in sorted(models_root.glob("**/feature_selection.yaml")):
+            try:
+                with open(selection_path, "r", encoding="utf-8") as handle:
+                    payload = yaml.safe_load(handle) or {}
+            except Exception:
+                continue
+            selected = payload.get("selected_features") or payload.get("feature_names") or []
+            if isinstance(selected, list) and selected:
+                key = f"selection:{selection_path.parent.name}"
+                sources[key] = [str(item) for item in selected if str(item).strip()]
+        return sources
+
+    def _normalize_feature_fields(self, feature_names: list[str]) -> list[str]:
+        semantic_features = {
+            feature_name
+            for payload in list_feature_groups().values()
+            for feature_name in payload.get("features", [])
+        }
+        normalized: list[str] = []
+        for feature_name in feature_names:
+            name = str(feature_name).strip()
+            if not name:
+                continue
+            if name in semantic_features:
+                normalized.append(name)
+                continue
+            if re.match(r"^\$[A-Za-z_][A-Za-z0-9_]*$", name):
+                normalized.append(name)
+                continue
+            if re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", name):
+                normalized.append(f"${name}")
+                continue
+            normalized.append(name)
+        return normalized
+
+    def _normalize_registry_feature_name(self, feature_name: str) -> str:
+        name = str(feature_name).strip()
+        if re.match(r"^\$[A-Za-z_][A-Za-z0-9_]*$", name):
+            return name[1:]
+        return name
+
+    def _classify_feature_source(self, feature_name: str) -> str:
+        normalized = self._normalize_registry_feature_name(feature_name)
+        semantic_features = {
+            item
+            for payload in list_feature_groups().values()
+            for item in payload.get("features", [])
+        }
+        if normalized in semantic_features:
+            return "semantic_derived"
+        if re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", normalized):
+            return "raw"
+        return "qlib_native"
+
+    def _classify_registry_group(self, feature_name: str) -> str:
+        normalized = self._normalize_registry_feature_name(feature_name)
+        for group_name, payload in list_feature_groups().items():
+            if normalized in payload.get("features", []):
+                return group_name
+        return self._classify_raw_field_group(normalized)
+
+    def _classify_raw_field_group(self, field_name: str) -> str:
+        field = str(field_name).lower()
+        if field in {"open", "high", "low", "close", "adj_open", "adj_high", "adj_low", "adj_close", "vwap", "factor", "adj_factor"}:
+            return "price"
+        if field in {"volume", "amount", "turnover_rate", "net_inflow", "big_inflow", "l1_buy_amount", "l1_sell_amount", "l1_net_amount"}:
+            return "liquidity"
+        if field in {"paused", "high_limit", "low_limit"}:
+            return "tradability"
+        if field.startswith("margin_") or field.startswith("lend_"):
+            return "margin"
+        if field in {"pe", "pb", "ps_ttm", "roe", "grossprofit_margin", "debt_to_assets", "current_ratio", "total_mv", "circ_mv", "net_income", "revenue", "total_assets", "equity", "op_cashflow", "inventory", "accounts_receiv", "inventory_yoy", "ar_yoy"}:
+            return "fundamental"
+        return "qlib_native"
+
+    def _describe_feature(self, feature_name: str) -> str:
+        normalized = self._normalize_registry_feature_name(feature_name)
+        source_layer = self._classify_feature_source(normalized)
+        if source_layer == "semantic_derived":
+            return f"Semantic research feature: {normalized}"
+        if source_layer == "raw":
+            return f"Native market or fundamental field: {normalized}"
+        return f"Qlib expression feature available to research/model layer: {feature_name}"
+
+    def _extract_feature_dependencies(self, feature_name: str) -> list[str]:
+        deps = {
+            self._normalize_registry_feature_name(match)
+            for match in re.findall(r"\$[A-Za-z_][A-Za-z0-9_]*", str(feature_name))
+        }
+        return sorted(deps)
+
+    def _load_benchmark_points(self, *, start_date: str | None, end_date: str | None, benchmark_code: str = "000300.SH", benchmark_name: str = "CSI300") -> list[dict[str, Any]]:
+        if not start_date or not end_date:
+            return []
+        start = pd.Timestamp(start_date).strftime("%Y-%m-%d")
+        end = pd.Timestamp(end_date).strftime("%Y-%m-%d")
+        candidates = [
+            cfg.get_path("raw") / "index" / f"{benchmark_code}.csv",
+            self.project_root / "data" / "raw" / "index" / f"{benchmark_code}.csv",
+        ]
+        frame = pd.DataFrame()
+        for candidate in candidates:
+            if candidate.exists():
+                frame = pd.read_csv(candidate)
+                break
+
+        if frame.empty:
+            try:
+                frame = self.research_view.get_feature([benchmark_code], ["open", "high", "low", "close", "volume"], start, end)
+            except Exception:
+                frame = pd.DataFrame()
+            if not frame.empty:
+                frame = frame.reset_index().rename(columns={"ts_code": "instrument_id"})
+
+        if frame.empty:
+            return []
+
+        rename_map = {
+            "vol": "volume",
+            "trade_date": "trade_date",
+            "datetime": "trade_date",
+            "ts_code": "instrument_id",
+            "instrument": "instrument_id",
+        }
+        frame = frame.rename(columns=rename_map)
+        if "trade_date" not in frame.columns:
+            return []
+        frame = frame.copy()
+        frame["trade_date"] = pd.to_datetime(frame["trade_date"].astype(str), format="%Y%m%d", errors="coerce").dt.strftime("%Y-%m-%d")
+        frame = frame[(frame["trade_date"] >= start) & (frame["trade_date"] <= end)]
+        frame = frame.sort_values("trade_date")
+        frame["instrument_id"] = frame.get("instrument_id", pd.Series([benchmark_code] * len(frame))).astype(str)
+
+        rows: list[dict[str, Any]] = []
+        for row in frame.to_dict(orient="records"):
+            rows.append(
+                {
+                    "trade_date": row.get("trade_date"),
+                    "instrument_id": row.get("instrument_id") or benchmark_code,
+                    "benchmark_name": benchmark_name,
+                    "open": self._to_float(row.get("open")),
+                    "high": self._to_float(row.get("high")),
+                    "low": self._to_float(row.get("low")),
+                    "close": self._to_float(row.get("close")),
+                    "volume": self._to_float(row.get("volume")),
+                }
+            )
+        return rows
 
     def _get_stock_list_frame(self) -> pd.DataFrame:
         if self._stock_list_cache is None:
