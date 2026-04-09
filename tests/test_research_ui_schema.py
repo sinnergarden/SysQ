@@ -64,6 +64,16 @@ class TestResearchUiSchema(unittest.TestCase):
         self.assertIn('close', full_snapshot['features'])
         self.assertGreater(len(full_snapshot['features']), len(subset_snapshot['features']))
 
+    def test_feature_health_uses_final_feature_values_for_semantic_fields(self):
+        summary = self.repo.build_feature_health_summary(
+            trade_date='2025-02-13',
+            feature_names=['amount_log', 'close'],
+            universe='csi300',
+        )
+        metrics = {item.feature_name: item for item in summary.features}
+        self.assertGreater(metrics['amount_log'].coverage_ratio, 0.0)
+        self.assertGreater(metrics['close'].coverage_ratio, 0.0)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -213,9 +213,18 @@ class ResearchCockpitRepository:
     def build_feature_health_summary(self, *, trade_date: str, feature_names: list[str], universe: str = "csi300") -> FeatureHealthSummary:
         qlib_fields = self._normalize_feature_fields(feature_names)
         report = inspect_qlib_data_health(trade_date, qlib_fields, universe=universe)
+
+        # Health should reflect the same final feature values that snapshot/model-facing
+        # reads use, instead of only raw probe field availability.
+        feature_frame = self._load_qlib_features_batched(universe, qlib_fields, trade_date, trade_date)
+        feature_rows = len(feature_frame)
+        overall_missing_ratio = float(feature_frame.isna().mean().mean()) if not feature_frame.empty else 1.0
+
         entries: list[FeatureHealthEntry] = []
         for field in qlib_fields:
-            miss = float(report.column_missing_ratio.get(field, 1.0))
+            miss = 1.0
+            if not feature_frame.empty and field in feature_frame.columns:
+                miss = float(feature_frame[field].isna().mean())
             entries.append(
                 FeatureHealthEntry(
                     feature_name=self._normalize_registry_feature_name(field),
@@ -231,8 +240,8 @@ class ResearchCockpitRepository:
             universe=universe,
             price_mode_context="fq",
             feature_count=len(entries),
-            instrument_count=report.feature_rows,
-            overall_missing_ratio=float(report.missing_ratio),
+            instrument_count=feature_rows,
+            overall_missing_ratio=overall_missing_ratio,
             features=entries,
             warnings=list(report.warnings),
             blockers=list(report.blocking_issues),
