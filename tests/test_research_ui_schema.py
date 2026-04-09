@@ -18,8 +18,10 @@ class TestResearchUiSchema(unittest.TestCase):
         entries = self.repo.list_feature_registry()
         self.assertTrue(entries)
         registry = {item.feature_name: item.to_dict() for item in entries}
+        self.assertEqual(len(entries), 254)
         self.assertIn('close', registry)
         self.assertIn('ret_1d', registry)
+        self.assertNotIn('alpha158_beta10', registry)
         self.assertIn('feature_id', registry['close'])
         self.assertIn('source_layer', registry['close'])
         self.assertIn('value_kind', registry['ret_1d'])
@@ -62,6 +64,7 @@ class TestResearchUiSchema(unittest.TestCase):
         )
         self.assertIn('features', full_snapshot)
         self.assertIn('close', full_snapshot['features'])
+        self.assertEqual(len(full_snapshot['features']), 254)
         self.assertGreater(len(full_snapshot['features']), len(subset_snapshot['features']))
 
     def test_feature_health_uses_final_feature_values_for_semantic_fields(self):

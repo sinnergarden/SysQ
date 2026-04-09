@@ -74,6 +74,13 @@ class ResearchCockpitRepository:
             return self._feature_registry_cache
         entries: dict[str, FeatureRegistryEntry] = {}
         registry_tags: dict[str, set[str]] = {}
+        model_feature_sources = self._load_model_feature_configs()
+        active_feature_names = {
+            self._normalize_registry_feature_name(feature_name)
+            for source_name, features in model_feature_sources.items()
+            if source_name.startswith("model:")
+            for feature_name in features
+        }
 
         def merge_entry(entry: FeatureRegistryEntry) -> None:
             existing = entries.get(entry.feature_name)
@@ -110,6 +117,8 @@ class ResearchCockpitRepository:
             )
 
         for field_name in self._load_adapter_qlib_fields():
+            if field_name not in active_feature_names:
+                continue
             merge_entry(
                 FeatureRegistryEntry(
                     feature_id=field_name,
@@ -127,6 +136,8 @@ class ResearchCockpitRepository:
 
         for group_name, payload in sorted(list_feature_groups().items()):
             for feature_name in payload.get("features", []):
+                if feature_name not in active_feature_names:
+                    continue
                 merge_entry(
                     FeatureRegistryEntry(
                         feature_id=feature_name,
@@ -143,7 +154,9 @@ class ResearchCockpitRepository:
                     )
                 )
 
-        for source_name, features in self._load_model_feature_configs().items():
+        for source_name, features in model_feature_sources.items():
+            if not source_name.startswith("model:"):
+                continue
             for feature_name in features:
                 field_name = self._normalize_registry_feature_name(feature_name)
                 merge_entry(
