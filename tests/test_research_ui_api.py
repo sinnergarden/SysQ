@@ -23,6 +23,8 @@ class TestResearchUiApi(unittest.TestCase):
         response = self.client.get('/')
         self.assertEqual(response.status_code, 200)
         self.assertIn('Research UI', response.text)
+        self.assertIn('cdn.plot.ly/plotly', response.text)
+        self.assertIn('case-bars-chart', response.text)
 
     def test_instruments_endpoint(self):
         response = self.client.get('/api/instruments', params={'q': '平安', 'limit': 10})
@@ -82,6 +84,23 @@ class TestResearchUiApi(unittest.TestCase):
         self.assertEqual(orders_payload['run_id'], run_id)
         self.assertEqual(orders_payload['trade_date'], first_trade_date)
         self.assertIn('items', orders_payload)
+
+    def test_feature_snapshot_defaults_to_full_available_set(self):
+        full_response = self.client.get('/api/feature-snapshot', params={'instrument_id': self.case_instrument, 'trade_date': self.execution_date})
+        self.assertEqual(full_response.status_code, 200)
+        full_payload = full_response.json()
+        self.assertEqual(full_payload['api_version'], 'v1')
+        self.assertIn('features', full_payload['data'])
+
+        subset_response = self.client.get('/api/feature-snapshot', params={
+            'instrument_id': self.case_instrument,
+            'trade_date': self.execution_date,
+            'feature_names': ['close', 'ret_1d'],
+        })
+        self.assertEqual(subset_response.status_code, 200)
+        subset_payload = subset_response.json()
+        self.assertGreater(len(full_payload['data']['features']), len(subset_payload['data']['features']))
+        self.assertIn('close', full_payload['data']['features'])
 
     def test_daily_run_endpoints(self):
         daily_response = self.client.get(f'/api/runs/daily/{self.execution_date}')

@@ -174,7 +174,7 @@ class ResearchCockpitRepository:
 
     def get_feature_series(self, *, instrument_id: str, start: str, end: str, feature_names: list[str]) -> list[dict[str, Any]]:
         qlib_fields = self._normalize_feature_fields(feature_names)
-        frame = self._load_qlib_features([instrument_id], qlib_fields, start, end)
+        frame = self._load_qlib_features_batched([instrument_id], qlib_fields, start, end)
         if frame.empty:
             return []
         rows: list[dict[str, Any]] = []
@@ -566,10 +566,10 @@ class ResearchCockpitRepository:
         return {key: self._normalize_scalar(value) for key, value in matched.iloc[0].to_dict().items()}
 
     def _load_feature_snapshot(self, *, trade_date: str, instrument_id: str, feature_names: list[str] | None = None) -> dict[str, Any]:
-        features = feature_names or [item.feature_name for item in self.list_feature_registry()[:24]]
+        features = feature_names or self._list_snapshot_feature_names()
         qlib_fields = self._normalize_feature_fields(features)
         try:
-            frame = self._load_qlib_features([instrument_id], qlib_fields, trade_date, trade_date)
+            frame = self._load_qlib_features_batched([instrument_id], qlib_fields, trade_date, trade_date)
         except Exception:
             return {"trade_date": trade_date, "instrument_id": instrument_id, "features": {}}
         if frame.empty:
@@ -687,6 +687,37 @@ class ResearchCockpitRepository:
         if frame is None:
             return pd.DataFrame()
         return frame
+
+    def _load_qlib_features_batched(
+        self,
+        instruments: list[str] | str,
+        fields: list[str],
+        start_date: str,
+        end_date: str,
+        batch_size: int = 120,
+    ) -> pd.DataFrame:
+        if not fields:
+            return pd.DataFrame()
+        if len(fields) <= batch_size:
+            return self._load_qlib_features(instruments, fields, start_date, end_date)
+        merged: pd.DataFrame | None = None
+        for offset in range(0, len(fields), batch_size):
+            batch = fields[offset : offset + batch_size]
+            chunk = self._load_qlib_features(instruments, batch, start_date, end_date)
+            if chunk.empty:
+                continue
+            merged = chunk if merged is None else merged.join(chunk, how="outer")
+        return merged if merged is not None else pd.DataFrame()
+
+    def _list_snapshot_feature_names(self) -> list[str]:
+        names: list[str] = []
+        for entry in self.list_feature_registry():
+            if not entry.supports_snapshot:
+                continue
+            candidate = entry.formula or entry.feature_name
+            if candidate not in names:
+                names.append(candidate)
+        return names
 
     def _load_adapter_qlib_fields(self) -> list[str]:
         config = cfg.get_tushare_feature_config().get("adapter", {})

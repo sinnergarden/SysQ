@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Qsys Research UI</title>
   <link rel="stylesheet" href="/ui/styles.css" />
+  <script defer src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
 </head>
 <body>
   <div class="shell">
@@ -54,9 +55,9 @@
         <div class="grid two-col">
           <div class="panel">
             <div class="panel-head"><h3>K / CSI300 / Volume</h3><span id="case-meta"></span></div>
-            <svg id="case-bars-chart" class="chart" viewBox="0 0 760 260"></svg>
-            <svg id="case-relative-chart" class="chart compact" viewBox="0 0 760 150"></svg>
-            <svg id="case-volume-chart" class="chart compact" viewBox="0 0 760 120"></svg>
+            <div id="case-bars-chart" class="chart plotly-chart chart-tall"></div>
+            <div id="case-relative-chart" class="chart plotly-chart chart-compact"></div>
+            <div id="case-volume-chart" class="chart plotly-chart chart-volume"></div>
           </div>
           <div class="panel">
             <div class="panel-head"><h3>Signal / Trade Markers</h3></div>
@@ -65,7 +66,8 @@
         </div>
         <div class="grid two-col">
           <div class="panel">
-            <div class="panel-head"><h3>Feature Snapshot</h3></div>
+            <div class="panel-head"><h3>Feature Snapshot</h3><span id="case-feature-count"></span></div>
+            <label class="search-inline">Search Snapshot<input id="case-feature-search" placeholder="filter feature name" /></label>
             <div id="case-feature-table" class="table-wrap"></div>
           </div>
           <div class="panel">
@@ -105,7 +107,8 @@
             <div id="feature-health-table" class="table-wrap"></div>
           </div>
           <div class="panel">
-            <div class="panel-head"><h3>Instrument-Date Snapshot</h3></div>
+            <div class="panel-head"><h3>Instrument-Date Snapshot</h3><span id="feature-snapshot-count"></span></div>
+            <label class="search-inline">Search Snapshot<input id="feature-snapshot-search" placeholder="filter feature name" /></label>
             <div id="feature-snapshot-table" class="table-wrap"></div>
           </div>
         </div>
@@ -129,12 +132,12 @@
         </div>
         <div class="grid two-col">
           <div class="panel">
-            <div class="panel-head"><h3>Strategy vs CSI300</h3></div>
-            <svg id="backtest-equity-chart" class="chart" viewBox="0 0 760 260"></svg>
+            <div class="panel-head"><h3>Strategy / Zero-cost / CSI300 / SSE</h3></div>
+            <div id="backtest-equity-chart" class="chart plotly-chart chart-tall"></div>
           </div>
           <div class="panel">
             <div class="panel-head"><h3>Drawdown / IC / RankIC</h3></div>
-            <svg id="backtest-diagnostics-chart" class="chart" viewBox="0 0 760 260"></svg>
+            <div id="backtest-diagnostics-chart" class="chart plotly-chart chart-tall"></div>
           </div>
         </div>
         <div class="grid two-col">
@@ -175,6 +178,6 @@
     </main>
   </div>
 
-  <script src="/ui/app.js"></script>
+  <script defer src="/ui/app.js"></script>
 </body>
 </html>

@@ -4,6 +4,7 @@ const CHART_COLORS = {
   benchmark: '#1d4ed8',
   accent: '#c2410c',
   danger: '#b91c1c',
+  neutral: '#334155',
   grid: 'rgba(31, 36, 48, 0.12)',
   axis: 'rgba(31, 36, 48, 0.46)',
   candleUp: '#0f766e',
@@ -17,6 +18,8 @@ const state = {
   cache: new Map(),
   latestBacktestRunId: null,
   featureRegistry: [],
+  caseFeatureSnapshot: {},
+  featureSnapshot: {},
   selectedFeatureNames: new Set(),
 };
 
@@ -112,287 +115,211 @@ function renderTable(containerId, rows, columns) {
   root.innerHTML = `<table><thead><tr>${header}</tr></thead><tbody>${body}</tbody></table>`;
 }
 
-function getSvgSize(svg) {
-  const box = svg.viewBox.baseVal;
-  return { width: box.width || 760, height: box.height || 260 };
-}
-
 function toNumber(value) {
   if (value === null || value === undefined || value === '') return null;
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : null;
 }
 
-function niceTicks(minValue, maxValue, count = 5) {
-  if (!Number.isFinite(minValue) || !Number.isFinite(maxValue)) return [0];
-  if (minValue === maxValue) {
-    const delta = minValue === 0 ? 1 : Math.abs(minValue) * 0.1;
-    minValue -= delta;
-    maxValue += delta;
-  }
-  const rawStep = Math.abs(maxValue - minValue) / Math.max(count - 1, 1);
-  const magnitude = 10 ** Math.floor(Math.log10(rawStep || 1));
-  const normalized = rawStep / magnitude;
-  const step = (normalized <= 1 ? 1 : normalized <= 2 ? 2 : normalized <= 5 ? 5 : 10) * magnitude;
-  const start = Math.floor(minValue / step) * step;
-  const end = Math.ceil(maxValue / step) * step;
-  const ticks = [];
-  for (let tick = start; tick <= end + step * 0.5; tick += step) {
-    ticks.push(Number(tick.toFixed(8)));
-  }
-  return ticks;
+function toDateLabel(value) {
+  return String(value || '').slice(0, 10);
 }
 
-function buildLinePath(values, xAt, yAt) {
-  let path = '';
-  let drawing = false;
-  values.forEach((value, index) => {
-    const numeric = toNumber(value);
-    if (numeric === null) {
-      drawing = false;
-      return;
-    }
-    const x = xAt(index);
-    const y = yAt(numeric);
-    path += `${drawing ? ' L' : 'M'} ${x.toFixed(2)} ${y.toFixed(2)}`;
-    drawing = true;
+function hasPlotly() {
+  return typeof window !== 'undefined' && typeof window.Plotly !== 'undefined';
+}
+
+function renderChartError(containerId, message) {
+  const root = document.getElementById(containerId);
+  if (!root) return;
+  root.innerHTML = `<div class="chart-empty">${escapeHtml(message)}</div>`;
+}
+
+function plotlyBaseLayout({ title = '', height = 320, yAxisTitle = '', hoverMode = 'x unified', showRangeSlider = false } = {}) {
+  return {
+    title: title ? { text: title, font: { size: 13, color: CHART_COLORS.axis } } : undefined,
+    height,
+    margin: { l: 56, r: 22, t: title ? 42 : 20, b: 42 },
+    paper_bgcolor: 'rgba(255, 253, 248, 0)',
+    plot_bgcolor: 'rgba(255, 253, 248, 0)',
+    hovermode: hoverMode,
+    dragmode: 'pan',
+    showlegend: true,
+    legend: { orientation: 'h', yanchor: 'bottom', y: 1.02, xanchor: 'left', x: 0 },
+    xaxis: {
+      type: 'date',
+      gridcolor: CHART_COLORS.grid,
+      linecolor: CHART_COLORS.grid,
+      tickfont: { color: CHART_COLORS.axis },
+      rangeslider: { visible: showRangeSlider },
+      fixedrange: false,
+    },
+    yaxis: {
+      title: yAxisTitle ? { text: yAxisTitle, font: { size: 11, color: CHART_COLORS.axis } } : undefined,
+      gridcolor: CHART_COLORS.grid,
+      zerolinecolor: CHART_COLORS.grid,
+      tickfont: { color: CHART_COLORS.axis },
+      fixedrange: false,
+    },
+    font: { family: 'IBM Plex Sans, Noto Sans SC, sans-serif', color: CHART_COLORS.axis },
+    hoverlabel: { bgcolor: '#fffdf8', bordercolor: CHART_COLORS.grid, font: { color: CHART_COLORS.axis } },
+  };
+}
+
+function renderPlotlyChart(containerId, traces, layout) {
+  if (!hasPlotly()) {
+    renderChartError(containerId, 'Plotly failed to load. Check CDN/network access and refresh.');
+    return;
+  }
+  const root = document.getElementById(containerId);
+  if (!root) return;
+  if (!traces || traces.length === 0) {
+    renderChartError(containerId, 'No chart data');
+    return;
+  }
+  window.Plotly.react(root, traces, layout, {
+    responsive: true,
+    displaylogo: false,
+    modeBarButtonsToRemove: ['lasso2d', 'select2d'],
+    scrollZoom: true,
   });
-  return path.trim();
 }
 
-function buildDateTickIndices(length, maxTicks = 6) {
-  if (!length) return [];
-  if (length <= maxTicks) return Array.from({ length }, (_, index) => index);
-  const step = Math.max(Math.floor((length - 1) / (maxTicks - 1)), 1);
-  const ticks = [];
-  for (let index = 0; index < length; index += step) ticks.push(index);
-  if (ticks[ticks.length - 1] !== length - 1) ticks.push(length - 1);
-  return ticks;
+function dashToPlotlyDash(dash) {
+  if (!dash) return 'solid';
+  return dash.includes('2') ? 'dot' : 'dash';
 }
 
-function renderSeriesChart(svgId, { dates = [], series = [], valueFormatter = formatNumber, includeZero = false, title = '' } = {}) {
-  const svg = document.getElementById(svgId);
-  const { width, height } = getSvgSize(svg);
-  const margin = { top: 28, right: 24, bottom: 34, left: 62 };
-  const plotWidth = width - margin.left - margin.right;
-  const plotHeight = height - margin.top - margin.bottom;
-  const visibleSeries = series.filter((item) => item.values.some((value) => toNumber(value) !== null));
-  const values = visibleSeries.flatMap((item) => item.values.map((value) => toNumber(value)).filter((value) => value !== null));
+function renderSeriesChart(containerId, { dates = [], series = [], title = '', includeZero = false, yAxisTitle = '' } = {}) {
+  const traces = series
+    .map((item) => ({
+      ...item,
+      points: dates.map((tradeDate, index) => ({ tradeDate, value: toNumber(item.values[index]) }))
+        .filter((point) => point.value !== null),
+    }))
+    .filter((item) => item.points.length > 0)
+    .map((item) => ({
+      type: 'scatter',
+      mode: 'lines',
+      name: item.name,
+      x: item.points.map((point) => point.tradeDate),
+      y: item.points.map((point) => point.value),
+      line: {
+        color: item.color || CHART_COLORS.strategy,
+        width: item.strokeWidth || 2.5,
+        dash: dashToPlotlyDash(item.dash),
+      },
+      hovertemplate: `${item.name}<br>%{x}<br>%{y:.4f}<extra></extra>`,
+    }));
 
-  if (!visibleSeries.length || !values.length) {
-    svg.innerHTML = `<text x="24" y="36" fill="${CHART_COLORS.axis}" font-size="12">No chart data</text>`;
+  const layout = plotlyBaseLayout({ title, height: 280, yAxisTitle });
+  if (includeZero) layout.yaxis.zeroline = true;
+  renderPlotlyChart(containerId, traces, layout);
+}
+
+function renderVolumeChart(containerId, bars) {
+  const points = (bars || [])
+    .map((item) => ({
+      tradeDate: item.trade_date,
+      value: toNumber(item.volume),
+      color: toNumber(item.close) >= toNumber(item.open) ? CHART_COLORS.candleUp : CHART_COLORS.candleDown,
+    }))
+    .filter((item) => item.value !== null);
+  if (!points.length) {
+    renderChartError(containerId, 'No volume data');
     return;
   }
-
-  let minValue = Math.min(...values);
-  let maxValue = Math.max(...values);
-  if (includeZero) {
-    minValue = Math.min(minValue, 0);
-    maxValue = Math.max(maxValue, 0);
-  }
-  const ticks = niceTicks(minValue, maxValue, 5);
-  minValue = ticks[0];
-  maxValue = ticks[ticks.length - 1];
-  const span = maxValue - minValue || 1;
-  const xAt = (index) => margin.left + (index * plotWidth) / Math.max(dates.length - 1, 1);
-  const yAt = (value) => margin.top + plotHeight - ((value - minValue) / span) * plotHeight;
-
-  const grid = ticks.map((tick) => {
-    const y = yAt(tick);
-    return [
-      `<line x1="${margin.left}" y1="${y.toFixed(2)}" x2="${width - margin.right}" y2="${y.toFixed(2)}" stroke="${CHART_COLORS.grid}" stroke-dasharray="4 4" />`,
-      `<text x="${margin.left - 10}" y="${(y + 4).toFixed(2)}" text-anchor="end" fill="${CHART_COLORS.axis}" font-size="11">${escapeHtml(valueFormatter(tick))}</text>`,
-    ].join('');
-  }).join('');
-
-  const xTicks = buildDateTickIndices(dates.length).map((index) => {
-    const x = xAt(index);
-    const label = dates[index] || '';
-    return [
-      `<line x1="${x.toFixed(2)}" y1="${height - margin.bottom}" x2="${x.toFixed(2)}" y2="${height - margin.bottom + 6}" stroke="${CHART_COLORS.axis}" />`,
-      `<text x="${x.toFixed(2)}" y="${height - 10}" text-anchor="middle" fill="${CHART_COLORS.axis}" font-size="11">${escapeHtml(label.slice(5))}</text>`,
-    ].join('');
-  }).join('');
-
-  const paths = visibleSeries.map((item, index) => {
-    const path = buildLinePath(item.values, xAt, yAt);
-    const color = item.color || (index === 0 ? CHART_COLORS.strategy : CHART_COLORS.benchmark);
-    if (!path) return '';
-    return `<path d="${path}" fill="none" stroke="${color}" stroke-width="${item.strokeWidth || 2.6}" stroke-linecap="round" stroke-linejoin="round" ${item.dash ? `stroke-dasharray="${item.dash}"` : ''} />`;
-  }).join('');
-
-  const legend = visibleSeries.map((item, index) => {
-    const color = item.color || (index === 0 ? CHART_COLORS.strategy : CHART_COLORS.benchmark);
-    const y = 16 + index * 16;
-    return [
-      `<line x1="${margin.left}" y1="${y}" x2="${margin.left + 18}" y2="${y}" stroke="${color}" stroke-width="3" ${item.dash ? `stroke-dasharray="${item.dash}"` : ''} />`,
-      `<text x="${margin.left + 24}" y="${y + 4}" fill="${CHART_COLORS.axis}" font-size="11">${escapeHtml(item.name)}</text>`,
-    ].join('');
-  }).join('');
-
-  const titleLabel = title ? `<text x="${width - margin.right}" y="16" text-anchor="end" fill="${CHART_COLORS.axis}" font-size="11">${escapeHtml(title)}</text>` : '';
-
-  svg.innerHTML = [
-    `<rect x="0" y="0" width="${width}" height="${height}" rx="16" fill="transparent"></rect>`,
-    grid,
-    `<line x1="${margin.left}" y1="${height - margin.bottom}" x2="${width - margin.right}" y2="${height - margin.bottom}" stroke="${CHART_COLORS.axis}" />`,
-    `<line x1="${margin.left}" y1="${margin.top}" x2="${margin.left}" y2="${height - margin.bottom}" stroke="${CHART_COLORS.axis}" />`,
-    xTicks,
-    paths,
-    legend,
-    titleLabel,
-  ].join('');
+  renderPlotlyChart(containerId, [
+    {
+      type: 'bar',
+      name: 'Volume',
+      x: points.map((item) => item.tradeDate),
+      y: points.map((item) => item.value),
+      marker: { color: points.map((item) => item.color), opacity: 0.75 },
+      hovertemplate: 'Volume<br>%{x}<br>%{y:.0f}<extra></extra>',
+    },
+  ], plotlyBaseLayout({ title: 'Volume', height: 180, yAxisTitle: 'Volume' }));
 }
 
-function renderBarChart(svgId, { dates = [], values = [], label = 'Volume', color = CHART_COLORS.volume } = {}) {
-  const svg = document.getElementById(svgId);
-  const { width, height } = getSvgSize(svg);
-  const margin = { top: 24, right: 24, bottom: 30, left: 62 };
-  const plotWidth = width - margin.left - margin.right;
-  const plotHeight = height - margin.top - margin.bottom;
-  const validValues = values.map((value) => toNumber(value)).filter((value) => value !== null);
-
-  if (!validValues.length) {
-    svg.innerHTML = `<text x="24" y="36" fill="${CHART_COLORS.axis}" font-size="12">No chart data</text>`;
-    return;
-  }
-
-  const maxValue = Math.max(...validValues, 0);
-  const ticks = niceTicks(0, maxValue, 4);
-  const scaledMax = ticks[ticks.length - 1] || 1;
-  const barWidth = plotWidth / Math.max(dates.length, 1) * 0.68;
-  const xAt = (index) => margin.left + (index * plotWidth) / Math.max(dates.length - 1, 1);
-  const yAt = (value) => margin.top + plotHeight - (value / scaledMax) * plotHeight;
-
-  const grid = ticks.map((tick) => {
-    const y = yAt(tick);
-    return [
-      `<line x1="${margin.left}" y1="${y.toFixed(2)}" x2="${width - margin.right}" y2="${y.toFixed(2)}" stroke="${CHART_COLORS.grid}" stroke-dasharray="4 4" />`,
-      `<text x="${margin.left - 10}" y="${(y + 4).toFixed(2)}" text-anchor="end" fill="${CHART_COLORS.axis}" font-size="11">${escapeHtml(formatNumber(tick, 1))}</text>`,
-    ].join('');
-  }).join('');
-
-  const bars = values.map((value, index) => {
-    const numeric = toNumber(value);
-    if (numeric === null) return '';
-    const x = xAt(index) - barWidth / 2;
-    const y = yAt(numeric);
-    const barHeight = height - margin.bottom - y;
-    return `<rect x="${x.toFixed(2)}" y="${y.toFixed(2)}" width="${barWidth.toFixed(2)}" height="${Math.max(barHeight, 1).toFixed(2)}" fill="${color}" opacity="0.78" rx="2" />`;
-  }).join('');
-
-  const xTicks = buildDateTickIndices(dates.length, 5).map((index) => {
-    const x = xAt(index);
-    return `<text x="${x.toFixed(2)}" y="${height - 8}" text-anchor="middle" fill="${CHART_COLORS.axis}" font-size="11">${escapeHtml((dates[index] || '').slice(5))}</text>`;
-  }).join('');
-
-  svg.innerHTML = [
-    grid,
-    `<line x1="${margin.left}" y1="${height - margin.bottom}" x2="${width - margin.right}" y2="${height - margin.bottom}" stroke="${CHART_COLORS.axis}" />`,
-    `<line x1="${margin.left}" y1="${margin.top}" x2="${margin.left}" y2="${height - margin.bottom}" stroke="${CHART_COLORS.axis}" />`,
-    bars,
-    xTicks,
-    `<text x="${width - margin.right}" y="16" text-anchor="end" fill="${CHART_COLORS.axis}" font-size="11">${escapeHtml(label)}</text>`,
-  ].join('');
+function normalizeTradeSide(side) {
+  const value = String(side || '').trim().toLowerCase();
+  if (value.startsWith('s')) return 'sell';
+  if (value.startsWith('b')) return 'buy';
+  return value || 'buy';
 }
 
-function renderCandlestickChart(svgId, bars, markers = []) {
-  const svg = document.getElementById(svgId);
-  const { width, height } = getSvgSize(svg);
-  const margin = { top: 28, right: 24, bottom: 34, left: 62 };
-  const plotWidth = width - margin.left - margin.right;
-  const plotHeight = height - margin.top - margin.bottom;
-  const validBars = bars.filter((item) => toNumber(item.high) !== null && toNumber(item.low) !== null);
-
+function renderCandlestickChart(containerId, bars, markers = [], instrumentId = '') {
+  const validBars = (bars || []).filter((item) => ['open', 'high', 'low', 'close'].every((key) => toNumber(item[key]) !== null));
   if (!validBars.length) {
-    svg.innerHTML = `<text x="24" y="36" fill="${CHART_COLORS.axis}" font-size="12">No chart data</text>`;
+    renderChartError(containerId, 'No OHLC data');
     return;
   }
 
-  const allPrices = [];
-  validBars.forEach((item) => {
-    ['open', 'high', 'low', 'close'].forEach((key) => {
-      const numeric = toNumber(item[key]);
-      if (numeric !== null) allPrices.push(numeric);
-    });
-  });
+  const buyMarkers = [];
+  const sellMarkers = [];
   markers.forEach((item) => {
-    const numeric = toNumber(item.value);
-    if (numeric !== null) allPrices.push(numeric);
+    const marker = {
+      tradeDate: toDateLabel(item.trade_date || item.date),
+      value: toNumber(item.value || item.deal_price),
+      side: normalizeTradeSide(item.side),
+      quantity: toNumber(item.quantity || item.filled_amount),
+    };
+    if (!marker.tradeDate || marker.value === null) return;
+    if (marker.side === 'sell') {
+      sellMarkers.push(marker);
+    } else {
+      buyMarkers.push(marker);
+    }
   });
-  const ticks = niceTicks(Math.min(...allPrices), Math.max(...allPrices), 5);
-  const minValue = ticks[0];
-  const maxValue = ticks[ticks.length - 1];
-  const span = maxValue - minValue || 1;
-  const dates = bars.map((item) => item.trade_date);
-  const xAt = (index) => margin.left + (index * plotWidth) / Math.max(bars.length - 1, 1);
-  const yAt = (value) => margin.top + plotHeight - ((value - minValue) / span) * plotHeight;
-  const candleWidth = Math.min((plotWidth / Math.max(bars.length, 1)) * 0.62, 12);
 
-  const grid = ticks.map((tick) => {
-    const y = yAt(tick);
-    return [
-      `<line x1="${margin.left}" y1="${y.toFixed(2)}" x2="${width - margin.right}" y2="${y.toFixed(2)}" stroke="${CHART_COLORS.grid}" stroke-dasharray="4 4" />`,
-      `<text x="${margin.left - 10}" y="${(y + 4).toFixed(2)}" text-anchor="end" fill="${CHART_COLORS.axis}" font-size="11">${escapeHtml(formatNumber(tick, 2))}</text>`,
-    ].join('');
-  }).join('');
+  const traces = [
+    {
+      type: 'candlestick',
+      name: instrumentId || 'OHLC',
+      x: validBars.map((item) => item.trade_date),
+      open: validBars.map((item) => Number(item.open)),
+      high: validBars.map((item) => Number(item.high)),
+      low: validBars.map((item) => Number(item.low)),
+      close: validBars.map((item) => Number(item.close)),
+      increasing: { line: { color: CHART_COLORS.candleUp }, fillcolor: CHART_COLORS.candleUp },
+      decreasing: { line: { color: CHART_COLORS.candleDown }, fillcolor: CHART_COLORS.candleDown },
+      showlegend: true,
+      hoverlabel: { namelength: -1 },
+    },
+  ];
 
-  const candles = bars.map((item, index) => {
-    const open = toNumber(item.open);
-    const high = toNumber(item.high);
-    const low = toNumber(item.low);
-    const close = toNumber(item.close);
-    if ([open, high, low, close].some((value) => value === null)) return '';
-    const x = xAt(index);
-    const color = close >= open ? CHART_COLORS.candleUp : CHART_COLORS.candleDown;
-    const bodyTop = yAt(Math.max(open, close));
-    const bodyBottom = yAt(Math.min(open, close));
-    const bodyHeight = Math.max(bodyBottom - bodyTop, 1.2);
-    return [
-      `<line x1="${x.toFixed(2)}" y1="${yAt(high).toFixed(2)}" x2="${x.toFixed(2)}" y2="${yAt(low).toFixed(2)}" stroke="${color}" stroke-width="1.4" />`,
-      `<rect x="${(x - candleWidth / 2).toFixed(2)}" y="${bodyTop.toFixed(2)}" width="${candleWidth.toFixed(2)}" height="${bodyHeight.toFixed(2)}" fill="${color}" fill-opacity="0.9" rx="1.5" />`,
-    ].join('');
-  }).join('');
+  if (buyMarkers.length) {
+    traces.push({
+      type: 'scatter',
+      mode: 'markers',
+      name: 'Buy',
+      x: buyMarkers.map((item) => item.tradeDate),
+      y: buyMarkers.map((item) => item.value),
+      marker: { color: CHART_COLORS.strategy, size: 11, symbol: 'triangle-up' },
+      customdata: buyMarkers.map((item) => [item.quantity]),
+      hovertemplate: 'Buy<br>%{x}<br>Price %{y:.2f}<br>Qty %{customdata[0]:.0f}<extra></extra>',
+    });
+  }
+  if (sellMarkers.length) {
+    traces.push({
+      type: 'scatter',
+      mode: 'markers',
+      name: 'Sell',
+      x: sellMarkers.map((item) => item.tradeDate),
+      y: sellMarkers.map((item) => item.value),
+      marker: { color: CHART_COLORS.accent, size: 11, symbol: 'triangle-down' },
+      customdata: sellMarkers.map((item) => [item.quantity]),
+      hovertemplate: 'Sell<br>%{x}<br>Price %{y:.2f}<br>Qty %{customdata[0]:.0f}<extra></extra>',
+    });
+  }
 
-  const markerSvg = markers.map((item) => {
-    const x = xAt(item.index);
-    const numeric = toNumber(item.value);
-    if (numeric === null) return '';
-    const y = yAt(numeric);
-    const color = item.side === 'sell' ? CHART_COLORS.accent : CHART_COLORS.strategy;
-    const label = item.side === 'sell' ? 'S' : 'B';
-    return [
-      `<circle cx="${x.toFixed(2)}" cy="${y.toFixed(2)}" r="4.5" fill="${color}" stroke="#fffdf8" stroke-width="1.4" />`,
-      `<text x="${x.toFixed(2)}" y="${(y - 10).toFixed(2)}" text-anchor="middle" fill="${color}" font-size="10" font-weight="700">${label}</text>`,
-    ].join('');
-  }).join('');
-
-  const xTicks = buildDateTickIndices(dates.length).map((index) => {
-    const x = xAt(index);
-    return [
-      `<line x1="${x.toFixed(2)}" y1="${height - margin.bottom}" x2="${x.toFixed(2)}" y2="${height - margin.bottom + 6}" stroke="${CHART_COLORS.axis}" />`,
-      `<text x="${x.toFixed(2)}" y="${height - 10}" text-anchor="middle" fill="${CHART_COLORS.axis}" font-size="11">${escapeHtml((dates[index] || '').slice(5))}</text>`,
-    ].join('');
-  }).join('');
-
-  const legend = [
-    `<rect x="${margin.left}" y="10" width="10" height="10" rx="2" fill="${CHART_COLORS.candleUp}" />`,
-    `<text x="${margin.left + 16}" y="19" fill="${CHART_COLORS.axis}" font-size="11">Up Day</text>`,
-    `<rect x="${margin.left + 72}" y="10" width="10" height="10" rx="2" fill="${CHART_COLORS.candleDown}" />`,
-    `<text x="${margin.left + 88}" y="19" fill="${CHART_COLORS.axis}" font-size="11">Down Day</text>`,
-    `<circle cx="${margin.left + 172}" cy="15" r="4.5" fill="${CHART_COLORS.strategy}" />`,
-    `<text x="${margin.left + 184}" y="19" fill="${CHART_COLORS.axis}" font-size="11">Trade Markers</text>`,
-  ].join('');
-
-  svg.innerHTML = [
-    grid,
-    `<line x1="${margin.left}" y1="${height - margin.bottom}" x2="${width - margin.right}" y2="${height - margin.bottom}" stroke="${CHART_COLORS.axis}" />`,
-    `<line x1="${margin.left}" y1="${margin.top}" x2="${margin.left}" y2="${height - margin.bottom}" stroke="${CHART_COLORS.axis}" />`,
-    candles,
-    markerSvg,
-    xTicks,
-    legend,
-  ].join('');
+  renderPlotlyChart(containerId, traces, plotlyBaseLayout({
+    title: `${instrumentId || 'Instrument'} OHLC`,
+    height: 360,
+    yAxisTitle: 'Price',
+    hoverMode: 'x',
+    showRangeSlider: false,
+  }));
 }
 
 function rebaseSeries(values, base = 100) {
@@ -412,11 +339,22 @@ function alignSeriesByDate(targetDates, sourceRows, valueKey = 'close') {
   });
 }
 
-function renderCaseFeatureTable(features) {
-  const rows = Object.entries(features || {})
+function filterFeatureRows(features, searchValue) {
+  const needle = String(searchValue || '').trim().toLowerCase();
+  return Object.entries(features || {})
     .map(([feature_name, value]) => ({ feature_name, value }))
+    .filter((row) => !needle || row.feature_name.toLowerCase().includes(needle))
     .sort((left, right) => left.feature_name.localeCompare(right.feature_name));
+}
+
+function renderCaseFeatureTable(features) {
+  const rows = filterFeatureRows(features, document.getElementById('case-feature-search').value);
   renderTable('case-feature-table', rows, [{ key: 'feature_name', label: 'Feature' }, { key: 'value', label: 'Value' }]);
+}
+
+function renderFeatureSnapshotTable(features) {
+  const rows = filterFeatureRows(features, document.getElementById('feature-snapshot-search').value);
+  renderTable('feature-snapshot-table', rows, [{ key: 'feature_name', label: 'Feature' }, { key: 'value', label: 'Value' }]);
 }
 
 function syncFeatureSelectionInput() {
@@ -589,10 +527,15 @@ async function loadCase() {
     }));
     const barIndex = new Map(chartBars.map((item, index) => [item.trade_date, index]));
     const tradeMarkers = backtestTrades
-      .filter((item) => barIndex.has(item.date) && typeof item.deal_price === 'number')
-      .map((item) => ({ index: barIndex.get(item.date), value: item.deal_price, side: item.side, date: item.date }));
+      .filter((item) => barIndex.has(item.date) && toNumber(item.deal_price) !== null)
+      .map((item) => ({
+        trade_date: item.date,
+        value: toNumber(item.deal_price),
+        side: item.side,
+        quantity: item.filled_amount,
+      }));
 
-    renderCandlestickChart('case-bars-chart', chartBars, tradeMarkers);
+    renderCandlestickChart('case-bars-chart', chartBars, tradeMarkers, payload.instrument_id);
     const dates = chartBars.map((item) => item.trade_date);
     const benchmarkValues = alignSeriesByDate(dates, payload.benchmark_bars || [], 'close');
     const benchmark2Values = alignSeriesByDate(dates, payload.secondary_benchmark_bars || [], 'close');
@@ -602,20 +545,17 @@ async function loadCase() {
       series: [
         { name: payload.instrument_id, values: rebaseSeries(chartBars.map((item) => item.close)), color: CHART_COLORS.strategy },
         { name: payload.benchmark_label || 'CSI300', values: rebaseSeries(benchmarkValues), color: CHART_COLORS.benchmark, dash: '6 4' },
-        { name: payload.secondary_benchmark_label || 'SSE', values: rebaseSeries(benchmark2Values), color: '#7c3aed', dash: '2 5' },
+        { name: payload.secondary_benchmark_label || 'SSE', values: rebaseSeries(benchmark2Values), color: CHART_COLORS.neutral, dash: '2 5' },
       ],
-      valueFormatter: (value) => formatNumber(value, 1),
+      yAxisTitle: 'Rebased',
     });
-    renderBarChart('case-volume-chart', {
-      dates,
-      values: chartBars.map((item) => item.volume),
-      label: 'Volume',
-      color: CHART_COLORS.volume,
-    });
+    renderVolumeChart('case-volume-chart', chartBars);
 
     document.getElementById('case-meta').textContent = `${payload.instrument_id} / ${payload.trade_date} / ${payload.price_mode} / ${payload.benchmark_label || 'CSI300'} / ${payload.secondary_benchmark_label || 'SSE'}`;
     document.getElementById('case-signal').textContent = JSON.stringify({ signal_snapshot: payload.signal_snapshot, trade_markers: backtestTrades, links: payload.links }, null, 2);
-    renderCaseFeatureTable(payload.feature_snapshot.features || {});
+    state.caseFeatureSnapshot = payload.feature_snapshot.features || {};
+    document.getElementById('case-feature-count').textContent = `${Object.keys(state.caseFeatureSnapshot).length} features`;
+    renderCaseFeatureTable(state.caseFeatureSnapshot);
 
     const orderRows = [...backtestTrades, ...(payload.positions || []), ...(payload.orders || [])];
     renderTable('case-orders-table', orderRows, [
@@ -631,6 +571,9 @@ async function loadCase() {
     ]);
   } catch (error) {
     document.getElementById('case-signal').textContent = error.message;
+    renderChartError('case-bars-chart', error.message);
+    renderChartError('case-relative-chart', error.message);
+    renderChartError('case-volume-chart', error.message);
   }
 }
 
@@ -669,13 +612,11 @@ async function loadFeatureHealth() {
     ].join(' | ');
 
     const snapshotParams = new URLSearchParams({ trade_date: tradeDate, instrument_id: instrumentId });
-    featureNames.forEach((name) => snapshotParams.append('feature_names', name));
     const snapshotPayload = await getJson(`/api/feature-snapshot?${snapshotParams.toString()}`, { useCache: false });
     const snapshot = unwrapData(snapshotPayload);
-    const rows = Object.entries(snapshot.features || {})
-      .map(([feature_name, value]) => ({ feature_name, value }))
-      .sort((left, right) => left.feature_name.localeCompare(right.feature_name));
-    renderTable('feature-snapshot-table', rows, [{ key: 'feature_name', label: 'Feature' }, { key: 'value', label: 'Value' }]);
+    state.featureSnapshot = snapshot.features || {};
+    document.getElementById('feature-snapshot-count').textContent = `${Object.keys(state.featureSnapshot).length} features`;
+    renderFeatureSnapshotTable(state.featureSnapshot);
   } catch (error) {
     document.getElementById('feature-health-summary').textContent = error.message;
     document.getElementById('feature-health-table').innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
@@ -702,9 +643,9 @@ async function loadBacktest() {
         { name: 'Strategy', values: dailyItems.map((item) => item.equity), color: CHART_COLORS.strategy },
         { name: 'Zero-cost', values: dailyItems.map((item) => item.zero_cost_equity), color: CHART_COLORS.accent, dash: '3 4' },
         { name: 'CSI300', values: dailyItems.map((item) => item.benchmark_equity), color: CHART_COLORS.benchmark, dash: '6 4' },
-        { name: 'SSE', values: dailyItems.map((item) => item.benchmark2_equity), color: '#7c3aed', dash: '2 5' },
+        { name: 'SSE', values: dailyItems.map((item) => item.benchmark2_equity), color: CHART_COLORS.neutral, dash: '2 5' },
       ],
-      valueFormatter: (value) => formatNumber(value, 0),
+      yAxisTitle: 'Equity',
     });
     renderSeriesChart('backtest-diagnostics-chart', {
       dates,
@@ -713,9 +654,9 @@ async function loadBacktest() {
       series: [
         { name: 'Drawdown', values: dailyItems.map((item) => item.drawdown), color: CHART_COLORS.danger },
         { name: 'IC', values: dailyItems.map((item) => item.ic), color: CHART_COLORS.accent },
-        { name: 'RankIC', values: dailyItems.map((item) => item.rank_ic), color: '#7c3aed', dash: '5 4' },
+        { name: 'RankIC', values: dailyItems.map((item) => item.rank_ic), color: CHART_COLORS.neutral, dash: '5 4' },
       ],
-      valueFormatter: (value) => formatPercent(value),
+      yAxisTitle: 'Ratio / IC',
     });
     renderTable('backtest-daily-table', dailyItems, [
       { key: 'trade_date', label: 'Trade Date' },
@@ -735,6 +676,8 @@ async function loadBacktest() {
     if (seedDate) await loadBacktestOrders(seedDate);
   } catch (error) {
     document.getElementById('backtest-daily-table').innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
+    renderChartError('backtest-equity-chart', error.message);
+    renderChartError('backtest-diagnostics-chart', error.message);
   }
 }
 
@@ -842,8 +785,10 @@ async function loadViewIfNeeded(name, { force = false } = {}) {
 }
 
 function bindFeatureRegistryEvents() {
+  document.getElementById('case-feature-search').addEventListener('input', () => renderCaseFeatureTable(state.caseFeatureSnapshot));
   document.getElementById('feature-registry-search').addEventListener('input', () => renderFeatureRegistry());
   document.getElementById('feature-source-filter').addEventListener('change', () => renderFeatureRegistry());
+  document.getElementById('feature-snapshot-search').addEventListener('input', () => renderFeatureSnapshotTable(state.featureSnapshot));
   document.getElementById('feature-names').addEventListener('change', () => parseFeatureSelectionFromInput());
   document.getElementById('select-visible-features').addEventListener('click', () => window.selectVisibleFeatures());
   document.getElementById('clear-feature-selection').addEventListener('click', () => window.clearFeatureSelection());

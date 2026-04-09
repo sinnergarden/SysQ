@@ -53,6 +53,17 @@ class TestResearchUiSchema(unittest.TestCase):
         self.assertIn('benchmark_bars', bundle)
         self.assertEqual(bundle['benchmark_label'], 'CSI300')
 
+    def test_feature_snapshot_defaults_to_more_than_manual_subset(self):
+        full_snapshot = self.repo.get_feature_snapshot(trade_date=self.execution_date, instrument_id='600219.SH')
+        subset_snapshot = self.repo.get_feature_snapshot(
+            trade_date=self.execution_date,
+            instrument_id='600219.SH',
+            feature_names=['close', 'ret_1d'],
+        )
+        self.assertIn('features', full_snapshot)
+        self.assertIn('close', full_snapshot['features'])
+        self.assertGreater(len(full_snapshot['features']), len(subset_snapshot['features']))
+
 
 if __name__ == '__main__':
     unittest.main()
