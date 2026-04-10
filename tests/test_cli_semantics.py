@@ -53,6 +53,7 @@ class TestCliSemantics(unittest.TestCase):
     def test_run_daily_defaults_use_dated_daily_layout(self):
         resolved = resolve_preopen_ops_paths(
             execution_date="2026-03-23",
+            daily_root=None,
             output_dir=None,
             report_dir=None,
             db_path=None,
@@ -65,6 +66,7 @@ class TestCliSemantics(unittest.TestCase):
     def test_run_post_close_defaults_use_dated_daily_layout(self):
         resolved = run_post_close._resolve_ops_paths(
             execution_date="2026-03-23",
+            daily_root=None,
             output_dir=None,
             report_dir=None,
             plan_dir=None,
@@ -118,6 +120,31 @@ class TestCliSemantics(unittest.TestCase):
         self.assertEqual(summary["sell_trades"], 1)
         self.assertEqual(summary["total_value"], 3500.0)
         self.assertEqual(summary["symbols"], ["000001.SZ", "000002.SZ"])
+
+    def test_run_daily_supports_custom_daily_root(self):
+        resolved = resolve_preopen_ops_paths(
+            execution_date="2026-03-23",
+            daily_root="scratch/custom_daily",
+            output_dir=None,
+            report_dir=None,
+            db_path=None,
+        )
+        self.assertTrue(str(resolved["daily_root"]).endswith("scratch/custom_daily"))
+        self.assertTrue(str(resolved["output_dir"]).endswith("scratch/custom_daily/2026-03-23/pre_open"))
+        self.assertTrue(str(resolved["report_dir"]).endswith("scratch/custom_daily/2026-03-23/pre_open/reports"))
+
+    def test_run_post_close_supports_custom_daily_root(self):
+        resolved = run_post_close._resolve_ops_paths(
+            execution_date="2026-03-23",
+            daily_root="scratch/custom_daily",
+            output_dir=None,
+            report_dir=None,
+            plan_dir=None,
+            db_path=None,
+        )
+        self.assertTrue(str(resolved["daily_root"]).endswith("scratch/custom_daily"))
+        self.assertTrue(str(resolved["output_dir"]).endswith("scratch/custom_daily/2026-03-23/post_close"))
+        self.assertTrue(str(resolved["plan_dir"]).endswith("scratch/custom_daily/2026-03-23/pre_open/plans"))
 
     @patch("scripts.run_daily_trading.log")
     @patch("scripts.run_daily_trading.DailyOpsReport.save", return_value="/tmp/custom/daily_ops_pre_open_1.json")

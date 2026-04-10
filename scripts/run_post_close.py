@@ -56,14 +56,15 @@ def _resolve_cli_path(path_str: str) -> str:
 def _resolve_ops_paths(
     *,
     execution_date: str,
+    daily_root: str | None,
     output_dir: str | None,
     report_dir: str | None,
     plan_dir: str | None,
     db_path: str | None,
 ) -> dict[str, str]:
-    daily_root = project_root / "daily"
-    post_close_paths = build_stage_paths(execution_date, stage="post_close", daily_root=daily_root)
-    pre_open_paths = build_stage_paths(execution_date, stage="pre_open", daily_root=daily_root)
+    resolved_daily_root = project_root / "daily" if daily_root is None else Path(_resolve_cli_path(daily_root))
+    post_close_paths = build_stage_paths(execution_date, stage="post_close", daily_root=resolved_daily_root)
+    pre_open_paths = build_stage_paths(execution_date, stage="pre_open", daily_root=resolved_daily_root)
 
     if db_path is None:
         resolved_db_path = str(resolve_account_db_path(project_root=project_root))
@@ -76,7 +77,7 @@ def _resolve_ops_paths(
     resolved_plan_dir = str(pre_open_paths.plans_dir) if plan_dir is None else _resolve_cli_path(plan_dir)
 
     return {
-        "daily_root": str(daily_root),
+        "daily_root": str(resolved_daily_root),
         "output_dir": resolved_output_dir,
         "report_dir": resolved_report_dir,
         "manifest_dir": resolved_manifest_dir,
@@ -95,17 +96,18 @@ def main():
     parser.add_argument("--date", required=True, help="Trading date to reconcile (YYYY-MM-DD)")
     parser.add_argument("--real_sync", required=True, help="Broker/account CSV or MiniQMT readback JSON exported after market close")
     parser.add_argument("--db_path", help="SQLite account database path (default: data/meta/real_account.db)")
+    parser.add_argument("--daily_root", help="Root directory for dated daily artifacts (default: daily)")
     parser.add_argument(
         "--output_dir",
-        help="Directory to write post-close artifacts (default: daily/<execution_date>/post_close)",
+        help="Directory to write post-close artifacts (default: <daily_root>/<execution_date>/post_close)",
     )
     parser.add_argument(
         "--plan_dir",
-        help="Directory containing pre-open plan CSV artifacts (default: daily/<execution_date>/pre_open/plans)",
+        help="Directory containing pre-open plan CSV artifacts (default: <daily_root>/<execution_date>/pre_open/plans)",
     )
     parser.add_argument(
         "--report_dir",
-        help="Directory to write structured JSON reports (default: daily/<execution_date>/post_close/reports)",
+        help="Directory to write structured JSON reports (default: <daily_root>/<execution_date>/post_close/reports)",
     )
     parser.add_argument("--real_account_name", default="real", help="Account name for real broker state")
     parser.add_argument("--shadow_account_name", default="shadow", help="Account name for shadow simulation state")
@@ -115,6 +117,7 @@ def main():
     execution_date = args.execution_date or args.date
     resolved_paths = _resolve_ops_paths(
         execution_date=execution_date,
+        daily_root=args.daily_root,
         output_dir=args.output_dir,
         report_dir=args.report_dir,
         plan_dir=args.plan_dir,

@@ -12,7 +12,9 @@ class TestResearchUiSchema(unittest.TestCase):
         project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
         self.repo = ResearchCockpitRepository(project_root=project_root)
         daily_root = os.path.join(project_root, 'daily')
-        self.execution_date = sorted([name for name in os.listdir(daily_root) if os.path.isdir(os.path.join(daily_root, name))])[-1]
+        available_dates = sorted([name for name in os.listdir(daily_root) if os.path.isdir(os.path.join(daily_root, name))])
+        preferred_date = '2025-01-03'
+        self.execution_date = preferred_date if preferred_date in available_dates else available_dates[-1]
 
     def test_feature_registry_entries_are_semantic_and_stable(self):
         entries = self.repo.list_feature_registry()
@@ -27,6 +29,13 @@ class TestResearchUiSchema(unittest.TestCase):
         self.assertIn('value_kind', registry['ret_1d'])
         self.assertIn(registry['close']['source_layer'], {'raw', 'qlib_native'})
         self.assertEqual(registry['ret_1d']['source_layer'], 'semantic_derived')
+
+    def test_backtest_runs_expose_display_label_and_parameter_summary(self):
+        runs = self.repo.list_backtest_runs(limit=3)
+        self.assertTrue(runs)
+        self.assertTrue(runs[0].display_label)
+        self.assertIn('model_path', runs[0].parameter_summary)
+        self.assertIn('notes', runs[0].parameter_summary)
 
     def test_daily_manifest_maps_to_stable_run_manifest(self):
         manifest = self.repo.build_daily_run_manifest('2025-01-03').to_dict()

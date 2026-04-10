@@ -195,6 +195,8 @@ def run_pre_open(args: argparse.Namespace, paths: BackfillPaths, signal_date: st
         signal_date,
         "--execution_date",
         execution_date,
+        "--daily_root",
+        str(paths.daily_root),
         "--model_path",
         args.model_path,
         "--db_path",
@@ -265,6 +267,8 @@ def run_post_close(paths: BackfillPaths, execution_date: str, real_sync_path: Pa
         execution_date,
         "--execution_date",
         execution_date,
+        "--daily_root",
+        str(paths.daily_root),
         "--real_sync",
         str(real_sync_path),
         "--db_path",
@@ -273,7 +277,7 @@ def run_post_close(paths: BackfillPaths, execution_date: str, real_sync_path: Pa
     run_cmd(cmd, log_path=log_path)
 
 
-def _simulate_zero_cost_curve(execution_days: list[str], initial_cash: float) -> pd.DataFrame:
+def _simulate_zero_cost_curve(paths: BackfillPaths, execution_days: list[str], initial_cash: float) -> pd.DataFrame:
     cash = float(initial_cash)
     positions: dict[str, dict[str, float]] = {}
     rows: list[dict[str, object]] = [
@@ -290,7 +294,7 @@ def _simulate_zero_cost_curve(execution_days: list[str], initial_cash: float) ->
 
     for execution_date in execution_days:
         signal_date = previous_trading_day(execution_date)
-        plan_path = find_shadow_plan(execution_date, signal_date)
+        plan_path = find_shadow_plan(paths, execution_date, signal_date)
         trade_count = 0
         daily_turnover = 0.0
         if plan_path.exists():
@@ -380,7 +384,7 @@ def build_aggregate_outputs(args: argparse.Namespace, paths: BackfillPaths, exec
         if day_trades.empty:
             continue
         signal_date = previous_trading_day(execution_date)
-        plan_path = find_shadow_plan(execution_date, signal_date)
+        plan_path = find_shadow_plan(paths, execution_date, signal_date)
         target_weight_map: dict[tuple[str, str], float] = {}
         if plan_path.exists():
             try:
@@ -409,7 +413,7 @@ def build_aggregate_outputs(args: argparse.Namespace, paths: BackfillPaths, exec
             )
 
     daily_df = pd.DataFrame(daily_rows)
-    zero_cost_df = _simulate_zero_cost_curve(replay_days, args.shadow_cash) if replay_days else pd.DataFrame()
+    zero_cost_df = _simulate_zero_cost_curve(paths, replay_days, args.shadow_cash) if replay_days else pd.DataFrame()
     if not zero_cost_df.empty:
         zero_cost_df = zero_cost_df.rename(columns={
             "total_assets": "zero_cost_total_assets",

@@ -148,6 +148,8 @@ class BacktestRunSummary:
     test_range: dict[str, str | None] = field(default_factory=dict)
     top_k: int | None = None
     price_mode: PriceMode = "fq"
+    display_label: str | None = None
+    parameter_summary: dict[str, Any] = field(default_factory=dict)
     metrics: dict[str, Any] = field(default_factory=dict)
     artifacts: list[RunArtifactRef] = field(default_factory=list)
     manifest_ref: str | None = None

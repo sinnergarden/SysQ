@@ -16,7 +16,9 @@ class TestResearchUiApi(unittest.TestCase):
         cls.project_root = project_root
         cls.client = TestClient(create_app(project_root))
         daily_root = os.path.join(project_root, 'daily')
-        cls.execution_date = sorted([name for name in os.listdir(daily_root) if os.path.isdir(os.path.join(daily_root, name))])[-1]
+        available_dates = sorted([name for name in os.listdir(daily_root) if os.path.isdir(os.path.join(daily_root, name))])
+        preferred_date = '2025-01-03'
+        cls.execution_date = preferred_date if preferred_date in available_dates else available_dates[-1]
         cls.case_instrument = '600219.SH'
 
     def test_root_serves_ui_shell(self):
@@ -60,6 +62,8 @@ class TestResearchUiApi(unittest.TestCase):
         self.assertEqual(payload['api_version'], 'v1')
         self.assertGreater(payload['count'], 0)
         self.assertIn('run_id', payload['items'][0])
+        self.assertIn('display_label', payload['items'][0])
+        self.assertIn('parameter_summary', payload['items'][0])
 
         run_id = payload['items'][0]['run_id']
         metrics_response = self.client.get(f'/api/backtest-runs/{run_id}/metrics')
@@ -68,6 +72,7 @@ class TestResearchUiApi(unittest.TestCase):
         self.assertEqual(metrics_payload['api_version'], 'v1')
         self.assertEqual(metrics_payload['data']['run_id'], run_id)
         self.assertIn('metrics', metrics_payload['data'])
+        self.assertIn('parameter_summary', metrics_payload['data'])
 
         daily_response = self.client.get(f'/api/backtest-runs/{run_id}/daily')
         self.assertEqual(daily_response.status_code, 200)
