@@ -67,6 +67,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model_name", default="qlib_lgbm", help="Training model name")
     parser.add_argument("--model_path", default="data/models/qlib_lgbm_semantic_all_features", help="Model path passed into daily scripts")
     parser.add_argument("--db_path", default="data/meta/real_account.db", help="Account database path")
+    parser.add_argument("--daily_root", default="daily", help="Root directory for replay daily artifacts")
+    parser.add_argument("--experiments_root", default="experiments", help="Root directory for aggregate backtest artifacts")
+    parser.add_argument("--reports_root", default="experiments/reports", help="Directory for structured report outputs")
+    parser.add_argument("--logs_root", default="build_logs/formal_rolling", help="Directory for per-run logs and progress")
     parser.add_argument("--reset", action="store_true", help="Delete overlapping daily artifacts and account rows before replay")
     parser.add_argument("--skip_signal_quality_gate", action="store_true", help="Bypass pre_open gate during replay")
     parser.add_argument("--max_days", type=int, default=None, help="Optional cap for smoke runs")
@@ -74,15 +78,15 @@ def parse_args() -> argparse.Namespace:
 
 
 def resolve_paths(args: argparse.Namespace) -> BackfillPaths:
-    logs_root = PROJECT_ROOT / "build_logs" / "formal_rolling"
+    logs_root = (PROJECT_ROOT / args.logs_root).resolve()
     logs_root.mkdir(parents=True, exist_ok=True)
     real_sync_root = logs_root / "real_sync_zero"
     real_sync_root.mkdir(parents=True, exist_ok=True)
     return BackfillPaths(
         db_path=(PROJECT_ROOT / args.db_path).resolve(),
-        daily_root=(PROJECT_ROOT / "daily").resolve(),
-        experiments_root=(PROJECT_ROOT / "experiments").resolve(),
-        reports_root=(PROJECT_ROOT / "experiments" / "reports").resolve(),
+        daily_root=(PROJECT_ROOT / args.daily_root).resolve(),
+        experiments_root=(PROJECT_ROOT / args.experiments_root).resolve(),
+        reports_root=(PROJECT_ROOT / args.reports_root).resolve(),
         logs_root=logs_root,
         progress_path=logs_root / "progress.jsonl",
         real_sync_root=real_sync_root,
@@ -210,8 +214,8 @@ def run_pre_open(args: argparse.Namespace, paths: BackfillPaths, signal_date: st
     run_cmd(cmd, log_path=log_path)
 
 
-def find_shadow_plan(execution_date: str, signal_date: str) -> Path:
-    stage_paths = build_stage_paths(execution_date, stage="pre_open", daily_root=PROJECT_ROOT / "daily")
+def find_shadow_plan(paths: BackfillPaths, execution_date: str, signal_date: str) -> Path:
+    stage_paths = build_stage_paths(execution_date, stage="pre_open", daily_root=paths.daily_root)
     return stage_paths.plans_dir / f"plan_{signal_date}_shadow.csv"
 
 
@@ -486,7 +490,7 @@ def main() -> None:
             run_pre_open(args, paths, signal_date, execution_date, day_log)
             append_progress(paths, "pre_open_done", execution_date=execution_date, signal_date=signal_date)
 
-            plan_path = find_shadow_plan(execution_date, signal_date)
+            plan_path = find_shadow_plan(paths, execution_date, signal_date)
             if not plan_path.exists():
                 raise FileNotFoundError(f"Shadow plan missing: {plan_path}")
             simulate_shadow_fill(args, paths, execution_date, plan_path)
