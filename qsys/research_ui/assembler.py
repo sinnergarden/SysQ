@@ -311,19 +311,24 @@ class ResearchCockpitRepository:
         return sorted(candidates, reverse=True)
 
     def list_backtest_runs(self, limit: int = 50) -> list[BacktestRunSummary]:
-        runs: list[BacktestRunSummary] = []
-        for path in self._iter_backtest_report_paths()[:limit]:
+        grouped_runs: dict[str, BacktestRunSummary] = {}
+        for path in self._iter_backtest_report_paths():
             payload = self._load_json(path)
             model_info = payload.get("model_info") or {}
             metrics = self._extract_backtest_metrics(payload)
             notes = [str(item) for item in (payload.get("notes") or [])]
+            version_key, version_label, feature_count = self._infer_backtest_version(payload, path)
             parameter_summary = {
+                "version_key": version_key,
+                "version_label": version_label,
+                "feature_count": feature_count,
                 "model_path": model_info.get("model_path"),
                 "top_k": self._to_int(model_info.get("top_k")),
                 "universe": model_info.get("universe") or "csi300",
                 "price_mode": "fq",
                 "signal_date": payload.get("signal_date"),
                 "execution_date": payload.get("execution_date"),
+                "internal_run_id": str(payload.get("run_id") or path.stem),
                 "notes": notes,
             }
             daily_path = (payload.get("artifacts") or {}).get("daily_result")
@@ -345,31 +350,84 @@ class ResearchCockpitRepository:
                         media_type="text/csv",
                     )
                 )
-            runs.append(
-                BacktestRunSummary(
-                    run_id=str(payload.get("run_id") or path.stem),
-                    run_type=str(payload.get("workflow") or "backtest"),
-                    model_name=str(model_info.get("model_name") or model_info.get("model_path") or "unknown"),
-                    feature_set=str(model_info.get("feature_set") or "unknown"),
-                    universe=str(model_info.get("universe") or "csi300"),
-                    train_range={"start": payload.get("signal_date"), "end": payload.get("execution_date")},
-                    test_range={"start": payload.get("signal_date"), "end": payload.get("execution_date")},
-                    top_k=self._to_int(model_info.get("top_k")),
-                    price_mode="fq",
-                    display_label=f"{str(payload.get('run_id') or path.stem)} | {str(model_info.get('model_name') or model_info.get('model_path') or 'unknown')} | end={payload.get('execution_date') or '-'}",
-                    parameter_summary=parameter_summary,
-                    metrics=metrics,
-                    artifacts=artifacts,
-                    manifest_ref=str(path.relative_to(self.project_root)),
-                )
+            summary = BacktestRunSummary(
+                run_id=str(payload.get("run_id") or path.stem),
+                run_type=str(payload.get("workflow") or "backtest"),
+                model_name=str(model_info.get("model_name") or model_info.get("model_path") or "unknown"),
+                feature_set=version_key,
+                universe=str(model_info.get("universe") or "csi300"),
+                train_range={"start": payload.get("signal_date"), "end": payload.get("execution_date")},
+                test_range={"start": payload.get("signal_date"), "end": payload.get("execution_date")},
+                top_k=self._to_int(model_info.get("top_k")),
+                price_mode="fq",
+                display_label=version_label,
+                parameter_summary=parameter_summary,
+                metrics=metrics,
+                artifacts=artifacts,
+                manifest_ref=str(path.relative_to(self.project_root)),
             )
-        return runs
+            if version_key not in {"feature_173", "feature_254"}:
+                continue
+            if version_key not in grouped_runs:
+                grouped_runs[version_key] = summary
+            if len(grouped_runs) >= limit:
+                break
+        return list(grouped_runs.values())
 
     def get_backtest_summary(self, run_id: str) -> BacktestRunSummary:
-        for item in self.list_backtest_runs(limit=500):
-            if item.run_id == run_id:
-                return item
-        raise FileNotFoundError(f"Unknown backtest run_id: {run_id}")
+        report_path = self._resolve_backtest_report(run_id)
+        payload = self._load_json(report_path)
+        model_info = payload.get("model_info") or {}
+        metrics = self._extract_backtest_metrics(payload)
+        notes = [str(item) for item in (payload.get("notes") or [])]
+        version_key, version_label, feature_count = self._infer_backtest_version(payload, report_path)
+        daily_path = (payload.get("artifacts") or {}).get("daily_result")
+        artifacts = [
+            RunArtifactRef(
+                artifact_id="backtest_report",
+                kind="report",
+                logical_path=str(report_path.relative_to(self.project_root)),
+                title=report_path.name,
+            )
+        ]
+        if daily_path:
+            artifacts.append(
+                RunArtifactRef(
+                    artifact_id="daily_result",
+                    kind="backtest_daily",
+                    logical_path=str(self._logicalize_path(daily_path)),
+                    title="daily_result",
+                    media_type="text/csv",
+                )
+            )
+        return BacktestRunSummary(
+            run_id=str(payload.get("run_id") or report_path.stem),
+            run_type=str(payload.get("workflow") or "backtest"),
+            model_name=str(model_info.get("model_name") or model_info.get("model_path") or "unknown"),
+            feature_set=version_key,
+            universe=str(model_info.get("universe") or "csi300"),
+            train_range={"start": payload.get("signal_date"), "end": payload.get("execution_date")},
+            test_range={"start": payload.get("signal_date"), "end": payload.get("execution_date")},
+            top_k=self._to_int(model_info.get("top_k")),
+            price_mode="fq",
+            display_label=version_label,
+            parameter_summary={
+                "version_key": version_key,
+                "version_label": version_label,
+                "feature_count": feature_count,
+                "model_path": model_info.get("model_path"),
+                "top_k": self._to_int(model_info.get("top_k")),
+                "universe": model_info.get("universe") or "csi300",
+                "price_mode": "fq",
+                "signal_date": payload.get("signal_date"),
+                "execution_date": payload.get("execution_date"),
+                "internal_run_id": str(payload.get("run_id") or report_path.stem),
+                "notes": notes,
+            },
+            metrics=metrics,
+            artifacts=artifacts,
+            manifest_ref=str(report_path.relative_to(self.project_root)),
+        )
 
     def get_backtest_daily_points(self, run_id: str) -> list[BacktestDailyPoint]:
         report_path = self._resolve_backtest_report(run_id)
@@ -672,6 +730,29 @@ class ResearchCockpitRepository:
             return self._resolve_project_artifact_path(trade_path)
         default_path = self.project_root / "experiments" / "backtest_trades.csv"
         return default_path
+
+    def _infer_backtest_version(self, payload: dict[str, Any], report_path: Path) -> tuple[str, str, int | None]:
+        model_info = payload.get("model_info") or {}
+        model_path_value = model_info.get("model_path")
+        feature_count: int | None = None
+        if model_path_value:
+            meta_path = self.project_root / str(model_path_value) / "meta.yaml"
+            if meta_path.exists():
+                meta_payload = yaml.safe_load(meta_path.read_text(encoding="utf-8")) or {}
+                training_summary = meta_payload.get("training_summary") or {}
+                feature_count = self._to_int(training_summary.get("feature_count"))
+        if feature_count is None:
+            match = re.search(r"formal_(\d+)_compare", str(report_path))
+            if match:
+                feature_count = self._to_int(match.group(1))
+        if feature_count is None and "semantic_all_features" in str(model_path_value or ""):
+            feature_count = 254
+        if feature_count is None and "extended" in str(model_path_value or ""):
+            feature_count = 173
+        if feature_count:
+            return f"feature_{feature_count}", f"feature {feature_count}", feature_count
+        model_name = str(model_info.get("model_name") or model_path_value or "unknown")
+        return model_name, model_name, feature_count
 
     def _extract_backtest_metrics(self, payload: dict[str, Any]) -> dict[str, Any]:
         sections = payload.get("sections") or []

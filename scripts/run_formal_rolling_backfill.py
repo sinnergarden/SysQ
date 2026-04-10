@@ -22,7 +22,6 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -51,11 +50,24 @@ class BackfillPaths:
     master_log_path: Path
 
 
+VERSION_PRESETS = {
+    "feature_173": {
+        "feature_set": "extended",
+        "model_path": "data/models/qlib_lgbm_extended",
+    },
+    "feature_254": {
+        "feature_set": "semantic_all_features",
+        "model_path": "data/models/qlib_lgbm_semantic_all_features",
+    },
+}
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Formal rolling backfill via daily pre_open/post_close scripts")
     parser.add_argument("--start", default="2025-01-02", help="First execution date")
     parser.add_argument("--end", default=None, help="Last execution date; defaults to latest weekday <= qlib_latest")
     parser.add_argument("--train_years", type=int, default=4, help="Trailing train window in calendar years")
+    parser.add_argument("--version", choices=sorted(VERSION_PRESETS.keys()), default=None, help="Pinned formal backtest version preset")
     parser.add_argument("--shadow_cash", type=float, default=500000.0, help="Initial cash for shadow account")
     parser.add_argument("--real_cash", type=float, default=0.0, help="Initial cash for real account")
     parser.add_argument("--top_k", type=int, default=5, help="Top-k equal weight holdings")
@@ -74,7 +86,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--reset", action="store_true", help="Delete overlapping daily artifacts and account rows before replay")
     parser.add_argument("--skip_signal_quality_gate", action="store_true", help="Bypass pre_open gate during replay")
     parser.add_argument("--max_days", type=int, default=None, help="Optional cap for smoke runs")
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.version:
+        preset = VERSION_PRESETS[args.version]
+        args.feature_set = preset["feature_set"]
+        args.model_path = preset["model_path"]
+    return args
 
 
 def resolve_paths(args: argparse.Namespace) -> BackfillPaths:
@@ -160,7 +177,7 @@ def reset_replay_range(paths: BackfillPaths, start_execution_date: str) -> None:
         try:
             for table in ["balance_history", "position_history", "trade_log"]:
                 conn.execute(
-                    f"DELETE FROM {table} WHERE account_name IN ('shadow', 'real') AND date >= ?",
+                    f"DELETE FROM {table} WHERE account_name IN ('shadow', 'shadow_zero_cost', 'real') AND date >= ?",
                     (signal_cutoff,),
                 )
             conn.commit()
@@ -221,14 +238,39 @@ def find_shadow_plan(paths: BackfillPaths, execution_date: str, signal_date: str
     return stage_paths.plans_dir / f"plan_{signal_date}_shadow.csv"
 
 
-def simulate_shadow_fill(args: argparse.Namespace, paths: BackfillPaths, execution_date: str, plan_path: Path) -> None:
+def ensure_account_initialized(paths: BackfillPaths, *, account_name: str, initial_cash: float, first_execution_date: str) -> None:
+    account = RealAccount(db_path=str(paths.db_path), account_name=account_name)
+    if account.get_latest_date(account_name):
+        return
+    anchor_date = previous_trading_day(first_execution_date)
+    empty_positions = pd.DataFrame(columns=["symbol", "amount", "price", "cost_basis"])
+    account.sync_broker_state(
+        date=anchor_date,
+        cash=float(initial_cash),
+        positions=empty_positions,
+        total_assets=float(initial_cash),
+        account_name=account_name,
+    )
+
+
+def simulate_shadow_fill(
+    args: argparse.Namespace,
+    paths: BackfillPaths,
+    execution_date: str,
+    plan_path: Path,
+    *,
+    account_name: str = "shadow",
+    fee_rate: float | None = None,
+    tax_rate: float | None = None,
+    slippage: float | None = None,
+) -> None:
     simulator = ShadowSimulator(
-        account_name="shadow",
+        account_name=account_name,
         initial_cash=args.shadow_cash,
         db_path=str(paths.db_path),
-        fee_rate=args.shadow_fee_rate,
-        tax_rate=args.shadow_tax_rate,
-        slippage=args.shadow_slippage,
+        fee_rate=args.shadow_fee_rate if fee_rate is None else fee_rate,
+        tax_rate=args.shadow_tax_rate if tax_rate is None else tax_rate,
+        slippage=args.shadow_slippage if slippage is None else slippage,
     )
     simulator.simulate_execution(str(plan_path), execution_date)
 
@@ -277,71 +319,24 @@ def run_post_close(paths: BackfillPaths, execution_date: str, real_sync_path: Pa
     run_cmd(cmd, log_path=log_path)
 
 
-def _simulate_zero_cost_curve(paths: BackfillPaths, execution_days: list[str], initial_cash: float) -> pd.DataFrame:
-    cash = float(initial_cash)
-    positions: dict[str, dict[str, float]] = {}
-    rows: list[dict[str, object]] = [
-        {
-            "date": previous_trading_day(execution_days[0]),
-            "total_assets": float(initial_cash),
-            "cash": float(initial_cash),
-            "position_count": 0,
-            "trade_count": 0,
-            "daily_fee": 0.0,
-            "daily_turnover": 0.0,
-        }
-    ]
-
+def _load_account_curve(paths: BackfillPaths, *, account_name: str, execution_days: list[str]) -> pd.DataFrame:
+    account = RealAccount(db_path=str(paths.db_path), account_name=account_name)
+    trade_log = account.get_trade_log(account_name=account_name)
+    rows: list[dict[str, object]] = []
     for execution_date in execution_days:
-        signal_date = previous_trading_day(execution_date)
-        plan_path = find_shadow_plan(paths, execution_date, signal_date)
-        trade_count = 0
-        daily_turnover = 0.0
-        if plan_path.exists():
-            plan_df = pd.read_csv(plan_path)
-            for _, row in plan_df.iterrows():
-                symbol = str(row.get("symbol") or "")
-                side = str(row.get("side") or "").lower()
-                amount = int(abs(row.get("amount") or 0))
-                price = float(row.get("price") or 0.0)
-                if not symbol or amount <= 0 or not np.isfinite(price) or price <= 0:
-                    continue
-                trade_value = amount * price
-                if side == "sell":
-                    held = int(positions.get(symbol, {}).get("amount", 0))
-                    sell_amount = min(held, amount)
-                    if sell_amount <= 0:
-                        continue
-                    cash += sell_amount * price
-                    remain = held - sell_amount
-                    if remain > 0:
-                        positions[symbol]["amount"] = remain
-                        positions[symbol]["price"] = price
-                    else:
-                        positions.pop(symbol, None)
-                    trade_count += 1
-                    daily_turnover += sell_amount * price
-                elif side == "buy":
-                    if cash + 1e-9 < trade_value:
-                        continue
-                    cash -= trade_value
-                    current = positions.get(symbol, {"amount": 0, "price": price, "cost_basis": price})
-                    new_amount = int(current["amount"]) + amount
-                    new_cost_basis = ((float(current["cost_basis"]) * int(current["amount"])) + trade_value) / new_amount
-                    positions[symbol] = {"amount": new_amount, "price": price, "cost_basis": new_cost_basis}
-                    trade_count += 1
-                    daily_turnover += trade_value
-
-        total_assets = float(cash + sum(float(pos["amount"]) * float(pos.get("price", 0.0)) for pos in positions.values()))
+        state = account.get_state(execution_date, account_name=account_name)
+        if not state:
+            continue
+        day_trades = trade_log[trade_log["date"] == execution_date].copy()
         rows.append(
             {
                 "date": execution_date,
-                "total_assets": total_assets,
-                "cash": float(cash),
-                "position_count": len(positions),
-                "trade_count": trade_count,
-                "daily_fee": 0.0,
-                "daily_turnover": daily_turnover,
+                "total_assets": float(state["total_assets"]),
+                "cash": float(state["cash"]),
+                "position_count": len(state["positions"]),
+                "trade_count": int(len(day_trades)),
+                "daily_fee": float(day_trades["fee"].sum() + day_trades["tax"].sum()) if not day_trades.empty else 0.0,
+                "daily_turnover": float((day_trades["amount"] * day_trades["price"]).sum()) if not day_trades.empty else 0.0,
             }
         )
     return pd.DataFrame(rows)
@@ -350,7 +345,6 @@ def _simulate_zero_cost_curve(paths: BackfillPaths, execution_days: list[str], i
 def build_aggregate_outputs(args: argparse.Namespace, paths: BackfillPaths, execution_days: list[str]) -> dict[str, str]:
     account = RealAccount(db_path=str(paths.db_path), account_name="shadow")
     trade_log = account.get_trade_log(account_name="shadow")
-    daily_rows: list[dict[str, object]] = []
     trades_rows: list[dict[str, object]] = []
 
     conn = sqlite3.connect(paths.db_path)
@@ -365,22 +359,7 @@ def build_aggregate_outputs(args: argparse.Namespace, paths: BackfillPaths, exec
     replay_days = [day for day in history_days if day in execution_days]
 
     for execution_date in history_days:
-        state = account.get_state(execution_date, account_name="shadow")
-        if not state:
-            continue
         day_trades = trade_log[trade_log["date"] == execution_date].copy()
-        daily_rows.append(
-            {
-                "date": execution_date,
-                "total_assets": float(state["total_assets"]),
-                "cash": float(state["cash"]),
-                "position_count": len(state["positions"]),
-                "trade_count": int(len(day_trades)),
-                "daily_fee": float(day_trades["fee"].sum() + day_trades["tax"].sum()) if not day_trades.empty else 0.0,
-                "daily_turnover": float((day_trades["amount"] * day_trades["price"]).sum()) if not day_trades.empty else 0.0,
-            }
-        )
-
         if day_trades.empty:
             continue
         signal_date = previous_trading_day(execution_date)
@@ -412,8 +391,8 @@ def build_aggregate_outputs(args: argparse.Namespace, paths: BackfillPaths, exec
                 }
             )
 
-    daily_df = pd.DataFrame(daily_rows)
-    zero_cost_df = _simulate_zero_cost_curve(paths, replay_days, args.shadow_cash) if replay_days else pd.DataFrame()
+    daily_df = _load_account_curve(paths, account_name="shadow", execution_days=history_days)
+    zero_cost_df = _load_account_curve(paths, account_name="shadow_zero_cost", execution_days=replay_days) if replay_days else pd.DataFrame()
     if not zero_cost_df.empty:
         zero_cost_df = zero_cost_df.rename(columns={
             "total_assets": "zero_cost_total_assets",
@@ -449,11 +428,12 @@ def build_aggregate_outputs(args: argparse.Namespace, paths: BackfillPaths, exec
             daily_result_path=str(daily_csv),
             notes=[
                 "formal rolling replay via pre_open/post_close scripts",
+                f"version={args.version or 'custom'}",
                 f"shadow_cash={args.shadow_cash}",
                 f"shadow_fee_rate={args.shadow_fee_rate}",
                 f"shadow_tax_rate={args.shadow_tax_rate}",
                 f"shadow_slippage={args.shadow_slippage}",
-                "zero_cost curve rebuilt from the same plan files with fee=tax=slippage=0",
+                "zero_cost curve replayed through the same shadow execution pipeline with fee=tax=slippage=0",
             ],
         )
         report.artifacts["trades"] = str(trades_csv)
@@ -482,6 +462,9 @@ def main() -> None:
     if args.reset:
         reset_replay_range(paths, execution_days[0])
 
+    ensure_account_initialized(paths, account_name="shadow", initial_cash=args.shadow_cash, first_execution_date=execution_days[0])
+    ensure_account_initialized(paths, account_name="shadow_zero_cost", initial_cash=args.shadow_cash, first_execution_date=execution_days[0])
+
     start_wall = time.time()
     for idx, execution_date in enumerate(execution_days, start=1):
         signal_date = previous_trading_day(execution_date)
@@ -497,7 +480,17 @@ def main() -> None:
             plan_path = find_shadow_plan(paths, execution_date, signal_date)
             if not plan_path.exists():
                 raise FileNotFoundError(f"Shadow plan missing: {plan_path}")
-            simulate_shadow_fill(args, paths, execution_date, plan_path)
+            simulate_shadow_fill(args, paths, execution_date, plan_path, account_name="shadow")
+            simulate_shadow_fill(
+                args,
+                paths,
+                execution_date,
+                plan_path,
+                account_name="shadow_zero_cost",
+                fee_rate=0.0,
+                tax_rate=0.0,
+                slippage=0.0,
+            )
             append_progress(paths, "shadow_fill_done", execution_date=execution_date, plan_path=str(plan_path))
 
             real_sync_path = write_zero_real_sync(paths, execution_date)
