@@ -28,6 +28,13 @@ class TestResearchUiSchema(unittest.TestCase):
         self.assertIn(registry['close']['source_layer'], {'raw', 'qlib_native'})
         self.assertEqual(registry['ret_1d']['source_layer'], 'semantic_derived')
 
+    def test_backtest_runs_expose_display_label_and_parameter_summary(self):
+        runs = self.repo.list_backtest_runs(limit=3)
+        self.assertTrue(runs)
+        self.assertTrue(runs[0].display_label)
+        self.assertIn('model_path', runs[0].parameter_summary)
+        self.assertIn('notes', runs[0].parameter_summary)
+
     def test_daily_manifest_maps_to_stable_run_manifest(self):
         manifest = self.repo.build_daily_run_manifest('2025-01-03').to_dict()
         self.assertEqual(manifest['run_type'], 'daily_ops')

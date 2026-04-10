@@ -292,12 +292,40 @@ class ResearchCockpitRepository:
             links={"daily_digest": f"/api/runs/daily/{execution_date}"},
         )
 
+    def _iter_backtest_report_paths(self) -> list[Path]:
+        candidates: list[Path] = []
+        seen: set[Path] = set()
+        report_roots = [self.reports_root]
+        scratch_root = self.project_root / "scratch"
+        if scratch_root.exists():
+            report_roots.extend(scratch_root.glob("**/experiments/reports"))
+        for root in report_roots:
+            if not root.exists():
+                continue
+            for path in root.glob("backtest_*.json"):
+                resolved = path.resolve()
+                if resolved in seen:
+                    continue
+                seen.add(resolved)
+                candidates.append(path)
+        return sorted(candidates, reverse=True)
+
     def list_backtest_runs(self, limit: int = 50) -> list[BacktestRunSummary]:
         runs: list[BacktestRunSummary] = []
-        for path in sorted(self.reports_root.glob("backtest_*.json"), reverse=True)[:limit]:
+        for path in self._iter_backtest_report_paths()[:limit]:
             payload = self._load_json(path)
             model_info = payload.get("model_info") or {}
             metrics = self._extract_backtest_metrics(payload)
+            notes = [str(item) for item in (payload.get("notes") or [])]
+            parameter_summary = {
+                "model_path": model_info.get("model_path"),
+                "top_k": self._to_int(model_info.get("top_k")),
+                "universe": model_info.get("universe") or "csi300",
+                "price_mode": "fq",
+                "signal_date": payload.get("signal_date"),
+                "execution_date": payload.get("execution_date"),
+                "notes": notes,
+            }
             daily_path = (payload.get("artifacts") or {}).get("daily_result")
             artifacts = [
                 RunArtifactRef(
@@ -328,6 +356,8 @@ class ResearchCockpitRepository:
                     test_range={"start": payload.get("signal_date"), "end": payload.get("execution_date")},
                     top_k=self._to_int(model_info.get("top_k")),
                     price_mode="fq",
+                    display_label=f"{str(payload.get('run_id') or path.stem)} | {str(model_info.get('model_name') or model_info.get('model_path') or 'unknown')} | end={payload.get('execution_date') or '-'}",
+                    parameter_summary=parameter_summary,
                     metrics=metrics,
                     artifacts=artifacts,
                     manifest_ref=str(path.relative_to(self.project_root)),
@@ -627,9 +657,10 @@ class ResearchCockpitRepository:
         path = self.reports_root / f"backtest_{run_id}.json"
         if path.exists():
             return path
-        for candidate in self.reports_root.glob("backtest_*.json"):
+        for candidate in self._iter_backtest_report_paths():
             payload = self._load_json(candidate)
-            if str(payload.get("run_id") or "") == run_id:
+            candidate_run_id = str(payload.get("run_id") or "")
+            if candidate_run_id == run_id or candidate.stem == f"backtest_{run_id}":
                 return candidate
         raise FileNotFoundError(f"Unknown backtest run_id: {run_id}")
 

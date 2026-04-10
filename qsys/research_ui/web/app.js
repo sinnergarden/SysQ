@@ -17,6 +17,7 @@ const state = {
   loadedViews: new Set(),
   cache: new Map(),
   latestBacktestRunId: null,
+  backtestRuns: [],
   featureRegistry: [],
   caseFeatureSnapshot: {},
   featureSnapshot: {},
@@ -96,6 +97,49 @@ function formatValue(value) {
   if (typeof value === 'number') return Number.isInteger(value) ? String(value) : formatNumber(value, Math.abs(value) < 1 ? 4 : 2);
   if (typeof value === 'object') return `<pre class="code-inline">${escapeHtml(JSON.stringify(value, null, 2))}</pre>`;
   return escapeHtml(String(value));
+}
+
+function renderParameterSummary(summary) {
+  const root = document.getElementById('backtest-params');
+  const label = document.getElementById('backtest-run-label');
+  if (!root || !label) return;
+  if (!summary) {
+    label.textContent = '';
+    root.innerHTML = '<div class="empty">No parameter summary</div>';
+    return;
+  }
+  label.textContent = summary.display_label || summary.run_id || '';
+  const params = summary.parameter_summary || {};
+  const rows = [
+    ['Model', summary.model_name || '-'],
+    ['Model Path', params.model_path || '-'],
+    ['Feature Set', summary.feature_set || '-'],
+    ['Universe', params.universe || summary.universe || '-'],
+    ['Top K', params.top_k ?? summary.top_k ?? '-'],
+    ['Price Mode', params.price_mode || summary.price_mode || '-'],
+    ['Signal Date', params.signal_date || summary.train_range?.start || '-'],
+    ['Latest Execution Date', params.execution_date || summary.test_range?.end || '-'],
+  ];
+  const notes = Array.isArray(params.notes) ? params.notes : [];
+  root.innerHTML = [
+    '<div class="kv-grid">',
+    ...rows.map(([key, value]) => `<div class="kv-item"><span>${escapeHtml(String(key))}</span><strong>${escapeHtml(String(value))}</strong></div>`),
+    '</div>',
+    notes.length ? `<div class="form-note">${notes.map((item) => escapeHtml(item)).join(' | ')}</div>` : '',
+  ].join('');
+}
+
+function renderBacktestRunOptions(runs) {
+  const select = document.getElementById('backtest-run-select');
+  if (!select) return;
+  const currentValue = document.getElementById('backtest-run-id').value.trim() || select.value || '';
+  const options = (runs || []).map((item) => `<option value="${escapeHtml(item.run_id)}">${escapeHtml(item.display_label || item.run_id)}</option>`).join('');
+  select.innerHTML = options || '<option value="">no backtest runs</option>';
+  if (currentValue && (runs || []).some((item) => item.run_id === currentValue)) {
+    select.value = currentValue;
+  } else if ((runs || []).length) {
+    select.value = runs[0].run_id;
+  }
 }
 
 function renderTable(containerId, rows, columns) {
@@ -626,11 +670,14 @@ async function loadFeatureHealth() {
 
 async function loadBacktest() {
   try {
-    const runId = document.getElementById('backtest-run-id').value.trim();
+    const runId = document.getElementById('backtest-run-id').value.trim() || document.getElementById('backtest-run-select').value;
+    document.getElementById('backtest-run-id').value = runId;
+    document.getElementById('backtest-run-select').value = runId;
     const summaryPayload = await getJson(`/api/backtest-runs/${runId}/summary`);
     const dailyPayload = await getJson(`/api/backtest-runs/${runId}/daily`);
     const summary = unwrapData(summaryPayload);
     const dailyItems = unwrapItems(dailyPayload);
+    renderParameterSummary(summary);
     document.getElementById('metric-total-return').textContent = summary.metrics.total_return || '-';
     document.getElementById('metric-sharpe').textContent = summary.metrics.sharpe || '-';
     document.getElementById('metric-max-drawdown').textContent = summary.metrics.max_drawdown || '-';
@@ -676,6 +723,7 @@ async function loadBacktest() {
     if (seedDate) await loadBacktestOrders(seedDate);
   } catch (error) {
     document.getElementById('backtest-daily-table').innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
+    renderParameterSummary(null);
     renderChartError('backtest-equity-chart', error.message);
     renderChartError('backtest-diagnostics-chart', error.message);
   }
@@ -751,8 +799,11 @@ window.loadBacktestOrders = async function loadBacktestOrders(tradeDate) {
 
 async function bootstrapDefaults() {
   try {
-    const runsPayload = await getJson('/api/backtest-runs?limit=1', { useCache: false });
-    const latestRun = unwrapItems(runsPayload)[0];
+    const runsPayload = await getJson('/api/backtest-runs?limit=50', { useCache: false });
+    const runs = unwrapItems(runsPayload);
+    state.backtestRuns = runs;
+    renderBacktestRunOptions(runs);
+    const latestRun = runs[0];
     if (latestRun && latestRun.run_id) {
       state.latestBacktestRunId = latestRun.run_id;
       if (!document.getElementById('backtest-run-id').value.trim()) document.getElementById('backtest-run-id').value = latestRun.run_id;
@@ -802,6 +853,9 @@ function bindEvents() {
   document.getElementById('load-case').addEventListener('click', () => loadViewIfNeeded('case', { force: true }));
   document.getElementById('load-feature').addEventListener('click', () => loadViewIfNeeded('feature', { force: true }));
   document.getElementById('load-backtest').addEventListener('click', () => loadViewIfNeeded('backtest', { force: true }));
+  document.getElementById('backtest-run-select').addEventListener('change', (event) => {
+    document.getElementById('backtest-run-id').value = event.target.value;
+  });
   document.getElementById('load-replay').addEventListener('click', () => loadViewIfNeeded('replay', { force: true }));
   bindFeatureRegistryEvents();
 }

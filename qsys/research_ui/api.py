@@ -186,7 +186,15 @@ def create_app(project_root: str | Path = ".") -> FastAPI:
             summary = repo.get_backtest_summary(run_id)
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-        return _envelope(data={"run_id": run_id, "metrics": summary.metrics}, meta={"resource": "backtest_metrics", "run_id": run_id})
+        return _envelope(
+            data={
+                "run_id": run_id,
+                "metrics": summary.metrics,
+                "display_label": summary.display_label,
+                "parameter_summary": summary.parameter_summary,
+            },
+            meta={"resource": "backtest_metrics", "run_id": run_id},
+        )
 
     @app.get("/api/backtest-runs/{run_id}/daily")
     def get_backtest_daily(

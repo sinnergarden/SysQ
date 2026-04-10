@@ -121,9 +121,18 @@
       <section class="view" id="view-backtest">
         <div class="panel form-panel">
           <div class="form-grid">
-            <label>Backtest Run<input id="backtest-run-id" value="" placeholder="auto latest" /></label>
+            <label>Backtest Version
+              <select id="backtest-run-select">
+                <option value="">loading...</option>
+              </select>
+            </label>
+            <label>Backtest Run ID<input id="backtest-run-id" value="" placeholder="auto latest / manual override" /></label>
             <button id="load-backtest">Load Backtest</button>
           </div>
+        </div>
+         <div class="panel">
+          <div class="panel-head"><h3>Backtest Parameters</h3><span id="backtest-run-label"></span></div>
+          <div id="backtest-params" class="panel-note"></div>
         </div>
         <div class="grid three-col">
           <div class="panel stat-card"><span>Total Return</span><strong id="metric-total-return">-</strong></div>
