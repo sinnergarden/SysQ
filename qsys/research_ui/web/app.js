@@ -111,9 +111,11 @@ function renderParameterSummary(summary) {
   label.textContent = summary.display_label || summary.run_id || '';
   const params = summary.parameter_summary || {};
   const rows = [
+    ['Version', params.version_label || summary.display_label || '-'],
+    ['Internal Backtest ID', params.internal_run_id || summary.run_id || '-'],
     ['Model', summary.model_name || '-'],
     ['Model Path', params.model_path || '-'],
-    ['Feature Set', summary.feature_set || '-'],
+    ['Feature Count', params.feature_count ?? '-'],
     ['Universe', params.universe || summary.universe || '-'],
     ['Top K', params.top_k ?? summary.top_k ?? '-'],
     ['Price Mode', params.price_mode || summary.price_mode || '-'],
@@ -132,7 +134,7 @@ function renderParameterSummary(summary) {
 function renderBacktestRunOptions(runs) {
   const select = document.getElementById('backtest-run-select');
   if (!select) return;
-  const currentValue = document.getElementById('backtest-run-id').value.trim() || select.value || '';
+  const currentValue = select.value || '';
   const options = (runs || []).map((item) => `<option value="${escapeHtml(item.run_id)}">${escapeHtml(item.display_label || item.run_id)}</option>`).join('');
   select.innerHTML = options || '<option value="">no backtest runs</option>';
   if (currentValue && (runs || []).some((item) => item.run_id === currentValue)) {
@@ -670,9 +672,18 @@ async function loadFeatureHealth() {
 
 async function loadBacktest() {
   try {
-    const runId = document.getElementById('backtest-run-id').value.trim() || document.getElementById('backtest-run-select').value;
-    document.getElementById('backtest-run-id').value = runId;
-    document.getElementById('backtest-run-select').value = runId;
+    const select = document.getElementById('backtest-run-select');
+    let runId = select.value;
+    if (!runId) {
+      if (!state.backtestRuns.length) {
+        const runsPayload = await getJson('/api/backtest-runs?limit=50', { useCache: false });
+        state.backtestRuns = unwrapItems(runsPayload);
+        renderBacktestRunOptions(state.backtestRuns);
+      }
+      runId = select.value || state.latestBacktestRunId || state.backtestRuns[0]?.run_id || '';
+      if (!runId) throw new Error('No backtest version available');
+      select.value = runId;
+    }
     const summaryPayload = await getJson(`/api/backtest-runs/${runId}/summary`);
     const dailyPayload = await getJson(`/api/backtest-runs/${runId}/daily`);
     const summary = unwrapData(summaryPayload);
@@ -771,14 +782,14 @@ window.jumpToReplay = function jumpToReplay(tradeDate) {
 window.jumpToCase = function jumpToCase(instrumentId, tradeDate) {
   if (instrumentId) document.getElementById('case-instrument').value = instrumentId;
   if (tradeDate) document.getElementById('case-date').value = tradeDate;
-  document.getElementById('case-backtest-run').value = document.getElementById('backtest-run-id').value.trim();
+  document.getElementById('case-backtest-run').value = document.getElementById('backtest-run-select').value;
   setView('case');
   loadCase();
 };
 
 window.loadBacktestOrders = async function loadBacktestOrders(tradeDate) {
   try {
-    const runId = document.getElementById('backtest-run-id').value.trim();
+    const runId = document.getElementById('backtest-run-select').value;
     const payload = await getJson(`/api/backtest-runs/${runId}/orders?trade_date=${tradeDate}`);
     const items = unwrapItems(payload);
     renderTable('backtest-orders-table', items, [
@@ -806,7 +817,6 @@ async function bootstrapDefaults() {
     const latestRun = runs[0];
     if (latestRun && latestRun.run_id) {
       state.latestBacktestRunId = latestRun.run_id;
-      if (!document.getElementById('backtest-run-id').value.trim()) document.getElementById('backtest-run-id').value = latestRun.run_id;
       if (!document.getElementById('case-backtest-run').value.trim()) document.getElementById('case-backtest-run').value = latestRun.run_id;
       const endDate = latestRun.test_range?.end;
       if (endDate) {
@@ -853,9 +863,7 @@ function bindEvents() {
   document.getElementById('load-case').addEventListener('click', () => loadViewIfNeeded('case', { force: true }));
   document.getElementById('load-feature').addEventListener('click', () => loadViewIfNeeded('feature', { force: true }));
   document.getElementById('load-backtest').addEventListener('click', () => loadViewIfNeeded('backtest', { force: true }));
-  document.getElementById('backtest-run-select').addEventListener('change', (event) => {
-    document.getElementById('backtest-run-id').value = event.target.value;
-  });
+  document.getElementById('backtest-run-select').addEventListener('change', () => {});
   document.getElementById('load-replay').addEventListener('click', () => loadViewIfNeeded('replay', { force: true }));
   bindFeatureRegistryEvents();
 }
