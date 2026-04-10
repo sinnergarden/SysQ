@@ -368,7 +368,13 @@ class ResearchCockpitRepository:
             )
             if version_key not in {"feature_173", "feature_254"}:
                 continue
-            if version_key not in grouped_runs:
+            existing = grouped_runs.get(version_key)
+            if existing is None:
+                grouped_runs[version_key] = summary
+                continue
+            current_rank = self._backtest_version_rank(summary)
+            existing_rank = self._backtest_version_rank(existing)
+            if current_rank > existing_rank:
                 grouped_runs[version_key] = summary
             if len(grouped_runs) >= limit:
                 break
@@ -753,6 +759,41 @@ class ResearchCockpitRepository:
             return f"feature_{feature_count}", f"feature {feature_count}", feature_count
         model_name = str(model_info.get("model_name") or model_path_value or "unknown")
         return model_name, model_name, feature_count
+
+    def _report_daily_alignment(self, summary: BacktestRunSummary) -> tuple[int, str]:
+        try:
+            report_path = self._resolve_backtest_report(summary.run_id)
+            payload = self._load_json(report_path)
+        except FileNotFoundError:
+            return (0, "")
+        daily_path = (payload.get("artifacts") or {}).get("daily_result")
+        if not daily_path:
+            return (0, "")
+        csv_path = self._resolve_project_artifact_path(daily_path)
+        if not csv_path.exists():
+            return (0, "")
+        try:
+            frame = pd.read_csv(csv_path, usecols=["date"])
+        except Exception:
+            return (0, "")
+        if frame.empty:
+            return (0, "")
+        last_date = str(frame.iloc[-1].get("date") or "")
+        expected_end = str(summary.test_range.get("end") or "")
+        return (1 if last_date == expected_end else 0, last_date)
+
+    def _backtest_version_rank(self, summary: BacktestRunSummary) -> tuple[int, int, str, int]:
+        manifest_ref = str(summary.manifest_ref or "")
+        params = summary.parameter_summary or {}
+        notes = [str(item) for item in (params.get("notes") or [])]
+        execution_end = str(summary.test_range.get("end") or "")
+        aligned, _ = self._report_daily_alignment(summary)
+        version_pinned = 1 if any(item.startswith("version=") for item in notes) else 0
+        preferred_root = 1 if "scratch/formal_173_compare/" in manifest_ref or "scratch/formal_254_compare/" in manifest_ref else 0
+        if manifest_ref.startswith("scratch/formal_feature"):
+            preferred_root = -1
+        feature_count = int(params.get("feature_count") or 0)
+        return (version_pinned, aligned, execution_end, feature_count)
 
     def _extract_backtest_metrics(self, payload: dict[str, Any]) -> dict[str, Any]:
         sections = payload.get("sections") or []
