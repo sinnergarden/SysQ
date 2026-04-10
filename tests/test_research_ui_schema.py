@@ -12,7 +12,9 @@ class TestResearchUiSchema(unittest.TestCase):
         project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
         self.repo = ResearchCockpitRepository(project_root=project_root)
         daily_root = os.path.join(project_root, 'daily')
-        self.execution_date = sorted([name for name in os.listdir(daily_root) if os.path.isdir(os.path.join(daily_root, name))])[-1]
+        available_dates = sorted([name for name in os.listdir(daily_root) if os.path.isdir(os.path.join(daily_root, name))])
+        preferred_date = '2025-01-03'
+        self.execution_date = preferred_date if preferred_date in available_dates else available_dates[-1]
 
     def test_feature_registry_entries_are_semantic_and_stable(self):
         entries = self.repo.list_feature_registry()
