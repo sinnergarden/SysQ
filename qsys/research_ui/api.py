@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from functools import lru_cache
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Query
@@ -29,9 +28,10 @@ def create_app(project_root: str | Path = ".") -> FastAPI:
     app = FastAPI(title="Qsys Research UI API", version="0.1.0")
     root = Path(project_root).resolve()
 
-    @lru_cache(maxsize=1)
+    repo = ResearchCockpitRepository(project_root=root)
+
     def get_repo() -> ResearchCockpitRepository:
-        return ResearchCockpitRepository(project_root=root)
+        return repo
 
     web_root = root / "qsys" / "research_ui" / "web"
     app.mount("/ui", StaticFiles(directory=web_root), name="research-ui-static")
@@ -159,19 +159,23 @@ def create_app(project_root: str | Path = ".") -> FastAPI:
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
+    def _fresh_repo_backtests() -> ResearchCockpitRepository:
+        # Backfill writes new report files continuously; re-scan per request so the UI always sees the latest run ids.
+        return ResearchCockpitRepository(project_root=root)
+
     @app.get("/api/backtest-runs")
     def list_backtest_runs(
         limit: int = Query(50, ge=1, le=500),
-        repo: ResearchCockpitRepository = Depends(get_repo),
     ) -> dict:
+        repo = _fresh_repo_backtests()
         items = [schema_to_dict(item) for item in repo.list_backtest_runs(limit=limit)]
         return _envelope(items=items, meta={"resource": "backtest_runs", "limit": limit})
 
     @app.get("/api/backtest-runs/{run_id}/summary")
     def get_backtest_summary(
         run_id: str,
-        repo: ResearchCockpitRepository = Depends(get_repo),
     ) -> dict:
+        repo = _fresh_repo_backtests()
         try:
             return _envelope(data=schema_to_dict(repo.get_backtest_summary(run_id)), meta={"resource": "backtest_summary", "run_id": run_id})
         except FileNotFoundError as exc:
@@ -180,8 +184,8 @@ def create_app(project_root: str | Path = ".") -> FastAPI:
     @app.get("/api/backtest-runs/{run_id}/metrics")
     def get_backtest_metrics(
         run_id: str,
-        repo: ResearchCockpitRepository = Depends(get_repo),
     ) -> dict:
+        repo = _fresh_repo_backtests()
         try:
             summary = repo.get_backtest_summary(run_id)
         except FileNotFoundError as exc:
@@ -199,8 +203,8 @@ def create_app(project_root: str | Path = ".") -> FastAPI:
     @app.get("/api/backtest-runs/{run_id}/daily")
     def get_backtest_daily(
         run_id: str,
-        repo: ResearchCockpitRepository = Depends(get_repo),
     ) -> dict:
+        repo = _fresh_repo_backtests()
         try:
             items = [schema_to_dict(item) for item in repo.get_backtest_daily_points(run_id)]
         except FileNotFoundError as exc:
@@ -215,8 +219,8 @@ def create_app(project_root: str | Path = ".") -> FastAPI:
         trade_date: str | None = None,
         instrument_id: str | None = None,
         limit: int = Query(2000, ge=1, le=10000),
-        repo: ResearchCockpitRepository = Depends(get_repo),
     ) -> dict:
+        repo = _fresh_repo_backtests()
         try:
             items = repo.get_backtest_orders(run_id, trade_date=trade_date, instrument_id=instrument_id, limit=limit)
         except FileNotFoundError as exc:
