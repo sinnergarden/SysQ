@@ -1,7 +1,7 @@
 import unittest
 import pandas as pd
 
-from qsys.feature.builder import build_phase1_features
+from qsys.feature.builder import _repair_research_input_columns, build_phase1_features
 from qsys.feature.groups.fundamental_context import build_fundamental_context_features
 from qsys.feature.transforms import apply_cross_sectional_standardization
 
@@ -73,6 +73,19 @@ class TestFeaturePhase1(unittest.TestCase):
         self.assertIn('roa', out.columns)
         self.assertIn('net_margin', out.columns)
         self.assertIn('operating_cf_to_profit', out.columns)
+
+    def test_repair_research_input_columns_handles_duplicate_target_columns(self):
+        duplicated = self.df.copy()
+        duplicated['close_x'] = duplicated['close'] + 0.1
+        duplicated['close_y'] = duplicated['close'] + 0.2
+        duplicated.insert(duplicated.columns.get_loc('close') + 1, 'close', duplicated['close'] + 0.3, allow_duplicates=True)
+
+        repaired = _repair_research_input_columns(duplicated)
+
+        self.assertEqual(repaired.columns.tolist().count('close'), 1)
+        first_close = duplicated.loc[:, duplicated.columns == 'close'].iloc[:, 0]
+        repaired_close = repaired['close']
+        pd.testing.assert_series_equal(repaired_close.reset_index(drop=True), first_close.reset_index(drop=True), check_names=False)
 
 
 if __name__ == "__main__":

@@ -53,6 +53,7 @@ class TestCliSemantics(unittest.TestCase):
     def test_run_daily_defaults_use_dated_daily_layout(self):
         resolved = resolve_preopen_ops_paths(
             execution_date="2026-03-23",
+            daily_root=None,
             output_dir=None,
             report_dir=None,
             db_path=None,
@@ -65,6 +66,7 @@ class TestCliSemantics(unittest.TestCase):
     def test_run_post_close_defaults_use_dated_daily_layout(self):
         resolved = run_post_close._resolve_ops_paths(
             execution_date="2026-03-23",
+            daily_root=None,
             output_dir=None,
             report_dir=None,
             plan_dir=None,
@@ -75,6 +77,19 @@ class TestCliSemantics(unittest.TestCase):
         self.assertTrue(str(resolved["plan_dir"]).endswith("daily/2026-03-23/pre_open/plans"))
         self.assertTrue(str(resolved["manifest_dir"]).endswith("daily/2026-03-23/post_close/manifests"))
         self.assertTrue(str(resolved["db_path"]).endswith("data/meta/real_account.db"))
+
+    def test_run_post_close_accepts_custom_daily_root(self):
+        resolved = run_post_close._resolve_ops_paths(
+            execution_date="2026-03-23",
+            daily_root="scratch/formal_173_fixed/daily",
+            output_dir=None,
+            report_dir=None,
+            plan_dir=None,
+            db_path=None,
+        )
+        self.assertTrue(str(resolved["daily_root"]).endswith("scratch/formal_173_fixed/daily"))
+        self.assertTrue(str(resolved["output_dir"]).endswith("scratch/formal_173_fixed/daily/2026-03-23/post_close"))
+        self.assertTrue(str(resolved["plan_dir"]).endswith("scratch/formal_173_fixed/daily/2026-03-23/pre_open/plans"))
 
     def test_build_stage_paths_only_creates_stage_root(self):
         with tempfile.TemporaryDirectory() as tmpdir:

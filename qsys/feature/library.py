@@ -3,11 +3,16 @@ from qlib.data.dataset.handler import DataHandlerLP
 from qlib.data.dataset.loader import QlibDataLoader
 from qlib.contrib.data.handler import phase123DL
 from qlib.contrib.eva.alpha import calc_ic
-from qsys.data.adapter import QlibAdapter
-from qsys.utils.logger import log
-import pandas as pd
-import numpy as np
+from pathlib import Path
 from typing import Any, cast
+
+import numpy as np
+import pandas as pd
+import yaml
+
+from qsys.data.adapter import QlibAdapter
+from qsys.feature.registry import list_feature_groups
+from qsys.utils.logger import log
 
 class FeatureLibrary:
     """
@@ -98,6 +103,38 @@ class FeatureLibrary:
     def get_research_phase123_config(cls):
         """Research config placeholder: current minimum uses margin_extended raw feature base until custom qlib build is wired."""
         return cls.get_alpha158_margin_extended_config()
+
+    @classmethod
+    def _load_feature_list_from_model_bundle(cls, bundle_dir: Path):
+        for filename in ("feature_selection.yaml", "meta.yaml"):
+            path = bundle_dir / filename
+            if not path.exists():
+                continue
+            try:
+                payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+            except Exception as exc:
+                log.warning(f"Failed to read semantic feature bundle {path}: {exc}")
+                continue
+            for key in ("selected_features", "feature_config", "features"):
+                values = payload.get(key)
+                if isinstance(values, list) and values:
+                    return list(values)
+        return None
+
+    @classmethod
+    def get_semantic_all_features_config(cls):
+        """Semantic config: prefer the checked-in model bundle, then fall back to alpha158 + semantic groups."""
+        bundle_dir = Path(__file__).resolve().parents[2] / "data" / "models" / "qlib_lgbm_semantic_all_features"
+        bundled = cls._load_feature_list_from_model_bundle(bundle_dir)
+        if bundled:
+            return bundled
+
+        merged = list(cls.get_alpha158_margin_extended_config())
+        for group in list_feature_groups().values():
+            for field in group.get("features", []):
+                if field not in merged:
+                    merged.append(field)
+        return merged
 
 class phase123(DataHandlerLP):
     def __init__(
