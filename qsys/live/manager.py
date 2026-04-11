@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 import pandas as pd
 from qlib.data import D
 
@@ -59,6 +61,14 @@ class LiveManager:
         normalized = normalized.groupby(level=0).last()
         return normalized["close"].to_dict()
 
+    @staticmethod
+    def _is_valid_price(value: object) -> bool:
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            return False
+        return math.isfinite(numeric) and numeric > 0
+
     def generate_signal_basket(self, date, market_data=None, execution_date=None, universe="csi300") -> pd.DataFrame:
         self.load_model()
         if self.model is None:
@@ -93,15 +103,33 @@ class LiveManager:
         )
         prices_df = prices_df.rename(columns={"$close": "close", "$factor": "factor"})
         current_prices = self._normalize_price_lookup(prices_df)
-        target_weights = self.strategy.generate_target_weights(scores, market_status=None)
 
         score_lookup = ranked_scores.set_index("symbol")["score"].to_dict()
         rank_lookup = ranked_scores.set_index("symbol")["score_rank"].to_dict()
+
+        valid_ranked = ranked_scores[ranked_scores["symbol"].map(lambda symbol: self._is_valid_price(current_prices.get(symbol)))].copy()
+        if valid_ranked.empty:
+            log.warning(f"No valid-price candidates available for signal_date={signal_date}")
+            return pd.DataFrame()
+
+        selected_scores = valid_ranked.head(self.strategy.top_k).set_index("symbol")["score"]
+        target_weights = self.strategy._calculate_weights(selected_scores)
+        target_weights = self.strategy._apply_risk_constraints(target_weights)
+
+        skipped = ranked_scores[~ranked_scores["symbol"].isin(selected_scores.index)].copy()
+        skipped_invalid = skipped[skipped["symbol"].map(lambda symbol: not self._is_valid_price(current_prices.get(symbol)))]
+        if not skipped_invalid.empty:
+            sample = ", ".join(skipped_invalid["symbol"].head(10).astype(str).tolist())
+            log.warning(
+                "Skipped invalid-price signal candidates on %s: count=%s symbols=%s",
+                signal_date,
+                len(skipped_invalid),
+                sample,
+            )
+
         rows = []
-        for symbol, weight in target_weights.items():
-            price = float(current_prices.get(symbol, 0.0) or 0.0)
-            if price <= 0:
-                continue
+        for symbol, weight in target_weights.to_dict().items():
+            price = float(current_prices.get(symbol))
             rows.append(
                 {
                     "symbol": str(symbol),
@@ -161,10 +189,19 @@ class LiveManager:
                 log.error(f"No features found for signal_date={signal_date}!")
                 return None
 
-            current_prices = basket_df.set_index("symbol")["price"].to_dict()
             target_weights = basket_df.set_index("symbol")["weight"].to_dict()
 
             current_positions = state["positions"]
+            price_symbols = sorted(set(target_weights.keys()) | set(current_positions.keys()))
+            prices_df = QlibAdapter().get_features(
+                price_symbols,
+                ["$close", "$factor"],
+                start_time=signal_date,
+                end_time=signal_date,
+            )
+            prices_df = prices_df.rename(columns={"$close": "close", "$factor": "factor"})
+            current_prices = self._normalize_price_lookup(prices_df) if prices_df is not None and not prices_df.empty else {}
+
             total_assets = state["total_assets"]
             plan_df = self.planner.generate_plan(
                 target_weights,
