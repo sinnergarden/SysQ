@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Qsys Research UI Cockpit</title>
+  <link rel="stylesheet" href="/ui/styles.css?v=20260411c" />
+  <script defer src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">Q</div>
+        <div>
+          <h1>Research UI</h1>
+          <p>Quant Research Cockpit</p>
+        </div>
+      </div>
+      <nav class="nav">
+        <button class="nav-btn active" data-view="backtest">Backtest Explorer</button>
+        <button class="nav-btn" data-view="case">Case Workspace</button>
+        <button class="nav-btn" data-view="feature">Feature Health</button>
+        <button class="nav-btn" data-view="replay">Decision Replay</button>
+      </nav>
+      <section class="sidebar-card">
+        <div class="sidebar-card-head">
+          <h2>Current Context</h2>
+          <span id="status-pill" class="status-pill" data-tone="ready">API Ready</span>
+        </div>
+        <div id="sidebar-context" class="context-stack"></div>
+      </section>
+      <section class="sidebar-card muted-card">
+        <h2>Routing Notes</h2>
+        <p>Backtest is the default cockpit. Every page shares the same run/date/instrument context and preserves drill-down navigation.</p>
+      </section>
+    </aside>
+
+    <main class="main">
+      <header class="toolbar">
+        <div class="toolbar-title">
+          <div>
+            <h2 id="view-title">Backtest Explorer</h2>
+            <p id="view-subtitle">收益、回撤、日级 drill-down 和跨页研究链路。</p>
+          </div>
+          <div class="toolbar-actions">
+            <button id="apply-context" type="button">Apply Context</button>
+            <button id="refresh-view" type="button" class="secondary-btn">Refresh View</button>
+            <button id="copy-context" type="button" class="ghost-btn">Copy Context</button>
+          </div>
+        </div>
+        <div class="global-filter-bar">
+          <label>Trade Date<input id="context-trade-date" value="2025-01-03" /></label>
+          <label>Instrument<input id="context-instrument" value="000001.SZ" /></label>
+          <label>Backtest Run
+            <select id="backtest-run-select">
+              <option value="">loading...</option>
+            </select>
+          </label>
+          <label>Feature ID<input id="context-feature-id" value="" placeholder="feature_id" /></label>
+          <label>Account<input id="context-account" value="shadow" /></label>
+          <label>Price Mode
+            <select id="context-price-mode">
+              <option value="fq">fq</option>
+              <option value="raw">raw</option>
+            </select>
+          </label>
+        </div>
+        <div id="context-strip" class="context-strip"></div>
+      </header>
+
+      <section class="view active" id="view-backtest">
+        <div class="view-grid backtest-grid">
+          <section class="panel panel-hero">
+            <div class="panel-head compact-head">
+              <div>
+                <p class="eyebrow">Main Cockpit</p>
+                <h3>Equity Curve</h3>
+              </div>
+              <div class="panel-actions" id="backtest-run-context"></div>
+            </div>
+            <div id="backtest-equity-chart" class="chart plotly-chart chart-hero"></div>
+          </section>
+
+          <section class="side-stack">
+            <div class="summary-grid summary-grid-tight">
+              <article class="panel stat-card"><span>Total Return</span><strong id="metric-total-return">-</strong><small id="metric-total-return-note">vs. benchmark</small></article>
+              <article class="panel stat-card"><span>Sharpe</span><strong id="metric-sharpe">-</strong><small id="metric-sharpe-note">risk adjusted</small></article>
+              <article class="panel stat-card"><span>Max Drawdown</span><strong id="metric-max-drawdown">-</strong><small id="metric-max-drawdown-note">peak to trough</small></article>
+              <article class="panel stat-card"><span>Avg RankIC</span><strong id="metric-rank-ic">-</strong><small id="metric-rank-ic-note">daily mean</small></article>
+              <article class="panel stat-card"><span>Turnover</span><strong id="metric-turnover">-</strong><small id="metric-turnover-note">avg daily</small></article>
+              <article class="panel stat-card"><span>Trade Days</span><strong id="metric-trade-days">-</strong><small id="metric-trade-days-note">loaded rows</small></article>
+            </div>
+            <section class="panel">
+              <div class="panel-head compact-head">
+                <div>
+                  <p class="eyebrow">Run Summary</p>
+                  <h3>Research Setup</h3>
+                </div>
+                <span id="backtest-run-label" class="panel-tag"></span>
+              </div>
+              <div id="backtest-params" class="kv-grid"></div>
+            </section>
+            <section class="panel">
+              <div class="panel-head compact-head">
+                <div>
+                  <p class="eyebrow">Selection</p>
+                  <h3>Date Context</h3>
+                </div>
+                <span id="backtest-selected-date-badge" class="badge">No day</span>
+              </div>
+              <div id="backtest-selected-summary" class="stack-list"></div>
+              <div id="backtest-context-links" class="button-row"></div>
+            </section>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head compact-head">
+              <div>
+                <p class="eyebrow">Diagnostics</p>
+                <h3>Drawdown / IC / RankIC</h3>
+              </div>
+            </div>
+            <div id="backtest-diagnostics-chart" class="chart plotly-chart chart-mid"></div>
+          </section>
+
+          <section class="panel panel-table-main">
+            <div class="panel-head compact-head">
+              <div>
+                <p class="eyebrow">Daily Drill-down</p>
+                <h3>Research Timeline</h3>
+              </div>
+            </div>
+            <div id="backtest-daily-table" class="table-wrap"></div>
+          </section>
+
+          <section class="panel panel-context-detail">
+            <div class="panel-head compact-head">
+              <div>
+                <p class="eyebrow">Selected Date</p>
+                <h3>Orders / Contributors</h3>
+              </div>
+            </div>
+            <div id="backtest-context-meta" class="summary-grid summary-grid-mini"></div>
+            <div class="subpanel-grid">
+              <div>
+                <div class="section-label">Trade-Day Orders</div>
+                <div id="backtest-orders-table" class="table-wrap"></div>
+              </div>
+              <div>
+                <div class="section-label">Top Contributors</div>
+                <div id="backtest-contributors" class="stack-list"></div>
+              </div>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <section class="view" id="view-case">
+        <div class="view-grid case-grid">
+          <section class="panel panel-hero">
+            <div class="panel-head compact-head">
+              <div>
+                <p class="eyebrow">Single Instrument Workbench</p>
+                <h3>Price / Benchmark / Volume</h3>
+              </div>
+              <div id="case-meta" class="panel-actions"></div>
+            </div>
+            <div id="case-bars-chart" class="chart plotly-chart chart-hero"></div>
+            <div id="case-relative-chart" class="chart plotly-chart chart-mid"></div>
+            <div id="case-volume-chart" class="chart plotly-chart chart-mini"></div>
+          </section>
+
+          <section class="side-stack">
+            <section class="panel">
+              <div class="panel-head compact-head">
+                <div>
+                  <p class="eyebrow">Loop</p>
+                  <h3>Feature -> Signal -> Position / Order</h3>
+                </div>
+              </div>
+              <div id="case-loop-summary" class="pipeline-grid pipeline-grid-compact"></div>
+            </section>
+            <section class="panel">
+              <div class="panel-head compact-head">
+                <div>
+                  <p class="eyebrow">Signal Snapshot</p>
+                  <h3>Meta / Links</h3>
+                </div>
+              </div>
+              <div id="case-signal-summary" class="stack-list"></div>
+              <pre id="case-signal" class="code-block"></pre>
+              <div id="case-links" class="button-row"></div>
+            </section>
+            <section class="panel accent-panel">
+              <div class="panel-head compact-head">
+                <div>
+                  <p class="eyebrow">Explanation</p>
+                  <h3>Why this instrument today</h3>
+                </div>
+              </div>
+              <div id="case-explanation" class="explanation-box"></div>
+            </section>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head compact-head">
+              <div>
+                <p class="eyebrow">Feature Snapshot</p>
+                <h3>Selected Date Features</h3>
+              </div>
+              <span id="case-feature-count" class="panel-tag"></span>
+            </div>
+            <div id="case-feature-table" class="table-wrap"></div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head compact-head">
+              <div>
+                <p class="eyebrow">Execution Chain</p>
+                <h3>Positions / Orders / Fills</h3>
+              </div>
+            </div>
+            <div id="case-orders-table" class="table-wrap"></div>
+          </section>
+        </div>
+      </section>
+
+      <section class="view" id="view-feature">
+        <div class="view-grid feature-grid-page">
+          <section class="panel full-span">
+            <div class="panel-head compact-head">
+              <div>
+                <p class="eyebrow">Diagnosis</p>
+                <h3>Selected Features</h3>
+              </div>
+              <div class="panel-actions">
+                <button id="select-visible-features" type="button" class="secondary-btn">Use Visible</button>
+                <button id="clear-feature-selection" type="button" class="ghost-btn">Clear</button>
+              </div>
+            </div>
+            <div class="feature-selection-grid">
+              <label class="span-2">Selected Feature IDs<textarea id="feature-names" rows="2" placeholder="selected from registry or typed manually"></textarea></label>
+              <label>Registry Search<input id="feature-registry-search" value="" placeholder="search name / group / tag" /></label>
+              <label>Source
+                <select id="feature-source-filter">
+                  <option value="all">all</option>
+                </select>
+              </label>
+            </div>
+            <div id="feature-selection-summary" class="form-note"></div>
+            <div id="feature-selection-chips" class="chip-wrap"></div>
+          </section>
+
+          <section class="panel full-span">
+            <div class="panel-head compact-head">
+              <div>
+                <p class="eyebrow">Health Summary</p>
+                <h3>Coverage / Missing / Queue</h3>
+              </div>
+            </div>
+            <div id="feature-health-summary-row" class="summary-grid summary-grid-tight"></div>
+            <div id="feature-problem-queue" class="problem-queue"></div>
+          </section>
+
+          <section class="panel panel-table-main">
+            <div class="panel-head compact-head">
+              <div>
+                <p class="eyebrow">Health Table</p>
+                <h3>Feature Queue</h3>
+              </div>
+            </div>
+            <div id="feature-health-summary" class="panel-note"></div>
+            <div id="feature-health-table" class="table-wrap"></div>
+          </section>
+
+          <section class="panel panel-context-detail">
+            <div class="panel-head compact-head">
+              <div>
+                <p class="eyebrow">Selected Feature</p>
+                <h3>Detail Workbench</h3>
+              </div>
+            </div>
+            <details class="details-card" open>
+              <summary>Selected Feature Summary</summary>
+              <div id="feature-selected-summary" class="stack-list"></div>
+            </details>
+            <div class="detail-grid">
+              <section class="detail-section">
+                <div class="section-label">Snapshot</div>
+                <div id="feature-snapshot-table" class="table-wrap"></div>
+              </section>
+              <section class="detail-section">
+                <div class="section-label">Distribution</div>
+                <div id="feature-distribution" class="placeholder-box"></div>
+              </section>
+              <section class="detail-section">
+                <div class="section-label">Drift</div>
+                <div id="feature-drift" class="placeholder-box"></div>
+              </section>
+              <section class="detail-section">
+                <div class="section-label">Registry</div>
+                <div id="feature-detail-registry" class="stack-list"></div>
+              </section>
+            </div>
+          </section>
+
+          <section class="panel full-span">
+            <div class="panel-head compact-head">
+              <div>
+                <p class="eyebrow">Registry</p>
+                <h3>Available Features</h3>
+              </div>
+              <span id="feature-registry-count" class="panel-tag"></span>
+            </div>
+            <div id="feature-registry-table" class="table-wrap"></div>
+          </section>
+        </div>
+      </section>
+
+      <section class="view" id="view-replay">
+        <div class="view-grid replay-grid">
+          <section class="panel full-span">
+            <div class="panel-head compact-head">
+              <div>
+                <p class="eyebrow">Rebalance Summary</p>
+                <h3>Execution Date Pipeline</h3>
+              </div>
+            </div>
+            <div id="replay-summary-row" class="summary-grid summary-grid-tight"></div>
+            <div id="replay-pipeline" class="pipeline-grid"></div>
+          </section>
+
+          <section class="panel panel-table-main">
+            <div class="panel-head compact-head">
+              <div>
+                <p class="eyebrow">Candidate Pool</p>
+                <h3>Universe -> Ranking -> Filtered</h3>
+              </div>
+            </div>
+            <div id="replay-candidates-table" class="table-wrap"></div>
+          </section>
+
+          <section class="panel panel-context-detail">
+            <div class="panel-head compact-head">
+              <div>
+                <p class="eyebrow">Selected Instrument</p>
+                <h3>Explanation</h3>
+              </div>
+            </div>
+            <div id="replay-selection-summary" class="stack-list"></div>
+            <div id="replay-instrument-chart" class="chart plotly-chart chart-mid"></div>
+            <div id="replay-explanation" class="explanation-box"></div>
+            <div id="replay-context-links" class="button-row"></div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head compact-head">
+              <div>
+                <p class="eyebrow">Portfolio Link</p>
+                <h3>Previous Positions</h3>
+              </div>
+            </div>
+            <div id="replay-positions-table" class="table-wrap"></div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head compact-head">
+              <div>
+                <p class="eyebrow">Execution Output</p>
+                <h3>Final Orders</h3>
+              </div>
+            </div>
+            <div id="replay-orders-table" class="table-wrap"></div>
+          </section>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script defer src="/ui/app.js?v=20260411c"></script>
+</body>
+</html>
