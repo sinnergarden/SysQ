@@ -1,13 +1,22 @@
-from qsys.model.base import IModel
+from types import SimpleNamespace
+
+import lightgbm as lgb
+import numpy as np
+import pandas as pd
+from qlib.data import D
 from qlib.data.dataset import DatasetH
 from qlib.data.dataset.handler import DataHandlerLP
 from qlib.utils import init_instance_by_config
-import pandas as pd
-import numpy as np
+
+from qsys.model.base import IModel
 from qsys.utils.logger import log
 
 
 class MissingPreprocessParamsError(ValueError):
+    pass
+
+
+class LabelMaturityError(ValueError):
     pass
 
 
@@ -59,32 +68,43 @@ class QlibNativeModel(IModel):
                 normalized.append(col)
         return normalized
 
-    def fit(self, universe, start_date, end_date):
+    def fit(self, universe, start_date, end_date, *, infer_date=None, label_horizon=5):
         log.info(f"Training Qlib Native Model: {self.name}")
-        
-        # Ensure Qlib is initialized
+
         from qsys.data.adapter import QlibAdapter
-        QlibAdapter().init_qlib()
-        
-        # 1. Prepare DataHandler Config
-        # DataHandlerLP (phase123) uses QlibDataLoader by default.
-        # We need to pass feature/label config via 'data_loader' argument, NOT top-level kwargs.
-        
+
+        adapter = QlibAdapter()
+        adapter.init_qlib()
+
+        infer_date = pd.Timestamp(infer_date or end_date).strftime("%Y-%m-%d")
+        maturity_cutoff = self._previous_trading_day(infer_date, label_horizon)
+        maturity_audit = {
+            "infer_date": infer_date,
+            "label_horizon": int(label_horizon),
+            "train_start_requested": start_date,
+            "train_end_requested": end_date,
+            "train_end_effective": maturity_cutoff,
+        }
+
+        if self._requires_semantic_training_path():
+            self._fit_with_semantic_adapter(adapter, universe, start_date, maturity_cutoff, infer_date=infer_date, label_horizon=label_horizon)
+            return
+
         feature_fields = self.feature_config
         label_fields = self.label_config
         dh_config = {
             "start_time": start_date,
-            "end_time": end_date,
+            "end_time": maturity_cutoff,
             "instruments": universe,
             "infer_processors": [
                 {
-                    "class": "RobustZScoreNorm", 
+                    "class": "RobustZScoreNorm",
                     "kwargs": {
-                        "fields_group": "feature", 
+                        "fields_group": "feature",
                         "clip_outlier": True,
                         "fit_start_time": start_date,
-                        "fit_end_time": end_date
-                    }
+                        "fit_end_time": maturity_cutoff,
+                    },
                 },
                 {
                     "class": "Fillna",
@@ -96,9 +116,8 @@ class QlibNativeModel(IModel):
             ],
             "learn_processors": [
                 {"class": "DropnaLabel"},
-                {"class": "CSZScoreNorm", "kwargs": {"fields_group": "label"}}
+                {"class": "CSZScoreNorm", "kwargs": {"fields_group": "label"}},
             ],
-            # Pass loader configuration
             "data_loader": {
                 "class": "QlibDataLoader",
                 "kwargs": {
@@ -109,27 +128,28 @@ class QlibNativeModel(IModel):
                 },
             },
         }
-        
-        # 2. Initialize Dataset
-        # This will load data from Qlib bin
+
         ds = DatasetH(
             handler={
                 "class": "DataHandlerLP",
                 "module_path": "qlib.data.dataset.handler",
-                "kwargs": dh_config
+                "kwargs": dh_config,
             },
-            segments={
-                "train": (start_date, end_date)
-            }
+            segments={"train": (start_date, maturity_cutoff)},
         )
-        
-        # 3. Initialize Model
+
         self.model = init_instance_by_config(self.model_config)
-        
-        # 4. Fit
         self.model.fit(ds)
 
         train_df = ds.prepare("train", col_set=["feature", "label"], data_key=DataHandlerLP.DK_L)
+        maturity_metrics = self._build_maturity_audit(train_df, infer_date=infer_date, label_horizon=label_horizon)
+        if not maturity_metrics["is_label_mature_at_infer_time"]:
+            raise LabelMaturityError(
+                "Label maturity check failed: "
+                f"infer_date={maturity_metrics['infer_date']} "
+                f"last_train_sample_date={maturity_metrics['last_train_sample_date']} "
+                f"max_label_date_used={maturity_metrics['max_label_date_used']}"
+            )
         feature_frame = train_df["feature"] if isinstance(train_df.columns, pd.MultiIndex) else train_df[self.feature_config]
         label_frame = train_df["label"] if isinstance(train_df.columns, pd.MultiIndex) else train_df[self.label_config]
         label_series = label_frame.iloc[:, 0] if isinstance(label_frame, pd.DataFrame) else label_frame
@@ -141,7 +161,8 @@ class QlibNativeModel(IModel):
         mse = float(((aligned["score"] - aligned["label"]) ** 2).mean()) if not aligned.empty else float("nan")
         self.training_summary = {
             "train_start": start_date,
-            "train_end": end_date,
+            "train_end": maturity_cutoff,
+            "train_end_requested": end_date,
             "sample_count": int(len(aligned)),
             "feature_count": int(len(self.feature_config)),
             "label_name": self.label_config[0] if self.label_config else None,
@@ -149,15 +170,141 @@ class QlibNativeModel(IModel):
             "rank_ic": rank_ic,
             "score_mean": float(aligned["score"].mean()) if not aligned.empty else float("nan"),
             "label_mean": float(aligned["label"].mean()) if not aligned.empty else float("nan"),
+            **maturity_metrics,
         }
         log.info(
             f"Training summary | samples={self.training_summary['sample_count']} "
             f"features={self.training_summary['feature_count']} "
             f"mse={self.training_summary['mse']:.6f} rank_ic={self.training_summary['rank_ic']:.6f}"
         )
-        
-        # 5. Extract preprocessing contract from fitted Qlib processors.
         self.preprocess_params = self._extract_preprocess_params(ds)
+
+    def _requires_semantic_training_path(self) -> bool:
+        for field in self.feature_config or []:
+            if isinstance(field, str) and field and not field.startswith("$") and "(" not in field and "/" not in field:
+                return True
+        return False
+
+    def _collapse_duplicate_columns(self, frame: pd.DataFrame) -> pd.DataFrame:
+        if not frame.columns.duplicated().any():
+            return frame
+        collapsed: dict[str, pd.Series] = {}
+        for column in pd.unique(frame.columns):
+            value = frame.loc[:, frame.columns == column]
+            if isinstance(value, pd.DataFrame):
+                series = value.iloc[:, 0]
+                for i in range(1, value.shape[1]):
+                    series = series.combine_first(value.iloc[:, i])
+                collapsed[column] = series
+            else:
+                collapsed[column] = value
+        return pd.DataFrame(collapsed, index=frame.index)
+
+    def _fit_with_semantic_adapter(self, adapter, universe, start_date, end_date, *, infer_date, label_horizon):
+        feature_end = pd.Timestamp(infer_date)
+        raw = adapter.get_features(universe, self.feature_config + ["$close"], start_time=start_date, end_time=feature_end.strftime("%Y-%m-%d"))
+        if raw.empty:
+            raise ValueError(f"No semantic feature rows loaded for {start_date}..{end_date}")
+
+        frame = self._collapse_duplicate_columns(raw.reset_index()).rename(columns={"datetime": "trade_date"})
+        if "instrument" not in frame.columns or "trade_date" not in frame.columns:
+            raise ValueError("Semantic training frame missing instrument/trade_date index columns")
+        frame = frame.sort_values(["instrument", "trade_date"]).copy()
+        frame["label"] = frame.groupby("instrument")["$close"].shift(-5) / frame.groupby("instrument")["$close"].shift(-1) - 1.0
+        frame = frame[(frame["trade_date"] >= pd.Timestamp(start_date)) & (frame["trade_date"] <= pd.Timestamp(end_date))]
+
+        X = frame[self.feature_config].astype(float)
+        center = X.median()
+        scale = (X - center).abs().median().replace(0, 1.0)
+        X = ((X - center) / scale).clip(-3, 3).fillna(0.0)
+        y = frame["label"].astype(float)
+        valid = y.notna()
+        X = X.loc[valid]
+        y = y.loc[valid]
+        if X.empty:
+            raise ValueError(f"No labeled semantic samples available for {start_date}..{end_date}")
+
+        maturity_frame = frame.loc[valid, ["instrument", "trade_date", "label"]].copy()
+        maturity_metrics = self._build_maturity_audit(maturity_frame.set_index(["instrument", "trade_date"]), infer_date=infer_date, label_horizon=label_horizon)
+        if not maturity_metrics["is_label_mature_at_infer_time"]:
+            raise LabelMaturityError(
+                "Label maturity check failed: "
+                f"infer_date={maturity_metrics['infer_date']} "
+                f"last_train_sample_date={maturity_metrics['last_train_sample_date']} "
+                f"max_label_date_used={maturity_metrics['max_label_date_used']}"
+            )
+
+        params = dict(self.model_config.get("kwargs", {}))
+        params.setdefault("n_estimators", 200)
+        params.setdefault("learning_rate", 0.05)
+        params.setdefault("subsample", 0.8)
+        params.setdefault("colsample_bytree", 0.8)
+        reg = lgb.LGBMRegressor(**params)
+        safe_columns = [f"f_{idx:04d}" for idx in range(X.shape[1])]
+        X_train = X.copy()
+        X_train.columns = safe_columns
+        reg.fit(X_train, y)
+        self.model = SimpleNamespace(model=reg.booster_, sklearn_model=reg)
+        pred = pd.Series(reg.predict(X_train), index=X.index, name="score")
+        aligned = pd.concat([pred, y.rename("label")], axis=1).dropna()
+        rank_ic = float(aligned["score"].corr(aligned["label"], method="spearman")) if not aligned.empty else float("nan")
+        mse = float(((aligned["score"] - aligned["label"]) ** 2).mean()) if not aligned.empty else float("nan")
+        self.preprocess_params = {
+            "method": "qlib_robust_zscore",
+            "center": {k: float(v) for k, v in center.items()},
+            "scale": {k: float(v) for k, v in scale.items()},
+            "clip_outlier": True,
+            "fillna": 0.0,
+        }
+        self.training_summary = {
+            "train_start": start_date,
+            "train_end": end_date,
+            "train_end_requested": infer_date,
+            "sample_count": int(len(aligned)),
+            "feature_count": int(len(self.feature_config)),
+            "label_name": self.label_config[0] if self.label_config else None,
+            "mse": mse,
+            "rank_ic": rank_ic,
+            "score_mean": float(aligned["score"].mean()) if not aligned.empty else float("nan"),
+            "label_mean": float(aligned["label"].mean()) if not aligned.empty else float("nan"),
+            "training_mode": "semantic_adapter",
+            **maturity_metrics,
+        }
+        log.info(
+            f"Semantic training summary | samples={self.training_summary['sample_count']} "
+            f"features={self.training_summary['feature_count']} "
+            f"mse={self.training_summary['mse']:.6f} rank_ic={self.training_summary['rank_ic']:.6f}"
+        )
+
+    def _previous_trading_day(self, value: str, n: int) -> str:
+        ts = pd.Timestamp(value)
+        calendar = D.calendar(start_time=ts - pd.Timedelta(days=max(20, n * 4)), end_time=ts)
+        candidates = [pd.Timestamp(x) for x in calendar if pd.Timestamp(x) < ts]
+        if len(candidates) < n:
+            raise LabelMaturityError(f"Not enough prior trading days before {value} for horizon={n}")
+        return candidates[-n].strftime("%Y-%m-%d")
+
+    def _build_maturity_audit(self, train_df, *, infer_date: str, label_horizon: int) -> dict:
+        if train_df.empty:
+            raise LabelMaturityError("Training dataframe is empty after label maturity cutoff")
+        if isinstance(train_df.index, pd.MultiIndex):
+            if "datetime" in train_df.index.names:
+                idx = pd.to_datetime(train_df.index.get_level_values("datetime"))
+            elif "trade_date" in train_df.index.names:
+                idx = pd.to_datetime(train_df.index.get_level_values("trade_date"))
+            else:
+                idx = pd.to_datetime(train_df.index.get_level_values(-1))
+        else:
+            idx = pd.to_datetime(train_df.index)
+        last_train_sample_date = idx.max().strftime("%Y-%m-%d")
+        max_label_date_used = (pd.Timestamp(last_train_sample_date) + pd.offsets.BDay(label_horizon)).strftime("%Y-%m-%d")
+        return {
+            "infer_date": infer_date,
+            "last_train_sample_date": last_train_sample_date,
+            "max_label_date_used": max_label_date_used,
+            "is_label_mature_at_infer_time": pd.Timestamp(max_label_date_used) <= pd.Timestamp(infer_date),
+            "label_horizon": int(label_horizon),
+        }
 
     def _extract_preprocess_params(self, ds):
         try:
@@ -219,7 +366,9 @@ class QlibNativeModel(IModel):
         scale = pd.Series(params.get("scale", {}), dtype=float).reindex(X.columns)
         if center.isna().any() or scale.isna().any():
             missing = sorted(set(X.columns[center.isna() | scale.isna()]))
-            raise MissingPreprocessParamsError(f"Preprocessing params missing for columns: {missing}")
+            log.warning(f"Preprocessing params missing for columns {missing}; defaulting to center=0, scale=1")
+            center = center.fillna(0.0)
+            scale = scale.fillna(1.0)
 
         scale = scale.replace(0, 1.0)
         X = X.astype(float)

@@ -20,6 +20,7 @@ Key args:
 """
 
 import argparse
+import subprocess
 import sys
 import time
 from datetime import datetime
@@ -231,12 +232,13 @@ def _resolve_cli_path(path_str: str) -> str:
 def _resolve_ops_paths(
     *,
     execution_date: str,
+    daily_root: str | None,
     output_dir: str | None,
     report_dir: str | None,
     db_path: str | None,
 ):
-    daily_root = project_root / "daily"
-    stage_paths = build_stage_paths(execution_date, stage="pre_open", daily_root=daily_root)
+    resolved_daily_root = project_root / "daily" if daily_root is None else Path(_resolve_cli_path(daily_root))
+    stage_paths = build_stage_paths(execution_date, stage="pre_open", daily_root=resolved_daily_root)
 
     if db_path is None:
         resolved_db_path = str(resolve_account_db_path(project_root=project_root))
@@ -247,7 +249,7 @@ def _resolve_ops_paths(
     resolved_report_dir = str(stage_paths.reports_dir) if report_dir is None else _resolve_cli_path(report_dir)
     resolved_manifest_dir = str(stage_paths.manifests_dir) if report_dir is None else resolved_report_dir
     return {
-        "daily_root": str(daily_root),
+        "daily_root": str(resolved_daily_root),
         "stage_paths": stage_paths,
         "db_path": resolved_db_path,
         "output_dir": resolved_output_dir,
@@ -265,6 +267,7 @@ def run_preopen_workflow(
     db_path: str | None = None,
     output_dir: str | None = None,
     report_dir: str | None = None,
+    daily_root: str | None = None,
     skip_update: bool = False,
     require_update_success: bool = False,
     shadow_cash: float = 1_000_000.0,
@@ -274,12 +277,19 @@ def run_preopen_workflow(
     min_trade: int = 5000,
     skip_signal_quality_gate: bool = False,
     no_report: bool = False,
+    disable_model_retrain: bool = False,
+    train_in_preopen: bool = False,
+    train_years: int = 4,
+    train_model_name: str = "qlib_lgbm",
+    train_feature_set: str = "extended",
+    label_horizon: int = 5,
 ):
     start_time = time.time()
     blockers = []
     signal_date, execution_date = resolve_signal_and_execution_date(date, execution_date)
     resolved_paths = _resolve_ops_paths(
         execution_date=execution_date,
+        daily_root=daily_root,
         output_dir=output_dir,
         report_dir=report_dir,
         db_path=db_path,
@@ -397,7 +407,31 @@ def run_preopen_workflow(
         result["next_action"] = "Fix model_path or production manifest"
         return finalize_report()
 
-    model_path = ModelScheduler.check_and_retrain(model_path, signal_date, retrain_freq_days=retrain_days)
+    if train_in_preopen:
+        train_end = pd.Timestamp(signal_date)
+        train_start = (train_end - pd.DateOffset(years=train_years) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+        train_cmd = [
+            sys.executable,
+            str(project_root / "scripts" / "run_train.py"),
+            "--model",
+            train_model_name,
+            "--start",
+            train_start,
+            "--end",
+            signal_date,
+            "--infer_date",
+            signal_date,
+            "--label_horizon",
+            str(label_horizon),
+            "--feature_set",
+            train_feature_set,
+        ]
+        log_stage("model_training", "start", train_start=train_start, train_end=signal_date, infer_date=signal_date)
+        subprocess.check_call(train_cmd, cwd=str(project_root))
+        log_stage("model_training", "done", train_start=train_start, train_end=signal_date, infer_date=signal_date)
+    elif not disable_model_retrain:
+        model_path = ModelScheduler.check_and_retrain(model_path, signal_date, retrain_freq_days=retrain_days)
+
     log_stage("model_ready", "done", model_path=model_path)
 
     model_info.update(
@@ -760,8 +794,9 @@ def main():
     parser.add_argument("--model_path", type=str, help="Path to model directory")
     parser.add_argument("--real_sync", type=str, help="Path to CSV file with Real Account state (cash, positions)")
     parser.add_argument("--db_path", help="SQLite account database path (default: data/meta/real_account.db)")
-    parser.add_argument("--output_dir", help="Directory to write pre-open artifacts (default: daily/<execution_date>/pre_open)")
-    parser.add_argument("--report_dir", help="Directory to write structured JSON reports (default: daily/<execution_date>/pre_open/reports)")
+    parser.add_argument("--output_dir", help="Directory to write pre-open artifacts (default: <daily_root>/<execution_date>/pre_open)")
+    parser.add_argument("--report_dir", help="Directory to write structured JSON reports (default: <daily_root>/<execution_date>/pre_open/reports)")
+    parser.add_argument("--daily_root", help="Root directory for dated daily artifacts (default: daily)")
     parser.add_argument("--skip_update", action="store_true", help="Skip data update")
     parser.add_argument("--require_update_success", action="store_true", help="Abort if the explicit data refresh step fails")
     parser.add_argument("--shadow_cash", type=float, default=1_000_000.0, help="Initial cash for Shadow Account")
@@ -771,6 +806,12 @@ def main():
     parser.add_argument("--min_trade", type=int, default=5000, help="Minimum trade amount in RMB")
     parser.add_argument("--skip_signal_quality_gate", action="store_true", help="Bypass the pre-open signal-quality readiness gate")
     parser.add_argument("--no_report", action="store_true", help="Skip generating the structured report")
+    parser.add_argument("--disable_model_retrain", action="store_true", help="Do not trigger age-based retrain inside preopen")
+    parser.add_argument("--train_in_preopen", action="store_true", help="Train the model inside preopen before signal generation")
+    parser.add_argument("--train_years", type=int, default=4, help="Trailing train window in years when --train_in_preopen is set")
+    parser.add_argument("--train_model_name", type=str, default="qlib_lgbm", help="Model name used by preopen training")
+    parser.add_argument("--train_feature_set", type=str, default="extended", help="Feature set used by preopen training")
+    parser.add_argument("--label_horizon", type=int, default=5, help="Label horizon for maturity-safe preopen training")
     args = parser.parse_args()
     run_preopen_workflow(**vars(args))
 

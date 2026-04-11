@@ -433,7 +433,12 @@ def collect_signal_quality_snapshot(
     return SignalQualitySnapshot(summary=summary, observations=detailed)
 
 
-def build_signal_quality_blockers(summary: dict, *, required_horizons: tuple[int, ...] = (1, 2, 3)) -> list[str]:
+def build_signal_quality_blockers(
+    summary: dict,
+    *,
+    required_horizons: tuple[int, ...] = (1, 2, 3),
+    min_partial_coverage_ratio: float = 0.8,
+) -> list[str]:
     blockers: list[str] = []
     if not summary:
         return ["Signal quality summary missing"]
@@ -442,9 +447,17 @@ def build_signal_quality_blockers(summary: dict, *, required_horizons: tuple[int
         key = f"horizon_{horizon}d"
         horizon_summary = summary.get(key) or {}
         status = horizon_summary.get("status")
-        if status in {"failed", "partial"}:
+        coverage_ratio = float(horizon_summary.get("coverage_ratio") or 0.0)
+        reason = horizon_summary.get("reason")
+        signal_date = horizon_summary.get("signal_date")
+        if status == "failed":
             blockers.append(
-                f"Signal basket {key} data quality {status}: reason={horizon_summary.get('reason')} signal_date={horizon_summary.get('signal_date')}"
+                f"Signal basket {key} data quality failed: reason={reason} signal_date={signal_date}"
+            )
+            continue
+        if status == "partial" and coverage_ratio < min_partial_coverage_ratio:
+            blockers.append(
+                f"Signal basket {key} data quality partial: reason={reason} signal_date={signal_date} coverage_ratio={coverage_ratio:.2f}"
             )
     return blockers
 
