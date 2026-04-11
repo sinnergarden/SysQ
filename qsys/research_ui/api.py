@@ -1,0 +1,261 @@
+from __future__ import annotations
+
+from functools import lru_cache
+from pathlib import Path
+
+from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+
+from qsys.research_ui import ResearchCockpitRepository
+from qsys.research_ui.schema import schema_to_dict
+
+
+API_VERSION = "v1"
+
+
+def _envelope(*, data: dict | list | None = None, items: list | None = None, meta: dict | None = None, **extra: object) -> dict:
+    payload: dict[str, object] = {"api_version": API_VERSION, "meta": meta or {}}
+    if data is not None:
+        payload["data"] = data
+    if items is not None:
+        payload["items"] = items
+        payload["count"] = len(items)
+    payload.update(extra)
+    return payload
+
+
+def create_app(project_root: str | Path = ".") -> FastAPI:
+    app = FastAPI(title="Qsys Research UI API", version="0.1.0")
+    root = Path(project_root).resolve()
+
+    @lru_cache(maxsize=1)
+    def get_repo() -> ResearchCockpitRepository:
+        return ResearchCockpitRepository(project_root=root)
+
+    web_root = root / "qsys" / "research_ui" / "web"
+    app.mount("/ui", StaticFiles(directory=web_root), name="research-ui-static")
+
+    @app.get("/")
+    def index() -> FileResponse:
+        return FileResponse(web_root / "index.html")
+
+    @app.get("/api/instruments")
+    def list_instruments(
+        q: str | None = None,
+        limit: int = Query(200, ge=1, le=5000),
+        repo: ResearchCockpitRepository = Depends(get_repo),
+    ) -> dict:
+        items = repo.list_instruments(query=q, limit=limit)
+        return _envelope(items=items, meta={"query": q, "limit": limit, "resource": "instrument_list"})
+
+    @app.get("/api/search")
+    def search_instruments(
+        q: str = Query(..., min_length=1),
+        limit: int = Query(50, ge=1, le=500),
+        repo: ResearchCockpitRepository = Depends(get_repo),
+    ) -> dict:
+        items = repo.list_instruments(query=q, limit=limit)
+        return _envelope(items=items, meta={"query": q, "limit": limit, "resource": "instrument_search"})
+
+    @app.get("/api/instruments/{instrument_id}")
+    def get_instrument(
+        instrument_id: str,
+        repo: ResearchCockpitRepository = Depends(get_repo),
+    ) -> dict:
+        item = repo.get_instrument(instrument_id)
+        if not item:
+            raise HTTPException(status_code=404, detail=f"Unknown instrument_id: {instrument_id}")
+        return _envelope(data=item, meta={"resource": "instrument", "instrument_id": instrument_id})
+
+    @app.get("/api/bars")
+    def get_bars(
+        instrument_id: str,
+        start: str,
+        end: str,
+        price_mode: str = Query("fq", pattern="^(raw|fq)$"),
+        repo: ResearchCockpitRepository = Depends(get_repo),
+    ) -> dict:
+        if not repo.get_instrument(instrument_id):
+            raise HTTPException(status_code=404, detail=f"Unknown instrument_id: {instrument_id}")
+        items = repo.get_bar_series(instrument_id=instrument_id, start=start, end=end, price_mode=price_mode)
+        if not items:
+            raise HTTPException(status_code=404, detail=f"No bars found for instrument_id={instrument_id}, range={start}..{end}")
+        return _envelope(
+            items=items,
+            meta={"resource": "bars", "instrument_id": instrument_id, "start": start, "end": end, "price_mode": price_mode},
+            instrument_id=instrument_id,
+            start=start,
+            end=end,
+            price_mode=price_mode,
+        )
+
+    @app.get("/api/feature-runs")
+    def list_feature_runs(
+        limit: int = Query(100, ge=1, le=500),
+        repo: ResearchCockpitRepository = Depends(get_repo),
+    ) -> dict:
+        items = repo.list_feature_runs(limit=limit)
+        return _envelope(items=items, meta={"resource": "feature_runs", "limit": limit})
+
+    @app.get("/api/feature-registry")
+    def get_feature_registry(repo: ResearchCockpitRepository = Depends(get_repo)) -> dict:
+        items = [schema_to_dict(item) for item in repo.list_feature_registry()]
+        return _envelope(items=items, meta={"resource": "feature_registry"})
+
+    @app.get("/api/features")
+    def get_features(
+        instrument_id: str,
+        start: str,
+        end: str,
+        feature_names: list[str] = Query(...),
+        repo: ResearchCockpitRepository = Depends(get_repo),
+    ) -> dict:
+        if not repo.get_instrument(instrument_id):
+            raise HTTPException(status_code=404, detail=f"Unknown instrument_id: {instrument_id}")
+        items = repo.get_feature_series(instrument_id=instrument_id, start=start, end=end, feature_names=feature_names)
+        if not items:
+            raise HTTPException(status_code=404, detail=f"No features found for instrument_id={instrument_id}, range={start}..{end}")
+        return _envelope(
+            items=items,
+            meta={"resource": "features", "instrument_id": instrument_id, "start": start, "end": end, "feature_names": feature_names},
+            instrument_id=instrument_id,
+            start=start,
+            end=end,
+            feature_names=feature_names,
+        )
+
+    @app.get("/api/feature-health")
+    def get_feature_health(
+        trade_date: str,
+        feature_names: list[str] = Query(...),
+        universe: str = "csi300",
+        repo: ResearchCockpitRepository = Depends(get_repo),
+    ) -> dict:
+        summary = repo.build_feature_health_summary(trade_date=trade_date, feature_names=feature_names, universe=universe)
+        return _envelope(data=schema_to_dict(summary), meta={"resource": "feature_health", "trade_date": trade_date, "universe": universe, "feature_names": feature_names})
+
+    @app.get("/api/feature-snapshot")
+    def get_feature_snapshot(
+        instrument_id: str,
+        trade_date: str,
+        feature_names: list[str] | None = Query(None),
+        repo: ResearchCockpitRepository = Depends(get_repo),
+    ) -> dict:
+        if not repo.get_instrument(instrument_id):
+            raise HTTPException(status_code=404, detail=f"Unknown instrument_id: {instrument_id}")
+        payload = repo.get_feature_snapshot(trade_date=trade_date, instrument_id=instrument_id, feature_names=feature_names)
+        if not payload.get("features"):
+            raise HTTPException(status_code=404, detail=f"No feature snapshot found for instrument_id={instrument_id}, trade_date={trade_date}")
+        return _envelope(data=payload, meta={"resource": "feature_snapshot", "trade_date": trade_date, "instrument_id": instrument_id, "feature_names": feature_names or []})
+
+    @app.get("/api/runs/daily/{execution_date}")
+    def get_daily_run(
+        execution_date: str,
+        repo: ResearchCockpitRepository = Depends(get_repo),
+    ) -> dict:
+        try:
+            return _envelope(data=schema_to_dict(repo.build_daily_run_manifest(execution_date)), meta={"resource": "daily_run", "execution_date": execution_date})
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/api/backtest-runs")
+    def list_backtest_runs(
+        limit: int = Query(50, ge=1, le=500),
+        repo: ResearchCockpitRepository = Depends(get_repo),
+    ) -> dict:
+        items = [schema_to_dict(item) for item in repo.list_backtest_runs(limit=limit)]
+        return _envelope(items=items, meta={"resource": "backtest_runs", "limit": limit})
+
+    @app.get("/api/backtest-runs/{run_id}/summary")
+    def get_backtest_summary(
+        run_id: str,
+        repo: ResearchCockpitRepository = Depends(get_repo),
+    ) -> dict:
+        try:
+            return _envelope(data=schema_to_dict(repo.get_backtest_summary(run_id)), meta={"resource": "backtest_summary", "run_id": run_id})
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/api/backtest-runs/{run_id}/metrics")
+    def get_backtest_metrics(
+        run_id: str,
+        repo: ResearchCockpitRepository = Depends(get_repo),
+    ) -> dict:
+        try:
+            summary = repo.get_backtest_summary(run_id)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return _envelope(
+            data={
+                "run_id": run_id,
+                "metrics": summary.metrics,
+                "display_label": summary.display_label,
+                "parameter_summary": summary.parameter_summary,
+            },
+            meta={"resource": "backtest_metrics", "run_id": run_id},
+        )
+
+    @app.get("/api/backtest-runs/{run_id}/daily")
+    def get_backtest_daily(
+        run_id: str,
+        repo: ResearchCockpitRepository = Depends(get_repo),
+    ) -> dict:
+        try:
+            items = [schema_to_dict(item) for item in repo.get_backtest_daily_points(run_id)]
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        if not items:
+            raise HTTPException(status_code=404, detail=f"No daily backtest payload found for run_id={run_id}")
+        return _envelope(items=items, meta={"resource": "backtest_daily", "run_id": run_id}, run_id=run_id)
+
+    @app.get("/api/backtest-runs/{run_id}/orders")
+    def get_backtest_orders(
+        run_id: str,
+        trade_date: str | None = None,
+        instrument_id: str | None = None,
+        limit: int = Query(2000, ge=1, le=10000),
+        repo: ResearchCockpitRepository = Depends(get_repo),
+    ) -> dict:
+        try:
+            items = repo.get_backtest_orders(run_id, trade_date=trade_date, instrument_id=instrument_id, limit=limit)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return _envelope(
+            items=items,
+            meta={"resource": "backtest_orders", "run_id": run_id, "trade_date": trade_date, "instrument_id": instrument_id, "limit": limit},
+            run_id=run_id,
+            trade_date=trade_date,
+            instrument_id=instrument_id,
+        )
+
+    @app.get("/api/decision-replay")
+    def get_decision_replay(
+        execution_date: str,
+        account_name: str = "shadow",
+        repo: ResearchCockpitRepository = Depends(get_repo),
+    ) -> dict:
+        try:
+            replay = repo.build_decision_replay(execution_date=execution_date, account_name=account_name)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return _envelope(data=schema_to_dict(replay), meta={"resource": "decision_replay", "execution_date": execution_date, "account_name": account_name})
+
+    @app.get("/api/cases/{case_id}")
+    def get_case(
+        case_id: str,
+        repo: ResearchCockpitRepository = Depends(get_repo),
+    ) -> dict:
+        try:
+            bundle = repo.get_case_bundle_by_id(case_id)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        has_payload = bool(bundle.bars or bundle.feature_snapshot.get("features") or bundle.signal_snapshot or bundle.orders or bundle.positions)
+        if not has_payload:
+            raise HTTPException(status_code=404, detail=f"No case payload found for case_id={case_id}")
+        return _envelope(data=schema_to_dict(bundle), meta={"resource": "case_bundle", "case_id": case_id})
+
+    return app
+
+
+app = create_app()
