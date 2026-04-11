@@ -302,10 +302,10 @@ class ResearchCockpitRepository:
     def _iter_preferred_formal_report_paths(self) -> list[Path]:
         preferred_paths: list[Path] = []
         preferred_roots = [
-            self.project_root / "scratch" / "formal_173_compare" / "experiments" / "reports",
-            self.project_root / "scratch" / "formal_254_compare" / "experiments" / "reports",
             self.project_root / "scratch" / "formal_173_fixed" / "experiments" / "reports",
             self.project_root / "scratch" / "formal_254_fixed" / "experiments" / "reports",
+            self.project_root / "scratch" / "formal_173_compare" / "experiments" / "reports",
+            self.project_root / "scratch" / "formal_254_compare" / "experiments" / "reports",
         ]
         for report_root in preferred_roots:
             if not report_root.exists():
