@@ -846,7 +846,20 @@ class ResearchCockpitRepository:
         elif "scratch/formal_254_fixed/" in report_logical:
             source_key = "formal_254_fixed"
             source_label = "254 fixed"
-        daily_path = (payload.get("artifacts") or {}).get("daily_result")
+        payload_artifacts = payload.get("artifacts") or {}
+        daily_path = payload_artifacts.get("daily_result")
+        training_summary = {}
+        training_summary_path = payload_artifacts.get("training_summary")
+        if training_summary_path:
+            resolved_training_summary = self._resolve_project_artifact_path(training_summary_path)
+            if resolved_training_summary.exists():
+                training_summary = self._load_json(resolved_training_summary)
+        metrics_payload = {}
+        metrics_path = payload_artifacts.get("metrics")
+        if metrics_path:
+            resolved_metrics = self._resolve_project_artifact_path(metrics_path)
+            if resolved_metrics.exists():
+                metrics_payload = self._load_json(resolved_metrics)
         artifacts = [
             RunArtifactRef(
                 artifact_id="backtest_report",
@@ -890,6 +903,15 @@ class ResearchCockpitRepository:
                 "execution_date": payload.get("execution_date"),
                 "internal_run_id": str(payload.get("run_id") or report_path.stem),
                 "notes": notes,
+                "training_mode": training_summary.get("training_mode") or model_info.get("training_mode"),
+                "train_end_requested": training_summary.get("train_end_requested"),
+                "train_end_effective": training_summary.get("train_end_effective"),
+                "infer_date": training_summary.get("infer_date"),
+                "last_train_sample_date": training_summary.get("last_train_sample_date"),
+                "max_label_date_used": training_summary.get("max_label_date_used"),
+                "is_label_mature_at_infer_time": training_summary.get("is_label_mature_at_infer_time"),
+                "shadow_reject_count": metrics_payload.get("shadow_reject_count"),
+                "suspicious_trade_count": metrics_payload.get("suspicious_trade_count"),
             },
             metrics=metrics,
             artifacts=artifacts,

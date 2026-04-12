@@ -51,6 +51,7 @@ from qsys.live.signal_monitoring import (
 from qsys.live.scheduler import ModelScheduler
 from qsys.live.simulation import ShadowSimulator
 from qsys.reports.daily import DailyOpsReport
+from qsys.reports.unified_schema import training_contract_payload, unified_run_artifacts, write_csv, write_json
 from qsys.trader.order_intents import build_order_intents, save_order_intents
 from qsys.utils.logger import log, log_event, log_stage
 
@@ -613,6 +614,7 @@ def run_preopen_workflow(
 
     shadow_account_name = "shadow"
     shadow_sim = ShadowSimulator(account_name=shadow_account_name, initial_cash=shadow_cash, db_path=db_path)
+    execution_audit_rows = []
 
     if shadow_sim.initialize_if_needed(signal_date):
         log_stage("shadow_account", "initialized", signal_date=signal_date)
@@ -624,7 +626,11 @@ def run_preopen_workflow(
         )
         if plan_path and plan_path.exists():
             log_stage("shadow_account", "simulate_previous_plan", plan_path=str(plan_path), signal_date=signal_date)
-            shadow_sim.simulate_execution(str(plan_path), signal_date)
+            execution_audit_rows = shadow_sim.simulate_execution(
+                str(plan_path),
+                signal_date,
+                volume_participation_cap=0.1,
+            ).to_dict(orient="records")
         else:
             log_stage("shadow_account", "skip_simulation", reason="previous plan missing", plan_path=str(plan_path) if plan_path else None)
 
@@ -711,6 +717,40 @@ def run_preopen_workflow(
     }
 
     duration = time.time() - start_time
+    training_summary_payload = training_contract_payload(
+        training_mode=str(model_info.get("training_mode") or "qlib_native"),
+        train_end_requested=signal_date if train_in_preopen else None,
+        train_end_effective=signal_date if train_in_preopen else None,
+        infer_date=signal_date,
+        last_train_sample_date=signal_date if train_in_preopen else None,
+        max_label_date_used=signal_date if train_in_preopen else None,
+        is_label_mature_at_infer_time=True if train_in_preopen else None,
+        mlflow_root=mlflow_root,
+    )
+    unified_paths = unified_run_artifacts(report_dir)
+    suspicious_rows = [
+        row for row in execution_audit_rows
+        if row.get("status") != "filled" or row.get("one_word_limit") or row.get("limit_state") not in {None, "", "unknown", "none"}
+    ]
+    result["artifacts"]["config_snapshot"] = write_json(unified_paths["config_snapshot"], {
+        "signal_date": signal_date,
+        "execution_date": execution_date,
+        "top_k": top_k,
+        "min_trade": min_trade,
+        "model_path": model_path,
+        "training_mode": training_summary_payload["training_mode"],
+        "volume_participation_cap": 0.1,
+        "fill_price_rule": "plan_price_plus_slippage",
+    })
+    result["artifacts"]["training_summary"] = write_json(unified_paths["training_summary"], training_summary_payload)
+    result["artifacts"]["execution_audit"] = write_csv(unified_paths["execution_audit"], execution_audit_rows)
+    result["artifacts"]["suspicious_trades"] = write_csv(unified_paths["suspicious_trades"], suspicious_rows)
+    result["artifacts"]["metrics"] = write_json(unified_paths["metrics"], {
+        "shadow_plan_total_value": shadow_summary.get("total_value"),
+        "real_plan_total_value": real_summary.get("total_value"),
+        "shadow_reject_count": len([row for row in execution_audit_rows if row.get("status") != "filled"]),
+        "suspicious_trade_count": len(suspicious_rows),
+    })
 
     if not no_report:
         report = DailyOpsReport.generate_pre_open_report(
@@ -741,6 +781,7 @@ def run_preopen_workflow(
         if signal_basket_path:
             report.artifacts["signal_basket"] = signal_basket_path
         report.artifacts.update(signal_quality_artifacts)
+        report.artifacts.update(result["artifacts"])
 
         report_path = DailyOpsReport.save(report, output_dir=report_dir)
         manifest_path = update_manifest(
@@ -760,6 +801,11 @@ def run_preopen_workflow(
                 "real_plan": real_summary,
                 "signal_quality_gate": signal_quality_summary,
                 "account_snapshots": result["account_snapshots"],
+                "training_summary": training_summary_payload,
+                "execution_metrics": {
+                    "shadow_reject_count": len([row for row in execution_audit_rows if row.get("status") != "filled"]),
+                    "suspicious_trade_count": len(suspicious_rows),
+                },
             },
         )
         result["artifacts"].update(report.artifacts)

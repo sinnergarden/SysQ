@@ -26,6 +26,7 @@ sys.path.append(str(project_root))
 from qsys.evaluation import StrictEvaluator
 from qsys.config import cfg
 from qsys.reports.strict_eval import StrictEvalReport
+from qsys.reports.unified_schema import unified_run_artifacts, write_csv, write_json
 from qsys.utils.logger import log
 
 
@@ -106,6 +107,18 @@ def main():
             notes=[f"Output CSV: {args.output}"],
         )
         
+        unified_paths = unified_run_artifacts(Path(args.output).resolve().parent)
+        json_report.artifacts["config_snapshot"] = write_json(unified_paths["config_snapshot"], {
+            "baseline": args.baseline,
+            "extended": args.extended,
+            "end": args.end,
+            "top_k": args.top_k,
+            "output": args.output,
+        })
+        json_report.artifacts["training_summary"] = write_json(unified_paths["training_summary"], {})
+        json_report.artifacts["execution_audit"] = write_csv(unified_paths["execution_audit"], [])
+        json_report.artifacts["suspicious_trades"] = write_csv(unified_paths["suspicious_trades"], [])
+        json_report.artifacts["metrics"] = write_json(unified_paths["metrics"], {"rows": len(eval_report.results)})
         report_path = StrictEvalReport.save(json_report)
         log.info(f"Structured report saved to {report_path}")
         

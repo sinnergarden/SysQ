@@ -28,6 +28,7 @@ import click
 from qsys.backtest import BacktestEngine
 from qsys.config import cfg
 from qsys.reports.backtest import BacktestReport
+from qsys.reports.unified_schema import unified_run_artifacts, write_csv, write_json
 from qsys.strategy.engine import DEFAULT_TOP_K
 from qsys.utils.logger import log
 
@@ -74,7 +75,30 @@ def main(model_path, universe, start, end, top_k):
         duration_seconds=duration,
         daily_result_path=str(daily_path),
     )
-    
+
+    unified_paths = unified_run_artifacts(save_dir)
+    training_summary_path = model_dir / "training_summary.json"
+    training_summary = {}
+    if training_summary_path.exists():
+        import json
+        training_summary = json.loads(training_summary_path.read_text(encoding="utf-8"))
+    metrics_payload = {}
+    for section in report.sections:
+        if section.name == "Performance":
+            metrics_payload = dict(section.metrics)
+            break
+    report.artifacts["config_snapshot"] = write_json(unified_paths["config_snapshot"], {
+        "model_path": str(model_dir),
+        "start": start,
+        "end": end,
+        "top_k": top_k,
+        "universe": universe,
+    })
+    report.artifacts["training_summary"] = write_json(unified_paths["training_summary"], training_summary)
+    report.artifacts["execution_audit"] = write_csv(unified_paths["execution_audit"], [])
+    report.artifacts["suspicious_trades"] = write_csv(unified_paths["suspicious_trades"], [])
+    report.artifacts["metrics"] = write_json(unified_paths["metrics"], metrics_payload)
+
     report_path = BacktestReport.save(report)
     log.info(f"Structured report saved to {report_path}")
     

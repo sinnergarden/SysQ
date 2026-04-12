@@ -34,6 +34,7 @@ from qsys.config import cfg
 from qsys.data.adapter import QlibAdapter
 from qsys.data.health import assert_qlib_data_ready
 from qsys.reports.train import TrainingReport
+from qsys.reports.unified_schema import training_contract_payload, write_json
 from qsys.utils.logger import log
 
 
@@ -136,11 +137,13 @@ def main(model, universe, start, end, run_backtest, backtest_start, backtest_end
         log.warning(f"Could not get data status: {e}")
         data_status = {"health_ok": False}
 
+    training_mode = "qlib_native"
     model_info = {
         "model_name": model_name,
         "feature_set": feature_set,
         "train_window": f"{start} to {end}",
         "universe": universe,
+        "training_mode": training_mode,
     }
 
     try:
@@ -159,18 +162,32 @@ def main(model, universe, start, end, run_backtest, backtest_start, backtest_end
         if root_path is None:
             raise ValueError("Root path not configured")
         save_path = root_path / "models" / model_name
-        model_instance.save(save_path)
 
         training_summary = model_instance.training_summary or {}
+        training_contract = training_contract_payload(
+            training_mode=training_mode,
+            train_end_requested=end,
+            train_end_effective=end,
+            infer_date=infer_date or end,
+            last_train_sample_date=end,
+            max_label_date_used=end,
+            is_label_mature_at_infer_time=True,
+            mlflow_root=str(mlflow_root_path) if mlflow_root else None,
+        )
+        training_summary.update(training_contract)
+        model_instance.training_summary = training_summary
+        model_instance.save(save_path)
         if training_summary:
             summary_path = save_path / "training_summary.csv"
             pd.DataFrame([training_summary]).to_csv(summary_path, index=False)
+            write_json(save_path / "training_summary.json", training_summary)
             log.info(f"Training summary saved to {summary_path}")
             log.info(
                 f"Training metrics | mse={training_summary.get('mse')} "
                 f"rank_ic={training_summary.get('rank_ic')} samples={training_summary.get('sample_count')}"
             )
             model_info["sample_count"] = training_summary.get("sample_count")
+            model_info.update(training_contract)
 
         notes.append(f"Feature count: {len(feature_config)}")
         
@@ -234,7 +251,19 @@ def main(model, universe, start, end, run_backtest, backtest_start, backtest_end
             blockers=blockers,
             notes=notes,
         )
-        report.artifacts["training_summary"] = str(save_path / "training_summary.csv")
+        report.artifacts["training_summary"] = str(save_path / "training_summary.json")
+        report.artifacts["training_summary_csv"] = str(save_path / "training_summary.csv")
+        report.artifacts["config_snapshot"] = write_json(save_path / "config_snapshot.json", {
+            "model_name": model_name,
+            "feature_set": feature_set,
+            "universe": universe,
+            "start": start,
+            "end": end,
+            "infer_date": infer_date or end,
+            "label_horizon": label_horizon,
+            "training_mode": training_mode,
+            "mlflow_root": str(mlflow_root_path) if mlflow_root else None,
+        })
         report.artifacts["model_path"] = str(save_path)
         
         report_path = TrainingReport.save(report)
