@@ -1,0 +1,70 @@
+from __future__ import annotations
+
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+
+SUPPORTED_FEATURE_SETS = {"baseline", "extended", "phase123"}
+SUPPORTED_MODEL_TYPES = {"qlib_lgbm", "qlib_xgb", "qlib_tabular_nn"}
+SUPPORTED_LABEL_TYPES = {"forward_return", "relative_return", "binary_event"}
+SUPPORTED_STRATEGY_TYPES = {"rank_topk", "rank_topk_with_cash_gate", "rank_plus_binary_gate"}
+SUPPORTED_REBALANCE_MODES = {"full_rebalance", "hold_if_no_trigger"}
+SUPPORTED_FREQUENCIES = {"daily", "weekly"}
+SUPPORTED_UNIVERSES = {"csi300", "all_a"}
+
+
+@dataclass
+class TransactionCostAssumptions:
+    fee_rate: float = 0.0003
+    slippage: float = 0.0
+    tax_rate: float = 0.001
+    volume_participation_cap: float | str = "not_available"
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+@dataclass
+class ExperimentSpec:
+    run_name: str
+    feature_set: str
+    model_type: str
+    label_type: str
+    strategy_type: str
+    universe: str
+    output_dir: str
+    top_k: int = 5
+    label_horizon: str = "5d"
+    label_benchmark: str = "none"
+    label_threshold: float | str = "not_applicable"
+    rebalance_mode: str = "full_rebalance"
+    rebalance_freq: str = "weekly"
+    retrain_freq: str = "weekly"
+    inference_freq: str = "daily"
+    transaction_cost_assumptions: TransactionCostAssumptions = field(default_factory=TransactionCostAssumptions)
+
+    def __post_init__(self) -> None:
+        if self.feature_set not in SUPPORTED_FEATURE_SETS:
+            raise ValueError(f"Unsupported feature_set: {self.feature_set}")
+        if self.model_type not in SUPPORTED_MODEL_TYPES:
+            raise ValueError(f"Unsupported model_type: {self.model_type}")
+        if self.label_type not in SUPPORTED_LABEL_TYPES:
+            raise ValueError(f"Unsupported label_type: {self.label_type}")
+        if self.strategy_type not in SUPPORTED_STRATEGY_TYPES:
+            raise ValueError(f"Unsupported strategy_type: {self.strategy_type}")
+        if self.universe not in SUPPORTED_UNIVERSES:
+            raise ValueError(f"Unsupported universe: {self.universe}")
+        if self.rebalance_mode not in SUPPORTED_REBALANCE_MODES:
+            raise ValueError(f"Unsupported rebalance_mode: {self.rebalance_mode}")
+        for field_name in ("rebalance_freq", "retrain_freq", "inference_freq"):
+            if getattr(self, field_name) not in SUPPORTED_FREQUENCIES:
+                raise ValueError(f"Unsupported {field_name}: {getattr(self, field_name)}")
+        if self.top_k <= 0:
+            raise ValueError("top_k must be positive")
+
+    def to_dict(self) -> dict:
+        payload = asdict(self)
+        payload["output_dir"] = str(Path(self.output_dir))
+        return payload
+
+
+ResearchSpec = ExperimentSpec

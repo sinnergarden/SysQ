@@ -9,6 +9,8 @@ from qlib.data import D
 from qsys.analysis.tearsheet import PerformanceAnalyzer
 from qsys.config import cfg
 from qsys.data.adapter import QlibAdapter
+from qsys.evaluation.signal_metrics import compute_group_returns, compute_signal_metrics
+from qsys.research.signal import to_signal_frame
 from qsys.strategy.engine import DEFAULT_TOP_K, StrategyEngine
 from qsys.strategy.generator import SignalGenerator
 from qsys.trader.account import Account
@@ -41,6 +43,8 @@ class BacktestEngine:
         self.trade_dates = []
         self.last_trades = pd.DataFrame()
         self.last_summary = None
+        self.last_signal_metrics = {}
+        self.last_group_returns = pd.DataFrame()
 
     def prepare(self):
         log.info("Preparing Backtest...")
@@ -141,8 +145,9 @@ class BacktestEngine:
                 if scores.empty or market_data.empty:
                     continue
 
+                signal_frame = to_signal_frame(scores)
                 current_prices = market_data["close"].to_dict()
-                target_weights = self.strategy.generate_target_weights(scores, market_data)
+                target_weights = self.strategy.generate_target_weights(signal_frame, market_data)
                 orders = self.order_gen.generate_orders(target_weights, self.account, current_prices)
                 trades = self.matcher.match(orders, self.account, market_data, current_prices)
 
@@ -190,11 +195,35 @@ class BacktestEngine:
         df_trades = pd.DataFrame(trade_logs)
         self.last_trades = df_trades
 
+        signal_panel = self._build_signal_panel(all_scores, all_market_data)
+        self.last_signal_metrics = compute_signal_metrics(signal_panel)
+        self.last_group_returns = compute_group_returns(signal_panel)
+
         if not df_result.empty:
             log.info(f"Backtest finished. Final Assets: {df_result.iloc[-1]['total_assets']:.2f}")
             self.last_summary = PerformanceAnalyzer.show(df_result)
 
         return df_result
+
+    def _build_signal_panel(self, all_scores: pd.DataFrame | pd.Series, all_market_data: pd.DataFrame) -> pd.DataFrame:
+        if all_market_data.empty:
+            return pd.DataFrame(columns=["date", "instrument", "signal_value", "forward_return"])
+        close_panel = all_market_data["close"].copy().sort_index()
+        if isinstance(close_panel, pd.Series):
+            close_panel = close_panel.to_frame(name="close")
+        forward = close_panel.groupby(level=1).shift(-1)
+        forward_return = (forward["close"] / close_panel["close"] - 1).rename("forward_return")
+
+        if isinstance(all_scores, pd.Series):
+            score_frame = all_scores.rename("signal_value").to_frame()
+        else:
+            score_frame = to_signal_frame(all_scores)[["signal_value"]]
+        panel = score_frame.join(forward_return, how="inner")
+        if panel.empty:
+            return pd.DataFrame(columns=["date", "instrument", "signal_value", "forward_return"])
+        panel = panel.reset_index()
+        panel.columns = ["date", "instrument", "signal_value", "forward_return"]
+        return panel
 
     def save_report(self, output_dir: str | Path, prefix: str = "backtest") -> dict[str, str]:
         output_dir = Path(output_dir)
@@ -215,5 +244,15 @@ class BacktestEngine:
             summary_path = output_dir / f"{prefix}_summary.csv"
             pd.DataFrame([self.last_summary]).to_csv(summary_path, index=False)
             written["summary"] = str(summary_path)
+
+        if self.last_signal_metrics:
+            signal_metrics_path = output_dir / f"{prefix}_signal_metrics.json"
+            pd.Series(self.last_signal_metrics).to_json(signal_metrics_path, force_ascii=False, indent=2)
+            written["signal_metrics"] = str(signal_metrics_path)
+
+        if isinstance(self.last_group_returns, pd.DataFrame) and not self.last_group_returns.empty:
+            group_returns_path = output_dir / f"{prefix}_group_returns.csv"
+            self.last_group_returns.to_csv(group_returns_path, index=False)
+            written["group_returns"] = str(group_returns_path)
 
         return written

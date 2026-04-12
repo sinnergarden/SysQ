@@ -1,18 +1,20 @@
 import pandas as pd
 import numpy as np
+from qsys.research.signal import to_signal_frame
 from qsys.utils.logger import log
 
 DEFAULT_TOP_K = 5
 
 
 class StrategyEngine:
-    def __init__(self, top_k=DEFAULT_TOP_K, method="equal_weight", risk_max_position=0.3):
+    def __init__(self, top_k=DEFAULT_TOP_K, method="equal_weight", risk_max_position=0.3, strategy_type="rank_topk"):
         """
         Strategy Engine: Decides target positions based on scores and rules.
         """
         self.top_k = top_k
         self.method = method # equal_weight, score_weighted
         self.risk_max_position = risk_max_position
+        self.strategy_type = strategy_type
 
     def generate_target_weights(self, scores, market_status=None):
         """
@@ -22,14 +24,8 @@ class StrategyEngine:
         Output:
             target_weights: dict {code: weight}
         """
-        # Ensure scores is Series
-        if isinstance(scores, pd.DataFrame):
-            # If multi-column, assume first column is score
-            # Or if it has 'score' column
-            if 'score' in scores.columns:
-                scores = scores['score']
-            else:
-                scores = scores.iloc[:, 0]
+        signal_frame = to_signal_frame(scores)
+        scores = signal_frame['signal_value']
                 
         # 1. Soft Filter
         valid_scores = self._apply_soft_filters(scores, market_status)

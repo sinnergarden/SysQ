@@ -27,6 +27,7 @@ import click
 
 from qsys.backtest import BacktestEngine
 from qsys.config import cfg
+from qsys.research import ExperimentSpec
 from qsys.reports.backtest import BacktestReport
 from qsys.reports.unified_schema import unified_run_artifacts, write_csv, write_json
 from qsys.strategy.engine import DEFAULT_TOP_K
@@ -46,6 +47,16 @@ def main(model_path, universe, start, end, top_k):
         raise ValueError("Root path not configured")
 
     model_dir = Path(model_path) if model_path else root_path / "models" / "qlib_lgbm"
+    experiment_spec = ExperimentSpec(
+        run_name=f"backtest_{model_dir.name}_{start}_{end}",
+        feature_set="baseline",
+        model_type=model_dir.name.split("_")[0] if "_" in model_dir.name else "qlib_lgbm",
+        label_type="forward_return",
+        strategy_type="rank_topk",
+        universe=universe,
+        output_dir=str(root_path / "experiments"),
+        top_k=top_k,
+    )
     engine = BacktestEngine(model_dir, universe=universe, start_date=start, end_date=end, top_k=top_k)
     res = engine.run()
 
@@ -74,6 +85,7 @@ def main(model_path, universe, start, end, top_k):
         universe=universe,
         duration_seconds=duration,
         daily_result_path=str(daily_path),
+        experiment_spec=experiment_spec.to_dict(),
     )
 
     unified_paths = unified_run_artifacts(save_dir)
@@ -88,13 +100,14 @@ def main(model_path, universe, start, end, top_k):
             metrics_payload = dict(section.metrics)
             break
     report.artifacts["config_snapshot"] = write_json(unified_paths["config_snapshot"], {
+        **experiment_spec.to_dict(),
         "model_path": str(model_dir),
         "start": start,
         "end": end,
-        "top_k": top_k,
-        "universe": universe,
     })
     report.artifacts["training_summary"] = write_json(unified_paths["training_summary"], training_summary)
+    report.artifacts["signal_metrics"] = write_json(save_dir / "signal_metrics.json", engine.last_signal_metrics or {"status": "not_available_in_flow"})
+    report.artifacts["group_returns"] = write_csv(save_dir / "group_returns.csv", engine.last_group_returns.to_dict(orient="records") if not engine.last_group_returns.empty else [])
     report.artifacts["execution_audit"] = write_csv(unified_paths["execution_audit"], [])
     report.artifacts["suspicious_trades"] = write_csv(unified_paths["suspicious_trades"], [])
     report.artifacts["metrics"] = write_json(unified_paths["metrics"], metrics_payload)
