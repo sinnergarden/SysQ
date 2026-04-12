@@ -5,6 +5,7 @@ import pandas as pd
 from qsys.evaluation.signal_metrics import compute_group_returns, compute_signal_metrics
 from qsys.research.spec import ExperimentSpec
 from qsys.research.signal import to_signal_frame
+from qsys.reports.unified_schema import unified_run_artifacts
 from qsys.strategy.engine import StrategyEngine
 
 
@@ -36,6 +37,12 @@ class TestResearchFrameworkV1(unittest.TestCase):
         weights = engine.generate_target_weights(signal_frame)
         self.assertEqual(list(weights.keys()), ["B"])
 
+    def test_strategy_cash_gate_can_stay_empty(self):
+        engine = StrategyEngine(top_k=3, strategy_type="rank_topk_with_cash_gate")
+        signal_frame = pd.DataFrame({"signal_value": [-0.2, -0.1, 0.0]}, index=["A", "B", "C"])
+        weights = engine.generate_target_weights(signal_frame)
+        self.assertEqual(weights, {})
+
     def test_signal_metrics_and_groups(self):
         rows = []
         for day in ["2025-01-02", "2025-01-03"]:
@@ -47,12 +54,17 @@ class TestResearchFrameworkV1(unittest.TestCase):
                     "forward_return": float(0.01 * (6 - idx)),
                 })
         panel = pd.DataFrame(rows)
-        metrics = compute_signal_metrics(panel)
-        groups = compute_group_returns(panel)
+        metrics = compute_signal_metrics(panel, label_horizon="5d")
+        groups = compute_group_returns(panel, label_horizon="5d")
+        paths = unified_run_artifacts("experiments")
+        self.assertIn("signal_metrics", paths)
+        self.assertIn("group_returns", paths)
         self.assertEqual(metrics["status"], "available")
         self.assertIn("IC", metrics)
+        self.assertEqual(metrics["label_horizon"], "5d")
         self.assertFalse(groups.empty)
         self.assertIn("nav", groups.columns)
+        self.assertIn("label_horizon", groups.columns)
 
 
 if __name__ == "__main__":

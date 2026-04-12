@@ -40,7 +40,9 @@ from qsys.utils.logger import log
 @click.option("--start", type=str, default="2022-01-01", help="Backtest start date")
 @click.option("--end", type=str, default="2022-03-01", help="Backtest end date")
 @click.option("--top_k", type=int, default=DEFAULT_TOP_K, help="Top K positions")
-def main(model_path, universe, start, end, top_k):
+@click.option("--strategy_type", type=str, default="rank_topk", help="Research strategy type for v1 impl1")
+@click.option("--label_horizon", type=str, default="1d_fixed_in_v1_impl1", help="Label horizon used by current signal metrics evaluator")
+def main(model_path, universe, start, end, top_k, strategy_type, label_horizon):
     start_time = time.time()
     root_path = cfg.get_path("root")
     if root_path is None:
@@ -52,12 +54,21 @@ def main(model_path, universe, start, end, top_k):
         feature_set="baseline",
         model_type=model_dir.name.split("_")[0] if "_" in model_dir.name else "qlib_lgbm",
         label_type="forward_return",
-        strategy_type="rank_topk",
+        strategy_type=strategy_type,
         universe=universe,
         output_dir=str(root_path / "experiments"),
         top_k=top_k,
+        label_horizon=label_horizon,
     )
-    engine = BacktestEngine(model_dir, universe=universe, start_date=start, end_date=end, top_k=top_k)
+    engine = BacktestEngine(
+        model_dir,
+        universe=universe,
+        start_date=start,
+        end_date=end,
+        top_k=top_k,
+        strategy_type=strategy_type,
+        label_horizon=label_horizon,
+    )
     res = engine.run()
 
     if res.empty:
@@ -104,10 +115,12 @@ def main(model_path, universe, start, end, top_k):
         "model_path": str(model_dir),
         "start": start,
         "end": end,
+        "spec_source": "entrypoint_defaults_v1_impl1",
+        "spec_status": "partial_not_full_config_driven",
     })
     report.artifacts["training_summary"] = write_json(unified_paths["training_summary"], training_summary)
-    report.artifacts["signal_metrics"] = write_json(save_dir / "signal_metrics.json", engine.last_signal_metrics or {"status": "not_available_in_flow"})
-    report.artifacts["group_returns"] = write_csv(save_dir / "group_returns.csv", engine.last_group_returns.to_dict(orient="records") if not engine.last_group_returns.empty else [])
+    report.artifacts["signal_metrics"] = write_json(unified_paths["signal_metrics"], engine.last_signal_metrics or {"status": "not_available_in_flow", "label_horizon": label_horizon})
+    report.artifacts["group_returns"] = write_csv(unified_paths["group_returns"], engine.last_group_returns.to_dict(orient="records") if not engine.last_group_returns.empty else [], columns=["date", "group", "mean_return", "nav", "label_horizon"])
     report.artifacts["execution_audit"] = write_csv(unified_paths["execution_audit"], [])
     report.artifacts["suspicious_trades"] = write_csv(unified_paths["suspicious_trades"], [])
     report.artifacts["metrics"] = write_json(unified_paths["metrics"], metrics_payload)

@@ -30,13 +30,15 @@ class BacktestEngine:
         daily_predictions=None,
         top_k=DEFAULT_TOP_K,
         n_drop=0,
+        strategy_type="rank_topk",
+        label_horizon="1d_fixed_in_v1_impl1",
     ):
         self.start_date = start_date
         self.end_date = end_date
         self.universe = universe
         self.signal_gen = SignalGenerator(model_path) if model_path else None
         self.daily_predictions = daily_predictions
-        self.strategy = StrategyEngine(top_k=top_k, method="equal_weight")
+        self.strategy = StrategyEngine(top_k=top_k, method="equal_weight", strategy_type=strategy_type)
         self.account = account if account else Account(init_cash=1_000_000)
         self.order_gen = OrderGenerator()
         self.matcher = MatchEngine()
@@ -45,6 +47,7 @@ class BacktestEngine:
         self.last_summary = None
         self.last_signal_metrics = {}
         self.last_group_returns = pd.DataFrame()
+        self.label_horizon = label_horizon
 
     def prepare(self):
         log.info("Preparing Backtest...")
@@ -196,8 +199,8 @@ class BacktestEngine:
         self.last_trades = df_trades
 
         signal_panel = self._build_signal_panel(all_scores, all_market_data)
-        self.last_signal_metrics = compute_signal_metrics(signal_panel)
-        self.last_group_returns = compute_group_returns(signal_panel)
+        self.last_signal_metrics = compute_signal_metrics(signal_panel, label_horizon=self.label_horizon)
+        self.last_group_returns = compute_group_returns(signal_panel, label_horizon=self.label_horizon)
 
         if not df_result.empty:
             log.info(f"Backtest finished. Final Assets: {df_result.iloc[-1]['total_assets']:.2f}")

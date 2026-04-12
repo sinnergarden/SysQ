@@ -29,11 +29,12 @@ class StrategyEngine:
                 
         # 1. Soft Filter
         valid_scores = self._apply_soft_filters(scores, market_status)
-        
-        # 2. Top K
+
+        # 2. Strategy rule
+        valid_scores = self._apply_strategy_rule(valid_scores)
         if valid_scores.empty:
             return {}
-            
+
         # Sort descending
         top_scores = valid_scores.sort_values(ascending=False).head(self.top_k)
         
@@ -84,6 +85,15 @@ class StrategyEngine:
         filtered_scores = filtered_scores[is_buyable]
         
         return filtered_scores
+
+    def _apply_strategy_rule(self, scores: pd.Series) -> pd.Series:
+        if self.strategy_type == "rank_topk":
+            return scores
+        if self.strategy_type == "rank_topk_with_cash_gate":
+            return scores[scores > 0]
+        if self.strategy_type == "rank_plus_binary_gate":
+            return scores[scores > 0]
+        raise ValueError(f"Unknown strategy_type: {self.strategy_type}")
 
     def _calculate_weights(self, top_scores):
         if self.method == "equal_weight":

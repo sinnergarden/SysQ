@@ -15,12 +15,12 @@ def _safe_corr(a: pd.Series, b: pd.Series, method: str = "pearson") -> float | N
     return None if pd.isna(value) else float(value)
 
 
-def compute_signal_metrics(signal_panel: pd.DataFrame) -> dict[str, Any]:
+def compute_signal_metrics(signal_panel: pd.DataFrame, label_horizon: str = "1d_fixed_in_v1_impl1") -> dict[str, Any]:
     if signal_panel.empty:
-        return {"status": "not_available_in_flow"}
+        return {"status": "not_available_in_flow", "label_horizon": label_horizon}
     work = signal_panel.dropna(subset=["signal_value", "forward_return"]).copy()
     if work.empty:
-        return {"status": "not_available_in_flow"}
+        return {"status": "not_available_in_flow", "label_horizon": label_horizon}
     daily_ic = work.groupby("date").apply(
         lambda g: _safe_corr(g["signal_value"], g["forward_return"], method="pearson"),
         include_groups=False,
@@ -38,6 +38,7 @@ def compute_signal_metrics(signal_panel: pd.DataFrame) -> dict[str, Any]:
         "RankICIR": _information_ratio(daily_rank_ic),
         "long_short_spread": float(long_short.mean()) if not long_short.empty else None,
         "days": int(work["date"].nunique()),
+        "label_horizon": label_horizon,
     }
     return metrics
 
@@ -61,12 +62,12 @@ def _compute_long_short(group: pd.DataFrame) -> float | None:
     return None if pd.isna(value) else float(value)
 
 
-def compute_group_returns(signal_panel: pd.DataFrame) -> pd.DataFrame:
+def compute_group_returns(signal_panel: pd.DataFrame, label_horizon: str = "1d_fixed_in_v1_impl1") -> pd.DataFrame:
     if signal_panel.empty:
-        return pd.DataFrame(columns=["date", "group", "mean_return", "nav"])
+        return pd.DataFrame(columns=["date", "group", "mean_return", "nav", "label_horizon"])
     work = signal_panel.dropna(subset=["signal_value", "forward_return"]).copy()
     if work.empty:
-        return pd.DataFrame(columns=["date", "group", "mean_return", "nav"])
+        return pd.DataFrame(columns=["date", "group", "mean_return", "nav", "label_horizon"])
     rows: list[dict[str, Any]] = []
     for date, group in work.groupby("date"):
         if len(group) < 5:
@@ -78,10 +79,11 @@ def compute_group_returns(signal_panel: pd.DataFrame) -> pd.DataFrame:
                 "date": date,
                 "group": int(bucket),
                 "mean_return": float(bucket_df["forward_return"].mean()),
+                "label_horizon": label_horizon,
             })
     out = pd.DataFrame(rows)
     if out.empty:
-        return pd.DataFrame(columns=["date", "group", "mean_return", "nav"])
+        return pd.DataFrame(columns=["date", "group", "mean_return", "nav", "label_horizon"])
     out = out.sort_values(["group", "date"])
     out["nav"] = out.groupby("group")["mean_return"].transform(lambda s: (1 + s).cumprod())
     return out
