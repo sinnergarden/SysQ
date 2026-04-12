@@ -35,6 +35,7 @@ const state = {
   backtest: {
     summary: null,
     daily: [],
+    groupReturns: [],
     selectedDate: '',
     selectedInstrument: '',
     ordersByDate: new Map(),
@@ -826,9 +827,17 @@ function renderParameterSummary(summary) {
     ['Version', params.version_label || summary.display_label || '-'],
     ['Internal ID', params.internal_run_id || summary.run_id || '-'],
     ['Model', summary.model_name || '-'],
+    ['Feature Set', params.feature_set || summary.feature_set || '-'],
+    ['Model Type', params.model_type || '-'],
+    ['Label Type', params.label_type || '-'],
+    ['Strategy Type', params.strategy_type || '-'],
     ['Feature Count', params.feature_count ?? '-'],
     ['Universe', params.universe || summary.universe || '-'],
     ['Top K', params.top_k ?? summary.top_k ?? '-'],
+    ['Rebalance Mode', params.rebalance_mode || '-'],
+    ['Rebalance Freq', params.rebalance_freq || '-'],
+    ['Inference Freq', params.inference_freq || '-'],
+    ['Retrain Freq', params.retrain_freq || '-'],
     ['Signal Date', params.signal_date || summary.train_range?.start || '-'],
     ['Execution Date', params.execution_date || summary.test_range?.end || '-'],
     ['Training Mode', params.training_mode || '-'],
@@ -878,12 +887,72 @@ function renderMetricCard(id, value, noteId, note) {
 
 function summarizeBacktestMetrics(summary, dailyItems) {
   const metrics = summary?.metrics || {};
+  const signalMetrics = summary?.signal_metrics || {};
   renderMetricCard('metric-total-return', metrics.total_return || '-', 'metric-total-return-note', 'strategy total return');
   renderMetricCard('metric-sharpe', metrics.sharpe || '-', 'metric-sharpe-note', 'reported by backtest');
   renderMetricCard('metric-max-drawdown', metrics.max_drawdown || '-', 'metric-max-drawdown-note', 'reported drawdown');
-  renderMetricCard('metric-rank-ic', formatNumber(average(dailyItems.map((item) => item.rank_ic)), 4), 'metric-rank-ic-note', 'daily mean');
+  renderMetricCard('metric-rank-ic', formatNumber(toNumber(signalMetrics.RankIC) ?? average(dailyItems.map((item) => item.rank_ic)), 4), 'metric-rank-ic-note', 'signal evaluator mean');
   renderMetricCard('metric-turnover', formatNumber(average(dailyItems.map((item) => item.turnover)), 0), 'metric-turnover-note', 'avg daily turnover');
-  renderMetricCard('metric-trade-days', String(dailyItems.length || 0), 'metric-trade-days-note', 'loaded daily rows');
+  renderMetricCard('metric-trade-days', String(dailyItems.length || signalMetrics.days || 0), 'metric-trade-days-note', 'loaded daily rows');
+}
+
+function renderBacktestSignalMetrics(summary) {
+  const root = byId('backtest-signal-metrics');
+  if (!root) return;
+  const signalMetrics = summary?.signal_metrics || {};
+  const rows = [
+    ['Status', signalMetrics.status || 'not_available'],
+    ['IC', signalMetrics.IC === undefined || signalMetrics.IC === null ? 'not_available' : formatNumber(signalMetrics.IC, 4)],
+    ['RankIC', signalMetrics.RankIC === undefined || signalMetrics.RankIC === null ? 'not_available' : formatNumber(signalMetrics.RankIC, 4)],
+    ['ICIR', signalMetrics.ICIR === undefined || signalMetrics.ICIR === null ? 'not_available' : formatNumber(signalMetrics.ICIR, 4)],
+    ['RankICIR', signalMetrics.RankICIR === undefined || signalMetrics.RankICIR === null ? 'not_available' : formatNumber(signalMetrics.RankICIR, 4)],
+    ['Long-Short Spread', signalMetrics.long_short_spread === undefined || signalMetrics.long_short_spread === null ? 'not_available' : formatPercent(signalMetrics.long_short_spread, 2)],
+    ['Label Horizon', signalMetrics.label_horizon || 'not_available'],
+  ];
+  root.innerHTML = rows.map(([key, value]) => `
+    <div class="kv-item">
+      <span>${escapeHtml(key)}</span>
+      <strong>${escapeHtml(String(value))}</strong>
+    </div>
+  `).join('');
+}
+
+function renderBacktestGroupReturns() {
+  const items = state.backtest.groupReturns || [];
+  if (!items.length) {
+    renderChartError('backtest-group-returns-chart', 'group_returns not_available');
+    byId('backtest-group-returns-table').innerHTML = '<div class="empty">group_returns not_available</div>';
+    return;
+  }
+  const dates = Array.from(new Set(items.map((item) => item.date))).sort();
+  const groups = Array.from(new Set(items.map((item) => item.group))).sort((left, right) => Number(left) - Number(right));
+  renderSeriesChart('backtest-group-returns-chart', {
+    dates,
+    title: 'Group NAV 1-5',
+    height: 300,
+    series: groups.map((group, idx) => ({
+      name: `Group ${group}`,
+      values: dates.map((date) => {
+        const row = items.find((item) => item.date === date && Number(item.group) === Number(group));
+        return row ? toNumber(row.nav) : null;
+      }),
+      color: [CHART_COLORS.strategy, CHART_COLORS.accent, CHART_COLORS.benchmark, CHART_COLORS.neutral, CHART_COLORS.danger][idx % 5],
+    })),
+    yAxisTitle: 'NAV',
+  });
+  const latestByGroup = groups.map((group) => {
+    const rows = items.filter((item) => Number(item.group) === Number(group));
+    return rows[rows.length - 1] || { group, nav: null, mean_return: null, label_horizon: 'not_available' };
+  });
+  renderDataTable('backtest-group-returns-table', latestByGroup, [
+    { key: 'group', label: 'Group', render: (row) => escapeHtml(String(row.group)) },
+    { key: 'nav', label: 'Last NAV', render: (row) => formatNumber(row.nav, 4), sortValue: (row) => toNumber(row.nav) },
+    { key: 'mean_return', label: 'Last Mean Return', render: (row) => formatPercent(row.mean_return), sortValue: (row) => toNumber(row.mean_return) },
+    { key: 'label_horizon', label: 'Label Horizon', render: (row) => escapeHtml(String(row.label_horizon || 'not_available')) },
+  ], {
+    tableKey: 'backtest-group-returns',
+    emptyMessage: 'group_returns not_available',
+  });
 }
 
 function renderBacktestCharts() {
@@ -891,6 +960,7 @@ function renderBacktestCharts() {
   if (!dailyItems.length) {
     renderChartError('backtest-equity-chart', 'No daily backtest data');
     renderChartError('backtest-diagnostics-chart', 'No diagnostics data');
+    renderBacktestGroupReturns();
     return;
   }
   const dates = dailyItems.map((item) => item.trade_date);
@@ -923,6 +993,7 @@ function renderBacktestCharts() {
     ],
     yAxisTitle: 'Ratio / IC',
   });
+  renderBacktestGroupReturns();
 }
 
 function renderBacktestDailyTable() {
@@ -1203,13 +1274,22 @@ async function loadBacktest() {
 
     const summaryPayload = await getJson(`/api/backtest-runs/${runId}/summary`, { useCache: false });
     const dailyPayload = await getJson(`/api/backtest-runs/${runId}/daily`, { useCache: false });
+    let groupReturnsPayload = null;
+    try {
+      groupReturnsPayload = await getJson(`/api/backtest-runs/${runId}/group-returns`, { useCache: false });
+    } catch (_error) {
+      groupReturnsPayload = null;
+    }
     const summary = unwrapData(summaryPayload);
     const dailyItems = unwrapItems(dailyPayload);
+    const groupReturns = unwrapItems(groupReturnsPayload);
     state.backtest.summary = summary;
     state.backtest.daily = dailyItems;
+    state.backtest.groupReturns = groupReturns;
     state.backtest.ordersByDate = new Map();
     renderParameterSummary(summary);
     renderBacktestRunContext();
+    renderBacktestSignalMetrics(summary);
     summarizeBacktestMetrics(summary, dailyItems);
     renderBacktestDailyTable();
 
@@ -1226,6 +1306,9 @@ async function loadBacktest() {
     byId('backtest-orders-table').innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
     byId('backtest-contributors').innerHTML = '<div class="empty">No contributors</div>';
     byId('backtest-selected-summary').innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
+    byId('backtest-signal-metrics').innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
+    renderChartError('backtest-group-returns-chart', error.message);
+    byId('backtest-group-returns-table').innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
   }
 }
 

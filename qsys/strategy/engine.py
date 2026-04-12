@@ -25,13 +25,12 @@ class StrategyEngine:
             target_weights: dict {code: weight}
         """
         signal_frame = to_signal_frame(scores)
-        scores = signal_frame['signal_value']
-                
+
         # 1. Soft Filter
-        valid_scores = self._apply_soft_filters(scores, market_status)
+        valid_signal_frame = self._apply_soft_filters(signal_frame, market_status)
 
         # 2. Strategy rule
-        valid_scores = self._apply_strategy_rule(valid_scores)
+        valid_scores = self._apply_strategy_rule(valid_signal_frame)
         if valid_scores.empty:
             return {}
 
@@ -46,7 +45,7 @@ class StrategyEngine:
         
         return weights.to_dict()
 
-    def _apply_soft_filters(self, scores, market_status):
+    def _apply_soft_filters(self, signal_frame, market_status):
         """
         Filter out untradable stocks from the *Candidate List*.
         Note: If we already hold it, we might want to keep holding it (weight > 0) or sell it (weight 0).
@@ -62,15 +61,15 @@ class StrategyEngine:
         - Don't sell Limit Down (though we can try).
         """
         if market_status is None or market_status.empty:
-            return scores
-            
+            return signal_frame
+
         # Align index
-        common_idx = scores.index.intersection(market_status.index)
+        common_idx = signal_frame.index.intersection(market_status.index)
         if common_idx.empty:
-            return scores
-            
+            return signal_frame
+
         status = market_status.loc[common_idx]
-        filtered_scores = scores.loc[common_idx].copy()
+        filtered_scores = signal_frame.loc[common_idx].copy()
         
         # Filter: Exclude if suspended or limit up (cannot buy)
         # Note: This logic assumes we are opening new positions.
@@ -86,13 +85,17 @@ class StrategyEngine:
         
         return filtered_scores
 
-    def _apply_strategy_rule(self, scores: pd.Series) -> pd.Series:
+    def _apply_strategy_rule(self, signal_frame: pd.DataFrame) -> pd.Series:
+        scores = signal_frame["signal_value"]
         if self.strategy_type == "rank_topk":
             return scores
         if self.strategy_type == "rank_topk_with_cash_gate":
             return scores[scores > 0]
         if self.strategy_type == "rank_plus_binary_gate":
-            raise NotImplementedError("rank_plus_binary_gate is not_supported_in_v1_impl1 without explicit binary signal input")
+            if "binary" not in signal_frame.columns:
+                raise ValueError("rank_plus_binary_gate requires explicit binary field in signal frame")
+            binary_mask = pd.to_numeric(signal_frame["binary"], errors="coerce") == 1
+            return scores[binary_mask]
         raise ValueError(f"Unknown strategy_type: {self.strategy_type}")
 
     def _calculate_weights(self, top_scores):
