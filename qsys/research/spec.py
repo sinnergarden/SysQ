@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
+from typing import Any
 from pathlib import Path
 
 V1_IMPL1_FIXED_LABEL_HORIZON = "1d_fixed_in_v1_impl1"
 
-SUPPORTED_FEATURE_SETS = {"baseline", "extended", "phase123"}
+SUPPORTED_FEATURE_SETS = {"baseline", "extended", "extended_absnorm", "phase123", "phase123_absnorm"}
 SUPPORTED_MODEL_TYPES = {"qlib_lgbm", "qlib_xgb", "qlib_tabular_nn"}
 SUPPORTED_LABEL_TYPES = {"forward_return", "relative_return", "binary_event"}
 SUPPORTED_STRATEGY_TYPES = {"rank_topk", "rank_topk_with_cash_gate", "rank_plus_binary_gate"}
@@ -43,6 +44,7 @@ class ExperimentSpec:
     retrain_freq: str = "weekly"
     inference_freq: str = "daily"
     transaction_cost_assumptions: TransactionCostAssumptions = field(default_factory=TransactionCostAssumptions)
+    strategy_params: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.feature_set not in SUPPORTED_FEATURE_SETS:
@@ -66,6 +68,20 @@ class ExperimentSpec:
             raise ValueError(
                 f"label_horizon={self.label_horizon} is not supported in v1 impl1; use {V1_IMPL1_FIXED_LABEL_HORIZON}"
             )
+        self.strategy_params = self._normalized_strategy_params(self.strategy_params)
+
+    @staticmethod
+    def _normalized_strategy_params(params: dict[str, Any] | None) -> dict[str, Any]:
+        payload = dict(params or {})
+        if "min_signal_threshold" in payload:
+            payload["min_signal_threshold"] = float(payload["min_signal_threshold"])
+        if "min_selected_count" in payload:
+            payload["min_selected_count"] = int(payload["min_selected_count"])
+        if "allow_empty_portfolio" in payload:
+            payload["allow_empty_portfolio"] = bool(payload["allow_empty_portfolio"])
+        if "min_trade_buffer_ratio" in payload:
+            payload["min_trade_buffer_ratio"] = float(payload["min_trade_buffer_ratio"])
+        return payload
 
     def to_dict(self) -> dict:
         payload = asdict(self)

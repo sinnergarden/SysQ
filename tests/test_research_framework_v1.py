@@ -30,6 +30,7 @@ class TestResearchFrameworkV1(unittest.TestCase):
         self.assertEqual(payload["rebalance_mode"], "full_rebalance")
         self.assertEqual(payload["rebalance_freq"], "weekly")
         self.assertEqual(payload["label_horizon"], V1_IMPL1_FIXED_LABEL_HORIZON)
+        self.assertEqual(payload["strategy_params"], {})
 
     def test_experiment_spec_rejects_fake_label_horizon(self):
         with self.assertRaises(ValueError):
@@ -62,6 +63,18 @@ class TestResearchFrameworkV1(unittest.TestCase):
         weights = engine.generate_target_weights(signal_frame)
         self.assertEqual(weights, {})
 
+    def test_strategy_cash_gate_supports_threshold_and_fallback(self):
+        engine = StrategyEngine(
+            top_k=2,
+            strategy_type="rank_topk_with_cash_gate",
+            min_signal_threshold=0.5,
+            min_selected_count=2,
+            allow_empty_portfolio=False,
+        )
+        signal_frame = pd.DataFrame({"signal_value": [0.9, 0.2, 0.1]}, index=["A", "B", "C"])
+        weights = engine.generate_target_weights(signal_frame)
+        self.assertEqual(list(weights.keys()), ["A", "B"])
+
     def test_rank_plus_binary_gate_requires_explicit_binary(self):
         engine = StrategyEngine(top_k=3, strategy_type="rank_plus_binary_gate")
         signal_frame = pd.DataFrame({"signal_value": [0.3, 0.2, 0.1]}, index=["A", "B", "C"])
@@ -93,6 +106,8 @@ class TestResearchFrameworkV1(unittest.TestCase):
         paths = unified_run_artifacts("experiments")
         self.assertIn("signal_metrics", paths)
         self.assertIn("group_returns", paths)
+        self.assertIn("exposure_summary", paths)
+        self.assertIn("selection_daily", paths)
         self.assertEqual(metrics["status"], "available")
         self.assertIn("IC", metrics)
         self.assertEqual(metrics["label_horizon"], V1_IMPL1_FIXED_LABEL_HORIZON)
@@ -132,6 +147,13 @@ class TestResearchFrameworkV1(unittest.TestCase):
                 self.last_group_returns = pd.DataFrame([
                     {"date": "2025-01-02", "group": 1, "mean_return": 0.01, "nav": 1.01, "label_horizon": V1_IMPL1_FIXED_LABEL_HORIZON},
                     {"date": "2025-01-02", "group": 5, "mean_return": -0.01, "nav": 0.99, "label_horizon": V1_IMPL1_FIXED_LABEL_HORIZON},
+                ])
+                self.last_exposure_summary = {"status": "available", "metrics": {"top1_weight": {"status": "available", "mean": 0.5}}}
+                self.last_exposure_timeseries = pd.DataFrame([
+                    {"date": "2025-01-02", "metric": "top1_weight", "value": 0.5},
+                ])
+                self.last_selection_daily = pd.DataFrame([
+                    {"date": "2025-01-02", "instrument": "A", "signal_value": 0.9, "target_weight": 0.5, "selected_rank": 1},
                 ])
 
             def run(self):
@@ -185,6 +207,9 @@ class TestResearchFrameworkV1(unittest.TestCase):
             self.assertEqual(payload["spec_source"], "explicit_cli_plus_artifact_inference_v1")
             self.assertEqual(payload["spec_inputs"]["feature_set"]["source"], "explicit_cli")
             self.assertEqual(payload["spec_inputs"]["model_type"]["resolved"], "qlib_lgbm")
+            self.assertEqual(payload["strategy_params"]["min_trade_buffer_ratio"], 0.0)
+            self.assertTrue((experiments_dir / "exposure_summary.json").exists())
+            self.assertTrue((experiments_dir / "selection_daily.csv").exists())
 
 
 if __name__ == "__main__":
