@@ -114,7 +114,11 @@ class ShadowSimulator:
                 status = "rejected"
                 reject_reason = "missing_price"
                 filled_amount = 0
-            elif limit_state in {"up", "down"} or one_word_limit:
+            elif one_word_limit:
+                status = "rejected"
+                reject_reason = "one_word_limit_blocked"
+                filled_amount = 0
+            elif limit_state in {"up", "down"}:
                 status = "rejected"
                 reject_reason = "simple_limit_state_blocked"
                 filled_amount = 0
@@ -122,7 +126,7 @@ class ShadowSimulator:
                 filled_amount = min(filled_amount, int(volume * float(volume_participation_cap)))
                 if filled_amount <= 0:
                     status = "rejected"
-                    reject_reason = "volume_participation_cap"
+                    reject_reason = "volume_cap_blocked"
             
             if status == "filled" and self.slippage:
                 if side == "buy":
