@@ -18,6 +18,7 @@ Key args:
 - --no_report: skip JSON run report
 """
 
+import os
 import sys
 import time
 from pathlib import Path
@@ -47,8 +48,9 @@ from qsys.utils.logger import log
 @click.option('--feature_set', type=click.Choice(['alpha158', 'extended', 'margin_extended', 'phase1', 'phase12', 'phase123', 'semantic_all_features'], case_sensitive=False), default='extended', show_default=True, help='Feature set: alpha158 | extended | margin_extended | phase1 | phase12 | phase123 | semantic_all_features')
 @click.option('--infer_date', default=None, help='Inference/signal date used for label maturity checks; defaults to --end')
 @click.option('--label_horizon', default=5, type=int, show_default=True, help='Trading-day horizon used by label maturity cutoff')
+@click.option('--mlflow_root', default=None, help='Optional MLflow tracking root for this training run; defaults to the project root behavior')
 @click.option('--no_report', is_flag=True, help='Skip generating the structured report')
-def main(model, universe, start, end, run_backtest, backtest_start, backtest_end, feature_set, infer_date, label_horizon, no_report):
+def main(model, universe, start, end, run_backtest, backtest_start, backtest_end, feature_set, infer_date, label_horizon, mlflow_root, no_report):
     start_time = time.time()
     blockers = []
     notes = []
@@ -142,7 +144,15 @@ def main(model, universe, start, end, run_backtest, backtest_start, backtest_end
     }
 
     try:
-        (project_root / "mlruns").mkdir(parents=True, exist_ok=True)
+        if mlflow_root:
+            mlflow_root_path = Path(mlflow_root).expanduser()
+            if not mlflow_root_path.is_absolute():
+                mlflow_root_path = (project_root / mlflow_root_path).resolve()
+            mlflow_root_path.mkdir(parents=True, exist_ok=True)
+            os.environ["MLFLOW_TRACKING_URI"] = mlflow_root_path.as_uri()
+            notes.append(f"MLflow root: {mlflow_root_path}")
+        else:
+            (project_root / "mlruns").mkdir(parents=True, exist_ok=True)
         model_instance.fit(codes, start, end, infer_date=infer_date or end, label_horizon=label_horizon)
 
         root_path = cfg.get_path("root")
