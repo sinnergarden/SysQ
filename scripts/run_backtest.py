@@ -28,6 +28,7 @@ import click
 from qsys.backtest import BacktestEngine
 from qsys.config import cfg
 from qsys.research import ExperimentSpec
+from qsys.research.spec import SUPPORTED_MODEL_TYPES, V1_IMPL1_FIXED_LABEL_HORIZON
 from qsys.reports.backtest import BacktestReport
 from qsys.reports.unified_schema import unified_run_artifacts, write_csv, write_json
 from qsys.strategy.engine import DEFAULT_TOP_K
@@ -41,7 +42,7 @@ from qsys.utils.logger import log
 @click.option("--end", type=str, default="2022-03-01", help="Backtest end date")
 @click.option("--top_k", type=int, default=DEFAULT_TOP_K, help="Top K positions")
 @click.option("--strategy_type", type=str, default="rank_topk", help="Research strategy type for v1 impl1")
-@click.option("--label_horizon", type=str, default="1d_fixed_in_v1_impl1", help="Label horizon used by current signal metrics evaluator")
+@click.option("--label_horizon", type=str, default=V1_IMPL1_FIXED_LABEL_HORIZON, help="Label horizon used by current signal metrics evaluator")
 def main(model_path, universe, start, end, top_k, strategy_type, label_horizon):
     start_time = time.time()
     root_path = cfg.get_path("root")
@@ -49,10 +50,11 @@ def main(model_path, universe, start, end, top_k, strategy_type, label_horizon):
         raise ValueError("Root path not configured")
 
     model_dir = Path(model_path) if model_path else root_path / "models" / "qlib_lgbm"
+    model_type = next((candidate for candidate in sorted(SUPPORTED_MODEL_TYPES, key=len, reverse=True) if model_dir.name.startswith(candidate)), "qlib_lgbm")
     experiment_spec = ExperimentSpec(
         run_name=f"backtest_{model_dir.name}_{start}_{end}",
         feature_set="baseline",
-        model_type=model_dir.name.split("_")[0] if "_" in model_dir.name else "qlib_lgbm",
+        model_type=model_type,
         label_type="forward_return",
         strategy_type=strategy_type,
         universe=universe,

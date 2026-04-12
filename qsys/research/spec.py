@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+V1_IMPL1_FIXED_LABEL_HORIZON = "1d_fixed_in_v1_impl1"
+
 SUPPORTED_FEATURE_SETS = {"baseline", "extended", "phase123"}
 SUPPORTED_MODEL_TYPES = {"qlib_lgbm", "qlib_xgb", "qlib_tabular_nn"}
 SUPPORTED_LABEL_TYPES = {"forward_return", "relative_return", "binary_event"}
@@ -33,7 +35,7 @@ class ExperimentSpec:
     universe: str
     output_dir: str
     top_k: int = 5
-    label_horizon: str = "5d"
+    label_horizon: str = V1_IMPL1_FIXED_LABEL_HORIZON
     label_benchmark: str = "none"
     label_threshold: float | str = "not_applicable"
     rebalance_mode: str = "full_rebalance"
@@ -60,6 +62,10 @@ class ExperimentSpec:
                 raise ValueError(f"Unsupported {field_name}: {getattr(self, field_name)}")
         if self.top_k <= 0:
             raise ValueError("top_k must be positive")
+        if self.label_horizon != V1_IMPL1_FIXED_LABEL_HORIZON:
+            raise ValueError(
+                f"label_horizon={self.label_horizon} is not supported in v1 impl1; use {V1_IMPL1_FIXED_LABEL_HORIZON}"
+            )
 
     def to_dict(self) -> dict:
         payload = asdict(self)

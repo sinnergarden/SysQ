@@ -16,6 +16,8 @@ def _safe_corr(a: pd.Series, b: pd.Series, method: str = "pearson") -> float | N
 
 
 def compute_signal_metrics(signal_panel: pd.DataFrame, label_horizon: str = "1d_fixed_in_v1_impl1") -> dict[str, Any]:
+    if label_horizon != "1d_fixed_in_v1_impl1":
+        raise ValueError("signal metrics currently support only label_horizon=1d_fixed_in_v1_impl1")
     if signal_panel.empty:
         return {"status": "not_available_in_flow", "label_horizon": label_horizon}
     work = signal_panel.dropna(subset=["signal_value", "forward_return"]).copy()
@@ -63,6 +65,8 @@ def _compute_long_short(group: pd.DataFrame) -> float | None:
 
 
 def compute_group_returns(signal_panel: pd.DataFrame, label_horizon: str = "1d_fixed_in_v1_impl1") -> pd.DataFrame:
+    if label_horizon != "1d_fixed_in_v1_impl1":
+        raise ValueError("group returns currently support only label_horizon=1d_fixed_in_v1_impl1")
     if signal_panel.empty:
         return pd.DataFrame(columns=["date", "group", "mean_return", "nav", "label_horizon"])
     work = signal_panel.dropna(subset=["signal_value", "forward_return"]).copy()

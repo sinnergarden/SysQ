@@ -92,7 +92,7 @@ class StrategyEngine:
         if self.strategy_type == "rank_topk_with_cash_gate":
             return scores[scores > 0]
         if self.strategy_type == "rank_plus_binary_gate":
-            return scores[scores > 0]
+            raise NotImplementedError("rank_plus_binary_gate is not_supported_in_v1_impl1 without explicit binary signal input")
         raise ValueError(f"Unknown strategy_type: {self.strategy_type}")
 
     def _calculate_weights(self, top_scores):
