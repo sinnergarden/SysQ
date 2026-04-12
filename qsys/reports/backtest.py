@@ -23,6 +23,7 @@ class BacktestReport:
         duration_seconds: float = None,
         blockers: list = None,
         notes: list = None,
+        experiment_spec: dict | None = None,
     ) -> RunReport:
         """Generate a backtest report"""
         status = ReportStatus.SUCCESS
@@ -43,6 +44,16 @@ class BacktestReport:
             report.model_info["top_k"] = top_k
         if universe:
             report.model_info["universe"] = universe
+        if experiment_spec:
+            report.model_info.update({
+                "feature_set": experiment_spec.get("feature_set"),
+                "label_type": experiment_spec.get("label_type"),
+                "strategy_type": experiment_spec.get("strategy_type"),
+                "retrain_freq": experiment_spec.get("retrain_freq"),
+                "rebalance_mode": experiment_spec.get("rebalance_mode"),
+                "rebalance_freq": experiment_spec.get("rebalance_freq"),
+                "inference_freq": experiment_spec.get("inference_freq"),
+            })
         
         # Add metrics section
         report.add_section(
@@ -73,6 +84,7 @@ class BacktestReport:
         end_date: str,
         top_k: int = None,
         universe: str = "csi300",
+        experiment_spec: dict | None = None,
         **kwargs
     ) -> RunReport:
         """Generate report from backtest result DataFrame"""
@@ -124,6 +136,7 @@ class BacktestReport:
             metrics=metrics,
             top_k=top_k,
             universe=universe,
+            experiment_spec=experiment_spec,
             **kwargs
         )
     

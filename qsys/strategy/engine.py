@@ -1,18 +1,20 @@
 import pandas as pd
 import numpy as np
+from qsys.research.signal import to_signal_frame
 from qsys.utils.logger import log
 
 DEFAULT_TOP_K = 5
 
 
 class StrategyEngine:
-    def __init__(self, top_k=DEFAULT_TOP_K, method="equal_weight", risk_max_position=0.3):
+    def __init__(self, top_k=DEFAULT_TOP_K, method="equal_weight", risk_max_position=0.3, strategy_type="rank_topk"):
         """
         Strategy Engine: Decides target positions based on scores and rules.
         """
         self.top_k = top_k
         self.method = method # equal_weight, score_weighted
         self.risk_max_position = risk_max_position
+        self.strategy_type = strategy_type
 
     def generate_target_weights(self, scores, market_status=None):
         """
@@ -22,22 +24,17 @@ class StrategyEngine:
         Output:
             target_weights: dict {code: weight}
         """
-        # Ensure scores is Series
-        if isinstance(scores, pd.DataFrame):
-            # If multi-column, assume first column is score
-            # Or if it has 'score' column
-            if 'score' in scores.columns:
-                scores = scores['score']
-            else:
-                scores = scores.iloc[:, 0]
+        signal_frame = to_signal_frame(scores)
+        scores = signal_frame['signal_value']
                 
         # 1. Soft Filter
         valid_scores = self._apply_soft_filters(scores, market_status)
-        
-        # 2. Top K
+
+        # 2. Strategy rule
+        valid_scores = self._apply_strategy_rule(valid_scores)
         if valid_scores.empty:
             return {}
-            
+
         # Sort descending
         top_scores = valid_scores.sort_values(ascending=False).head(self.top_k)
         
@@ -88,6 +85,15 @@ class StrategyEngine:
         filtered_scores = filtered_scores[is_buyable]
         
         return filtered_scores
+
+    def _apply_strategy_rule(self, scores: pd.Series) -> pd.Series:
+        if self.strategy_type == "rank_topk":
+            return scores
+        if self.strategy_type == "rank_topk_with_cash_gate":
+            return scores[scores > 0]
+        if self.strategy_type == "rank_plus_binary_gate":
+            raise NotImplementedError("rank_plus_binary_gate is not_supported_in_v1_impl1 without explicit binary signal input")
+        raise ValueError(f"Unknown strategy_type: {self.strategy_type}")
 
     def _calculate_weights(self, top_scores):
         if self.method == "equal_weight":
