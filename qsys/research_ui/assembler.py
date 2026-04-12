@@ -1143,10 +1143,13 @@ class ResearchCockpitRepository:
         feature_loaders = {
             "feature_set:alpha158": FeatureLibrary.get_alpha158_config,
             "feature_set:alpha158_extended": FeatureLibrary.get_alpha158_extended_config,
+            "feature_set:alpha158_extended_absnorm": FeatureLibrary.get_alpha158_extended_absnorm_config,
             "feature_set:margin_extended": FeatureLibrary.get_alpha158_margin_extended_config,
+            "feature_set:margin_extended_absnorm": FeatureLibrary.get_alpha158_margin_extended_absnorm_config,
             "feature_set:research_phase1": FeatureLibrary.get_research_phase1_config,
             "feature_set:research_phase12": FeatureLibrary.get_research_phase12_config,
             "feature_set:research_phase123": FeatureLibrary.get_research_phase123_config,
+            "feature_set:research_phase123_absnorm": FeatureLibrary.get_research_phase123_absnorm_config,
             "feature_set:semantic_all_features": FeatureLibrary.get_semantic_all_features_config,
         }
         for source_name, loader in feature_loaders.items():
