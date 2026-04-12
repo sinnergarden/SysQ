@@ -178,6 +178,7 @@ class QlibNativeModel(IModel):
             "rank_ic": rank_ic,
             "score_mean": float(aligned["score"].mean()) if not aligned.empty else float("nan"),
             "label_mean": float(aligned["label"].mean()) if not aligned.empty else float("nan"),
+            "training_mode": "qlib_native",
             **maturity_metrics,
         }
         log.info(
@@ -269,7 +270,7 @@ class QlibNativeModel(IModel):
         self.training_summary = {
             "train_start": start_date,
             "train_end": end_date,
-            "train_end_requested": infer_date,
+            "train_end_requested": end_date,
             "sample_count": int(len(aligned)),
             "feature_count": int(len(self.feature_config)),
             "label_name": self.label_config[0] if self.label_config else None,
