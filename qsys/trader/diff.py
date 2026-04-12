@@ -5,8 +5,9 @@ from qsys.utils.logger import log
 class OrderGenerator:
     def __init__(self, min_trade_buffer_ratio: float = 0.0):
         self.min_trade_buffer_ratio = max(float(min_trade_buffer_ratio), 0.0)
+        self.last_buffer_audit = []
 
-    def generate_orders(self, target_weights: dict, account, current_prices: dict):
+    def generate_orders(self, target_weights: dict, account, current_prices: dict, *, trade_date: str | None = None):
         """
         Generate orders to move from current portfolio to target weights.
         
@@ -20,6 +21,7 @@ class OrderGenerator:
         """
         total_equity = account.get_total_equity(current_prices)
         orders = [] # List of dict: {'symbol', 'amount', 'side', 'price'}
+        self.last_buffer_audit = []
         
         # 1. Identify all involved symbols (Current holdings + Target)
         all_symbols = set(account.positions.keys()) | set(target_weights.keys())
@@ -42,6 +44,16 @@ class OrderGenerator:
             # Diff
             diff_value = t_value - c_value
             if total_equity > 0 and abs(diff_value) / total_equity < self.min_trade_buffer_ratio:
+                self.last_buffer_audit.append({
+                    'date': trade_date,
+                    'instrument': sym,
+                    'current_value': float(c_value),
+                    'target_value': float(t_value),
+                    'diff_value': float(diff_value),
+                    'diff_ratio': float(abs(diff_value) / total_equity),
+                    'threshold_ratio': float(self.min_trade_buffer_ratio),
+                    'skip_reason': 'skipped_due_to_turnover_buffer',
+                })
                 continue
             diff_amount_raw = diff_value / price
             

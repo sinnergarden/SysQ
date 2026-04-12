@@ -184,6 +184,7 @@ def main(model_path, universe, start, end, top_k, feature_set, model_type, label
     report.artifacts["execution_audit"] = write_csv(unified_paths["execution_audit"], [])
     report.artifacts["suspicious_trades"] = write_csv(unified_paths["suspicious_trades"], [])
     report.artifacts["metrics"] = write_json(unified_paths["metrics"], metrics_payload)
+    report.artifacts["execution_summary"] = write_json(unified_paths["execution_summary"], engine.last_execution_summary or {"status": "not_available"})
     report.artifacts["exposure_summary"] = write_json(unified_paths["exposure_summary"], engine.last_exposure_summary or {"status": "not_available"})
     report.artifacts["exposure_timeseries"] = write_csv(
         unified_paths["exposure_timeseries"],
@@ -194,6 +195,11 @@ def main(model_path, universe, start, end, top_k, feature_set, model_type, label
         unified_paths["selection_daily"],
         engine.last_selection_daily.to_dict(orient="records") if not engine.last_selection_daily.empty else [],
         columns=["date", "instrument", "signal_value", "target_weight", "selected_rank"],
+    )
+    report.artifacts["turnover_buffer_audit"] = write_csv(
+        unified_paths["turnover_buffer_audit"],
+        engine.last_turnover_buffer_audit.to_dict(orient="records") if not engine.last_turnover_buffer_audit.empty else [],
+        columns=["date", "instrument", "current_value", "target_value", "diff_value", "diff_ratio", "threshold_ratio", "skip_reason"],
     )
 
     report_path = BacktestReport.save(report)

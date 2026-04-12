@@ -82,13 +82,51 @@ def compute_portfolio_exposure_diagnostics(
     if not artifacts.empty:
         artifacts = artifacts.sort_values(["date", "metric"]).reset_index(drop=True)
 
+    stable_summary = summarize_exposure_timeseries(artifacts)
     summary = {
         "status": "available",
         "top_k": int(top_k),
         "availability": _availability_payload(merged),
         "metrics": metrics,
+        "stable_summary": stable_summary,
     }
     return summary, artifacts
+
+
+def summarize_exposure_timeseries(artifacts: pd.DataFrame) -> dict[str, Any]:
+    if artifacts is None or artifacts.empty:
+        return {
+            "status": "not_available",
+            "size_tilt_vs_universe_mean": "missing_input",
+            "size_tilt_vs_universe_abs_mean": "missing_input",
+            "industry_drift_l1_mean": "missing_input",
+            "industry_weight_hhi_mean": "missing_input",
+            "beta_weighted_mean_mean": "missing_input",
+            "top1_weight_mean": "missing_input",
+            "topk_weight_hhi_mean": "missing_input",
+            "avg_holding_count": "missing_input",
+        }
+
+    def metric_mean(metric: str, *, abs_value: bool = False) -> float | str:
+        subset = artifacts.loc[artifacts["metric"] == metric, "value"]
+        subset = pd.to_numeric(subset, errors="coerce").dropna()
+        if subset.empty:
+            return "missing_input"
+        if abs_value:
+            subset = subset.abs()
+        return round(float(subset.mean()), 8)
+
+    return {
+        "status": "available",
+        "size_tilt_vs_universe_mean": metric_mean("size_tilt_vs_universe"),
+        "size_tilt_vs_universe_abs_mean": metric_mean("size_tilt_vs_universe", abs_value=True),
+        "industry_drift_l1_mean": metric_mean("industry_drift_l1"),
+        "industry_weight_hhi_mean": metric_mean("industry_weight_hhi"),
+        "beta_weighted_mean_mean": metric_mean("beta_weighted_mean"),
+        "top1_weight_mean": metric_mean("top1_weight"),
+        "topk_weight_hhi_mean": metric_mean("topk_weight_hhi"),
+        "avg_holding_count": metric_mean("holding_count"),
+    }
 
 
 

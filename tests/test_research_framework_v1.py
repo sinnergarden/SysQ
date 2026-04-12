@@ -2,15 +2,18 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+import json
 
 import pandas as pd
 from click.testing import CliRunner
 
 from qsys.evaluation.signal_metrics import compute_group_returns, compute_signal_metrics
+from qsys.evaluation.exposure import summarize_exposure_timeseries
 from qsys.research.spec import ExperimentSpec, V1_IMPL1_FIXED_LABEL_HORIZON
 from qsys.research.signal import to_signal_frame
 from qsys.reports.unified_schema import unified_run_artifacts
 from qsys.strategy.engine import StrategyEngine
+from qsys.trader.diff import OrderGenerator
 from scripts.run_backtest import main as run_backtest_main
 
 
@@ -108,6 +111,8 @@ class TestResearchFrameworkV1(unittest.TestCase):
         self.assertIn("group_returns", paths)
         self.assertIn("exposure_summary", paths)
         self.assertIn("selection_daily", paths)
+        self.assertIn("execution_summary", paths)
+        self.assertIn("turnover_buffer_audit", paths)
         self.assertEqual(metrics["status"], "available")
         self.assertIn("IC", metrics)
         self.assertEqual(metrics["label_horizon"], V1_IMPL1_FIXED_LABEL_HORIZON)
@@ -154,6 +159,10 @@ class TestResearchFrameworkV1(unittest.TestCase):
                 ])
                 self.last_selection_daily = pd.DataFrame([
                     {"date": "2025-01-02", "instrument": "A", "signal_value": 0.9, "target_weight": 0.5, "selected_rank": 1},
+                ])
+                self.last_execution_summary = {"status": "available", "empty_portfolio_ratio": 0.0, "avg_holding_count": 1.0, "avg_turnover_ratio": 0.1}
+                self.last_turnover_buffer_audit = pd.DataFrame([
+                    {"date": "2025-01-02", "instrument": "A", "current_value": 0.0, "target_value": 100.0, "diff_value": 100.0, "diff_ratio": 0.001, "threshold_ratio": 0.01, "skip_reason": "skipped_due_to_turnover_buffer"},
                 ])
 
             def run(self):
@@ -210,6 +219,43 @@ class TestResearchFrameworkV1(unittest.TestCase):
             self.assertEqual(payload["strategy_params"]["min_trade_buffer_ratio"], 0.0)
             self.assertTrue((experiments_dir / "exposure_summary.json").exists())
             self.assertTrue((experiments_dir / "selection_daily.csv").exists())
+            self.assertTrue((experiments_dir / "execution_summary.json").exists())
+            self.assertTrue((experiments_dir / "turnover_buffer_audit.csv").exists())
+
+    def test_turnover_buffer_audit_records_skips(self):
+        class Position:
+            def __init__(self, total_amount):
+                self.total_amount = total_amount
+
+        class Account:
+            def __init__(self):
+                self.positions = {"A": Position(100)}
+
+            def get_total_equity(self, prices):
+                return 100000.0
+
+        generator = OrderGenerator(min_trade_buffer_ratio=0.01)
+        orders = generator.generate_orders({"A": 0.0011}, Account(), {"A": 10.0}, trade_date="2025-01-02")
+        self.assertEqual(orders, [])
+        self.assertEqual(len(generator.last_buffer_audit), 1)
+        self.assertEqual(generator.last_buffer_audit[0]["skip_reason"], "skipped_due_to_turnover_buffer")
+
+    def test_exposure_summary_stable_fields(self):
+        artifacts = pd.DataFrame([
+            {"date": "2025-01-02", "metric": "size_tilt_vs_universe", "value": 0.2},
+            {"date": "2025-01-03", "metric": "size_tilt_vs_universe", "value": -0.1},
+            {"date": "2025-01-02", "metric": "industry_drift_l1", "value": 0.3},
+            {"date": "2025-01-02", "metric": "industry_weight_hhi", "value": 0.4},
+            {"date": "2025-01-02", "metric": "beta_weighted_mean", "value": 1.1},
+            {"date": "2025-01-02", "metric": "top1_weight", "value": 0.25},
+            {"date": "2025-01-02", "metric": "topk_weight_hhi", "value": 0.22},
+            {"date": "2025-01-02", "metric": "holding_count", "value": 5},
+        ])
+        summary = summarize_exposure_timeseries(artifacts)
+        self.assertEqual(summary["status"], "available")
+        self.assertAlmostEqual(summary["size_tilt_vs_universe_mean"], 0.05)
+        self.assertAlmostEqual(summary["size_tilt_vs_universe_abs_mean"], 0.15)
+        self.assertAlmostEqual(summary["avg_holding_count"], 5.0)
 
 
 if __name__ == "__main__":

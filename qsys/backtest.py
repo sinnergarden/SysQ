@@ -55,6 +55,8 @@ class BacktestEngine:
         self.last_exposure_summary = {}
         self.last_exposure_timeseries = pd.DataFrame()
         self.last_selection_daily = pd.DataFrame()
+        self.last_turnover_buffer_audit = pd.DataFrame()
+        self.last_execution_summary = {}
 
     def prepare(self):
         log.info("Preparing Backtest...")
@@ -172,7 +174,12 @@ class BacktestEngine:
                         })
                     if selection_rows:
                         self.last_selection_daily = pd.concat([self.last_selection_daily, pd.DataFrame(selection_rows)], ignore_index=True)
-                orders = self.order_gen.generate_orders(target_weights, self.account, current_prices)
+                orders = self.order_gen.generate_orders(target_weights, self.account, current_prices, trade_date=date)
+                if self.order_gen.last_buffer_audit:
+                    self.last_turnover_buffer_audit = pd.concat(
+                        [self.last_turnover_buffer_audit, pd.DataFrame(self.order_gen.last_buffer_audit)],
+                        ignore_index=True,
+                    )
                 trades = self.matcher.match(orders, self.account, market_data, current_prices)
 
                 for t in trades:
@@ -228,6 +235,7 @@ class BacktestEngine:
             exposure_panel,
             top_k=self.strategy.top_k,
         )
+        self.last_execution_summary = self._build_execution_summary(df_result)
 
         if not df_result.empty:
             log.info(f"Backtest finished. Final Assets: {df_result.iloc[-1]['total_assets']:.2f}")
@@ -319,6 +327,11 @@ class BacktestEngine:
             exposure_summary_path.write_text(json.dumps(self.last_exposure_summary, ensure_ascii=False, indent=2), encoding="utf-8")
             written["exposure_summary"] = str(exposure_summary_path)
 
+        if self.last_execution_summary:
+            execution_summary_path = output_dir / f"{prefix}_execution_summary.json"
+            execution_summary_path.write_text(json.dumps(self.last_execution_summary, ensure_ascii=False, indent=2), encoding="utf-8")
+            written["execution_summary"] = str(execution_summary_path)
+
         if isinstance(self.last_exposure_timeseries, pd.DataFrame) and not self.last_exposure_timeseries.empty:
             exposure_timeseries_path = output_dir / f"{prefix}_exposure_timeseries.csv"
             self.last_exposure_timeseries.to_csv(exposure_timeseries_path, index=False)
@@ -329,4 +342,38 @@ class BacktestEngine:
             self.last_selection_daily.to_csv(selection_daily_path, index=False)
             written["selection_daily"] = str(selection_daily_path)
 
+        if isinstance(self.last_turnover_buffer_audit, pd.DataFrame) and not self.last_turnover_buffer_audit.empty:
+            turnover_buffer_audit_path = output_dir / f"{prefix}_turnover_buffer_audit.csv"
+            self.last_turnover_buffer_audit.to_csv(turnover_buffer_audit_path, index=False)
+            written["turnover_buffer_audit"] = str(turnover_buffer_audit_path)
+
         return written
+
+    def _build_execution_summary(self, result_df: pd.DataFrame) -> dict[str, object]:
+        audit = self.last_turnover_buffer_audit.copy() if isinstance(self.last_turnover_buffer_audit, pd.DataFrame) else pd.DataFrame()
+        skipped_count = int(audit.shape[0]) if not audit.empty else 0
+        skipped_diff_value_sum = float(pd.to_numeric(audit.get("diff_value"), errors="coerce").abs().sum()) if not audit.empty else 0.0
+        skipped_diff_value_ratio_mean = float(pd.to_numeric(audit.get("diff_ratio"), errors="coerce").mean()) if not audit.empty else 0.0
+        empty_portfolio_ratio = 0.0
+        avg_holding_count = 0.0
+        avg_turnover_ratio = 0.0
+        if result_df is not None and not result_df.empty:
+            if "position_count" in result_df.columns:
+                position_count = pd.to_numeric(result_df["position_count"], errors="coerce").fillna(0)
+                empty_portfolio_ratio = float((position_count <= 0).mean())
+                avg_holding_count = float(position_count.mean())
+            if {"daily_turnover", "total_assets"}.issubset(result_df.columns):
+                denom = pd.to_numeric(result_df["total_assets"], errors="coerce").replace(0, pd.NA)
+                numer = pd.to_numeric(result_df["daily_turnover"], errors="coerce")
+                ratio = (numer / denom).dropna()
+                if not ratio.empty:
+                    avg_turnover_ratio = float(ratio.mean())
+        return {
+            "status": "available",
+            "skipped_order_count": skipped_count,
+            "skipped_diff_value_sum": round(skipped_diff_value_sum, 8),
+            "skipped_diff_value_ratio_mean": round(skipped_diff_value_ratio_mean, 8),
+            "empty_portfolio_ratio": round(empty_portfolio_ratio, 8),
+            "avg_holding_count": round(avg_holding_count, 8),
+            "avg_turnover_ratio": round(avg_turnover_ratio, 8),
+        }
