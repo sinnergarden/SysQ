@@ -68,4 +68,7 @@ def unified_run_artifacts(report_dir: str | Path) -> dict[str, Path]:
         "execution_audit": root / "execution_audit.csv",
         "suspicious_trades": root / "suspicious_trades.csv",
         "metrics": root / "metrics.json",
+        "exposure_summary": root / "exposure_summary.json",
+        "exposure_timeseries": root / "exposure_timeseries.csv",
+        "selection_daily": root / "selection_daily.csv",
     }

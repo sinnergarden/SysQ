@@ -25,6 +25,24 @@ class TestExtendedFeatureConfig(unittest.TestCase):
         self.assertIn("ps_ttm", semantic)
         self.assertEqual(len(semantic), len(set(semantic)))
 
+    def test_absnorm_feature_sets_add_variants_without_dropping_baseline(self):
+        extended = FeatureLibrary.get_alpha158_extended_config()
+        extended_absnorm = FeatureLibrary.get_alpha158_extended_absnorm_config()
+        phase123 = FeatureLibrary.get_research_phase123_config()
+        phase123_absnorm = FeatureLibrary.get_research_phase123_absnorm_config()
+
+        self.assertGreater(len(extended_absnorm), len(extended))
+        self.assertGreater(len(phase123_absnorm), len(phase123))
+        for field in extended:
+            self.assertIn(field, extended_absnorm)
+        for field in phase123:
+            self.assertIn(field, phase123_absnorm)
+        self.assertIn("$net_inflow/($circ_mv+1e-12)", extended_absnorm)
+        self.assertIn("($net_inflow/(Abs($net_inflow)+1e-12))*Log(Abs($net_inflow)+1)", extended_absnorm)
+        self.assertIn("Rank($net_inflow/($circ_mv+1e-12))", extended_absnorm)
+        self.assertEqual(len(extended_absnorm), len(set(extended_absnorm)))
+        self.assertEqual(len(phase123_absnorm), len(set(phase123_absnorm)))
+
 
 if __name__ == '__main__':
     unittest.main()

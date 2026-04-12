@@ -1,11 +1,14 @@
 from qlib.data.dataset import DatasetH
 from qlib.data.dataset.handler import DataHandlerLP
 from qlib.data.dataset.loader import QlibDataLoader
-from qlib.contrib.data.handler import phase123DL
 from qlib.contrib.eva.alpha import calc_ic
 from pathlib import Path
 from typing import Any, cast
 
+try:
+    from qlib.contrib.data.handler import Alpha158DL as _Alpha158Handler
+except ImportError:  # pragma: no cover - legacy qlib fallback
+    from qlib.contrib.data.handler import phase123DL as _Alpha158Handler
 import numpy as np
 import pandas as pd
 import yaml
@@ -19,6 +22,59 @@ class FeatureLibrary:
     Predefined feature sets.
     Research-only feature sets should not implicitly change production manifest behavior.
     """
+
+    ABSOLUTE_VALUE_AUDIT_FIELDS = {
+        "market_value": ["$total_mv", "$circ_mv"],
+        "flow": ["$net_inflow", "$big_inflow"],
+        "fundamental_scale": ["$revenue", "$net_income", "$op_cashflow", "$total_assets", "$equity"],
+    }
+
+    ABSOLUTE_VALUE_NORMALIZATION_VARIANTS = {
+        "$total_mv": [
+            "$total_mv",
+            "Log($total_mv+1)",
+            "Rank($total_mv)",
+            "$circ_mv/($total_mv+1e-12)",
+        ],
+        "$circ_mv": [
+            "$circ_mv",
+            "Log($circ_mv+1)",
+            "Rank($circ_mv)",
+            "$circ_mv/($total_mv+1e-12)",
+        ],
+        "$net_inflow": [
+            "$net_inflow",
+            "$net_inflow/($circ_mv+1e-12)",
+            "($net_inflow/(Abs($net_inflow)+1e-12))*Log(Abs($net_inflow)+1)",
+            "Rank($net_inflow/($circ_mv+1e-12))",
+        ],
+        "$big_inflow": [
+            "$big_inflow",
+            "$big_inflow/($circ_mv+1e-12)",
+            "($big_inflow/(Abs($big_inflow)+1e-12))*Log(Abs($big_inflow)+1)",
+            "Rank($big_inflow/($circ_mv+1e-12))",
+        ],
+        "$revenue": [
+            "$revenue",
+            "$revenue/($total_mv+1e-12)",
+            "$revenue/($total_assets+1e-12)",
+            "Rank($revenue/($total_mv+1e-12))",
+        ],
+        "$net_income": [
+            "$net_income",
+            "$net_income/($total_mv+1e-12)",
+            "$net_income/($equity+1e-12)",
+            "($net_income/(Abs($net_income)+1e-12))*Log(Abs($net_income)+1)",
+            "Rank($net_income/($equity+1e-12))",
+        ],
+        "$op_cashflow": [
+            "$op_cashflow",
+            "$op_cashflow/($total_mv+1e-12)",
+            "$op_cashflow/($revenue+1e-12)",
+            "($op_cashflow/(Abs($op_cashflow)+1e-12))*Log(Abs($op_cashflow)+1)",
+            "Rank($op_cashflow/($revenue+1e-12))",
+        ],
+    }
 
     # Extended raw fields - A-share fundamentals and margin financing
     EXTENDED_RAW_FIELDS = [
@@ -53,7 +109,7 @@ class FeatureLibrary:
     
     @staticmethod
     def get_alpha158_config():
-        config = phase123DL.get_feature_config()
+        config = _Alpha158Handler.get_feature_config()
         if isinstance(config, tuple) and len(config) == 2:
             return list(config[0])
         if isinstance(config, dict):
@@ -103,6 +159,43 @@ class FeatureLibrary:
     def get_research_phase123_config(cls):
         """Research config placeholder: current minimum uses margin_extended raw feature base until custom qlib build is wired."""
         return cls.get_alpha158_margin_extended_config()
+
+    @classmethod
+    def get_absolute_value_audit(cls):
+        return {
+            "high_risk_groups": cls.ABSOLUTE_VALUE_AUDIT_FIELDS,
+            "normalization_variants": cls.ABSOLUTE_VALUE_NORMALIZATION_VARIANTS,
+        }
+
+    @classmethod
+    def _merge_feature_fields(cls, *groups):
+        merged = []
+        for group in groups:
+            for field in group:
+                if field not in merged:
+                    merged.append(field)
+        return merged
+
+    @classmethod
+    def _normalized_feature_fields(cls):
+        merged = []
+        for variants in cls.ABSOLUTE_VALUE_NORMALIZATION_VARIANTS.values():
+            merged = cls._merge_feature_fields(merged, variants)
+        return merged
+
+    @classmethod
+    def get_alpha158_extended_absnorm_config(cls):
+        """Extended research config with additive absolute-value normalization variants."""
+        return cls._merge_feature_fields(cls.get_alpha158_extended_config(), cls._normalized_feature_fields())
+
+    @classmethod
+    def get_alpha158_margin_extended_absnorm_config(cls):
+        """Margin-extended research config with additive absolute-value normalization variants."""
+        return cls._merge_feature_fields(cls.get_alpha158_margin_extended_config(), cls._normalized_feature_fields())
+
+    @classmethod
+    def get_research_phase123_absnorm_config(cls):
+        return cls.get_alpha158_margin_extended_absnorm_config()
 
     @classmethod
     def _load_feature_list_from_model_bundle(cls, bundle_dir: Path):

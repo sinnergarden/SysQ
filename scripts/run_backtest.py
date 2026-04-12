@@ -60,7 +60,11 @@ from qsys.utils.logger import log
 @click.option("--inference_freq", type=str, default="daily", help="Research inference frequency for v1")
 @click.option("--retrain_freq", type=str, default="weekly", help="Research retrain frequency for v1")
 @click.option("--label_horizon", type=str, default=V1_IMPL1_FIXED_LABEL_HORIZON, help="Label horizon used by current signal metrics evaluator")
-def main(model_path, universe, start, end, top_k, feature_set, model_type, label_type, strategy_type, rebalance_mode, rebalance_freq, inference_freq, retrain_freq, label_horizon):
+@click.option("--min_signal_threshold", type=float, default=0.0, help="Minimum signal threshold for cash-gated rank selection")
+@click.option("--min_selected_count", type=int, default=1, help="Minimum eligible names required before deploying capital in cash-gated rank selection")
+@click.option("--allow_empty_portfolio/--no_allow_empty_portfolio", default=True, help="Allow cash-gated strategy to stay empty when threshold gate fails")
+@click.option("--min_trade_buffer_ratio", type=float, default=0.0, help="Skip order staging when target/current weight gap is below this ratio of equity")
+def main(model_path, universe, start, end, top_k, feature_set, model_type, label_type, strategy_type, rebalance_mode, rebalance_freq, inference_freq, retrain_freq, label_horizon, min_signal_threshold, min_selected_count, allow_empty_portfolio, min_trade_buffer_ratio):
     start_time = time.time()
     root_path = cfg.get_path("root")
     if root_path is None:
@@ -76,6 +80,13 @@ def main(model_path, universe, start, end, top_k, feature_set, model_type, label
     resolved_inference_freq = _resolve_supported_value("inference_freq", inference_freq, SUPPORTED_FREQUENCIES)
     resolved_retrain_freq = _resolve_supported_value("retrain_freq", retrain_freq, SUPPORTED_FREQUENCIES)
 
+    strategy_params = {
+        "min_signal_threshold": min_signal_threshold,
+        "min_selected_count": min_selected_count,
+        "allow_empty_portfolio": allow_empty_portfolio,
+        "min_trade_buffer_ratio": min_trade_buffer_ratio,
+    }
+
     experiment_spec = ExperimentSpec(
         run_name=f"backtest_{model_dir.name}_{start}_{end}",
         feature_set=resolved_feature_set,
@@ -90,6 +101,7 @@ def main(model_path, universe, start, end, top_k, feature_set, model_type, label
         rebalance_freq=resolved_rebalance_freq,
         inference_freq=resolved_inference_freq,
         retrain_freq=resolved_retrain_freq,
+        strategy_params=strategy_params,
     )
     engine = BacktestEngine(
         model_dir,
@@ -99,6 +111,7 @@ def main(model_path, universe, start, end, top_k, feature_set, model_type, label
         top_k=top_k,
         strategy_type=resolved_strategy_type,
         label_horizon=label_horizon,
+        strategy_params=strategy_params,
     )
     res = engine.run()
 
@@ -171,6 +184,17 @@ def main(model_path, universe, start, end, top_k, feature_set, model_type, label
     report.artifacts["execution_audit"] = write_csv(unified_paths["execution_audit"], [])
     report.artifacts["suspicious_trades"] = write_csv(unified_paths["suspicious_trades"], [])
     report.artifacts["metrics"] = write_json(unified_paths["metrics"], metrics_payload)
+    report.artifacts["exposure_summary"] = write_json(unified_paths["exposure_summary"], engine.last_exposure_summary or {"status": "not_available"})
+    report.artifacts["exposure_timeseries"] = write_csv(
+        unified_paths["exposure_timeseries"],
+        engine.last_exposure_timeseries.to_dict(orient="records") if not engine.last_exposure_timeseries.empty else [],
+        columns=["date", "metric", "value"],
+    )
+    report.artifacts["selection_daily"] = write_csv(
+        unified_paths["selection_daily"],
+        engine.last_selection_daily.to_dict(orient="records") if not engine.last_selection_daily.empty else [],
+        columns=["date", "instrument", "signal_value", "target_weight", "selected_rank"],
+    )
 
     report_path = BacktestReport.save(report)
     log.info(f"Structured report saved to {report_path}")
@@ -206,6 +230,8 @@ def _infer_feature_set_from_artifact(model_dir: Path) -> str | None:
             continue
         if candidate in model_dir.name:
             return candidate
+    if "margin_extended" in model_dir.name:
+        return "phase123"
     return "baseline"
 
 

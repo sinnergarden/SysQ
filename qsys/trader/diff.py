@@ -3,8 +3,8 @@ import numpy as np
 from qsys.utils.logger import log
 
 class OrderGenerator:
-    def __init__(self):
-        pass
+    def __init__(self, min_trade_buffer_ratio: float = 0.0):
+        self.min_trade_buffer_ratio = max(float(min_trade_buffer_ratio), 0.0)
 
     def generate_orders(self, target_weights: dict, account, current_prices: dict):
         """
@@ -41,6 +41,8 @@ class OrderGenerator:
             
             # Diff
             diff_value = t_value - c_value
+            if total_equity > 0 and abs(diff_value) / total_equity < self.min_trade_buffer_ratio:
+                continue
             diff_amount_raw = diff_value / price
             
             # Round to lot (100)

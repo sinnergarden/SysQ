@@ -7,7 +7,16 @@ DEFAULT_TOP_K = 5
 
 
 class StrategyEngine:
-    def __init__(self, top_k=DEFAULT_TOP_K, method="equal_weight", risk_max_position=0.3, strategy_type="rank_topk"):
+    def __init__(
+        self,
+        top_k=DEFAULT_TOP_K,
+        method="equal_weight",
+        risk_max_position=0.3,
+        strategy_type="rank_topk",
+        min_signal_threshold=0.0,
+        min_selected_count=1,
+        allow_empty_portfolio=True,
+    ):
         """
         Strategy Engine: Decides target positions based on scores and rules.
         """
@@ -15,6 +24,9 @@ class StrategyEngine:
         self.method = method # equal_weight, score_weighted
         self.risk_max_position = risk_max_position
         self.strategy_type = strategy_type
+        self.min_signal_threshold = float(min_signal_threshold)
+        self.min_selected_count = max(int(min_selected_count), 0)
+        self.allow_empty_portfolio = bool(allow_empty_portfolio)
 
     def generate_target_weights(self, scores, market_status=None):
         """
@@ -30,12 +42,10 @@ class StrategyEngine:
         valid_signal_frame = self._apply_soft_filters(signal_frame, market_status)
 
         # 2. Strategy rule
-        valid_scores = self._apply_strategy_rule(valid_signal_frame)
-        if valid_scores.empty:
+        top_scores = self.select_target_scores(valid_signal_frame)
+         
+        if top_scores.empty:
             return {}
-
-        # Sort descending
-        top_scores = valid_scores.sort_values(ascending=False).head(self.top_k)
         
         # 3. Weighting
         weights = self._calculate_weights(top_scores)
@@ -85,12 +95,26 @@ class StrategyEngine:
         
         return filtered_scores
 
+    def select_target_scores(self, signal_frame: pd.DataFrame) -> pd.Series:
+        valid_scores = self._apply_strategy_rule(signal_frame)
+        if valid_scores.empty:
+            return pd.Series(dtype=float)
+        return valid_scores.sort_values(ascending=False).head(self.top_k)
+
     def _apply_strategy_rule(self, signal_frame: pd.DataFrame) -> pd.Series:
-        scores = signal_frame["signal_value"]
+        scores = signal_frame["signal_value"].astype(float)
         if self.strategy_type == "rank_topk":
             return scores
         if self.strategy_type == "rank_topk_with_cash_gate":
-            return scores[scores > 0]
+            eligible = scores[scores > self.min_signal_threshold]
+            if len(eligible) >= max(self.min_selected_count, 1):
+                return eligible
+            if self.allow_empty_portfolio:
+                return pd.Series(dtype=float)
+            fallback_count = min(self.top_k, max(self.min_selected_count, 1), len(scores))
+            if fallback_count <= 0:
+                return pd.Series(dtype=float)
+            return scores.sort_values(ascending=False).head(fallback_count)
         if self.strategy_type == "rank_plus_binary_gate":
             if "binary" not in signal_frame.columns:
                 raise ValueError("rank_plus_binary_gate requires explicit binary field in signal frame")
