@@ -151,6 +151,8 @@ class BacktestRunSummary:
     display_label: str | None = None
     parameter_summary: dict[str, Any] = field(default_factory=dict)
     metrics: dict[str, Any] = field(default_factory=dict)
+    signal_metrics: dict[str, Any] = field(default_factory=dict)
+    group_returns_summary: dict[str, Any] = field(default_factory=dict)
     artifacts: list[RunArtifactRef] = field(default_factory=list)
     manifest_ref: str | None = None
 

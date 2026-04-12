@@ -155,6 +155,27 @@ class TestRunReports(unittest.TestCase):
         self.assertEqual(report.status, ReportStatus.SUCCESS)
         self.assertEqual(len(report.sections), 1)
         self.assertEqual(report.model_info.get("top_k"), 30)
+
+    def test_backtest_report_carries_research_spec_fields(self):
+        report = BacktestReport.generate(
+            start_date="2025-01-01",
+            end_date="2025-12-31",
+            model_info={"model_path": "data/models/qlib_lgbm_phase123"},
+            metrics={"sharpe": 1.5},
+            experiment_spec={
+                "feature_set": "phase123",
+                "model_type": "qlib_lgbm",
+                "label_type": "forward_return",
+                "strategy_type": "rank_plus_binary_gate",
+                "retrain_freq": "weekly",
+                "rebalance_mode": "full_rebalance",
+                "rebalance_freq": "weekly",
+                "inference_freq": "daily",
+            },
+        )
+        self.assertEqual(report.model_info.get("feature_set"), "phase123")
+        self.assertEqual(report.model_info.get("model_type"), "qlib_lgbm")
+        self.assertEqual(report.model_info.get("strategy_type"), "rank_plus_binary_gate")
         
     def test_strict_eval_report_generation(self):
         results = [

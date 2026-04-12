@@ -47,6 +47,7 @@ class BacktestReport:
         if experiment_spec:
             report.model_info.update({
                 "feature_set": experiment_spec.get("feature_set"),
+                "model_type": experiment_spec.get("model_type"),
                 "label_type": experiment_spec.get("label_type"),
                 "strategy_type": experiment_spec.get("strategy_type"),
                 "retrain_freq": experiment_spec.get("retrain_freq"),

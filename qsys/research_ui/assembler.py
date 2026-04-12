@@ -53,6 +53,7 @@ class ResearchCockpitRepository:
         self._backtest_runs_cache: dict[int, list[BacktestRunSummary]] = {}
         self._backtest_summary_cache: dict[str, BacktestRunSummary] = {}
         self._backtest_daily_cache: dict[str, list[BacktestDailyPoint]] = {}
+        self._backtest_group_returns_cache: dict[str, list[dict[str, Any]]] = {}
         self._backtest_report_paths_cache: list[Path] | None = None
         self._backtest_report_index: dict[str, Path] = {}
         self._json_cache: dict[Path, dict[str, Any]] = {}
@@ -453,6 +454,28 @@ class ResearchCockpitRepository:
             )
         self._backtest_daily_cache[run_id] = points
         return points
+
+    def get_backtest_group_returns(self, run_id: str) -> list[dict[str, Any]]:
+        cached = self._backtest_group_returns_cache.get(run_id)
+        if cached is not None:
+            return cached
+        report_path = self._resolve_backtest_report(run_id)
+        payload = self._load_json(report_path)
+        group_path = (payload.get("artifacts") or {}).get("group_returns")
+        if not group_path:
+            self._backtest_group_returns_cache[run_id] = []
+            return []
+        csv_path = self._resolve_project_artifact_path(group_path)
+        if not csv_path.exists():
+            self._backtest_group_returns_cache[run_id] = []
+            return []
+        frame = pd.read_csv(csv_path)
+        if frame.empty:
+            self._backtest_group_returns_cache[run_id] = []
+            return []
+        rows = [{key: self._normalize_scalar(value) for key, value in row.items()} for row in frame.to_dict(orient="records")]
+        self._backtest_group_returns_cache[run_id] = rows
+        return rows
 
     def get_backtest_orders(
         self,
@@ -860,6 +883,8 @@ class ResearchCockpitRepository:
             resolved_metrics = self._resolve_project_artifact_path(metrics_path)
             if resolved_metrics.exists():
                 metrics_payload = self._load_json(resolved_metrics)
+        signal_metrics = self._load_backtest_signal_metrics(payload_artifacts)
+        group_returns_summary = self._load_backtest_group_returns_summary(payload_artifacts)
         artifacts = [
             RunArtifactRef(
                 artifact_id="backtest_report",
@@ -875,6 +900,25 @@ class ResearchCockpitRepository:
                     kind="backtest_daily",
                     logical_path=str(self._logicalize_path(daily_path)),
                     title="daily_result",
+                    media_type="text/csv",
+                )
+            )
+        if payload_artifacts.get("signal_metrics"):
+            artifacts.append(
+                RunArtifactRef(
+                    artifact_id="signal_metrics",
+                    kind="other",
+                    logical_path=str(self._logicalize_path(payload_artifacts["signal_metrics"])),
+                    title="signal_metrics",
+                )
+            )
+        if payload_artifacts.get("group_returns"):
+            artifacts.append(
+                RunArtifactRef(
+                    artifact_id="group_returns",
+                    kind="other",
+                    logical_path=str(self._logicalize_path(payload_artifacts["group_returns"])),
+                    title="group_returns",
                     media_type="text/csv",
                 )
             )
@@ -896,6 +940,14 @@ class ResearchCockpitRepository:
                 "source_label": source_label,
                 "feature_count": feature_count,
                 "model_path": model_info.get("model_path"),
+                "feature_set": model_info.get("feature_set") or version_key,
+                "model_type": model_info.get("model_type"),
+                "label_type": model_info.get("label_type"),
+                "strategy_type": model_info.get("strategy_type"),
+                "rebalance_mode": model_info.get("rebalance_mode"),
+                "rebalance_freq": model_info.get("rebalance_freq"),
+                "inference_freq": model_info.get("inference_freq"),
+                "retrain_freq": model_info.get("retrain_freq"),
                 "top_k": self._to_int(model_info.get("top_k")),
                 "universe": model_info.get("universe") or "csi300",
                 "price_mode": "fq",
@@ -914,6 +966,8 @@ class ResearchCockpitRepository:
                 "suspicious_trade_count": metrics_payload.get("suspicious_trade_count"),
             },
             metrics=metrics,
+            signal_metrics=signal_metrics,
+            group_returns_summary=group_returns_summary,
             artifacts=artifacts,
             manifest_ref=report_logical,
         )
@@ -924,6 +978,45 @@ class ResearchCockpitRepository:
             if section.get("name") == "Performance":
                 return dict(section.get("metrics") or {})
         return {}
+
+    def _load_backtest_signal_metrics(self, artifacts: dict[str, Any]) -> dict[str, Any]:
+        signal_metrics_path = artifacts.get("signal_metrics")
+        if not signal_metrics_path:
+            return {"status": "not_available"}
+        resolved_path = self._resolve_project_artifact_path(signal_metrics_path)
+        if not resolved_path.exists():
+            return {"status": "not_available"}
+        payload = self._load_json(resolved_path)
+        if not payload:
+            return {"status": "not_available"}
+        payload.setdefault("status", "available")
+        return payload
+
+    def _load_backtest_group_returns_summary(self, artifacts: dict[str, Any]) -> dict[str, Any]:
+        group_returns_path = artifacts.get("group_returns")
+        if not group_returns_path:
+            return {"status": "not_available"}
+        resolved_path = self._resolve_project_artifact_path(group_returns_path)
+        if not resolved_path.exists():
+            return {"status": "not_available"}
+        frame = pd.read_csv(resolved_path)
+        if frame.empty:
+            return {"status": "not_available"}
+        group_nav = frame.sort_values(["group", "date"]).groupby("group", observed=False).tail(1)
+        return {
+            "status": "available",
+            "groups": [
+                {
+                    "group": self._to_int(row.get("group")),
+                    "nav": self._to_float(row.get("nav")),
+                    "mean_return": self._to_float(row.get("mean_return")),
+                    "label_horizon": row.get("label_horizon"),
+                }
+                for row in group_nav.to_dict(orient="records")
+            ],
+            "group_count": int(frame["group"].nunique()) if "group" in frame.columns else 0,
+            "days": int(frame["date"].nunique()) if "date" in frame.columns else 0,
+        }
 
     def _artifact_kind(self, name: str) -> str:
         mapping = {
