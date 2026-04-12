@@ -20,6 +20,10 @@ class LabelMaturityError(ValueError):
     pass
 
 
+class InvalidPreprocessContractWarning(UserWarning):
+    pass
+
+
 class QlibNativeModel(IModel):
     def __init__(self, name, model_config, feature_config, label_config=None):
         """
@@ -67,6 +71,10 @@ class QlibNativeModel(IModel):
             else:
                 normalized.append(col)
         return normalized
+
+    def load(self, path):
+        super().load(path)
+        self.preprocess_params = self._sanitize_preprocess_params(self.preprocess_params)
 
     def fit(self, universe, start_date, end_date, *, infer_date=None, label_horizon=5):
         log.info(f"Training Qlib Native Model: {self.name}")
@@ -249,13 +257,15 @@ class QlibNativeModel(IModel):
         aligned = pd.concat([pred, y.rename("label")], axis=1).dropna()
         rank_ic = float(aligned["score"].corr(aligned["label"], method="spearman")) if not aligned.empty else float("nan")
         mse = float(((aligned["score"] - aligned["label"]) ** 2).mean()) if not aligned.empty else float("nan")
-        self.preprocess_params = {
-            "method": "qlib_robust_zscore",
-            "center": {k: float(v) for k, v in center.items()},
-            "scale": {k: float(v) for k, v in scale.items()},
-            "clip_outlier": True,
-            "fillna": 0.0,
-        }
+        self.preprocess_params = self._sanitize_preprocess_params(
+            {
+                "method": "qlib_robust_zscore",
+                "center": {k: float(v) for k, v in center.items()},
+                "scale": {k: float(v) for k, v in scale.items()},
+                "clip_outlier": True,
+                "fillna": 0.0,
+            }
+        )
         self.training_summary = {
             "train_start": start_date,
             "train_end": end_date,
@@ -306,6 +316,27 @@ class QlibNativeModel(IModel):
             "label_horizon": int(label_horizon),
         }
 
+    def _sanitize_preprocess_params(self, params):
+        if not params or params.get("method") != "qlib_robust_zscore":
+            return params
+
+        center = pd.Series(params.get("center", {}), dtype=float)
+        scale = pd.Series(params.get("scale", {}), dtype=float)
+        invalid = sorted(set(center[center.isna()].index) | set(scale[scale.isna()].index) | set(scale[scale == 0].index))
+        if invalid:
+            log.warning(
+                "Preprocess contract has invalid stats for columns %s; defaulting to center=0, scale=1",
+                invalid,
+            )
+            center = center.fillna(0.0)
+            scale = scale.fillna(1.0).replace(0, 1.0)
+        params = dict(params)
+        params["center"] = {k: float(v) for k, v in center.items()}
+        params["scale"] = {k: float(v) for k, v in scale.items()}
+        if invalid:
+            params["invalid_columns"] = invalid
+        return params
+
     def _extract_preprocess_params(self, ds):
         try:
             handler = ds.handler
@@ -349,6 +380,7 @@ class QlibNativeModel(IModel):
                 "fillna": fill_value,
                 "clip_outlier": clip_outlier,
             }
+            params = self._sanitize_preprocess_params(params)
             log.info("Extracted fitted RobustZScoreNorm params from Qlib handler.")
             return params
         except Exception as e:

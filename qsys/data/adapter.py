@@ -845,12 +845,14 @@ class QlibAdapter:
         project_root = cfg.project_root
         
         dirs_to_remove = [
-            project_root / "mlruns",
             project_root / "Users",
             project_root / "notebooks" / "mlruns",
             project_root / "notebooks" / "Users"
         ]
-        
+
+        # Keep the project mlflow root in place; Qlib may create the recorder lazily after init.
+        (project_root / "mlruns").mkdir(parents=True, exist_ok=True)
+
         for d in dirs_to_remove:
             if d.exists() and d.is_dir():
                 try:

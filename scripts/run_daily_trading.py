@@ -283,6 +283,7 @@ def run_preopen_workflow(
     train_model_name: str = "qlib_lgbm",
     train_feature_set: str = "extended",
     label_horizon: int = 5,
+    mlflow_root: str | None = None,
 ):
     start_time = time.time()
     blockers = []
@@ -426,6 +427,8 @@ def run_preopen_workflow(
             "--feature_set",
             train_feature_set,
         ]
+        if mlflow_root:
+            train_cmd.extend(["--mlflow_root", str(mlflow_root)])
         log_stage("model_training", "start", train_start=train_start, train_end=signal_date, infer_date=signal_date)
         subprocess.check_call(train_cmd, cwd=str(project_root))
         log_stage("model_training", "done", train_start=train_start, train_end=signal_date, infer_date=signal_date)
@@ -812,6 +815,7 @@ def main():
     parser.add_argument("--train_model_name", type=str, default="qlib_lgbm", help="Model name used by preopen training")
     parser.add_argument("--train_feature_set", type=str, default="extended", help="Feature set used by preopen training")
     parser.add_argument("--label_horizon", type=int, default=5, help="Label horizon for maturity-safe preopen training")
+    parser.add_argument("--mlflow_root", type=str, help="Optional MLflow tracking root used only for future preopen training runs")
     args = parser.parse_args()
     run_preopen_workflow(**vars(args))
 

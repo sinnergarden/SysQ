@@ -14,6 +14,16 @@ from qsys.feature.groups.fundamental_context import build_fundamental_context_fe
 from qsys.feature.transforms import apply_cross_sectional_standardization
 
 
+def _coerce_first_numeric(frame: pd.DataFrame, column: str) -> pd.Series:
+    value = frame.loc[:, frame.columns == column]
+    if isinstance(value, pd.DataFrame):
+        series = pd.Series(pd.NA, index=frame.index, dtype="object")
+        for idx in range(value.shape[1]):
+            series = series.combine_first(pd.to_numeric(value.iloc[:, idx], errors="coerce"))
+        return pd.to_numeric(series, errors="coerce")
+    return pd.to_numeric(value, errors="coerce")
+
+
 def _repair_research_input_columns(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     coalesce_pairs = {
@@ -25,11 +35,16 @@ def _repair_research_input_columns(df: pd.DataFrame) -> pd.DataFrame:
     for target, sources in coalesce_pairs.items():
         if target not in out.columns:
             out[target] = pd.NA
-        base = pd.to_numeric(out[target], errors='coerce')
+        base = _coerce_first_numeric(out, target)
         for src in sources:
             if src in out.columns:
-                base = base.combine_first(pd.to_numeric(out[src], errors='coerce'))
-        out[target] = base
+                base = base.combine_first(_coerce_first_numeric(out, src))
+        target_positions = [idx for idx, name in enumerate(out.columns) if name == target]
+        insert_at = target_positions[0] if target_positions else len(out.columns)
+        if target_positions:
+            keep_mask = out.columns != target
+            out = out.loc[:, keep_mask].copy()
+        out.insert(insert_at, target, base)
     return out
 
 

@@ -84,6 +84,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--experiments_root", default="experiments", help="Root directory for aggregate backtest artifacts")
     parser.add_argument("--reports_root", default="experiments/reports", help="Directory for structured report outputs")
     parser.add_argument("--logs_root", default="build_logs/formal_rolling", help="Directory for per-run logs and progress")
+    parser.add_argument("--mlflow_root", default=None, help="Optional isolated MLflow tracking root for future training runs in this backfill")
     parser.add_argument("--reset", action="store_true", help="Delete overlapping daily artifacts and account rows before replay")
     parser.add_argument("--skip_signal_quality_gate", action="store_true", help="Bypass pre_open gate during replay")
     parser.add_argument("--max_days", type=int, default=None, help="Optional cap for smoke runs")
@@ -220,6 +221,8 @@ def run_pre_open(args: argparse.Namespace, paths: BackfillPaths, signal_date: st
         "--label_horizon",
         "5",
     ]
+    if args.mlflow_root:
+        cmd.extend(["--mlflow_root", args.mlflow_root])
     if train_in_preopen:
         cmd.append("--train_in_preopen")
     if args.skip_signal_quality_gate:

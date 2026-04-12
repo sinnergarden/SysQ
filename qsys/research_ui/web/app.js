@@ -1177,13 +1177,16 @@ function selectBacktestDate(tradeDate) {
 async function loadBacktest() {
   try {
     updateContext(readContextFromInputs());
+    const runsPayload = await getJson('/api/backtest-runs?limit=50', { useCache: false });
+    state.backtestRuns = unwrapItems(runsPayload);
+    renderBacktestRunOptions(state.backtestRuns);
+    state.latestBacktestRunId = state.backtestRuns[0]?.run_id || '';
+
     let runId = state.context.runId || byId('backtest-run-select').value;
+    if (!state.backtestRuns.some((item) => item.run_id === runId)) {
+      runId = state.latestBacktestRunId || state.backtestRuns[0]?.run_id || '';
+    }
     if (!runId) {
-      if (!state.backtestRuns.length) {
-        const runsPayload = await getJson('/api/backtest-runs?limit=50', { useCache: false });
-        state.backtestRuns = unwrapItems(runsPayload);
-        renderBacktestRunOptions(state.backtestRuns);
-      }
       runId = byId('backtest-run-select').value || state.latestBacktestRunId || state.backtestRuns[0]?.run_id || '';
     }
     if (!runId) throw new Error('No backtest version available');

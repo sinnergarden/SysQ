@@ -79,6 +79,45 @@ class TestPreprocessingConsistency(unittest.TestCase):
             loaded.load(path)
             self.assertEqual(loaded.preprocess_params, model.preprocess_params)
 
+    def test_apply_preprocess_sanitizes_nan_contract_values(self):
+        model = self._make_model()
+        model.preprocess_params = {
+            "method": "qlib_robust_zscore",
+            "center": {"f1": 10.0, "f2": float("nan")},
+            "scale": {"f1": 2.0, "f2": float("nan")},
+            "fillna": 0.0,
+            "clip_outlier": True,
+        }
+        frame = pd.DataFrame({"f1": [12.0], "f2": [5.0]})
+
+        out = model._apply_preprocess(frame)
+
+        expected = pd.DataFrame({"f1": [1.0], "f2": [3.0]})
+        pd.testing.assert_frame_equal(out.reset_index(drop=True), expected)
+
+    def test_load_sanitizes_invalid_saved_contract_values(self):
+        model = self._make_model()
+        model.preprocess_params = {
+            "method": "qlib_robust_zscore",
+            "center": {"f1": 1.0, "f2": float("nan")},
+            "scale": {"f1": 3.0, "f2": 0.0},
+            "fillna": 0.0,
+            "clip_outlier": True,
+        }
+
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "model"
+            model.save(path)
+
+            loaded = self._make_model()
+            loaded.load(path)
+            self.assertEqual(loaded.preprocess_params["center"]["f2"], 0.0)
+            self.assertEqual(loaded.preprocess_params["scale"]["f2"], 1.0)
+            self.assertEqual(loaded.preprocess_params["invalid_columns"], ["f2"])
+
 
 if __name__ == "__main__":
     unittest.main()

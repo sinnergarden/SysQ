@@ -17,9 +17,13 @@ class TestExtendedFeatureConfig(unittest.TestCase):
         phase1 = FeatureLibrary.get_research_phase1_config()
         phase12 = FeatureLibrary.get_research_phase12_config()
         phase123 = FeatureLibrary.get_research_phase123_config()
+        semantic = FeatureLibrary.get_semantic_all_features_config()
         self.assertGreaterEqual(len(phase1), len(FeatureLibrary.get_alpha158_extended_config()))
         self.assertGreaterEqual(len(phase12), len(phase1))
         self.assertGreaterEqual(len(phase123), len(phase12))
+        self.assertGreater(len(semantic), len(phase123))
+        self.assertIn("ps_ttm", semantic)
+        self.assertEqual(len(semantic), len(set(semantic)))
 
 
 if __name__ == '__main__':
