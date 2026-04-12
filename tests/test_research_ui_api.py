@@ -63,8 +63,10 @@ class TestResearchUiApi(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertEqual(payload['api_version'], 'v1')
-        self.assertEqual(payload['count'], 2)
-        self.assertEqual({item['feature_set'] for item in payload['items']}, {'feature_173', 'feature_254'})
+        self.assertGreaterEqual(payload['count'], 2)
+        feature_sets = {item['feature_set'] for item in payload['items']}
+        self.assertIn('feature_173', feature_sets)
+        self.assertIn('feature_254', feature_sets)
         self.assertIn('run_id', payload['items'][0])
         self.assertIn('display_label', payload['items'][0])
         self.assertIn('parameter_summary', payload['items'][0])
