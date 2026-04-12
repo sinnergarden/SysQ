@@ -88,6 +88,7 @@
 职责：
 - 把 signal 变成 target weights / orders
 - 显式表达选股、过滤、持仓、空仓、换仓和调仓频率
+- 明确“空仓 / 部分空仓是合法结果，不是异常”
 
 第一版输入：
 - signal output
@@ -130,7 +131,7 @@
 | `run_name` | Yes | None | free text | 研究 run 的稳定名字 |
 | `feature_set` | Yes | None | `baseline`, `extended`, `phase123`, future named sets | 显式指向特征集合 |
 | `model_type` | Yes | None | `qlib_lgbm`, `qlib_xgb`, `qlib_tabular_nn` | 第一版先列出可扩展枚举，不要求都立即实现 |
-| `label_type` | Yes | None | `forward_1d`, `forward_5d`, `relative_to_benchmark`, `binary_upside` | 必须显式说明训练标签 |
+| `label_type` | Yes | None | `forward_return`, `relative_return`, `binary_event` | 标签语义类型，不隐含 horizon / benchmark / threshold |
 | `strategy_type` | Yes | None | `rank_topk`, `rank_topk_with_cash_gate`, `rank_plus_binary_gate` | signal 和 strategy 显式拆层 |
 | `universe` | Yes | None | `csi300`, `all_a`, future named universes | 第一版优先支持 `csi300` |
 | `output_dir` | Yes | None | path | 研究产物输出目录 |
@@ -140,7 +141,11 @@
 | Field | Required | Default | V1 Supported Values | Notes |
 |---|---|---:|---|---|
 | `top_k` | No | `5` | positive int | 仅对需要 top-k 的 strategy 生效 |
-| `rebalance_mode` | No | `weekly` | `daily`, `weekly` | 表示组合调仓频率 |
+| `label_horizon` | No | `5d` | `1d`, `5d`, future horizons | 显式定义标签预测窗口，不再隐藏在 `label_type` 里 |
+| `label_benchmark` | No | `none` | `none`, `csi300`, future named benchmarks | 仅对相对收益类标签生效 |
+| `label_threshold` | No | `not_applicable` | float or `not_applicable` | 仅对二分类/事件类标签生效 |
+| `rebalance_mode` | No | `full_rebalance` | `full_rebalance`, `hold_if_no_trigger` | 表示调仓语义 |
+| `rebalance_freq` | No | `weekly` | `daily`, `weekly` | 表示组合调仓频率 |
 | `retrain_freq` | No | `weekly` | `daily`, `weekly` | 表示模型重训频率 |
 | `inference_freq` | No | `daily` | `daily`, `weekly` | 表示信号推理频率 |
 | `transaction_cost_assumptions.fee_rate` | No | strategy default | float | 显式写入 config snapshot |
@@ -151,6 +156,8 @@
 ### Notes
 
 - `ExperimentSpec` 第一版只要求把字段写清楚，不要求一次支持所有组合。
+- `rebalance_mode` 与 `rebalance_freq` 语义必须分开：前者表示“怎么调仓”，后者表示“多久调一次仓”；实现时不要混用成一个字段。
+- `label_type` 只表达标签语义类型，不再隐含 horizon / benchmark / threshold；这些条件应通过显式字段补足。
 - 不支持的字段值应在实现中显式报 `not_supported_in_v1`，不要偷偷 fallback。
 - `transaction_cost assumptions` 必须进入 `config_snapshot.json`，后续比较 run 时不能靠聊天还原。
 
@@ -221,6 +228,7 @@ Strategy 层输出：
 
 适用：
 - 研究“模型整体信号不足时是否应留现金”
+- 该策略允许部分空仓或全空仓；空仓在第一版属于合法策略结果，而不是错误态
 
 ### 3. `rank_plus_binary_gate`
 
@@ -307,6 +315,7 @@ Strategy 层输出：
 - `top_k`
 - `retrain_freq`
 - `rebalance_mode`
+- `rebalance_freq`
 - `inference_freq`
 - `universe`
 - transaction cost assumptions
