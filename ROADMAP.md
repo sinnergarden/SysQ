@@ -163,6 +163,31 @@
 - [ ] 输出分窗口收益、回撤、换手、胜率、风格漂移摘要
 - [ ] 支持和 strict eval / production 模型做横向比较
 
+### research framework v1
+
+为什么现在做：
+- 当前研究仍偏单脚本 / 单策略 / 单次 debug 驱动，研究维度难以自由组合，导致 feature、model、label、strategy、调仓频率、交易成本假设经常混在具体脚本里。
+- 当前结果解释仍偏一次性：很多 run 能看 PnL，但很难公平比较 signal quality、组合构造差异和执行假设差异，也不够直接对接 UI。
+- 如果继续围绕单次训练 / 单次回测 / 单次修 bug 推进，后续研究会越来越依赖临时脚本和口头解释，难以复用。
+
+这一版目标：
+- 定义第一版研究框架骨架，让研究时可通过显式 spec 组合 `feature_set / model_type / label_type / strategy_type / top_k / rebalance_mode / retrain_freq / inference_freq / universe / transaction_cost assumptions`。
+- 明确拆分 `SignalEngine` 与 `StrategyEngine`：前者只负责 signal 输出，后者只负责组合构造与订单/权重生成。
+- 明确第一版 `Evaluator` 指标面和统一 artifact contract，让研究结果可以被公平比较，并直接对接 report UI。
+- 保持与现有 `run_train / run_backtest / run_strict_eval / daily ops / unified schema` 的衔接，不先推翻旧入口。
+
+完成判定：
+- repo 内有一份可直接指导开发的 `research framework v1` 文档，明确核心抽象、字段、枚举值、产物协议与 UI 对接要求。
+- 文档能支持后续最小实现 PR，不再需要先靠聊天重新解释“研究框架第一版”到底做什么。
+- 开发边界清晰：研究框架第一版只收口骨架、配置与产物契约，不混入大规模架构重写或复杂交易细则。
+
+这一版不做：
+- 不继续围绕单个策略做深度 debug。
+- 不新增大量临时 audit script。
+- 不做大规模架构重写。
+- 不先碰复杂交易所微观规则。
+- 不打乱 daily ops 主链路。
+
 ### C. 运行可观测性完善
 
 - [ ] 将 feature coverage / readiness / graceful degradation 汇总到统一 run report
