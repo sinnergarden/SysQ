@@ -137,13 +137,11 @@ def main(model, universe, start, end, run_backtest, backtest_start, backtest_end
         log.warning(f"Could not get data status: {e}")
         data_status = {"health_ok": False}
 
-    training_mode = "qlib_native"
     model_info = {
         "model_name": model_name,
         "feature_set": feature_set,
         "train_window": f"{start} to {end}",
         "universe": universe,
-        "training_mode": training_mode,
     }
 
     try:
@@ -163,18 +161,18 @@ def main(model, universe, start, end, run_backtest, backtest_start, backtest_end
             raise ValueError("Root path not configured")
         save_path = root_path / "models" / model_name
 
-        training_summary = model_instance.training_summary or {}
+        training_summary = dict(model_instance.training_summary or {})
         training_contract = training_contract_payload(
-            training_mode=training_mode,
-            train_end_requested=end,
-            train_end_effective=end,
-            infer_date=infer_date or end,
-            last_train_sample_date=end,
-            max_label_date_used=end,
-            is_label_mature_at_infer_time=True,
+            training_mode=training_summary.get("training_mode"),
+            train_end_requested=training_summary.get("train_end_requested"),
+            train_end_effective=training_summary.get("train_end_effective"),
+            infer_date=training_summary.get("infer_date"),
+            last_train_sample_date=training_summary.get("last_train_sample_date"),
+            max_label_date_used=training_summary.get("max_label_date_used"),
+            is_label_mature_at_infer_time=training_summary.get("is_label_mature_at_infer_time"),
             mlflow_root=str(mlflow_root_path) if mlflow_root else None,
         )
-        training_summary.update(training_contract)
+        training_summary.update({k: v for k, v in training_contract.items() if v is not None})
         model_instance.training_summary = training_summary
         model_instance.save(save_path)
         if training_summary:
@@ -261,7 +259,7 @@ def main(model, universe, start, end, run_backtest, backtest_start, backtest_end
             "end": end,
             "infer_date": infer_date or end,
             "label_horizon": label_horizon,
-            "training_mode": training_mode,
+            "training_mode": training_summary.get("training_mode"),
             "mlflow_root": str(mlflow_root_path) if mlflow_root else None,
         })
         report.artifacts["model_path"] = str(save_path)

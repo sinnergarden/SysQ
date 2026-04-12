@@ -20,6 +20,7 @@ Key args:
 """
 
 import argparse
+import json
 import subprocess
 import sys
 import time
@@ -51,9 +52,47 @@ from qsys.live.signal_monitoring import (
 from qsys.live.scheduler import ModelScheduler
 from qsys.live.simulation import ShadowSimulator
 from qsys.reports.daily import DailyOpsReport
-from qsys.reports.unified_schema import training_contract_payload, unified_run_artifacts, write_csv, write_json
+from qsys.reports.unified_schema import unified_run_artifacts, write_csv, write_json
 from qsys.trader.order_intents import build_order_intents, save_order_intents
 from qsys.utils.logger import log, log_event, log_stage
+
+
+TRAINING_FIELDS = [
+    "training_mode",
+    "train_end_requested",
+    "train_end_effective",
+    "infer_date",
+    "last_train_sample_date",
+    "max_label_date_used",
+    "is_label_mature_at_infer_time",
+]
+
+
+def load_training_summary_payload(model_path: str | None, mlflow_root: str | None = None) -> dict:
+    payload = {field: None for field in TRAINING_FIELDS}
+    payload["mlflow_root"] = mlflow_root
+    if not model_path:
+        return payload
+    model_dir = Path(model_path)
+    json_path = model_dir / "training_summary.json"
+    if json_path.exists():
+        try:
+            data = json.loads(json_path.read_text(encoding="utf-8"))
+            payload.update({field: data.get(field) for field in TRAINING_FIELDS})
+            payload["mlflow_root"] = data.get("mlflow_root", mlflow_root)
+            return payload
+        except Exception:
+            return payload
+    meta_path = model_dir / "meta.yaml"
+    if meta_path.exists():
+        try:
+            data = yaml.safe_load(meta_path.read_text(encoding="utf-8")) or {}
+            summary = data.get("training_summary") or {}
+            payload.update({field: summary.get(field) for field in TRAINING_FIELDS})
+            return payload
+        except Exception:
+            return payload
+    return payload
 
 
 def update_data(force=True):
@@ -717,16 +756,7 @@ def run_preopen_workflow(
     }
 
     duration = time.time() - start_time
-    training_summary_payload = training_contract_payload(
-        training_mode=str(model_info.get("training_mode") or "qlib_native"),
-        train_end_requested=signal_date if train_in_preopen else None,
-        train_end_effective=signal_date if train_in_preopen else None,
-        infer_date=signal_date,
-        last_train_sample_date=signal_date if train_in_preopen else None,
-        max_label_date_used=signal_date if train_in_preopen else None,
-        is_label_mature_at_infer_time=True if train_in_preopen else None,
-        mlflow_root=mlflow_root,
-    )
+    training_summary_payload = load_training_summary_payload(model_path=model_path, mlflow_root=mlflow_root)
     unified_paths = unified_run_artifacts(report_dir)
     suspicious_rows = [
         row for row in execution_audit_rows
@@ -738,7 +768,7 @@ def run_preopen_workflow(
         "top_k": top_k,
         "min_trade": min_trade,
         "model_path": model_path,
-        "training_mode": training_summary_payload["training_mode"],
+        "training_mode": training_summary_payload.get("training_mode"),
         "volume_participation_cap": 0.1,
         "fill_price_rule": "plan_price_plus_slippage",
     })

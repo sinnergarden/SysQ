@@ -116,7 +116,7 @@ class ShadowSimulator:
                 filled_amount = 0
             elif limit_state in {"up", "down"} or one_word_limit:
                 status = "rejected"
-                reject_reason = "limit_state_blocked"
+                reject_reason = "simple_limit_state_blocked"
                 filled_amount = 0
             elif volume_participation_cap and volume > 0:
                 filled_amount = min(filled_amount, int(volume * float(volume_participation_cap)))
