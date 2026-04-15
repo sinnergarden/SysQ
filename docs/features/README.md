@@ -19,6 +19,7 @@
 ## 当前文件
 
 - `feature_system.md`：Qsys 特征系统长期说明，定义 raw / feature engineering / bin / model 的工程边界与推进方式
+- `factor_governance_and_research_migration.md`：因子对象、variant lineage、bundle、experiment 与工程化迁移的大需求文档
 - [new_feature.md](file:///Users/liuming/Documents/trae_projects/SysQ/docs/features/new_feature.md)
 - `daily_signal_monitoring.md`：daily ops 推荐篮子质量监控需求，覆盖 1d/2d/3d vintage 跟踪与盘后信号质量摘要。
 - `qsys_workflow_layer.md`：workflow / plugin 抽象层的首版设计与文档映射。
@@ -29,3 +30,4 @@
 
 - daily ops 已补充 `signal basket`、`signal quality` 和 `daily ops manifest` 三类结构化产物，后续 MiniQMT 接入应继续复用这套输出骨架。
 - workflow layer 已完成文档与 skeleton 起草，后续应沿 `preopen-plan` adapter -> `order_intents` -> `miniqmt broker adapter` 主线推进。
+- 因子治理主线已新增 `factor_governance_and_research_migration.md`，后续涉及 factor / variant / bundle / experiment 的长期改造，默认先以该文档为需求基线。
