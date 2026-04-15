@@ -13,6 +13,7 @@
 1. [001-separate-signal-and-strategy.md](file:///Users/liuming/Documents/trae_projects/SysQ/docs/adr/001-separate-signal-and-strategy.md)
 2. [002-use-tushare-free-first.md](file:///Users/liuming/Documents/trae_projects/SysQ/docs/adr/002-use-tushare-free-first.md)
 3. [003-modular-monolith.md](file:///Users/liuming/Documents/trae_projects/SysQ/docs/adr/003-modular-monolith.md)
+4. [004-factor-objects-over-feature-sets.md](file:///Users/liuming/Documents/trae_projects/SysQ/docs/adr/004-factor-objects-over-feature-sets.md)
 
 ## 什么时候新增 ADR
 
