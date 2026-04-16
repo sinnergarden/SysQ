@@ -1,5 +1,7 @@
 # FEATURE: research_framework_v1
 
+> Update note: 本文档定义了 signal / strategy / evaluator / artifact 的第一版研究骨架；factor / variant / bundle / experiment object 的后续迁移，见 `docs/features/factor_governance_and_research_migration.md` 与 `docs/features/factor_governance_pr_plan.md`。
+
 ## Goal
 
 - 把 Qsys 从“单次训练 / 单次回测 / 单次修 bug”的系统，推进成一个可自由研究、可公平比较、可直接对接 UI 的研究框架。
@@ -129,7 +131,7 @@
 | Field | Required | Default | V1 Supported Values | Notes |
 |---|---|---:|---|---|
 | `run_name` | Yes | None | free text | 研究 run 的稳定名字 |
-| `feature_set` | Yes | None | `baseline`, `extended`, `phase123`, future named sets | 显式指向特征集合 |
+| `feature_set` | Yes | None | `baseline`, `extended`, `phase123`, future named sets | V1 仍使用该字段；后续应逐步迁移到 `bundle_id` |
 | `model_type` | Yes | None | `qlib_lgbm`, `qlib_xgb`, `qlib_tabular_nn` | 第一版先列出可扩展枚举，不要求都立即实现 |
 | `label_type` | Yes | None | `forward_return`, `relative_return`, `binary_event` | 标签语义类型，不隐含 horizon / benchmark / threshold |
 | `strategy_type` | Yes | None | `rank_topk`, `rank_topk_with_cash_gate`, `rank_plus_binary_gate` | signal 和 strategy 显式拆层 |
