@@ -691,6 +691,13 @@ research/
 - 本次为文档型需求，无运行时回滚动作
 - 若后续实现中发现对象层设计过重，可回退到“bundle + experiment snapshot 优先、definition/variant 后补”的轻量落地路径
 
+## Related Docs
+
+- `docs/features/factor_governance_pr_plan.md`：把本需求拆成可执行 phase 和后续 PR 提单边界
+- `docs/adr/004-factor-objects-over-feature-sets.md`：记录长期决策基线
+- `docs/features/research_framework_v1.md`：现有研究框架文档，后续需补对象层设计
+- `docs/features/feature_system.md`：现有 feature 系统长期说明，后续需补 factor/variant/bundle 规则
+
 ## Notes
 
 - 本需求本质上不是“再加几组特征”，而是把 Qsys 从字段驱动研究系统推进到因子对象驱动研究系统。
