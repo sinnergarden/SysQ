@@ -46,7 +46,7 @@ from qsys.utils.logger import log
 @click.option('--run_backtest', is_flag=True, help='Run minimal backtest after training')
 @click.option('--backtest_start', default=None, help='Backtest start date; defaults to last 40 trading days window start')
 @click.option('--backtest_end', default=None, help='Backtest end date; defaults to training end date')
-@click.option('--feature_set', type=click.Choice(['alpha158', 'extended', 'extended_absnorm', 'margin_extended', 'phase1', 'phase12', 'phase123', 'phase123_absnorm', 'semantic_all_features'], case_sensitive=False), default='extended', show_default=True, help='Feature set: alpha158 | extended | extended_absnorm | margin_extended | phase1 | phase12 | phase123 | phase123_absnorm | semantic_all_features')
+@click.option('--feature_set', type=click.Choice(['alpha158', 'extended', 'extended_absnorm', 'margin_extended', 'phase1', 'phase12', 'phase123', 'phase123_absnorm', 'semantic_all_features', 'semantic_all_features_absnorm'], case_sensitive=False), default='extended', show_default=True, help='Feature set: alpha158 | extended | extended_absnorm | margin_extended | phase1 | phase12 | phase123 | phase123_absnorm | semantic_all_features | semantic_all_features_absnorm')
 @click.option('--infer_date', default=None, help='Inference/signal date used for label maturity checks; defaults to --end')
 @click.option('--label_horizon', default=5, type=int, show_default=True, help='Trading-day horizon used by label maturity cutoff')
 @click.option('--mlflow_root', default=None, help='Optional MLflow tracking root for this training run; defaults to the project root behavior')
@@ -102,6 +102,8 @@ def main(model, universe, start, end, run_backtest, backtest_start, backtest_end
         feature_config = FeatureLibrary.get_research_phase123_absnorm_config()
     elif feature_set == 'semantic_all_features':
         feature_config = FeatureLibrary.get_semantic_all_features_config()
+    elif feature_set == 'semantic_all_features_absnorm':
+        feature_config = FeatureLibrary.get_semantic_all_features_absnorm_config()
     else:
         feature_config = FeatureLibrary.get_alpha158_config()
 
@@ -113,6 +115,8 @@ def main(model, universe, start, end, run_backtest, backtest_start, backtest_end
         model_name = f"{model}_{feature_set}"
     elif feature_set == 'semantic_all_features':
         model_name = f"{model}_semantic_all_features"
+    elif feature_set == 'semantic_all_features_absnorm':
+        model_name = f"{model}_semantic_all_features_absnorm"
     else:
         model_name = f"{model}_extended"
     log.info(f"Using feature_set={feature_set} with {len(feature_config)} features")
