@@ -32,7 +32,7 @@ from qsys.backtest import BacktestEngine
 from qsys.config import cfg
 from qsys.reports.backtest import BacktestReport
 from qsys.reports.unified_schema import unified_run_artifacts, write_csv, write_json
-from qsys.research import ExperimentSpec, resolve_mainline_object_name
+from qsys.research import ExperimentSpec, decision_payload, resolve_mainline_object_name, resolve_subject_decision
 from qsys.research.spec import (
     SUPPORTED_FEATURE_SETS,
     SUPPORTED_FREQUENCIES,
@@ -165,12 +165,22 @@ def main(ctx, model_path, universe, start, end, top_k, feature_set, model_type, 
     )
     if not hasattr(report, "model_info") or report.model_info is None:
         report.model_info = {}
+    mainline_decision = resolve_subject_decision(
+        subject_type="mainline_object",
+        subject_ids=[lineage.get("mainline_object_name")],
+    )
+    run_decision = resolve_subject_decision(
+        subject_type="experiment_run",
+        subject_ids=[model_dir.name, str(model_dir)],
+    )
     report.model_info.update({
         "input_mode": lineage["input_mode"],
         "bundle_id": lineage["bundle_id"],
         "factor_variants": lineage["factor_variants"],
         "lineage_status": lineage["lineage_status"],
         "strategy_type": strategy_spec.get("strategy_type"),
+        "mainline_decision_status": decision_payload(mainline_decision).get("status"),
+        "run_decision_status": decision_payload(run_decision).get("status"),
     })
 
     unified_paths = unified_run_artifacts(save_dir)
@@ -247,6 +257,14 @@ def main(ctx, model_path, universe, start, end, top_k, feature_set, model_type, 
         unified_paths["selection_daily"],
         engine.last_selection_daily.to_dict(orient="records") if not engine.last_selection_daily.empty else [],
         columns=["date", "instrument", "signal_value", "target_weight", "selected_rank"],
+    )
+    report.artifacts["decisions"] = write_json(
+        unified_paths["decisions"],
+        {
+            "mainline_object": decision_payload(mainline_decision),
+            "experiment_run": decision_payload(run_decision),
+            "lineage": lineage,
+        },
     )
 
     report_path = BacktestReport.save(report)

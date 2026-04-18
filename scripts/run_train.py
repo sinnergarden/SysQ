@@ -40,11 +40,13 @@ from qsys.reports.train import TrainingReport
 from qsys.reports.unified_schema import training_contract_payload, write_json
 from qsys.research import (
     ManifestValidationError,
+    decision_payload,
     get_mainline_spec_by_bundle_id,
     get_mainline_spec_by_feature_set,
     load_factor_registry,
     resolve_mainline_feature_config,
     resolve_mainline_object_name,
+    resolve_subject_decision,
 )
 from qsys.utils.logger import log
 
@@ -321,6 +323,14 @@ def main(ctx, model, universe, start, end, run_backtest, backtest_start, backtes
         log.warning(f"Could not get data status: {e}")
         data_status = {'health_ok': False}
 
+    mainline_decision = resolve_subject_decision(
+        subject_type='mainline_object',
+        subject_ids=[input_payload.get('mainline_object_name')],
+    )
+    run_decision = resolve_subject_decision(
+        subject_type='experiment_run',
+        subject_ids=[model_name],
+    )
     model_info = {
         'model_name': model_name,
         'feature_set': resolved_feature_set,
@@ -330,6 +340,8 @@ def main(ctx, model, universe, start, end, run_backtest, backtest_start, backtes
         'input_mode': input_payload['input_mode'],
         'train_window': f"{start} to {end}",
         'universe': universe,
+        'mainline_decision_status': decision_payload(mainline_decision).get('status'),
+        'run_decision_status': decision_payload(run_decision).get('status'),
     }
 
     try:
@@ -453,6 +465,10 @@ def main(ctx, model, universe, start, end, run_backtest, backtest_start, backtes
         )
         report.artifacts['config_snapshot'] = write_json(save_path / 'config_snapshot.json', snapshot_payload)
         report.artifacts['model_path'] = str(save_path)
+        report.artifacts['decisions'] = write_json(save_path / 'decisions.json', {
+            'mainline_object': decision_payload(mainline_decision),
+            'experiment_run': decision_payload(run_decision),
+        })
 
         report_path = TrainingReport.save(report)
         log.info(f"Training report saved to: {report_path}")

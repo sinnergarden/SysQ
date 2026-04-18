@@ -1,0 +1,21 @@
+decision_id: run.qlib_lgbm_semantic_all_features_absnorm.shadow_ready.v1
+subject_type: experiment_run
+subject_id: qlib_lgbm_semantic_all_features_absnorm
+status: shadow_ready
+reason: Current run-level baseline is acceptable for shadow observation after comparison review.
+evidence:
+  total_return: 0.0
+  RankIC: 0.0
+  max_drawdown: 0.0
+  turnover: 0.0
+  empty_portfolio_ratio: 0.0
+  comparison_source: absnorm_comparison_reference
+  lineage:
+    model_name: qlib_lgbm_semantic_all_features_absnorm
+    mainline_object_name: feature_254_absnorm
+    bundle_id: bundle_feature_254_absnorm
+created_at: "2026-04-18T18:10:00+08:00"
+updated_at: "2026-04-18T18:10:00+08:00"
+author: qsys_phase_f
+notes:
+  - Minimal run-level decision fixture for Phase F decision-awareness tests.
