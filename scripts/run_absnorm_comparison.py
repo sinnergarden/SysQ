@@ -13,7 +13,7 @@ project_root = Path(__file__).resolve().parent.parent
 sys.path.append(str(project_root))
 
 from qsys.feature.library import FeatureLibrary
-from qsys.research import MAINLINE_OBJECTS
+from qsys.research import MAINLINE_OBJECTS, decision_payload, resolve_subject_decision
 
 DEFAULT_VARIANTS = [
     (
@@ -48,6 +48,14 @@ def main(start: str, end: str, universe: str, top_k: int, output_dir: str):
         model_path = project_root / "data" / "models" / model_name
         variant_dir = out_dir / variant
         variant_dir.mkdir(parents=True, exist_ok=True)
+        mainline_decision = resolve_subject_decision(
+            subject_type="mainline_object",
+            subject_ids=[variant],
+        )
+        run_decision = resolve_subject_decision(
+            subject_type="experiment_run",
+            subject_ids=[model_name, str(model_path)],
+        )
         row = {
             "variant": variant,
             "mainline_object_name": variant,
@@ -55,6 +63,10 @@ def main(start: str, end: str, universe: str, top_k: int, output_dir: str):
             "bundle_id": bundle_id,
             "feature_set": feature_set,
             "model_path": str(model_path),
+            "decision_status": decision_payload(mainline_decision).get("status"),
+            "decision_reason": decision_payload(mainline_decision).get("reason"),
+            "run_decision_status": decision_payload(run_decision).get("status"),
+            "run_decision_reason": decision_payload(run_decision).get("reason"),
         }
         if not model_path.exists():
             row.update(_missing_row("missing_model"))
@@ -166,7 +178,7 @@ def _build_markdown(summary: pd.DataFrame, *, start: str, end: str, universe: st
         "",
     ]
     compact = summary[[
-        "variant", "mainline_object_name", "bundle_id", "legacy_feature_set_alias", "feature_set", "total_return", "sharpe", "max_drawdown", "turnover", "RankIC",
+        "variant", "mainline_object_name", "bundle_id", "legacy_feature_set_alias", "feature_set", "decision_status", "decision_reason", "run_decision_status", "run_decision_reason", "total_return", "sharpe", "max_drawdown", "turnover", "RankIC",
         "long_short_spread", "group_monotonicity_proxy", "empty_portfolio_ratio", "avg_holding_count",
         "size_tilt_vs_universe_mean", "industry_drift_l1_mean", "top1_weight_mean", "topk_weight_hhi_mean", "status",
     ]].copy()
@@ -202,7 +214,7 @@ def _frame_to_markdown(frame: pd.DataFrame) -> str:
 
 def _ordered_summary(summary: pd.DataFrame) -> pd.DataFrame:
     columns = [
-        "variant", "mainline_object_name", "bundle_id", "legacy_feature_set_alias", "feature_set", "status", "returncode", "total_return", "sharpe", "max_drawdown", "turnover",
+        "variant", "mainline_object_name", "bundle_id", "legacy_feature_set_alias", "feature_set", "decision_status", "decision_reason", "run_decision_status", "run_decision_reason", "status", "returncode", "total_return", "sharpe", "max_drawdown", "turnover",
         "IC", "RankIC", "long_short_spread", "group_monotonicity_proxy", "empty_portfolio_ratio", "avg_holding_count",
         "size_tilt_vs_universe_mean", "industry_drift_l1_mean", "top1_weight_mean", "topk_weight_hhi_mean",
         "model_path", "stdout_tail", "stderr_tail",

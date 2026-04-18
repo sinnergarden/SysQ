@@ -30,7 +30,7 @@ sys.path.append(str(project_root))
 from qsys.evaluation import StrictEvaluator
 from qsys.config import cfg
 from qsys.reports.strict_eval import StrictEvalReport
-from qsys.research import resolve_mainline_object_name
+from qsys.research import decision_payload, resolve_mainline_object_name, resolve_subject_decision
 from qsys.reports.unified_schema import unified_run_artifacts, write_csv, write_json
 from qsys.utils.logger import log
 
@@ -213,9 +213,29 @@ def main():
                 f"Extended lineage: {extended_lineage.get('lineage_status')}",
             ],
         )
+        baseline_mainline_decision = resolve_subject_decision(
+            subject_type="mainline_object",
+            subject_ids=[baseline_lineage.get("mainline_object_name")],
+        )
+        extended_mainline_decision = resolve_subject_decision(
+            subject_type="mainline_object",
+            subject_ids=[extended_lineage.get("mainline_object_name")],
+        )
+        baseline_run_decision = resolve_subject_decision(
+            subject_type="experiment_run",
+            subject_ids=[Path(args.baseline).name, args.baseline],
+        )
+        extended_run_decision = resolve_subject_decision(
+            subject_type="experiment_run",
+            subject_ids=[Path(args.extended).name, args.extended],
+        )
         json_report.model_info.update({
             "baseline_lineage": _lineage_summary(baseline_lineage),
             "extended_lineage": _lineage_summary(extended_lineage),
+            "baseline_decision_status": decision_payload(baseline_mainline_decision).get("status"),
+            "extended_decision_status": decision_payload(extended_mainline_decision).get("status"),
+            "baseline_run_decision_status": decision_payload(baseline_run_decision).get("status"),
+            "extended_run_decision_status": decision_payload(extended_run_decision).get("status"),
         })
 
         unified_paths = unified_run_artifacts(Path(args.output).resolve().parent)
@@ -255,6 +275,15 @@ def main():
                 "baseline_lineage": baseline_lineage,
                 "extended_lineage": extended_lineage,
                 "top_k": args.top_k,
+            },
+        )
+        json_report.artifacts["decisions"] = write_json(
+            unified_paths["decisions"],
+            {
+                "baseline_mainline_object": decision_payload(baseline_mainline_decision),
+                "extended_mainline_object": decision_payload(extended_mainline_decision),
+                "baseline_experiment_run": decision_payload(baseline_run_decision),
+                "extended_experiment_run": decision_payload(extended_run_decision),
             },
         )
         report_path = StrictEvalReport.save(json_report)

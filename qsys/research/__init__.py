@@ -1,3 +1,15 @@
+from qsys.research.decision import (
+    DEFAULT_DECISIONS_DIR,
+    SUPPORTED_SUBJECT_TYPES,
+    DecisionRecord,
+    PromotionStatus,
+    decision_payload,
+    find_latest_decision,
+    load_decision_record,
+    load_decision_records,
+    parse_decision_record,
+    resolve_subject_decision,
+)
 from qsys.research.mainline import (
     BUNDLE_ID_TO_MAINLINE_OBJECT,
     LEGACY_FEATURE_SET_ALIAS_TO_MAINLINE_OBJECT,
@@ -34,7 +46,11 @@ __all__ = [
     "FactorVariant",
     "FactorManifestRegistry",
     "MainlineObjectSpec",
+    "DecisionRecord",
+    "PromotionStatus",
     "ManifestValidationError",
+    "DEFAULT_DECISIONS_DIR",
+    "SUPPORTED_SUBJECT_TYPES",
     "MAINLINE_OBJECTS",
     "BUNDLE_ID_TO_MAINLINE_OBJECT",
     "LEGACY_FEATURE_SET_ALIAS_TO_MAINLINE_OBJECT",
@@ -53,4 +69,10 @@ __all__ = [
     "resolve_mainline_compat_feature_set",
     "resolve_mainline_feature_config",
     "resolve_mainline_object_name",
+    "decision_payload",
+    "find_latest_decision",
+    "load_decision_record",
+    "load_decision_records",
+    "parse_decision_record",
+    "resolve_subject_decision",
 ]

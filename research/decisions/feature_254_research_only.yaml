@@ -1,0 +1,21 @@
+decision_id: mainline.feature_254.research_only.v1
+subject_type: mainline_object
+subject_id: feature_254
+status: research_only
+reason: Expanded mainline object remains under research until evaluation and promotion evidence is more settled.
+evidence:
+  total_return: null
+  RankIC: null
+  max_drawdown: null
+  turnover: null
+  empty_portfolio_ratio: null
+  comparison_source: mainline_research_tracking
+  lineage:
+    mainline_object_name: feature_254
+    bundle_id: bundle_feature_254
+    legacy_feature_set_alias: semantic_all_features
+created_at: "2026-04-18T17:30:00+08:00"
+updated_at: "2026-04-18T17:30:00+08:00"
+author: qsys_phase_f
+notes:
+  - Keep object visible in governance but do not imply readiness.
