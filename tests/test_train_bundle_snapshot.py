@@ -148,7 +148,32 @@ class TestTrainBundleSnapshot(unittest.TestCase):
             ],
         )
         self.assertNotEqual(result.exit_code, 0)
-        self.assertIn("Provide exactly one of feature_set or bundle_id", result.output)
+        self.assertIn("Provide only one of explicit feature_set or bundle_id", result.output)
+
+    def test_run_train_without_explicit_inputs_defaults_to_legacy_extended(self):
+        runner = CliRunner()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            fake_report = _FakeReport()
+            with patch("scripts.run_train.assert_qlib_data_ready", return_value=_FakeHealth()), \
+                 patch("scripts.run_train.QlibAdapter", _FakeAdapter), \
+                 patch("scripts.run_train.cfg.get_path", return_value=root), \
+                 patch("scripts.run_train.TrainingReport.generate", return_value=fake_report), \
+                 patch("scripts.run_train.TrainingReport.save", return_value=str(root / "report.json")), \
+                 patch("qsys.model.zoo.qlib_native.QlibNativeModel", _FakeModel):
+                result = runner.invoke(
+                    run_train_main,
+                    [
+                        "--model", "qlib_lgbm",
+                        "--start", "2025-01-01",
+                        "--end", "2025-01-31",
+                    ],
+                )
+            self.assertEqual(result.exit_code, 0, msg=result.output)
+            snapshot = json.loads((root / "models" / "qlib_lgbm_extended" / "config_snapshot.json").read_text(encoding="utf-8"))
+            self.assertEqual(snapshot["input_mode"], "feature_set")
+            self.assertEqual(snapshot["feature_set"], "extended")
+            self.assertIsNone(snapshot["bundle_id"])
 
     def test_run_train_legacy_feature_set_still_writes_legacy_snapshot(self):
         runner = CliRunner()

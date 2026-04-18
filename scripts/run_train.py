@@ -110,49 +110,55 @@ def _resolve_variant_to_feature_fields(base_factor_id: str, transform_chain: lis
     )
 
 
-def resolve_training_input(feature_set: str | None, bundle_id: str | None) -> dict[str, Any]:
-    if bool(feature_set) == bool(bundle_id):
-        raise ValueError('Provide exactly one of feature_set or bundle_id')
+def resolve_training_input(
+    feature_set: str | None,
+    bundle_id: str | None,
+    *,
+    feature_set_explicit: bool = False,
+) -> dict[str, Any]:
+    if bundle_id and feature_set_explicit:
+        raise ValueError('Provide only one of explicit feature_set or bundle_id')
 
-    if feature_set:
-        feature_config, resolved_feature_set = _resolve_legacy_feature_config(feature_set)
+    if bundle_id:
+        try:
+            registry = load_factor_registry()
+        except ManifestValidationError as exc:
+            raise ValueError(f"Failed to load factor manifests: {exc}") from exc
+
+        bundle = registry.bundles.get(bundle_id or '')
+        if bundle is None:
+            raise ValueError(f"Unknown bundle_id: {bundle_id}")
+
+        feature_config: list[str] = []
+        for variant_id in bundle.factor_variant_ids:
+            variant = registry.variants.get(variant_id)
+            if variant is None:
+                raise ValueError(f"Bundle '{bundle.bundle_id}' references unknown variant_id '{variant_id}'")
+            for field in _resolve_variant_to_feature_fields(variant.base_factor_id, variant.transform_chain):
+                if field not in feature_config:
+                    feature_config.append(field)
+
         return {
-            'input_mode': 'feature_set',
-            'feature_set': resolved_feature_set,
-            'bundle_id': None,
-            'factor_variants': [],
-            'bundle_source': None,
-            'bundle_resolution_status': 'not_applicable',
-            'object_layer_status': 'legacy_feature_set_path',
+            'input_mode': 'bundle_id',
+            'feature_set': None,
+            'bundle_id': bundle.bundle_id,
+            'factor_variants': bundle.factor_variant_ids,
+            'bundle_source': 'research/factors/bundles',
+            'bundle_resolution_status': 'resolved_via_manifest_compat_layer',
+            'object_layer_status': 'bundle_manifest_resolved_for_train_v1',
             'feature_config': feature_config,
         }
 
-    try:
-        registry = load_factor_registry()
-    except ManifestValidationError as exc:
-        raise ValueError(f"Failed to load factor manifests: {exc}") from exc
-
-    bundle = registry.bundles.get(bundle_id or '')
-    if bundle is None:
-        raise ValueError(f"Unknown bundle_id: {bundle_id}")
-
-    feature_config: list[str] = []
-    for variant_id in bundle.factor_variant_ids:
-        variant = registry.variants.get(variant_id)
-        if variant is None:
-            raise ValueError(f"Bundle '{bundle.bundle_id}' references unknown variant_id '{variant_id}'")
-        for field in _resolve_variant_to_feature_fields(variant.base_factor_id, variant.transform_chain):
-            if field not in feature_config:
-                feature_config.append(field)
-
+    resolved_feature_set = feature_set or 'extended'
+    feature_config, resolved_feature_set = _resolve_legacy_feature_config(resolved_feature_set)
     return {
-        'input_mode': 'bundle_id',
-        'feature_set': None,
-        'bundle_id': bundle.bundle_id,
-        'factor_variants': bundle.factor_variant_ids,
-        'bundle_source': 'research/factors/bundles',
-        'bundle_resolution_status': 'resolved_via_manifest_compat_layer',
-        'object_layer_status': 'bundle_manifest_resolved_for_train_v1',
+        'input_mode': 'feature_set',
+        'feature_set': resolved_feature_set,
+        'bundle_id': None,
+        'factor_variants': [],
+        'bundle_source': None,
+        'bundle_resolution_status': 'not_applicable',
+        'object_layer_status': 'legacy_feature_set_path',
         'feature_config': feature_config,
     }
 
@@ -213,13 +219,14 @@ def build_training_snapshot(
 @click.option('--run_backtest', is_flag=True, help='Run minimal backtest after training')
 @click.option('--backtest_start', default=None, help='Backtest start date; defaults to last 40 trading days window start')
 @click.option('--backtest_end', default=None, help='Backtest end date; defaults to training end date')
-@click.option('--feature_set', type=click.Choice(SUPPORTED_FEATURE_SET_CHOICES, case_sensitive=False), default=None, help='Legacy feature-set input path')
+@click.option('--feature_set', type=click.Choice(SUPPORTED_FEATURE_SET_CHOICES, case_sensitive=False), default='extended', show_default=True, help='Legacy feature-set input path')
 @click.option('--bundle_id', default=None, help='Bundle manifest id used as the training input object')
 @click.option('--infer_date', default=None, help='Inference/signal date used for label maturity checks; defaults to --end')
 @click.option('--label_horizon', default=5, type=int, show_default=True, help='Trading-day horizon used by label maturity cutoff')
 @click.option('--mlflow_root', default=None, help='Optional MLflow tracking root for this training run; defaults to the project root behavior')
 @click.option('--no_report', is_flag=True, help='Skip generating the structured report')
-def main(model, universe, start, end, run_backtest, backtest_start, backtest_end, feature_set, bundle_id, infer_date, label_horizon, mlflow_root, no_report):
+@click.pass_context
+def main(ctx, model, universe, start, end, run_backtest, backtest_start, backtest_end, feature_set, bundle_id, infer_date, label_horizon, mlflow_root, no_report):
     start_time = time.time()
     blockers = []
     notes = []
@@ -253,8 +260,13 @@ def main(model, universe, start, end, run_backtest, backtest_start, backtest_end
         }
     }
 
+    feature_set_explicit = ctx.get_parameter_source('feature_set') == click.core.ParameterSource.COMMANDLINE
     try:
-        input_payload = resolve_training_input(feature_set=feature_set, bundle_id=bundle_id)
+        input_payload = resolve_training_input(
+            feature_set=feature_set,
+            bundle_id=bundle_id,
+            feature_set_explicit=feature_set_explicit,
+        )
     except ValueError as exc:
         raise click.UsageError(str(exc)) from exc
     feature_config = input_payload['feature_config']
