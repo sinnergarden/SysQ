@@ -38,7 +38,14 @@ from qsys.data.adapter import QlibAdapter
 from qsys.data.health import assert_qlib_data_ready
 from qsys.reports.train import TrainingReport
 from qsys.reports.unified_schema import training_contract_payload, write_json
-from qsys.research import ManifestValidationError, load_factor_registry
+from qsys.research import (
+    ManifestValidationError,
+    get_mainline_spec_by_bundle_id,
+    get_mainline_spec_by_feature_set,
+    load_factor_registry,
+    resolve_mainline_feature_config,
+    resolve_mainline_object_name,
+)
 from qsys.utils.logger import log
 
 SUPPORTED_FEATURE_SET_CHOICES = [
@@ -83,6 +90,9 @@ def _model_name_for_input(model: str, feature_set: str | None, input_mode: str, 
     if input_mode == 'bundle_id':
         if not bundle_id:
             raise ValueError('bundle_id must be provided when input_mode=bundle_id')
+        mainline_spec = get_mainline_spec_by_bundle_id(bundle_id)
+        if mainline_spec is not None:
+            return mainline_spec.model_name
         safe_bundle = bundle_id.replace('/', '_').replace('@', '_at_')
         return f"{model}_bundle_{safe_bundle}"
     if feature_set == 'alpha158':
@@ -102,6 +112,11 @@ def _resolve_variant_to_feature_fields(base_factor_id: str, transform_chain: lis
     normalized_chain = [step.strip().lower() for step in (transform_chain or []) if step and step.strip()]
     if not normalized_chain:
         raise ValueError(f"Variant for factor '{base_factor_id}' has empty transform_chain")
+
+    mainline_feature_config = resolve_mainline_feature_config(base_factor_id)
+    if mainline_feature_config is not None:
+        return list(mainline_feature_config)
+
     if normalized_chain in (['identity'], ['raw']):
         return [base_factor_id]
     raise ValueError(
@@ -138,28 +153,34 @@ def resolve_training_input(
                 if field not in feature_config:
                     feature_config.append(field)
 
+        mainline_spec = get_mainline_spec_by_bundle_id(bundle.bundle_id)
         return {
             'input_mode': 'bundle_id',
-            'feature_set': None,
+            'feature_set': mainline_spec.legacy_feature_set_alias if mainline_spec else None,
             'bundle_id': bundle.bundle_id,
             'factor_variants': bundle.factor_variant_ids,
             'bundle_source': 'research/factors/bundles',
             'bundle_resolution_status': 'resolved_via_manifest_compat_layer',
             'object_layer_status': 'bundle_manifest_resolved_for_train_v1',
             'feature_config': feature_config,
+            'mainline_object_name': mainline_spec.mainline_object_name if mainline_spec else resolve_mainline_object_name(bundle_id=bundle.bundle_id),
+            'legacy_feature_set_alias': mainline_spec.legacy_feature_set_alias if mainline_spec else None,
         }
 
     resolved_feature_set = feature_set or 'extended'
     feature_config, resolved_feature_set = _resolve_legacy_feature_config(resolved_feature_set)
+    mainline_spec = get_mainline_spec_by_feature_set(resolved_feature_set)
     return {
         'input_mode': 'feature_set',
         'feature_set': resolved_feature_set,
-        'bundle_id': None,
+        'bundle_id': mainline_spec.bundle_id if mainline_spec else None,
         'factor_variants': [],
         'bundle_source': None,
         'bundle_resolution_status': 'not_applicable',
         'object_layer_status': 'legacy_feature_set_path',
         'feature_config': feature_config,
+        'mainline_object_name': mainline_spec.mainline_object_name if mainline_spec else resolve_mainline_object_name(feature_set=resolved_feature_set),
+        'legacy_feature_set_alias': resolved_feature_set,
     }
 
 
@@ -182,6 +203,8 @@ def build_training_snapshot(
         'input_mode': input_payload['input_mode'],
         'feature_set': input_payload.get('feature_set'),
         'bundle_id': input_payload.get('bundle_id'),
+        'mainline_object_name': input_payload.get('mainline_object_name'),
+        'legacy_feature_set_alias': input_payload.get('legacy_feature_set_alias'),
         'factor_variants': list(input_payload.get('factor_variants') or []),
         'bundle_source': input_payload.get('bundle_source'),
         'bundle_resolution_status': input_payload.get('bundle_resolution_status'),
@@ -272,10 +295,8 @@ def main(ctx, model, universe, start, end, run_backtest, backtest_start, backtes
     feature_config = input_payload['feature_config']
     resolved_feature_set = input_payload.get('feature_set')
     model_name = _model_name_for_input(model, resolved_feature_set, input_payload['input_mode'], input_payload.get('bundle_id'))
-    log.info(
-        f"Using {input_payload['input_mode']}="
-        f"{input_payload.get('bundle_id') or resolved_feature_set} with {len(feature_config)} features"
-    )
+    input_label = input_payload.get('bundle_id') or resolved_feature_set or input_payload.get('mainline_object_name')
+    log.info(f"Using {input_payload['input_mode']}={input_label} with {len(feature_config)} features")
     model_instance = QlibNativeModel(
         name=model_name,
         model_config=qlib_config,
@@ -304,6 +325,8 @@ def main(ctx, model, universe, start, end, run_backtest, backtest_start, backtes
         'model_name': model_name,
         'feature_set': resolved_feature_set,
         'bundle_id': input_payload.get('bundle_id'),
+        'mainline_object_name': input_payload.get('mainline_object_name'),
+        'legacy_feature_set_alias': input_payload.get('legacy_feature_set_alias'),
         'input_mode': input_payload['input_mode'],
         'train_window': f"{start} to {end}",
         'universe': universe,

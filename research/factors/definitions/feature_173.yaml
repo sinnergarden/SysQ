@@ -1,0 +1,9 @@
+factor_id: feature_173
+name: Mainline Feature 173
+family: mainline_object
+kind: research_object
+dependencies:
+  - extended
+builder: mainline_object_registry
+timing_semantics: t_close_for_t_plus_1
+description: Mainline baseline research object mapped to the historical extended feature set.

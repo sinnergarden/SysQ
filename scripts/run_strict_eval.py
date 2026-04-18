@@ -30,6 +30,7 @@ sys.path.append(str(project_root))
 from qsys.evaluation import StrictEvaluator
 from qsys.config import cfg
 from qsys.reports.strict_eval import StrictEvalReport
+from qsys.research import resolve_mainline_object_name
 from qsys.reports.unified_schema import unified_run_artifacts, write_csv, write_json
 from qsys.utils.logger import log
 
@@ -97,10 +98,14 @@ def load_training_snapshot(model_path: str) -> dict[str, Any]:
 
 
 def build_lineage_payload(snapshot: dict[str, Any]) -> dict[str, Any]:
+    feature_set = snapshot.get("feature_set")
+    bundle_id = snapshot.get("bundle_id")
     return {
         "input_mode": snapshot.get("input_mode") or "feature_set",
-        "feature_set": snapshot.get("feature_set"),
-        "bundle_id": snapshot.get("bundle_id"),
+        "feature_set": feature_set,
+        "bundle_id": bundle_id,
+        "mainline_object_name": snapshot.get("mainline_object_name") or resolve_mainline_object_name(feature_set=feature_set, bundle_id=bundle_id),
+        "legacy_feature_set_alias": snapshot.get("legacy_feature_set_alias") or feature_set,
         "factor_variants": list(snapshot.get("factor_variants") or []),
         "bundle_resolution_status": snapshot.get("bundle_resolution_status") or "legacy_or_incomplete_lineage",
         "object_layer_status": snapshot.get("object_layer_status") or "legacy_or_incomplete_lineage",
@@ -118,6 +123,8 @@ def _lineage_summary(lineage: dict[str, Any]) -> dict[str, Any]:
         "input_mode": lineage.get("input_mode"),
         "feature_set": lineage.get("feature_set"),
         "bundle_id": lineage.get("bundle_id"),
+        "mainline_object_name": lineage.get("mainline_object_name"),
+        "legacy_feature_set_alias": lineage.get("legacy_feature_set_alias"),
         "strategy_type": (lineage.get("strategy_spec") or {}).get("strategy_type"),
         "lineage_status": lineage.get("lineage_status"),
     }

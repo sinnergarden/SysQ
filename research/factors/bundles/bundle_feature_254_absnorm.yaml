@@ -1,0 +1,7 @@
+bundle_id: bundle_feature_254_absnorm
+purpose: mainline_research_absnorm
+factor_variants:
+  - feature_254_absnorm@raw
+intended_usage: Mainline absnorm bundle corresponding to historical feature_set=semantic_all_features_absnorm.
+change_log:
+  - "2026-04-18: initial mainline object bundle for feature_254_absnorm"

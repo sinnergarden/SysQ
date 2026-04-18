@@ -1,0 +1,7 @@
+bundle_id: bundle_feature_173
+purpose: mainline_research_baseline
+factor_variants:
+  - feature_173@raw
+intended_usage: Mainline baseline bundle corresponding to historical feature_set=extended.
+change_log:
+  - "2026-04-18: initial mainline object bundle for feature_173"

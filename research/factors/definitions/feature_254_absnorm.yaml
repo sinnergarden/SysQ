@@ -1,0 +1,9 @@
+factor_id: feature_254_absnorm
+name: Mainline Feature 254 Absnorm
+family: mainline_object
+kind: research_object
+dependencies:
+  - semantic_all_features_absnorm
+builder: mainline_object_registry
+timing_semantics: t_close_for_t_plus_1
+description: Mainline absnorm research object mapped to the historical semantic_all_features_absnorm feature set.

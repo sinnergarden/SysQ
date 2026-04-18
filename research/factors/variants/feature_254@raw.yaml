@@ -1,0 +1,6 @@
+variant_id: feature_254@raw
+base_factor_id: feature_254
+transform_chain:
+  - raw
+status: mainline
+notes: Mainline expanded object variant for the historical semantic_all_features feature set.

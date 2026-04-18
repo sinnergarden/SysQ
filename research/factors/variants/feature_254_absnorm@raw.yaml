@@ -1,0 +1,6 @@
+variant_id: feature_254_absnorm@raw
+base_factor_id: feature_254_absnorm
+transform_chain:
+  - raw
+status: mainline
+notes: Mainline absnorm object variant for the historical semantic_all_features_absnorm feature set.
