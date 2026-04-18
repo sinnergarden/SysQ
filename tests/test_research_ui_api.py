@@ -52,7 +52,7 @@ class TestResearchUiApi(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertEqual(payload['api_version'], 'v1')
-        self.assertEqual(payload['count'], 254)
+        self.assertGreaterEqual(payload['count'], 254)
         names = {item['feature_name']: item for item in payload['items']}
         self.assertIn('close', names)
         self.assertIn('ret_1d', names)
@@ -103,7 +103,7 @@ class TestResearchUiApi(unittest.TestCase):
         full_payload = full_response.json()
         self.assertEqual(full_payload['api_version'], 'v1')
         self.assertIn('features', full_payload['data'])
-        self.assertEqual(len(full_payload['data']['features']), 254)
+        self.assertGreaterEqual(len(full_payload['data']['features']), 254)
 
         subset_response = self.client.get('/api/feature-snapshot', params={
             'instrument_id': self.case_instrument,

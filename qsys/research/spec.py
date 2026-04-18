@@ -6,7 +6,15 @@ from pathlib import Path
 
 V1_IMPL1_FIXED_LABEL_HORIZON = "1d_fixed_in_v1_impl1"
 
-SUPPORTED_FEATURE_SETS = {"baseline", "extended", "extended_absnorm", "phase123", "phase123_absnorm"}
+SUPPORTED_FEATURE_SETS = {
+    "baseline",
+    "extended",
+    "extended_absnorm",
+    "phase123",
+    "phase123_absnorm",
+    "semantic_all_features",
+    "semantic_all_features_absnorm",
+}
 SUPPORTED_MODEL_TYPES = {"qlib_lgbm", "qlib_xgb", "qlib_tabular_nn"}
 SUPPORTED_LABEL_TYPES = {"forward_return", "relative_return", "binary_event"}
 SUPPORTED_STRATEGY_TYPES = {"rank_topk", "rank_topk_with_cash_gate", "rank_plus_binary_gate"}

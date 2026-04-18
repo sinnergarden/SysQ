@@ -33,46 +33,39 @@ class FeatureLibrary:
         "$total_mv": [
             "$total_mv",
             "Log($total_mv+1)",
-            "Rank($total_mv)",
             "$circ_mv/($total_mv+1e-12)",
         ],
         "$circ_mv": [
             "$circ_mv",
             "Log($circ_mv+1)",
-            "Rank($circ_mv)",
             "$circ_mv/($total_mv+1e-12)",
         ],
         "$net_inflow": [
             "$net_inflow",
             "$net_inflow/($circ_mv+1e-12)",
             "($net_inflow/(Abs($net_inflow)+1e-12))*Log(Abs($net_inflow)+1)",
-            "Rank($net_inflow/($circ_mv+1e-12))",
         ],
         "$big_inflow": [
             "$big_inflow",
             "$big_inflow/($circ_mv+1e-12)",
             "($big_inflow/(Abs($big_inflow)+1e-12))*Log(Abs($big_inflow)+1)",
-            "Rank($big_inflow/($circ_mv+1e-12))",
         ],
         "$revenue": [
             "$revenue",
             "$revenue/($total_mv+1e-12)",
             "$revenue/($total_assets+1e-12)",
-            "Rank($revenue/($total_mv+1e-12))",
         ],
         "$net_income": [
             "$net_income",
             "$net_income/($total_mv+1e-12)",
             "$net_income/($equity+1e-12)",
             "($net_income/(Abs($net_income)+1e-12))*Log(Abs($net_income)+1)",
-            "Rank($net_income/($equity+1e-12))",
         ],
         "$op_cashflow": [
             "$op_cashflow",
             "$op_cashflow/($total_mv+1e-12)",
             "$op_cashflow/($revenue+1e-12)",
             "($op_cashflow/(Abs($op_cashflow)+1e-12))*Log(Abs($op_cashflow)+1)",
-            "Rank($op_cashflow/($revenue+1e-12))",
         ],
     }
 
@@ -196,6 +189,10 @@ class FeatureLibrary:
     @classmethod
     def get_research_phase123_absnorm_config(cls):
         return cls.get_alpha158_margin_extended_absnorm_config()
+
+    @classmethod
+    def get_semantic_all_features_absnorm_config(cls):
+        return cls._merge_feature_fields(cls.get_semantic_all_features_config(), cls._normalized_feature_fields())
 
     @classmethod
     def _load_feature_list_from_model_bundle(cls, bundle_dir: Path):
