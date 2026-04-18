@@ -19,6 +19,7 @@ import json
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 import click
 import yaml
@@ -64,21 +65,26 @@ from qsys.utils.logger import log
 @click.option("--min_selected_count", type=int, default=1, help="Minimum eligible names required before deploying capital in cash-gated rank selection")
 @click.option("--allow_empty_portfolio/--no_allow_empty_portfolio", default=True, help="Allow cash-gated strategy to stay empty when threshold gate fails")
 @click.option("--min_trade_buffer_ratio", type=float, default=0.0, help="Skip order staging when target/current weight gap is below this ratio of equity")
-def main(model_path, universe, start, end, top_k, feature_set, model_type, label_type, strategy_type, rebalance_mode, rebalance_freq, inference_freq, retrain_freq, label_horizon, min_signal_threshold, min_selected_count, allow_empty_portfolio, min_trade_buffer_ratio):
+@click.pass_context
+def main(ctx, model_path, universe, start, end, top_k, feature_set, model_type, label_type, strategy_type, rebalance_mode, rebalance_freq, inference_freq, retrain_freq, label_horizon, min_signal_threshold, min_selected_count, allow_empty_portfolio, min_trade_buffer_ratio):
     start_time = time.time()
     root_path = cfg.get_path("root")
     if root_path is None:
         raise ValueError("Root path not configured")
 
     model_dir = Path(model_path) if model_path else root_path / "models" / "qlib_lgbm"
-    resolved_feature_set, feature_set_source = _resolve_feature_set(model_dir, feature_set)
-    resolved_model_type, model_type_source = _resolve_model_type(model_dir, model_type)
-    resolved_label_type = _resolve_supported_value("label_type", label_type, SUPPORTED_LABEL_TYPES)
-    resolved_strategy_type = _resolve_supported_value("strategy_type", strategy_type, SUPPORTED_STRATEGY_TYPES)
-    resolved_rebalance_mode = _resolve_supported_value("rebalance_mode", rebalance_mode, SUPPORTED_REBALANCE_MODES)
-    resolved_rebalance_freq = _resolve_supported_value("rebalance_freq", rebalance_freq, SUPPORTED_FREQUENCIES)
-    resolved_inference_freq = _resolve_supported_value("inference_freq", inference_freq, SUPPORTED_FREQUENCIES)
-    resolved_retrain_freq = _resolve_supported_value("retrain_freq", retrain_freq, SUPPORTED_FREQUENCIES)
+    training_snapshot = load_training_snapshot(model_dir)
+    lineage = build_backtest_lineage(training_snapshot)
+
+    explicit = lambda name: ctx.get_parameter_source(name) == click.core.ParameterSource.COMMANDLINE
+    resolved_feature_set, feature_set_source = _resolve_feature_set(model_dir, feature_set, training_snapshot)
+    resolved_model_type, model_type_source = _resolve_model_type(model_dir, model_type, training_snapshot)
+    resolved_label_type, label_type_source = _resolve_label_type(label_type, training_snapshot, explicit("label_type"))
+    resolved_strategy_type, strategy_type_source = _resolve_strategy_type(strategy_type, training_snapshot, explicit("strategy_type"))
+    resolved_rebalance_mode, rebalance_mode_source = _resolve_rebalance_mode(rebalance_mode, training_snapshot, explicit("rebalance_mode"))
+    resolved_rebalance_freq, rebalance_freq_source = _resolve_rebalance_freq(rebalance_freq, training_snapshot, explicit("rebalance_freq"))
+    resolved_inference_freq, inference_freq_source = _resolve_inference_freq(inference_freq, training_snapshot, explicit("inference_freq"))
+    resolved_retrain_freq, retrain_freq_source = _resolve_retrain_freq(retrain_freq, training_snapshot, explicit("retrain_freq"))
 
     strategy_params = {
         "min_signal_threshold": min_signal_threshold,
@@ -86,6 +92,16 @@ def main(model_path, universe, start, end, top_k, feature_set, model_type, label
         "allow_empty_portfolio": allow_empty_portfolio,
         "min_trade_buffer_ratio": min_trade_buffer_ratio,
     }
+    strategy_spec = merge_strategy_spec(training_snapshot, {
+        "strategy_type": resolved_strategy_type,
+        "top_k": top_k,
+        "strategy_params": strategy_params,
+        "rebalance_mode": resolved_rebalance_mode,
+        "rebalance_freq": resolved_rebalance_freq,
+        "inference_freq": resolved_inference_freq,
+        "retrain_freq": resolved_retrain_freq,
+    })
+    cost_spec = extract_cost_spec(training_snapshot, strategy_params)
 
     experiment_spec = ExperimentSpec(
         run_name=f"backtest_{model_dir.name}_{start}_{end}",
@@ -139,8 +155,23 @@ def main(model_path, universe, start, end, top_k, feature_set, model_type, label
         universe=universe,
         duration_seconds=duration,
         daily_result_path=str(daily_path),
-        experiment_spec=experiment_spec.to_dict(),
+        experiment_spec={
+            **experiment_spec.to_dict(),
+            "input_mode": lineage["input_mode"],
+            "bundle_id": lineage["bundle_id"],
+            "strategy_spec": strategy_spec,
+            "cost_spec": cost_spec,
+        },
     )
+    if not hasattr(report, "model_info") or report.model_info is None:
+        report.model_info = {}
+    report.model_info.update({
+        "input_mode": lineage["input_mode"],
+        "bundle_id": lineage["bundle_id"],
+        "factor_variants": lineage["factor_variants"],
+        "lineage_status": lineage["lineage_status"],
+        "strategy_type": strategy_spec.get("strategy_type"),
+    })
 
     unified_paths = unified_run_artifacts(save_dir)
     training_summary_path = model_dir / "training_summary.json"
@@ -152,6 +183,8 @@ def main(model_path, universe, start, end, top_k, feature_set, model_type, label
         if section.name == "Performance":
             metrics_payload = dict(section.metrics)
             break
+    spec_source = "explicit_cli_plus_training_snapshot_v1" if training_snapshot.get("status") == "available" else "explicit_cli_plus_artifact_inference_v1"
+    spec_status = "snapshot_driven_when_available_v1" if training_snapshot.get("status") == "available" else "cli_driven_with_artifact_fallbacks_v1"
     report.artifacts["config_snapshot"] = write_json(
         unified_paths["config_snapshot"],
         {
@@ -159,23 +192,35 @@ def main(model_path, universe, start, end, top_k, feature_set, model_type, label
             "model_path": str(model_dir),
             "start": start,
             "end": end,
-            "spec_source": "explicit_cli_plus_artifact_inference_v1",
-            "spec_status": "cli_driven_with_artifact_fallbacks_v1",
+            "spec_source": spec_source,
+            "spec_status": spec_status,
             "spec_inputs": {
                 "feature_set": _input_source_payload(feature_set, resolved_feature_set, feature_set_source),
                 "model_type": _input_source_payload(model_type, resolved_model_type, model_type_source),
-                "label_type": _input_source_payload(label_type, resolved_label_type, "explicit_cli"),
-                "strategy_type": _input_source_payload(strategy_type, resolved_strategy_type, "explicit_cli"),
-                "rebalance_mode": _input_source_payload(rebalance_mode, resolved_rebalance_mode, "explicit_cli"),
-                "rebalance_freq": _input_source_payload(rebalance_freq, resolved_rebalance_freq, "explicit_cli"),
-                "inference_freq": _input_source_payload(inference_freq, resolved_inference_freq, "explicit_cli"),
-                "retrain_freq": _input_source_payload(retrain_freq, resolved_retrain_freq, "explicit_cli"),
+                "label_type": _input_source_payload(label_type, resolved_label_type, label_type_source),
+                "strategy_type": _input_source_payload(strategy_type, resolved_strategy_type, strategy_type_source),
+                "rebalance_mode": _input_source_payload(rebalance_mode, resolved_rebalance_mode, rebalance_mode_source),
+                "rebalance_freq": _input_source_payload(rebalance_freq, resolved_rebalance_freq, rebalance_freq_source),
+                "inference_freq": _input_source_payload(inference_freq, resolved_inference_freq, inference_freq_source),
+                "retrain_freq": _input_source_payload(retrain_freq, resolved_retrain_freq, retrain_freq_source),
                 "label_horizon": _input_source_payload(label_horizon, label_horizon, "explicit_cli"),
             },
+            "lineage": lineage,
+            "label_spec": merge_label_spec(training_snapshot, resolved_label_type, label_horizon),
+            "model_spec": merge_model_spec(training_snapshot, resolved_model_type, model_dir),
+            "strategy_spec": strategy_spec,
+            "cost_spec": cost_spec,
         },
     )
     report.artifacts["training_summary"] = write_json(unified_paths["training_summary"], training_summary)
-    report.artifacts["signal_metrics"] = write_json(unified_paths["signal_metrics"], engine.last_signal_metrics or {"status": "not_available_in_flow", "label_horizon": label_horizon})
+    report.artifacts["signal_metrics"] = write_json(
+        unified_paths["signal_metrics"],
+        {
+            **(engine.last_signal_metrics or {"status": "not_available_in_flow", "label_horizon": label_horizon}),
+            "lineage": lineage,
+            "label_spec": merge_label_spec(training_snapshot, resolved_label_type, label_horizon),
+        },
+    )
     report.artifacts["group_returns"] = write_csv(
         unified_paths["group_returns"],
         engine.last_group_returns.to_dict(orient="records") if not engine.last_group_returns.empty else [],
@@ -183,7 +228,15 @@ def main(model_path, universe, start, end, top_k, feature_set, model_type, label
     )
     report.artifacts["execution_audit"] = write_csv(unified_paths["execution_audit"], [])
     report.artifacts["suspicious_trades"] = write_csv(unified_paths["suspicious_trades"], [])
-    report.artifacts["metrics"] = write_json(unified_paths["metrics"], metrics_payload)
+    report.artifacts["metrics"] = write_json(
+        unified_paths["metrics"],
+        {
+            **metrics_payload,
+            "lineage": lineage,
+            "strategy_spec": strategy_spec,
+            "cost_spec": cost_spec,
+        },
+    )
     report.artifacts["exposure_summary"] = write_json(unified_paths["exposure_summary"], engine.last_exposure_summary or {"status": "not_available"})
     report.artifacts["exposure_timeseries"] = write_csv(
         unified_paths["exposure_timeseries"],
@@ -235,22 +288,156 @@ def _infer_feature_set_from_artifact(model_dir: Path) -> str | None:
     return "baseline"
 
 
-def _resolve_model_type(model_dir: Path, cli_value: str | None) -> tuple[str, str]:
+def load_training_snapshot(model_dir: Path) -> dict[str, Any]:
+    snapshot_path = model_dir / "config_snapshot.json"
+    if not snapshot_path.exists():
+        return {
+            "status": "not_found",
+            "lineage_status": "legacy_or_incomplete_lineage",
+            "snapshot_path": str(snapshot_path),
+        }
+    try:
+        payload = json.loads(snapshot_path.read_text(encoding="utf-8"))
+        payload["status"] = "available"
+        payload["snapshot_path"] = str(snapshot_path)
+        payload.setdefault("lineage_status", payload.get("object_layer_status") or "snapshot_available")
+        return payload
+    except Exception as exc:
+        return {
+            "status": "invalid",
+            "lineage_status": "legacy_or_incomplete_lineage",
+            "snapshot_path": str(snapshot_path),
+            "error": str(exc),
+        }
+
+
+def build_backtest_lineage(snapshot: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "input_mode": snapshot.get("input_mode") or "feature_set",
+        "feature_set": snapshot.get("feature_set"),
+        "bundle_id": snapshot.get("bundle_id"),
+        "factor_variants": list(snapshot.get("factor_variants") or []),
+        "bundle_resolution_status": snapshot.get("bundle_resolution_status") or "legacy_or_incomplete_lineage",
+        "object_layer_status": snapshot.get("object_layer_status") or "legacy_or_incomplete_lineage",
+        "lineage_status": snapshot.get("lineage_status") or "legacy_or_incomplete_lineage",
+        "snapshot_path": snapshot.get("snapshot_path"),
+    }
+
+
+def merge_label_spec(snapshot: dict[str, Any], resolved_label_type: str, label_horizon: str) -> dict[str, Any]:
+    label_spec = dict(snapshot.get("label_spec") or {})
+    label_spec.setdefault("label_type", resolved_label_type)
+    label_spec.setdefault("label_horizon", label_horizon)
+    return label_spec
+
+
+def merge_model_spec(snapshot: dict[str, Any], resolved_model_type: str, model_dir: Path) -> dict[str, Any]:
+    model_spec = dict(snapshot.get("model_spec") or {})
+    model_spec.setdefault("model_type", resolved_model_type)
+    model_spec.setdefault("model_name", model_dir.name)
+    model_spec.setdefault("model_path", str(model_dir))
+    return model_spec
+
+
+def merge_strategy_spec(snapshot: dict[str, Any], runtime_strategy_spec: dict[str, Any]) -> dict[str, Any]:
+    strategy_spec = dict(snapshot.get("strategy_spec") or {})
+    strategy_spec.update({key: value for key, value in runtime_strategy_spec.items() if value is not None})
+    return strategy_spec
+
+
+def extract_cost_spec(snapshot: dict[str, Any], strategy_params: dict[str, Any]) -> dict[str, Any]:
+    cost_spec = dict(snapshot.get("cost_spec") or {})
+    if not cost_spec:
+        cost_spec = {"status": "not_available_in_training_snapshot"}
+    cost_spec.setdefault("min_trade_buffer_ratio", strategy_params.get("min_trade_buffer_ratio"))
+    return cost_spec
+
+
+def _resolve_model_type(model_dir: Path, cli_value: str | None, snapshot: dict[str, Any]) -> tuple[str, str]:
     if cli_value is not None:
         return _resolve_supported_value("model_type", cli_value, SUPPORTED_MODEL_TYPES), "explicit_cli"
+    snapshot_value = _nested_get(snapshot, ["model_spec", "model_type"])
+    if snapshot_value in SUPPORTED_MODEL_TYPES:
+        return snapshot_value, "training_snapshot"
     inferred = _infer_model_type_from_artifact(model_dir)
     if inferred is None:
         raise click.BadParameter("model_type could not be inferred from model artifact; pass --model_type explicitly", param_hint="--model_type")
     return inferred, "artifact_name_inference"
 
 
-def _resolve_feature_set(model_dir: Path, cli_value: str | None) -> tuple[str, str]:
+def _resolve_feature_set(model_dir: Path, cli_value: str | None, snapshot: dict[str, Any]) -> tuple[str, str]:
     if cli_value is not None:
         return _resolve_supported_value("feature_set", cli_value, SUPPORTED_FEATURE_SETS), "explicit_cli"
+    snapshot_value = snapshot.get("feature_set")
+    if snapshot_value in SUPPORTED_FEATURE_SETS:
+        return snapshot_value, "training_snapshot"
     inferred = _infer_feature_set_from_artifact(model_dir)
     if inferred is None:
         raise click.BadParameter("feature_set could not be inferred from model artifact; pass --feature_set explicitly", param_hint="--feature_set")
     return inferred, "artifact_meta_or_name_inference"
+
+
+def _resolve_label_type(cli_value: str, snapshot: dict[str, Any], cli_explicit: bool) -> tuple[str, str]:
+    snapshot_value = _nested_get(snapshot, ["label_spec", "label_type"])
+    if cli_explicit:
+        return _resolve_supported_value("label_type", cli_value, SUPPORTED_LABEL_TYPES), "explicit_cli"
+    if snapshot_value in SUPPORTED_LABEL_TYPES:
+        return snapshot_value, "training_snapshot"
+    return _resolve_supported_value("label_type", cli_value or "forward_return", SUPPORTED_LABEL_TYPES), "explicit_cli"
+
+
+def _resolve_strategy_type(cli_value: str, snapshot: dict[str, Any], cli_explicit: bool) -> tuple[str, str]:
+    snapshot_value = _nested_get(snapshot, ["strategy_spec", "strategy_type"])
+    if cli_explicit:
+        return _resolve_supported_value("strategy_type", cli_value, SUPPORTED_STRATEGY_TYPES), "explicit_cli"
+    if snapshot_value in SUPPORTED_STRATEGY_TYPES:
+        return snapshot_value, "training_snapshot"
+    return _resolve_supported_value("strategy_type", cli_value or "rank_topk", SUPPORTED_STRATEGY_TYPES), "explicit_cli"
+
+
+def _resolve_rebalance_mode(cli_value: str, snapshot: dict[str, Any], cli_explicit: bool) -> tuple[str, str]:
+    snapshot_value = _nested_get(snapshot, ["strategy_spec", "rebalance_mode"])
+    if cli_explicit:
+        return _resolve_supported_value("rebalance_mode", cli_value, SUPPORTED_REBALANCE_MODES), "explicit_cli"
+    if snapshot_value in SUPPORTED_REBALANCE_MODES:
+        return snapshot_value, "training_snapshot"
+    return _resolve_supported_value("rebalance_mode", cli_value or "full_rebalance", SUPPORTED_REBALANCE_MODES), "explicit_cli"
+
+
+def _resolve_rebalance_freq(cli_value: str, snapshot: dict[str, Any], cli_explicit: bool) -> tuple[str, str]:
+    snapshot_value = _nested_get(snapshot, ["strategy_spec", "rebalance_freq"])
+    if cli_explicit:
+        return _resolve_supported_value("rebalance_freq", cli_value, SUPPORTED_FREQUENCIES), "explicit_cli"
+    if snapshot_value in SUPPORTED_FREQUENCIES:
+        return snapshot_value, "training_snapshot"
+    return _resolve_supported_value("rebalance_freq", cli_value or "weekly", SUPPORTED_FREQUENCIES), "explicit_cli"
+
+
+def _resolve_inference_freq(cli_value: str, snapshot: dict[str, Any], cli_explicit: bool) -> tuple[str, str]:
+    snapshot_value = _nested_get(snapshot, ["strategy_spec", "inference_freq"])
+    if cli_explicit:
+        return _resolve_supported_value("inference_freq", cli_value, SUPPORTED_FREQUENCIES), "explicit_cli"
+    if snapshot_value in SUPPORTED_FREQUENCIES:
+        return snapshot_value, "training_snapshot"
+    return _resolve_supported_value("inference_freq", cli_value or "daily", SUPPORTED_FREQUENCIES), "explicit_cli"
+
+
+def _resolve_retrain_freq(cli_value: str, snapshot: dict[str, Any], cli_explicit: bool) -> tuple[str, str]:
+    snapshot_value = _nested_get(snapshot, ["strategy_spec", "retrain_freq"])
+    if cli_explicit:
+        return _resolve_supported_value("retrain_freq", cli_value, SUPPORTED_FREQUENCIES), "explicit_cli"
+    if snapshot_value in SUPPORTED_FREQUENCIES:
+        return snapshot_value, "training_snapshot"
+    return _resolve_supported_value("retrain_freq", cli_value or "weekly", SUPPORTED_FREQUENCIES), "explicit_cli"
+
+
+def _nested_get(payload: dict[str, Any], path: list[str]) -> Any:
+    current: Any = payload
+    for key in path:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+    return current
 
 
 def _input_source_payload(raw_value: str | None, resolved_value: str, source: str) -> dict[str, str | None]:
