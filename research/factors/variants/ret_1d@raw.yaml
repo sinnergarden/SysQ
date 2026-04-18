@@ -1,0 +1,6 @@
+variant_id: ret_1d@raw
+base_factor_id: ret_1d
+transform_chain:
+  - raw
+status: draft
+notes: Raw ret_1d feature variant for bundle-driven training tests.

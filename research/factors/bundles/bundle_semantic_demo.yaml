@@ -1,0 +1,8 @@
+bundle_id: bundle_semantic_demo
+purpose: minimal_train_snapshot_demo
+factor_variants:
+  - close@raw
+  - ret_1d@raw
+intended_usage: Minimal bundle that can enter the training CLI and produce an object-layer snapshot.
+change_log:
+  - "2026-04-18: initial semantic training demo bundle"

@@ -1,0 +1,9 @@
+factor_id: close
+name: Close Price
+family: price
+kind: semantic_feature
+dependencies:
+  - market_data.close
+builder: semantic_registry
+timing_semantics: t_close_for_t_plus_1
+description: Semantic close feature exposed by the current feature registry.
