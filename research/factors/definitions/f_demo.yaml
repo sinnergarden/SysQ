@@ -1,0 +1,9 @@
+factor_id: f_demo
+name: Demo Factor
+family: demo
+kind: cross_sectional
+dependencies:
+  - market_data.close
+builder: demo_builder_v1
+timing_semantics: t_close_for_t_plus_1
+description: Minimal demo factor definition for manifest contract tests.

@@ -1,0 +1,8 @@
+bundle_id: bundle_demo
+purpose: demo_manifest_contract
+factor_variants:
+  - f_demo@raw
+  - f_demo@absnorm
+intended_usage: Minimal bundle used to validate factor-governance object manifests.
+change_log:
+  - "2026-04-18: initial demo bundle"

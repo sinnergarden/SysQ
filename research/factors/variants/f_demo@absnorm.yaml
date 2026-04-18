@@ -1,0 +1,6 @@
+variant_id: f_demo@absnorm
+base_factor_id: f_demo
+transform_chain:
+  - absnorm
+status: research
+notes: Absolute-normalized demo factor variant for parser and validator tests.

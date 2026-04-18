@@ -1,0 +1,6 @@
+variant_id: f_demo@raw
+base_factor_id: f_demo
+transform_chain:
+  - identity
+status: draft
+notes: Raw demo factor variant for parser and validator tests.
