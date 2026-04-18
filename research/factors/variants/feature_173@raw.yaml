@@ -1,0 +1,6 @@
+variant_id: feature_173@raw
+base_factor_id: feature_173
+transform_chain:
+  - raw
+status: mainline
+notes: Mainline baseline object variant for the historical extended feature set.

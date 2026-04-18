@@ -32,7 +32,7 @@ from qsys.backtest import BacktestEngine
 from qsys.config import cfg
 from qsys.reports.backtest import BacktestReport
 from qsys.reports.unified_schema import unified_run_artifacts, write_csv, write_json
-from qsys.research import ExperimentSpec
+from qsys.research import ExperimentSpec, resolve_mainline_object_name
 from qsys.research.spec import (
     SUPPORTED_FEATURE_SETS,
     SUPPORTED_FREQUENCIES,
@@ -312,10 +312,15 @@ def load_training_snapshot(model_dir: Path) -> dict[str, Any]:
 
 
 def build_backtest_lineage(snapshot: dict[str, Any]) -> dict[str, Any]:
+    feature_set = snapshot.get("feature_set")
+    bundle_id = snapshot.get("bundle_id")
+    mainline_object_name = snapshot.get("mainline_object_name") or resolve_mainline_object_name(feature_set=feature_set, bundle_id=bundle_id)
     return {
         "input_mode": snapshot.get("input_mode") or "feature_set",
-        "feature_set": snapshot.get("feature_set"),
-        "bundle_id": snapshot.get("bundle_id"),
+        "feature_set": feature_set,
+        "bundle_id": bundle_id,
+        "mainline_object_name": mainline_object_name,
+        "legacy_feature_set_alias": snapshot.get("legacy_feature_set_alias") or feature_set,
         "factor_variants": list(snapshot.get("factor_variants") or []),
         "bundle_resolution_status": snapshot.get("bundle_resolution_status") or "legacy_or_incomplete_lineage",
         "object_layer_status": snapshot.get("object_layer_status") or "legacy_or_incomplete_lineage",

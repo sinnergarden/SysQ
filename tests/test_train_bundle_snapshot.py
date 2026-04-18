@@ -173,7 +173,7 @@ class TestTrainBundleSnapshot(unittest.TestCase):
             snapshot = json.loads((root / "models" / "qlib_lgbm_extended" / "config_snapshot.json").read_text(encoding="utf-8"))
             self.assertEqual(snapshot["input_mode"], "feature_set")
             self.assertEqual(snapshot["feature_set"], "extended")
-            self.assertIsNone(snapshot["bundle_id"])
+            self.assertEqual(snapshot["bundle_id"], "bundle_feature_173")
 
     def test_run_train_legacy_feature_set_still_writes_legacy_snapshot(self):
         runner = CliRunner()
@@ -199,7 +199,7 @@ class TestTrainBundleSnapshot(unittest.TestCase):
             snapshot = json.loads((root / "models" / "qlib_lgbm_extended" / "config_snapshot.json").read_text(encoding="utf-8"))
             self.assertEqual(snapshot["input_mode"], "feature_set")
             self.assertEqual(snapshot["feature_set"], "extended")
-            self.assertIsNone(snapshot["bundle_id"])
+            self.assertEqual(snapshot["bundle_id"], "bundle_feature_173")
 
     def test_run_train_bundle_id_writes_bundle_snapshot(self):
         runner = CliRunner()

@@ -13,11 +13,20 @@ project_root = Path(__file__).resolve().parent.parent
 sys.path.append(str(project_root))
 
 from qsys.feature.library import FeatureLibrary
+from qsys.research import MAINLINE_OBJECTS
 
 DEFAULT_VARIANTS = [
-    ("feature_173", "qlib_lgbm_extended", "extended"),
-    ("feature_254", "qlib_lgbm_semantic_all_features", "semantic_all_features"),
-    ("feature_254_absnorm", "qlib_lgbm_semantic_all_features_absnorm", "semantic_all_features_absnorm"),
+    (
+        spec.mainline_object_name,
+        spec.model_name,
+        spec.legacy_feature_set_alias,
+        spec.bundle_id,
+    )
+    for spec in (
+        MAINLINE_OBJECTS["feature_173"],
+        MAINLINE_OBJECTS["feature_254"],
+        MAINLINE_OBJECTS["feature_254_absnorm"],
+    )
 ]
 
 
@@ -35,12 +44,15 @@ def main(start: str, end: str, universe: str, top_k: int, output_dir: str):
     (out_dir / "feature_audit.json").write_text(json.dumps(audit, ensure_ascii=False, indent=2), encoding="utf-8")
 
     rows: list[dict[str, Any]] = []
-    for variant, model_name, feature_set in DEFAULT_VARIANTS:
+    for variant, model_name, feature_set, bundle_id in DEFAULT_VARIANTS:
         model_path = project_root / "data" / "models" / model_name
         variant_dir = out_dir / variant
         variant_dir.mkdir(parents=True, exist_ok=True)
         row = {
             "variant": variant,
+            "mainline_object_name": variant,
+            "legacy_feature_set_alias": feature_set,
+            "bundle_id": bundle_id,
             "feature_set": feature_set,
             "model_path": str(model_path),
         }
@@ -154,7 +166,7 @@ def _build_markdown(summary: pd.DataFrame, *, start: str, end: str, universe: st
         "",
     ]
     compact = summary[[
-        "variant", "feature_set", "total_return", "sharpe", "max_drawdown", "turnover", "RankIC",
+        "variant", "mainline_object_name", "bundle_id", "legacy_feature_set_alias", "feature_set", "total_return", "sharpe", "max_drawdown", "turnover", "RankIC",
         "long_short_spread", "group_monotonicity_proxy", "empty_portfolio_ratio", "avg_holding_count",
         "size_tilt_vs_universe_mean", "industry_drift_l1_mean", "top1_weight_mean", "topk_weight_hhi_mean", "status",
     ]].copy()
@@ -190,7 +202,7 @@ def _frame_to_markdown(frame: pd.DataFrame) -> str:
 
 def _ordered_summary(summary: pd.DataFrame) -> pd.DataFrame:
     columns = [
-        "variant", "feature_set", "status", "returncode", "total_return", "sharpe", "max_drawdown", "turnover",
+        "variant", "mainline_object_name", "bundle_id", "legacy_feature_set_alias", "feature_set", "status", "returncode", "total_return", "sharpe", "max_drawdown", "turnover",
         "IC", "RankIC", "long_short_spread", "group_monotonicity_proxy", "empty_portfolio_ratio", "avg_holding_count",
         "size_tilt_vs_universe_mean", "industry_drift_l1_mean", "top1_weight_mean", "topk_weight_hhi_mean",
         "model_path", "stdout_tail", "stderr_tail",
