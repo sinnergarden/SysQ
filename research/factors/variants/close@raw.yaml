@@ -1,0 +1,6 @@
+variant_id: close@raw
+base_factor_id: close
+transform_chain:
+  - raw
+status: draft
+notes: Raw close feature variant for bundle-driven training tests.

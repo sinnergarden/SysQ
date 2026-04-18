@@ -1,0 +1,9 @@
+factor_id: ret_1d
+name: One Day Return
+family: return
+kind: semantic_feature
+dependencies:
+  - market_data.close
+builder: semantic_registry
+timing_semantics: t_close_for_t_plus_1
+description: Semantic one-day return feature exposed by the current feature registry.
