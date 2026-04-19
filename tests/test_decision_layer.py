@@ -91,6 +91,16 @@ def test_decision_registry_resolves_latest_matching_record(tmp_path: Path) -> No
     assert resolve_subject_decision(subject_type="mainline_object", subject_ids=["missing", "feature_254"], decisions_dir=tmp_path).status == "candidate"
 
 
+def test_mainline_decision_status_regression_matches_latest_policy() -> None:
+    feature_173 = resolve_subject_decision(subject_type="mainline_object", subject_ids=["feature_173"])
+    feature_254 = resolve_subject_decision(subject_type="mainline_object", subject_ids=["feature_254"])
+    feature_254_absnorm = resolve_subject_decision(subject_type="mainline_object", subject_ids=["feature_254_absnorm"])
+
+    assert feature_173.status == "candidate"
+    assert feature_254.status == "research_only"
+    assert feature_254_absnorm.status == "research_only"
+
+
 def test_absnorm_comparison_summary_includes_decision_columns() -> None:
     frame = pd.DataFrame([
         {

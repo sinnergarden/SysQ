@@ -18,7 +18,7 @@ from qsys.research.rolling import decision_evidence_payload
 DEFAULT_DECISION_FILES = {
     "feature_173": "research/decisions/feature_173_candidate.yaml",
     "feature_254": "research/decisions/feature_254_research_only.yaml",
-    "feature_254_absnorm": "research/decisions/feature_254_absnorm_candidate.yaml",
+    "feature_254_absnorm": "research/decisions/feature_254_absnorm_research_only.yaml",
 }
 
 

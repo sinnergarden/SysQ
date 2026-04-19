@@ -26,6 +26,7 @@
 - `qsys_workflow_layer.md`：workflow / plugin 抽象层的首版设计与文档映射。
 - `qsys_workflow_adapter_plan.md`：首批 commands 的 adapter 设计与 PR 拆分建议。
 - `miniqmt_bridge_and_production_ops.md`：研究+生产双定位、WSL 生产运行形态与 MiniQMT 桥接方向。
+- `mainline_rolling_and_readiness.md`：三条主线对象的固定 rolling 研究入口、artifact contract、UI 识别约定，以及最小 readiness / coverage / degradation 闭环。
 
 ## 当前进度备注
 

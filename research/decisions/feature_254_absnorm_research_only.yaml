@@ -1,9 +1,9 @@
-decision_id: mainline.feature_254_absnorm.candidate.v1
+decision_id: mainline.feature_254_absnorm.research_only.v2
 subject_type: mainline_object
 subject_id: feature_254_absnorm
-status: candidate
-reason: Absnorm mainline object remains a tracked candidate pending more explicit
-  promotion evidence.
+status: research_only
+reason: Absnorm improves on feature_254 but still trails the baseline, so it stays
+  research_only until readiness and rolling evidence are stronger.
 evidence:
   rolling_window_count: 20
   rolling_rankic_mean: 0.00178331
@@ -20,4 +20,4 @@ created_at: '2026-04-18T17:30:00+08:00'
 updated_at: '2026-04-18T17:30:00+08:00'
 author: qsys_phase_f
 notes:
-- Candidate is explicit but not yet shadow_ready.
+- Improved relative to feature_254, but not enough to remain candidate.
