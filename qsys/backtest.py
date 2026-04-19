@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 
 import pandas as pd
@@ -263,26 +264,28 @@ class BacktestEngine:
         }
 
     def _build_exposure_panel(self, instruments) -> pd.DataFrame:
-        fields = ["lncap", "industry", "beta"]
-        try:
-            exposure = QlibAdapter().get_features(
-                instruments,
-                fields,
-                start_time=self.start_date,
-                end_time=self.end_date,
-            )
-        except Exception:
+        if self.last_selection_daily is None or self.last_selection_daily.empty:
             return pd.DataFrame(columns=["date", "instrument", "size", "industry", "beta"])
-        if exposure is None or exposure.empty:
-            return pd.DataFrame(columns=["date", "instrument", "size", "industry", "beta"])
-        if exposure.index.names == ["instrument", "datetime"]:
-            exposure = exposure.swaplevel().sort_index()
-        frame = exposure.reset_index().rename(columns={"datetime": "date", "instrument": "instrument", "lncap": "size"})
+
+        base = self.last_selection_daily[["date", "instrument"]].copy().drop_duplicates()
+        base["date"] = pd.to_datetime(base["date"], errors="coerce").dt.strftime("%Y-%m-%d")
+        industry_map = pd.DataFrame(columns=["instrument", "industry"])
+
+        meta_db = Path(str(cfg.get_path("root"))) / "meta.db"
+        if meta_db.exists():
+            try:
+                with sqlite3.connect(meta_db) as conn:
+                    industry_map = pd.read_sql("select ts_code as instrument, industry from stock_basic", conn)
+            except Exception:
+                industry_map = pd.DataFrame(columns=["instrument", "industry"])
+
+        merged = base.merge(industry_map, on="instrument", how="left") if not industry_map.empty else base
+        merged["size"] = pd.NA
+        merged["beta"] = pd.NA
         for col in ["date", "instrument", "size", "industry", "beta"]:
-            if col not in frame.columns:
-                frame[col] = pd.NA
-        frame["date"] = pd.to_datetime(frame["date"]).dt.strftime("%Y-%m-%d")
-        return frame[["date", "instrument", "size", "industry", "beta"]]
+            if col not in merged.columns:
+                merged[col] = pd.NA
+        return merged[["date", "instrument", "size", "industry", "beta"]].dropna(subset=["date", "instrument"]).drop_duplicates(["date", "instrument"])
 
     def save_report(self, output_dir: str | Path, prefix: str = "backtest") -> dict[str, str]:
         output_dir = Path(output_dir)

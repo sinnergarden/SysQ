@@ -45,6 +45,70 @@ def test_canonical_model_path_matches_mainline_aliases(tmp_path: Path) -> None:
     assert canonical_model_path(tmp_path, MAINLINE_OBJECTS["feature_254_absnorm"]) == tmp_path / "data" / "models" / "qlib_lgbm_semantic_all_features_absnorm"
 
 
+def test_mainline_rolling_eval_resumes_from_existing_metrics(tmp_path: Path) -> None:
+    runner = CliRunner()
+    spec = MAINLINE_OBJECTS["feature_173"]
+    model_dir = canonical_model_path(tmp_path, spec)
+    model_dir.mkdir(parents=True, exist_ok=True)
+    object_dir = tmp_path / "tmp" / "rolling" / spec.mainline_object_name
+    object_dir.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame([
+        {
+            "mainline_object_name": spec.mainline_object_name,
+            "bundle_id": spec.bundle_id,
+            "legacy_feature_set_alias": spec.legacy_feature_set_alias,
+            "window_id": "window_001",
+            "train_start": "2021-01-01",
+            "train_end": "2024-12-31",
+            "test_start": "2025-01-02",
+            "test_end": "2025-01-21",
+            "total_return": 0.1,
+            "max_drawdown": -0.05,
+            "turnover": 0.2,
+            "IC": 0.1,
+            "RankIC": 0.08,
+            "long_short_spread": 0.03,
+            "empty_portfolio_ratio": 0.0,
+            "avg_holding_count": 5.0,
+        }
+    ]).to_csv(object_dir / "rolling_metrics.csv", index=False)
+
+    snapshot = {
+        "status": "available",
+        "start": "2021-01-01",
+        "end": "2024-12-31",
+        "feature_set": "extended",
+        "bundle_id": spec.bundle_id,
+    }
+    calls: list[tuple[str, str]] = []
+
+    class _ResumeEngine(_FakeBacktestEngine):
+        def __init__(self, *args, **kwargs):
+            calls.append((kwargs["start_date"], kwargs["end_date"]))
+            super().__init__(*args, **kwargs)
+
+    with patch("scripts.run_mainline_rolling_eval.project_root", tmp_path), \
+         patch("scripts.run_mainline_rolling_eval.BacktestEngine", _ResumeEngine), \
+         patch("scripts.run_mainline_rolling_eval.load_training_snapshot", return_value=snapshot), \
+         patch("scripts.run_mainline_rolling_eval.build_backtest_lineage", return_value={"lineage_status": "ok"}):
+        result = runner.invoke(
+            rolling_eval_main,
+            [
+                "--start", "2025-01-02",
+                "--end", "2025-02-15",
+                "--output_dir", "tmp/rolling",
+                "--test_window_days", "20",
+                "--step_days", "20",
+                "--mainline_object", spec.mainline_object_name,
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    metrics = pd.read_csv(object_dir / "rolling_metrics.csv")
+    assert len(metrics) == 3
+    assert calls == [("2025-01-22", "2025-02-10"), ("2025-02-11", "2025-02-15")]
+
+
 def test_mainline_rolling_eval_writes_required_outputs(tmp_path: Path) -> None:
     runner = CliRunner()
     for spec in MAINLINE_OBJECTS.values():

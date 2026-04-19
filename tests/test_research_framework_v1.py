@@ -134,6 +134,35 @@ class TestResearchFrameworkV1(unittest.TestCase):
         self.assertNotEqual(result.exit_code, 0)
         self.assertIn("not_supported_in_v1", result.output)
 
+    def test_backtest_exposure_panel_uses_selection_base_and_meta_industry(self):
+        import sqlite3
+
+        from qsys.backtest import BacktestEngine
+
+        engine = BacktestEngine(
+            model_path=None,
+            universe="csi300",
+            start_date="2025-01-02",
+            end_date="2025-01-03",
+            top_k=5,
+        )
+        engine.last_selection_daily = pd.DataFrame([
+            {"date": "2025-01-02", "instrument": "AAA", "target_weight": 0.5},
+        ])
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            conn = sqlite3.connect(root / "meta.db")
+            pd.DataFrame([{"ts_code": "AAA", "industry": "bank"}]).to_sql("stock_basic", conn, index=False, if_exists="replace")
+            conn.close()
+            with patch("qsys.backtest.cfg.get_path", return_value=root):
+                frame = engine._build_exposure_panel("csi300")
+
+        self.assertEqual(list(frame.columns), ["date", "instrument", "size", "industry", "beta"])
+        self.assertEqual(frame.iloc[0]["industry"], "bank")
+        self.assertTrue(pd.isna(frame.iloc[0]["size"]))
+        self.assertTrue(pd.isna(frame.iloc[0]["beta"]))
+
     def test_run_backtest_writes_cli_driven_config_snapshot(self):
         runner = CliRunner()
         fake_result = pd.DataFrame([

@@ -97,8 +97,17 @@ def main(
         windows_path = object_dir / "rolling_windows.csv"
         windows_frame.to_csv(windows_path, index=False)
 
+        metrics_path = object_dir / "rolling_metrics.csv"
         metric_rows: list[dict] = []
+        completed_window_ids: set[str] = set()
+        if metrics_path.exists():
+            existing_metrics = pd.read_csv(metrics_path)
+            metric_rows = existing_metrics.to_dict(orient="records")
+            completed_window_ids = {str(v) for v in existing_metrics.get("window_id", pd.Series(dtype=str)).dropna().tolist()}
+
         for window in windows:
+            if window.window_id in completed_window_ids:
+                continue
             engine = BacktestEngine(
                 model_path=model_path,
                 universe=universe,
@@ -118,9 +127,9 @@ def main(
                     signal_metrics=engine.last_signal_metrics or {},
                 )
             )
+            pd.DataFrame(metric_rows).to_csv(metrics_path, index=False)
 
         metrics_frame = pd.DataFrame(metric_rows)
-        metrics_path = object_dir / "rolling_metrics.csv"
         metrics_frame.to_csv(metrics_path, index=False)
 
         summary_payload = build_rolling_summary(metrics_frame, defaults)

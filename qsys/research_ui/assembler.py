@@ -857,6 +857,7 @@ class ResearchCockpitRepository:
         report_logical = str(report_path.relative_to(self.project_root))
         source_key = "other"
         source_label = "other"
+        mainline_object_name = str(model_info.get("mainline_object_name") or "").strip()
         if "scratch/formal_173_compare/" in report_logical:
             source_key = "formal_173_compare"
             source_label = "173 compare"
@@ -869,6 +870,9 @@ class ResearchCockpitRepository:
         elif "scratch/formal_254_fixed/" in report_logical:
             source_key = "formal_254_fixed"
             source_label = "254 fixed"
+        elif mainline_object_name:
+            source_key = f"rolling:{mainline_object_name}"
+            source_label = f"rolling {mainline_object_name}"
         payload_artifacts = payload.get("artifacts") or {}
         daily_path = payload_artifacts.get("daily_result")
         training_summary = {}
@@ -926,13 +930,13 @@ class ResearchCockpitRepository:
             run_id=str(payload.get("run_id") or report_path.stem),
             run_type=str(payload.get("workflow") or "backtest"),
             model_name=str(model_info.get("model_name") or model_info.get("model_path") or "unknown"),
-            feature_set=version_key,
+            feature_set=mainline_object_name or version_key,
             universe=str(model_info.get("universe") or "csi300"),
             train_range={"start": payload.get("signal_date"), "end": payload.get("execution_date")},
             test_range={"start": payload.get("signal_date"), "end": payload.get("execution_date")},
             top_k=self._to_int(model_info.get("top_k")),
             price_mode="fq",
-            display_label=f"{version_label} · {source_label}",
+            display_label=f"{(mainline_object_name or version_label)} · {source_label}",
             parameter_summary={
                 "version_key": version_key,
                 "version_label": version_label,
@@ -940,7 +944,7 @@ class ResearchCockpitRepository:
                 "source_label": source_label,
                 "feature_count": feature_count,
                 "model_path": model_info.get("model_path"),
-                "feature_set": model_info.get("feature_set") or version_key,
+                "feature_set": model_info.get("feature_set") or mainline_object_name or version_key,
                 "model_type": model_info.get("model_type"),
                 "label_type": model_info.get("label_type"),
                 "strategy_type": model_info.get("strategy_type"),
@@ -953,6 +957,9 @@ class ResearchCockpitRepository:
                 "price_mode": "fq",
                 "signal_date": payload.get("signal_date"),
                 "execution_date": payload.get("execution_date"),
+                "mainline_object_name": mainline_object_name or None,
+                "bundle_id": model_info.get("bundle_id"),
+                "legacy_feature_set_alias": model_info.get("legacy_feature_set_alias"),
                 "internal_run_id": str(payload.get("run_id") or report_path.stem),
                 "notes": notes,
                 "training_mode": training_summary.get("training_mode") or model_info.get("training_mode"),
