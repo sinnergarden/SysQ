@@ -2,20 +2,22 @@ decision_id: mainline.feature_173.candidate.v1
 subject_type: mainline_object
 subject_id: feature_173
 status: candidate
-reason: Stable baseline mainline object kept as the current candidate reference for comparison and regression.
+reason: Stable baseline mainline object kept as the current candidate reference for
+  comparison and regression.
 evidence:
-  total_return: null
-  RankIC: null
-  max_drawdown: null
-  turnover: null
-  empty_portfolio_ratio: null
-  comparison_source: historical_mainline_baseline
+  rolling_window_count: 20
+  rolling_rankic_mean: 0.04182725
+  rolling_rankic_std: 0.04813962
+  rolling_total_return_mean: 0.05464532
+  rolling_max_drawdown_worst: -0.18553564
+  rolling_turnover_mean: 1.06959516
+  comparison_source: experiments/mainline_rolling/comparison_summary.csv
   lineage:
     mainline_object_name: feature_173
     bundle_id: bundle_feature_173
     legacy_feature_set_alias: extended
-created_at: "2026-04-18T17:30:00+08:00"
-updated_at: "2026-04-18T17:30:00+08:00"
+created_at: '2026-04-18T17:30:00+08:00'
+updated_at: '2026-04-18T17:30:00+08:00'
 author: qsys_phase_f
 notes:
-  - Baseline candidate state is explicit now rather than implied by naming and habit.
+- Baseline candidate state is explicit now rather than implied by naming and habit.

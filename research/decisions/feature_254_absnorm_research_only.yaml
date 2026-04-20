@@ -1,0 +1,23 @@
+decision_id: mainline.feature_254_absnorm.research_only.v2
+subject_type: mainline_object
+subject_id: feature_254_absnorm
+status: research_only
+reason: Absnorm improves on feature_254 but still trails the baseline, so it stays
+  research_only until readiness and rolling evidence are stronger.
+evidence:
+  rolling_window_count: 20
+  rolling_rankic_mean: 0.00178331
+  rolling_rankic_std: 0.01963585
+  rolling_total_return_mean: -0.01585601
+  rolling_max_drawdown_worst: -0.24819226
+  rolling_turnover_mean: 1.05547518
+  comparison_source: experiments/mainline_rolling/comparison_summary.csv
+  lineage:
+    mainline_object_name: feature_254_absnorm
+    bundle_id: bundle_feature_254_absnorm
+    legacy_feature_set_alias: semantic_all_features_absnorm
+created_at: '2026-04-18T17:30:00+08:00'
+updated_at: '2026-04-18T17:30:00+08:00'
+author: qsys_phase_f
+notes:
+- Improved relative to feature_254, but not enough to remain candidate.
