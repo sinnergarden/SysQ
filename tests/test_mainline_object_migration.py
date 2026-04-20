@@ -77,6 +77,8 @@ class TestMainlineObjectMigration(unittest.TestCase):
             "feature_173": ("bundle_feature_173", "extended"),
             "feature_254": ("bundle_feature_254", "semantic_all_features"),
             "feature_254_absnorm": ("bundle_feature_254_absnorm", "semantic_all_features_absnorm"),
+            "feature_254_trimmed": ("bundle_feature_254_trimmed", "semantic_all_features_trimmed"),
+            "feature_254_absnorm_trimmed": ("bundle_feature_254_absnorm_trimmed", "semantic_all_features_absnorm_trimmed"),
         }
         for mainline_object_name, (bundle_id, feature_set) in expected.items():
             spec = MAINLINE_OBJECTS[mainline_object_name]
@@ -91,19 +93,21 @@ class TestMainlineObjectMigration(unittest.TestCase):
         self.assertEqual(resolve_mainline_feature_config("feature_173"), FeatureLibrary.get_alpha158_extended_config())
         self.assertEqual(resolve_mainline_feature_config("feature_254"), FeatureLibrary.get_semantic_all_features_config())
         self.assertEqual(resolve_mainline_feature_config("feature_254_absnorm"), FeatureLibrary.get_semantic_all_features_absnorm_config())
+        self.assertEqual(resolve_mainline_feature_config("feature_254_trimmed"), FeatureLibrary.get_semantic_all_features_trimmed_config())
+        self.assertEqual(resolve_mainline_feature_config("feature_254_absnorm_trimmed"), FeatureLibrary.get_semantic_all_features_absnorm_trimmed_config())
 
     def test_mainline_summary_lists_all_objects(self):
         rows = mainline_object_summary()
         names = {row["mainline_object_name"] for row in rows}
-        self.assertEqual(names, {"feature_173", "feature_254", "feature_254_absnorm"})
+        self.assertEqual(names, {"feature_173", "feature_254", "feature_254_absnorm", "feature_254_trimmed", "feature_254_absnorm_trimmed"})
 
     def test_train_bundle_resolution_uses_mainline_object_mapping(self):
-        payload = resolve_training_input(feature_set=None, bundle_id="bundle_feature_254")
-        self.assertEqual(payload["mainline_object_name"], "feature_254")
-        self.assertEqual(payload["legacy_feature_set_alias"], "semantic_all_features")
-        self.assertEqual(payload["bundle_id"], "bundle_feature_254")
-        self.assertEqual(payload["factor_variants"], ["feature_254@raw"])
-        self.assertEqual(payload["feature_config"], FeatureLibrary.get_semantic_all_features_config())
+        payload = resolve_training_input(feature_set=None, bundle_id="bundle_feature_254_trimmed")
+        self.assertEqual(payload["mainline_object_name"], "feature_254_trimmed")
+        self.assertEqual(payload["legacy_feature_set_alias"], "semantic_all_features_trimmed")
+        self.assertEqual(payload["bundle_id"], "bundle_feature_254_trimmed")
+        self.assertEqual(payload["factor_variants"], ["feature_254_trimmed@raw"])
+        self.assertEqual(payload["feature_config"], FeatureLibrary.get_semantic_all_features_trimmed_config())
 
     def test_train_legacy_feature_set_still_records_mainline_mapping(self):
         runner = CliRunner()

@@ -95,10 +95,14 @@ def test_mainline_decision_status_regression_matches_latest_policy() -> None:
     feature_173 = resolve_subject_decision(subject_type="mainline_object", subject_ids=["feature_173"])
     feature_254 = resolve_subject_decision(subject_type="mainline_object", subject_ids=["feature_254"])
     feature_254_absnorm = resolve_subject_decision(subject_type="mainline_object", subject_ids=["feature_254_absnorm"])
+    feature_254_trimmed = resolve_subject_decision(subject_type="mainline_object", subject_ids=["feature_254_trimmed"])
+    feature_254_absnorm_trimmed = resolve_subject_decision(subject_type="mainline_object", subject_ids=["feature_254_absnorm_trimmed"])
 
     assert feature_173.status == "candidate"
-    assert feature_254.status == "research_only"
+    assert feature_254.status == "park"
     assert feature_254_absnorm.status == "research_only"
+    assert feature_254_trimmed.status == "research_only"
+    assert feature_254_absnorm_trimmed.status == "research_only"
 
 
 def test_absnorm_comparison_summary_includes_decision_columns() -> None:

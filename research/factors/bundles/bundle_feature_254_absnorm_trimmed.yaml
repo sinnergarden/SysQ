@@ -1,0 +1,7 @@
+bundle_id: bundle_feature_254_absnorm_trimmed
+purpose: mainline_research_absnorm_trimmed
+factor_variants:
+  - feature_254_absnorm_trimmed@raw
+intended_usage: Trimmed absnorm bundle corresponding to feature_set=semantic_all_features_absnorm_trimmed.
+change_log:
+  - "2026-04-20: trimmed mainline object bundle for feature_254_absnorm"

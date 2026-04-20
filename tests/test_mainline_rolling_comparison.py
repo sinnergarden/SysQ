@@ -50,6 +50,32 @@ SUMMARY_ROWS = {
         "rolling_turnover_mean": 0.24,
         "rolling_empty_portfolio_ratio_mean": 0.0,
     },
+    "feature_254_trimmed": {
+        "mainline_object_name": "feature_254_trimmed",
+        "bundle_id": "bundle_feature_254_trimmed",
+        "legacy_feature_set_alias": "semantic_all_features_trimmed",
+        "rolling_window_count": 3,
+        "rolling_total_return_mean": 0.14,
+        "rolling_total_return_median": 0.13,
+        "rolling_rankic_mean": 0.09,
+        "rolling_rankic_std": 0.01,
+        "rolling_max_drawdown_worst": -0.08,
+        "rolling_turnover_mean": 0.22,
+        "rolling_empty_portfolio_ratio_mean": 0.0,
+    },
+    "feature_254_absnorm_trimmed": {
+        "mainline_object_name": "feature_254_absnorm_trimmed",
+        "bundle_id": "bundle_feature_254_absnorm_trimmed",
+        "legacy_feature_set_alias": "semantic_all_features_absnorm_trimmed",
+        "rolling_window_count": 3,
+        "rolling_total_return_mean": 0.15,
+        "rolling_total_return_median": 0.14,
+        "rolling_rankic_mean": 0.1,
+        "rolling_rankic_std": 0.009,
+        "rolling_max_drawdown_worst": -0.07,
+        "rolling_turnover_mean": 0.2,
+        "rolling_empty_portfolio_ratio_mean": 0.0,
+    },
 }
 
 
@@ -70,6 +96,11 @@ def test_mainline_rolling_comparison_writes_csv_and_markdown(tmp_path: Path) -> 
             rolling_comparison_main,
             [
                 "--rolling_dir", "rolling",
+                "--mainline_object", "feature_173",
+                "--mainline_object", "feature_254",
+                "--mainline_object", "feature_254_absnorm",
+                "--mainline_object", "feature_254_trimmed",
+                "--mainline_object", "feature_254_absnorm_trimmed",
             ],
         )
 
@@ -93,5 +124,7 @@ def test_mainline_rolling_comparison_writes_csv_and_markdown(tmp_path: Path) -> 
         "decision_reason",
     }.issubset(summary.columns)
     assert "feature_254_absnorm" in report
+    assert "feature_254_trimmed" in report
+    assert "feature_254_absnorm_trimmed" in report
     assert "Best" in report
     assert "Worst" in report

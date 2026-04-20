@@ -29,6 +29,14 @@ class FeatureLibrary:
         "fundamental_scale": ["$revenue", "$net_income", "$op_cashflow", "$total_assets", "$equity"],
     }
 
+    TRIMMED_EXCLUDED_FIELDS = [
+        "market_breadth",
+        "limit_up_breadth",
+        "small_vs_large_strength",
+        "growth_vs_value_proxy",
+        "ps_ttm",
+    ]
+
     ABSOLUTE_VALUE_NORMALIZATION_VARIANTS = {
         "$total_mv": [
             "$total_mv",
@@ -193,6 +201,14 @@ class FeatureLibrary:
     @classmethod
     def get_semantic_all_features_absnorm_config(cls):
         return cls._merge_feature_fields(cls.get_semantic_all_features_config(), cls._normalized_feature_fields())
+
+    @classmethod
+    def get_semantic_all_features_trimmed_config(cls):
+        return [field for field in cls.get_semantic_all_features_config() if field not in cls.TRIMMED_EXCLUDED_FIELDS]
+
+    @classmethod
+    def get_semantic_all_features_absnorm_trimmed_config(cls):
+        return [field for field in cls.get_semantic_all_features_absnorm_config() if field not in cls.TRIMMED_EXCLUDED_FIELDS]
 
     @classmethod
     def _load_feature_list_from_model_bundle(cls, bundle_dir: Path):

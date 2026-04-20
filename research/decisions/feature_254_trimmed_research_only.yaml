@@ -1,0 +1,23 @@
+decision_id: mainline.feature_254_trimmed.research_only.v1
+subject_type: mainline_object
+subject_id: feature_254_trimmed
+status: research_only
+reason: Trimming the shared bad fields improves raw 254, but the result is still clearly
+  below feature_173, so it stays research_only.
+evidence:
+  rolling_window_count: 20
+  rolling_rankic_mean: 0.0011874
+  rolling_rankic_std: 0.01972633
+  rolling_total_return_mean: -0.02803104
+  rolling_max_drawdown_worst: -0.23596989
+  rolling_turnover_mean: 0.99205287
+  comparison_source: experiments/mainline_trimmed_compare/comparison_summary.csv
+  lineage:
+    mainline_object_name: feature_254_trimmed
+    bundle_id: bundle_feature_254_trimmed
+    legacy_feature_set_alias: semantic_all_features_trimmed
+created_at: '2026-04-20T12:55:00+08:00'
+updated_at: '2026-04-20T12:55:00+08:00'
+author: qsys_trimmed_phase
+notes:
+- Trimmed raw 254 is better than raw 254, but not enough to promote.

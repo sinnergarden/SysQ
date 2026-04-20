@@ -2,8 +2,8 @@ decision_id: mainline.feature_254_absnorm.research_only.v2
 subject_type: mainline_object
 subject_id: feature_254_absnorm
 status: research_only
-reason: Absnorm improves on feature_254 but still trails the baseline, so it stays
-  research_only until readiness and rolling evidence are stronger.
+reason: Absnorm is better than raw 254 but still negative on rolling return mean and
+  materially behind feature_173, so it stays research_only.
 evidence:
   rolling_window_count: 20
   rolling_rankic_mean: 0.00178331
@@ -11,7 +11,7 @@ evidence:
   rolling_total_return_mean: -0.01585601
   rolling_max_drawdown_worst: -0.24819226
   rolling_turnover_mean: 1.05547518
-  comparison_source: experiments/mainline_rolling/comparison_summary.csv
+  comparison_source: experiments/mainline_trimmed_compare/comparison_summary.csv
   lineage:
     mainline_object_name: feature_254_absnorm
     bundle_id: bundle_feature_254_absnorm

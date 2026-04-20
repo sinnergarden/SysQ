@@ -11,7 +11,7 @@ evidence:
   rolling_total_return_mean: 0.05464532
   rolling_max_drawdown_worst: -0.18553564
   rolling_turnover_mean: 1.06959516
-  comparison_source: experiments/mainline_rolling/comparison_summary.csv
+  comparison_source: experiments/mainline_trimmed_compare/comparison_summary.csv
   lineage:
     mainline_object_name: feature_173
     bundle_id: bundle_feature_173

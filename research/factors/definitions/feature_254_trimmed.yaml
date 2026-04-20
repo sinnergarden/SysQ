@@ -1,0 +1,9 @@
+factor_id: feature_254_trimmed
+name: Mainline Feature 254 Trimmed
+family: mainline_object
+kind: research_object
+dependencies:
+  - semantic_all_features_trimmed
+builder: mainline_object_registry
+timing_semantics: t_close_for_t_plus_1
+description: Trimmed semantic_all_features object with shared bad fields removed.

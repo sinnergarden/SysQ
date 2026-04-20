@@ -43,6 +43,8 @@ def test_canonical_model_path_matches_mainline_aliases(tmp_path: Path) -> None:
     assert canonical_model_path(tmp_path, MAINLINE_OBJECTS["feature_173"]) == tmp_path / "data" / "models" / "qlib_lgbm_extended"
     assert canonical_model_path(tmp_path, MAINLINE_OBJECTS["feature_254"]) == tmp_path / "data" / "models" / "qlib_lgbm_semantic_all_features"
     assert canonical_model_path(tmp_path, MAINLINE_OBJECTS["feature_254_absnorm"]) == tmp_path / "data" / "models" / "qlib_lgbm_semantic_all_features_absnorm"
+    assert canonical_model_path(tmp_path, MAINLINE_OBJECTS["feature_254_trimmed"]) == tmp_path / "data" / "models" / "qlib_lgbm_semantic_all_features_trimmed"
+    assert canonical_model_path(tmp_path, MAINLINE_OBJECTS["feature_254_absnorm_trimmed"]) == tmp_path / "data" / "models" / "qlib_lgbm_semantic_all_features_absnorm_trimmed"
 
 
 def test_mainline_rolling_eval_resumes_from_existing_metrics(tmp_path: Path) -> None:
@@ -109,10 +111,46 @@ def test_mainline_rolling_eval_resumes_from_existing_metrics(tmp_path: Path) -> 
     assert calls == [("2025-01-22", "2025-02-10"), ("2025-02-11", "2025-02-15")]
 
 
+def test_mainline_rolling_eval_accepts_trimmed_objects_without_polluting_default_set(tmp_path: Path) -> None:
+    runner = CliRunner()
+    for key in ["feature_173", "feature_254", "feature_254_absnorm", "feature_254_trimmed", "feature_254_absnorm_trimmed"]:
+        model_dir = canonical_model_path(tmp_path, MAINLINE_OBJECTS[key])
+        model_dir.mkdir(parents=True, exist_ok=True)
+
+    snapshot = {
+        "status": "available",
+        "start": "2021-01-01",
+        "end": "2024-12-31",
+        "feature_set": "extended",
+        "bundle_id": "bundle_feature_173",
+    }
+    with patch("scripts.run_mainline_rolling_eval.project_root", tmp_path), \
+         patch("scripts.run_mainline_rolling_eval.BacktestEngine", _FakeBacktestEngine), \
+         patch("scripts.run_mainline_rolling_eval.load_training_snapshot", return_value=snapshot), \
+         patch("scripts.run_mainline_rolling_eval.build_backtest_lineage", return_value={"lineage_status": "ok"}):
+        result = runner.invoke(
+            rolling_eval_main,
+            [
+                "--start", "2025-01-02",
+                "--end", "2025-02-15",
+                "--output_dir", "tmp/rolling",
+                "--test_window_days", "20",
+                "--step_days", "20",
+                "--mainline_object", "feature_254_trimmed",
+                "--mainline_object", "feature_254_absnorm_trimmed",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    assert not (tmp_path / "tmp" / "rolling" / "feature_173").exists()
+    for key in ["feature_254_trimmed", "feature_254_absnorm_trimmed"]:
+        assert (tmp_path / "tmp" / "rolling" / key / "rolling_summary.json").exists()
+
+
 def test_mainline_rolling_eval_writes_required_outputs(tmp_path: Path) -> None:
     runner = CliRunner()
-    for spec in MAINLINE_OBJECTS.values():
-        model_dir = canonical_model_path(tmp_path, spec)
+    for key in ["feature_173", "feature_254", "feature_254_absnorm"]:
+        model_dir = canonical_model_path(tmp_path, MAINLINE_OBJECTS[key])
         model_dir.mkdir(parents=True, exist_ok=True)
 
     snapshot = {
@@ -138,7 +176,8 @@ def test_mainline_rolling_eval_writes_required_outputs(tmp_path: Path) -> None:
         )
 
     assert result.exit_code == 0, result.output
-    for spec in MAINLINE_OBJECTS.values():
+    for key in ["feature_173", "feature_254", "feature_254_absnorm"]:
+        spec = MAINLINE_OBJECTS[key]
         object_dir = tmp_path / "tmp" / "rolling" / spec.mainline_object_name
         windows = pd.read_csv(object_dir / "rolling_windows.csv")
         metrics = pd.read_csv(object_dir / "rolling_metrics.csv")

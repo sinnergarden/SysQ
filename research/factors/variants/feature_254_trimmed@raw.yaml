@@ -1,0 +1,6 @@
+variant_id: feature_254_trimmed@raw
+base_factor_id: feature_254_trimmed
+transform_chain:
+  - raw
+status: research
+notes: Raw variant for the trimmed semantic_all_features research object.

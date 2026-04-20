@@ -37,6 +37,20 @@ MAINLINE_OBJECTS: dict[str, MainlineObjectSpec] = {
         model_name="qlib_lgbm_semantic_all_features_absnorm",
         description="Mainline absnorm research object mapped to the historical semantic_all_features_absnorm feature set.",
     ),
+    "feature_254_trimmed": MainlineObjectSpec(
+        mainline_object_name="feature_254_trimmed",
+        bundle_id="bundle_feature_254_trimmed",
+        legacy_feature_set_alias="semantic_all_features_trimmed",
+        model_name="qlib_lgbm_semantic_all_features_trimmed",
+        description="Trimmed expanded research object with the shared high-missing/dead fields removed from feature_254.",
+    ),
+    "feature_254_absnorm_trimmed": MainlineObjectSpec(
+        mainline_object_name="feature_254_absnorm_trimmed",
+        bundle_id="bundle_feature_254_absnorm_trimmed",
+        legacy_feature_set_alias="semantic_all_features_absnorm_trimmed",
+        model_name="qlib_lgbm_semantic_all_features_absnorm_trimmed",
+        description="Trimmed absnorm research object with the shared high-missing/dead fields removed from feature_254_absnorm.",
+    ),
 }
 
 LEGACY_FEATURE_SET_ALIAS_TO_MAINLINE_OBJECT = {
@@ -63,18 +77,24 @@ MAINLINE_OBJECT_TO_FEATURE_CONFIG_LOADER = {
     "feature_173": FeatureLibrary.get_alpha158_extended_config,
     "feature_254": FeatureLibrary.get_semantic_all_features_config,
     "feature_254_absnorm": FeatureLibrary.get_semantic_all_features_absnorm_config,
+    "feature_254_trimmed": FeatureLibrary.get_semantic_all_features_trimmed_config,
+    "feature_254_absnorm_trimmed": FeatureLibrary.get_semantic_all_features_absnorm_trimmed_config,
 }
 
 MAINLINE_OBJECT_TO_VARIANT_IDS = {
     "feature_173": ["feature_173@raw"],
     "feature_254": ["feature_254@raw"],
     "feature_254_absnorm": ["feature_254_absnorm@raw"],
+    "feature_254_trimmed": ["feature_254_trimmed@raw"],
+    "feature_254_absnorm_trimmed": ["feature_254_absnorm_trimmed@raw"],
 }
 
 MAINLINE_OBJECT_TO_FEATURE_SET_NAME = {
     "feature_173": "extended",
     "feature_254": "semantic_all_features",
     "feature_254_absnorm": "semantic_all_features_absnorm",
+    "feature_254_trimmed": "semantic_all_features_trimmed",
+    "feature_254_absnorm_trimmed": "semantic_all_features_absnorm_trimmed",
 }
 
 

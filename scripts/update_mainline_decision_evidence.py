@@ -17,8 +17,10 @@ from qsys.research.rolling import decision_evidence_payload
 
 DEFAULT_DECISION_FILES = {
     "feature_173": "research/decisions/feature_173_candidate.yaml",
-    "feature_254": "research/decisions/feature_254_research_only.yaml",
+    "feature_254": "research/decisions/feature_254_park.yaml",
     "feature_254_absnorm": "research/decisions/feature_254_absnorm_research_only.yaml",
+    "feature_254_trimmed": "research/decisions/feature_254_trimmed_research_only.yaml",
+    "feature_254_absnorm_trimmed": "research/decisions/feature_254_absnorm_trimmed_research_only.yaml",
 }
 
 
@@ -36,11 +38,14 @@ def main(comparison_csv: str, comparison_source: str) -> None:
 
     updated_files: list[str] = []
     by_name = {str(row["mainline_object_name"]): row for _, row in frame.iterrows()}
-    for mainline_object_name, spec in MAINLINE_OBJECTS.items():
-        row = by_name.get(mainline_object_name)
-        if row is None:
-            raise ValueError(f"Missing comparison row for {mainline_object_name}")
-        decision_path = (project_root / DEFAULT_DECISION_FILES[mainline_object_name]).resolve()
+    for mainline_object_name, row in by_name.items():
+        spec = MAINLINE_OBJECTS.get(mainline_object_name)
+        if spec is None:
+            continue
+        decision_rel = DEFAULT_DECISION_FILES.get(mainline_object_name)
+        if decision_rel is None:
+            continue
+        decision_path = (project_root / decision_rel).resolve()
         payload = yaml.safe_load(decision_path.read_text(encoding="utf-8")) or {}
         payload["evidence"] = decision_evidence_payload(
             row.to_dict(),

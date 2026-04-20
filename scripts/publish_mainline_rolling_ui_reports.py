@@ -51,7 +51,8 @@ def _build_rolling_daily_result(metrics: pd.DataFrame) -> list[dict[str, object]
 @click.command(name="publish_mainline_rolling_ui_reports")
 @click.option("--rolling_dir", default="experiments/mainline_rolling", help="Directory containing per-object rolling outputs")
 @click.option("--reports_dir", default="experiments/reports", help="Directory for UI-readable backtest reports")
-def main(rolling_dir: str, reports_dir: str) -> None:
+@click.option("--mainline_object", "mainline_objects", multiple=True, help="Optional mainline object filter; repeat for multiple values")
+def main(rolling_dir: str, reports_dir: str, mainline_objects: tuple[str, ...]) -> None:
     rolling_root = (project_root / rolling_dir).resolve()
     reports_root = (project_root / reports_dir).resolve()
     reports_root.mkdir(parents=True, exist_ok=True)
@@ -63,7 +64,13 @@ def main(rolling_dir: str, reports_dir: str) -> None:
         for _, row in comparison.iterrows()
     }
 
-    for mainline_object_name, spec in MAINLINE_OBJECTS.items():
+    selected_names = list(mainline_objects or [
+        path.name
+        for path in rolling_root.iterdir()
+        if path.is_dir() and (path / "rolling_summary.json").exists() and path.name in MAINLINE_OBJECTS
+    ])
+    for mainline_object_name in selected_names:
+        spec = MAINLINE_OBJECTS[mainline_object_name]
         summary_path = rolling_root / mainline_object_name / "rolling_summary.json"
         metrics_path = rolling_root / mainline_object_name / "rolling_metrics.csv"
         windows_path = rolling_root / mainline_object_name / "rolling_windows.csv"

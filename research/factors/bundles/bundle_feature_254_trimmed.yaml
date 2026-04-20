@@ -1,0 +1,7 @@
+bundle_id: bundle_feature_254_trimmed
+purpose: mainline_research_expanded_trimmed
+factor_variants:
+  - feature_254_trimmed@raw
+intended_usage: Trimmed expanded bundle corresponding to feature_set=semantic_all_features_trimmed.
+change_log:
+  - "2026-04-20: trimmed mainline object bundle for feature_254"

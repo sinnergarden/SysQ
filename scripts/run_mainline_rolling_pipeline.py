@@ -44,8 +44,11 @@ def main(start: str, end: str, rolling_dir: str, reports_dir: str, mainline_obje
         standalone_mode=False,
     )
 
+    publish_args = ["--rolling_dir", rolling_dir, "--reports_dir", reports_dir]
+    for mainline_object in mainline_objects:
+        publish_args.extend(["--mainline_object", mainline_object])
     publish_ui_main.main(
-        args=["--rolling_dir", rolling_dir, "--reports_dir", reports_dir],
+        args=publish_args,
         standalone_mode=False,
     )
 

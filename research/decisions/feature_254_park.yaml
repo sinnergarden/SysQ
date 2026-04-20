@@ -1,9 +1,9 @@
-decision_id: mainline.feature_254.research_only.v1
+decision_id: mainline.feature_254.park.v2
 subject_type: mainline_object
 subject_id: feature_254
-status: research_only
-reason: Expanded mainline object remains under research until evaluation and promotion
-  evidence is more settled.
+status: park
+reason: Raw 254 remains the worst line after rolling and readiness review, so it is
+  parked in favor of trimmed follow-up paths.
 evidence:
   rolling_window_count: 20
   rolling_rankic_mean: -0.0123631
@@ -11,7 +11,7 @@ evidence:
   rolling_total_return_mean: -0.05481831
   rolling_max_drawdown_worst: -0.18834494
   rolling_turnover_mean: 1.19836078
-  comparison_source: experiments/mainline_rolling/comparison_summary.csv
+  comparison_source: experiments/mainline_trimmed_compare/comparison_summary.csv
   lineage:
     mainline_object_name: feature_254
     bundle_id: bundle_feature_254
@@ -20,4 +20,5 @@ created_at: '2026-04-18T17:30:00+08:00'
 updated_at: '2026-04-18T17:30:00+08:00'
 author: qsys_phase_f
 notes:
-- Keep object visible in governance but do not imply readiness.
+- Shared bad fields remain unresolved enough that raw 254 should not stay on the active
+  mainline path.
