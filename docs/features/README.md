@@ -27,6 +27,7 @@
 - `qsys_workflow_adapter_plan.md`：首批 commands 的 adapter 设计与 PR 拆分建议。
 - `miniqmt_bridge_and_production_ops.md`：研究+生产双定位、WSL 生产运行形态与 MiniQMT 桥接方向。
 - `mainline_rolling_and_readiness.md`：三条主线对象的固定 rolling 研究入口、artifact contract、UI 识别约定，以及最小 readiness / coverage / degradation 闭环。
+- `mainline_strategy_tuning_exclusion_round.md`：`feature_173` vs `feature_254_trimmed` 的策略层排除实验收口 notes，记录最优接法、相对强弱与最终业务判断。
 
 ## 当前进度备注
 
