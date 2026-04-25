@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +13,8 @@ from qsys.ops.state import atomic_write_json, load_json
 CHANNEL_NAME = "wecom_webhook"
 DEFAULT_TIMEOUT_SECONDS = 5
 MAX_RESPONSE_TEXT_LENGTH = 200
+WEBHOOK_URL_RE = re.compile(r"https://qyapi\.weixin\.qq\.com/cgi-bin/webhook/send\?key=[^\s\"'&]+")
+WEBHOOK_KEY_RE = re.compile(r"key=[^\s\"'&]+")
 
 
 def _resolve_wecom_webhook_url(explicit_webhook_url: str | None = None) -> str | None:
@@ -34,8 +38,15 @@ def _resolve_wecom_webhook_url(explicit_webhook_url: str | None = None) -> str |
     return None
 
 
+def _sanitize_notification_text(text: str | None) -> str:
+    sanitized = str(text or "")
+    sanitized = WEBHOOK_URL_RE.sub("https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=***", sanitized)
+    sanitized = WEBHOOK_KEY_RE.sub("key=***", sanitized)
+    return sanitized
+
+
 def _safe_response_text(response: requests.Response) -> str:
-    text = (response.text or "").strip()
+    text = _sanitize_notification_text((response.text or "").strip())
     if len(text) > MAX_RESPONSE_TEXT_LENGTH:
         return text[:MAX_RESPONSE_TEXT_LENGTH] + "..."
     return text
@@ -60,15 +71,37 @@ def send_wecom_webhook_message(title: str, content: str, *, webhook_url: str | N
     }
     try:
         response = requests.post(resolved_webhook_url, json=payload, timeout=DEFAULT_TIMEOUT_SECONDS)
-        response.raise_for_status()
+        http_status = int(response.status_code)
         response_text = _safe_response_text(response)
+        response.raise_for_status()
+
+        response_payload = {}
+        if response.text:
+            try:
+                response_payload = json.loads(response.text)
+            except json.JSONDecodeError:
+                response_payload = {}
+
+        errcode = int(response_payload.get("errcode", 0)) if response_payload else 0
+        errmsg = _sanitize_notification_text(str(response_payload.get("errmsg", ""))) if response_payload else ""
+        if errcode != 0:
+            return {
+                "status": "failed",
+                "channel": CHANNEL_NAME,
+                "webhook_configured": True,
+                "message": "wecom webhook returned non-zero errcode",
+                "error": f"wecom errcode={errcode}, errmsg={errmsg or 'unknown'}",
+                "http_status": http_status,
+                "response_text": response_text,
+            }
+
         return {
             "status": "success",
             "channel": CHANNEL_NAME,
             "webhook_configured": True,
-            "message": f"notification sent ({response.status_code})",
+            "message": f"notification sent ({http_status})",
             "error": None,
-            "http_status": int(response.status_code),
+            "http_status": http_status,
             "response_text": response_text,
         }
     except Exception as exc:
@@ -77,7 +110,7 @@ def send_wecom_webhook_message(title: str, content: str, *, webhook_url: str | N
             "channel": CHANNEL_NAME,
             "webhook_configured": True,
             "message": "notification request failed",
-            "error": str(exc),
+            "error": _sanitize_notification_text(str(exc)),
         }
 
 

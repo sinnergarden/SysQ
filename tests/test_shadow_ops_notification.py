@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from qsys.ops import build_latest_shadow_model_payload, write_latest_shadow_model
-from qsys.ops.notification import send_shadow_run_notification, send_wecom_webhook_message
+from qsys.ops.notification import _sanitize_notification_text, send_shadow_run_notification, send_wecom_webhook_message
 from qsys.ops.state import load_json
 from qsys.ops.training import TrainingArtifacts, TrainingInvocationError
 from scripts.ops.run_shadow_daily import run_shadow_daily
@@ -169,6 +169,13 @@ class TestShadowOpsNotification(unittest.TestCase):
         self.assertFalse(result["webhook_configured"])
         self.assertEqual(result["error"], "webhook not configured")
 
+    def test_sanitize_notification_text_masks_webhook_url_and_key(self):
+        raw = "boom https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=SECRET and key=SECRET"
+        sanitized = _sanitize_notification_text(raw)
+        self.assertNotIn("SECRET", sanitized)
+        self.assertNotIn("https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=SECRET", sanitized)
+        self.assertIn("key=***", sanitized)
+
     def test_send_wecom_webhook_message_success_uses_markdown_payload(self):
         with patch.object(__import__("qsys.ops.notification", fromlist=["cfg"]).cfg, "get") as cfg_get, patch(
             "qsys.ops.notification.requests.post", return_value=_FakeResponse(200, '{"errcode":0,"errmsg":"ok"}')
@@ -176,20 +183,37 @@ class TestShadowOpsNotification(unittest.TestCase):
             cfg_get.side_effect = lambda key, default=None: {"notification": {"wecom_webhook_url": "https://example.invalid/hook"}} if key == "ops" else default
             result = send_wecom_webhook_message("Qsys Shadow Daily: SUCCESS", "trade_date: 2026-04-25")
         self.assertEqual(result["status"], "success")
+        self.assertEqual(result["http_status"], 200)
         kwargs = post_mock.call_args.kwargs
         self.assertEqual(kwargs["json"]["msgtype"], "markdown")
         self.assertIn("Qsys Shadow Daily: SUCCESS", kwargs["json"]["markdown"]["content"])
         self.assertNotIn("example.invalid", json.dumps(result))
 
-    def test_send_wecom_webhook_message_failure_does_not_raise(self):
+    def test_send_wecom_webhook_message_nonzero_errcode_is_failed(self):
         with patch.object(__import__("qsys.ops.notification", fromlist=["cfg"]).cfg, "get") as cfg_get, patch(
-            "qsys.ops.notification.requests.post", side_effect=RuntimeError("network boom")
+            "qsys.ops.notification.requests.post",
+            return_value=_FakeResponse(200, '{"errcode":93000,"errmsg":"invalid webhook https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=SECRET"}'),
+        ):
+            cfg_get.side_effect = lambda key, default=None: {"notification": {"wecom_webhook_url": "https://example.invalid/hook"}} if key == "ops" else default
+            result = send_wecom_webhook_message("title", "content")
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["http_status"], 200)
+        self.assertIn("wecom errcode=93000", result["error"])
+        self.assertNotIn("SECRET", result["error"])
+        self.assertNotIn("https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=SECRET", result["error"])
+        self.assertNotIn("SECRET", result.get("response_text", ""))
+
+    def test_send_wecom_webhook_message_failure_does_not_raise_and_sanitizes_error(self):
+        error_text = "network boom https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=SECRET"
+        with patch.object(__import__("qsys.ops.notification", fromlist=["cfg"]).cfg, "get") as cfg_get, patch(
+            "qsys.ops.notification.requests.post", side_effect=RuntimeError(error_text)
         ):
             cfg_get.side_effect = lambda key, default=None: {"notification": {"wecom_webhook_url": "https://example.invalid/hook"}} if key == "ops" else default
             result = send_wecom_webhook_message("title", "content")
         self.assertEqual(result["status"], "failed")
         self.assertEqual(result["channel"], "wecom_webhook")
-        self.assertIn("network boom", result["error"])
+        self.assertNotIn("SECRET", result["error"])
+        self.assertNotIn("https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=SECRET", result["error"])
 
     def test_send_shadow_run_notification_builds_daily_message(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -260,6 +284,30 @@ class TestShadowOpsNotification(unittest.TestCase):
                 self.assertEqual(result["overall_status"], "failed")
                 self.assertEqual(summary["notification_status"], "failed")
                 self.assertEqual(notification["error"], "boom")
+
+    def test_daily_runner_notification_wecom_errcode_failed_does_not_pollute_status(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch("scripts.ops.run_shadow_daily._build_data_status", return_value=_fake_data_status()), patch(
+                "scripts.ops.run_shadow_daily._build_feature_status", return_value=_fake_feature_status()
+            ), patch(
+                "scripts.ops.run_shadow_daily.send_shadow_run_notification",
+                return_value={
+                    "status": "failed",
+                    "channel": "wecom_webhook",
+                    "webhook_configured": True,
+                    "message": "wecom webhook returned non-zero errcode",
+                    "error": "wecom errcode=93000, errmsg=invalid webhook",
+                    "http_status": 200,
+                },
+            ):
+                result = run_shadow_daily(tmpdir, run_id="shadow_2026-04-25_090807", triggered_by="test")
+                run_dir = Path(result["run_dir"])
+                summary = load_json(run_dir / "daily_summary.json")
+                notification = load_json(run_dir / "06_notification" / "notification_result.json")
+                self.assertEqual(result["overall_status"], "failed")
+                self.assertEqual(summary["notification_status"], "failed")
+                self.assertEqual(notification["http_status"], 200)
+                self.assertIn("wecom errcode=93000", notification["error"])
 
     def test_weekly_runner_writes_notification_result_for_success(self):
         with tempfile.TemporaryDirectory() as tmpdir:
