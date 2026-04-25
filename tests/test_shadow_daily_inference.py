@@ -36,6 +36,14 @@ def _make_usable_latest_model(base_dir: Path) -> dict[str, str]:
 
 class TestShadowDailyInference(unittest.TestCase):
     def setUp(self):
+        self.date_resolution = {
+            "requested_date": "2026-04-25",
+            "resolved_trade_date": "2026-04-25",
+            "last_qlib_date": "2026-04-25",
+            "status": "success",
+            "reason": "requested_date is available in qlib",
+            "is_exact_match": True,
+        }
         self.data_status = {
             "trade_date": "2026-04-25",
             "status": "success",
@@ -56,9 +64,9 @@ class TestShadowDailyInference(unittest.TestCase):
 
     def test_no_model_blocks_inference_and_rebalance(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            with patch("scripts.ops.run_shadow_daily._build_data_status", return_value=self.data_status), patch(
-                "scripts.ops.run_shadow_daily._build_feature_status", return_value=self.feature_status
-            ):
+            with patch("scripts.ops.run_shadow_daily.resolve_daily_trade_date", return_value=self.date_resolution), patch(
+                "scripts.ops.run_shadow_daily._build_data_status", return_value=self.data_status
+            ), patch("scripts.ops.run_shadow_daily._build_feature_status", return_value=self.feature_status):
                 result = run_shadow_daily(tmpdir, run_id="shadow_2026-04-25_090807", triggered_by="test")
 
             run_dir = Path(result["run_dir"])
@@ -97,9 +105,11 @@ class TestShadowDailyInference(unittest.TestCase):
             data_failed = dict(self.data_status)
             data_failed["status"] = "failed"
             data_failed["health_report"] = {"blocking_issues": ["raw_latest stale"]}
-            with patch("scripts.ops.run_shadow_daily._build_data_status", return_value=data_failed), patch(
-                "scripts.ops.run_shadow_daily._build_feature_status", return_value=self.feature_status
-            ), patch("scripts.ops.run_shadow_daily.run_shadow_daily_inference") as inference_mock, patch(
+            with patch("scripts.ops.run_shadow_daily.resolve_daily_trade_date", return_value=self.date_resolution), patch(
+                "scripts.ops.run_shadow_daily._build_data_status", return_value=data_failed
+            ), patch("scripts.ops.run_shadow_daily._build_feature_status", return_value=self.feature_status), patch(
+                "scripts.ops.run_shadow_daily.run_shadow_daily_inference"
+            ) as inference_mock, patch(
                 "scripts.ops.run_shadow_daily.run_shadow_rebalance"
             ) as rebalance_mock:
                 result = run_shadow_daily(base_dir, run_id="shadow_2026-04-25_090807", triggered_by="test")
@@ -129,9 +139,11 @@ class TestShadowDailyInference(unittest.TestCase):
             feature_failed["status"] = "failed"
             feature_failed["degradation_level"] = "blocked"
             feature_failed["notes"] = ["feature coverage insufficient"]
-            with patch("scripts.ops.run_shadow_daily._build_data_status", return_value=self.data_status), patch(
-                "scripts.ops.run_shadow_daily._build_feature_status", return_value=feature_failed
-            ), patch("scripts.ops.run_shadow_daily.run_shadow_daily_inference") as inference_mock, patch(
+            with patch("scripts.ops.run_shadow_daily.resolve_daily_trade_date", return_value=self.date_resolution), patch(
+                "scripts.ops.run_shadow_daily._build_data_status", return_value=self.data_status
+            ), patch("scripts.ops.run_shadow_daily._build_feature_status", return_value=feature_failed), patch(
+                "scripts.ops.run_shadow_daily.run_shadow_daily_inference"
+            ) as inference_mock, patch(
                 "scripts.ops.run_shadow_daily.run_shadow_rebalance"
             ) as rebalance_mock:
                 result = run_shadow_daily(base_dir, run_id="shadow_2026-04-25_090807", triggered_by="test")
@@ -156,9 +168,11 @@ class TestShadowDailyInference(unittest.TestCase):
             feature_warn = dict(self.feature_status)
             feature_warn["status"] = "warn"
             feature_warn["degradation_level"] = "extended_warn"
-            with patch("scripts.ops.run_shadow_daily._build_data_status", return_value=self.data_status), patch(
-                "scripts.ops.run_shadow_daily._build_feature_status", return_value=feature_warn
-            ), patch("scripts.ops.run_shadow_daily.run_shadow_daily_inference") as inference_mock, patch(
+            with patch("scripts.ops.run_shadow_daily.resolve_daily_trade_date", return_value=self.date_resolution), patch(
+                "scripts.ops.run_shadow_daily._build_data_status", return_value=self.data_status
+            ), patch("scripts.ops.run_shadow_daily._build_feature_status", return_value=feature_warn), patch(
+                "scripts.ops.run_shadow_daily.run_shadow_daily_inference"
+            ) as inference_mock, patch(
                 "scripts.ops.run_shadow_daily.run_shadow_rebalance"
             ) as rebalance_mock:
                 inference_mock.return_value = type("InferenceArtifacts", (), {
@@ -199,13 +213,114 @@ class TestShadowDailyInference(unittest.TestCase):
             self.assertEqual(manifest["stage_status"]["shadow_rebalance"]["status"], "success")
             rebalance_mock.assert_called_once()
 
+    def test_daily_runner_uses_resolved_trade_date(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_dir = Path(tmpdir)
+            _make_usable_latest_model(base_dir)
+            fallback_resolution = {
+                "requested_date": "2026-04-25",
+                "resolved_trade_date": "2026-04-17",
+                "last_qlib_date": "2026-04-17",
+                "status": "fallback_to_latest_available",
+                "reason": "requested_date has no qlib feature rows; using latest available trading date",
+                "is_exact_match": False,
+            }
+            data_status = dict(self.data_status)
+            data_status["trade_date"] = "2026-04-17"
+            feature_status = dict(self.feature_status)
+            feature_status["trade_date"] = "2026-04-17"
+            with patch("scripts.ops.run_shadow_daily.resolve_daily_trade_date", return_value=fallback_resolution), patch(
+                "scripts.ops.run_shadow_daily._build_data_status", return_value=data_status
+            ), patch("scripts.ops.run_shadow_daily._build_feature_status", return_value=feature_status), patch(
+                "scripts.ops.run_shadow_daily.run_shadow_daily_inference"
+            ) as inference_mock, patch("scripts.ops.run_shadow_daily.run_shadow_rebalance") as rebalance_mock:
+                inference_mock.return_value = type("InferenceArtifacts", (), {
+                    "predictions_path": str(base_dir / "runs" / "2026-04-25" / "shadow_2026-04-25_090807" / "04_inference" / "predictions.csv"),
+                    "inference_summary_path": str(base_dir / "runs" / "2026-04-25" / "shadow_2026-04-25_090807" / "04_inference" / "inference_summary.json"),
+                    "prediction_count": 1,
+                })()
+                pred_path = Path(inference_mock.return_value.predictions_path)
+                pred_path.parent.mkdir(parents=True, exist_ok=True)
+                pred_path.write_text(
+                    "trade_date,instrument,score,model_name,mainline_object_name,bundle_id,train_run_id\n"
+                    "2026-04-17,SH600000,0.2,qlib_lgbm_extended,feature_173,bundle_feature_173,shadow_retrain_2026-04-25_090807\n",
+                    encoding="utf-8",
+                )
+                _write_json(Path(inference_mock.return_value.inference_summary_path), {"status": "success", "trade_date": "2026-04-17"})
+                rebalance_mock.return_value = type("RebalanceArtifacts", (), {
+                    "execution_summary_path": str(base_dir / "runs" / "2026-04-25" / "shadow_2026-04-25_090807" / "05_shadow" / "execution_summary.json"),
+                    "target_weights_path": str(base_dir / "runs" / "2026-04-25" / "shadow_2026-04-25_090807" / "05_shadow" / "target_weights.csv"),
+                    "order_intents_path": str(base_dir / "runs" / "2026-04-25" / "shadow_2026-04-25_090807" / "05_shadow" / "order_intents.csv"),
+                    "account_after_path": str(base_dir / "runs" / "2026-04-25" / "shadow_2026-04-25_090807" / "05_shadow" / "account_after.json"),
+                    "positions_after_path": str(base_dir / "runs" / "2026-04-25" / "shadow_2026-04-25_090807" / "05_shadow" / "positions_after.csv"),
+                    "shadow_account_path": str(base_dir / "shadow" / "account.json"),
+                    "shadow_positions_path": str(base_dir / "shadow" / "positions.csv"),
+                    "shadow_ledger_path": str(base_dir / "shadow" / "ledger.csv"),
+                    "order_count": 0,
+                    "filled_count": 0,
+                    "rejected_count": 0,
+                    "turnover": 0.0,
+                    "cash_after": 1000000.0,
+                    "total_value_after": 1000000.0,
+                })()
+                Path(rebalance_mock.return_value.execution_summary_path).parent.mkdir(parents=True, exist_ok=True)
+                _write_json(Path(rebalance_mock.return_value.execution_summary_path), {"status": "success"})
+                result = run_shadow_daily(base_dir, run_id="shadow_2026-04-25_090807", triggered_by="test")
+
+            summary = load_json(Path(result["run_dir"]) / "daily_summary.json")
+            manifest = load_json(Path(result["run_dir"]) / "manifest.json")
+            self.assertEqual(summary["trade_date"], "2026-04-17")
+            self.assertEqual(summary["requested_date"], "2026-04-25")
+            self.assertEqual(summary["date_resolution_status"], "fallback_to_latest_available")
+            self.assertEqual(manifest["date_resolution"]["resolved_trade_date"], "2026-04-17")
+            self.assertEqual(inference_mock.call_args.kwargs["trade_date"], "2026-04-17")
+            self.assertEqual(rebalance_mock.call_args.kwargs["trade_date"], "2026-04-17")
+
+    def test_daily_resolver_failed_blocks_downstream(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_dir = Path(tmpdir)
+            shadow_dir = base_dir / "shadow"
+            shadow_dir.mkdir(parents=True, exist_ok=True)
+            account_path = _write_json(shadow_dir / "account.json", {"cash": 1.0, "last_run_id": "shadow_prev"})
+            ledger_path = shadow_dir / "ledger.csv"
+            ledger_path.write_text("run_id,trade_date\n", encoding="utf-8")
+            account_before = account_path.read_text(encoding="utf-8")
+            ledger_before = ledger_path.read_text(encoding="utf-8")
+            failed_resolution = {
+                "requested_date": "2026-04-25",
+                "resolved_trade_date": None,
+                "last_qlib_date": None,
+                "status": "failed",
+                "reason": "no available qlib trading date",
+                "is_exact_match": False,
+            }
+            with patch("scripts.ops.run_shadow_daily.resolve_daily_trade_date", return_value=failed_resolution), patch(
+                "scripts.ops.run_shadow_daily._build_feature_status", return_value=self.feature_status
+            ), patch("scripts.ops.run_shadow_daily.run_shadow_daily_inference") as inference_mock, patch(
+                "scripts.ops.run_shadow_daily.run_shadow_rebalance"
+            ) as rebalance_mock:
+                result = run_shadow_daily(base_dir, run_id="shadow_2026-04-25_090807", triggered_by="test")
+
+            run_dir = Path(result["run_dir"])
+            manifest = load_json(run_dir / "manifest.json")
+            summary = load_json(run_dir / "daily_summary.json")
+            self.assertEqual(manifest["stage_status"]["data_sync"]["status"], "failed")
+            self.assertEqual(manifest["stage_status"]["select_model"]["status"], "skipped")
+            self.assertEqual(manifest["stage_status"]["inference"]["status"], "skipped")
+            self.assertEqual(manifest["stage_status"]["shadow_rebalance"]["status"], "skipped")
+            self.assertEqual(summary["date_resolution_status"], "failed")
+            self.assertEqual(account_path.read_text(encoding="utf-8"), account_before)
+            self.assertEqual(ledger_path.read_text(encoding="utf-8"), ledger_before)
+            inference_mock.assert_not_called()
+            rebalance_mock.assert_not_called()
+
     def test_inference_failure_does_not_trigger_rebalance(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             base_dir = Path(tmpdir)
             _make_usable_latest_model(base_dir)
-            with patch("scripts.ops.run_shadow_daily._build_data_status", return_value=self.data_status), patch(
-                "scripts.ops.run_shadow_daily._build_feature_status", return_value=self.feature_status
-            ), patch(
+            with patch("scripts.ops.run_shadow_daily.resolve_daily_trade_date", return_value=self.date_resolution), patch(
+                "scripts.ops.run_shadow_daily._build_data_status", return_value=self.data_status
+            ), patch("scripts.ops.run_shadow_daily._build_feature_status", return_value=self.feature_status), patch(
                 "scripts.ops.run_shadow_daily.run_shadow_daily_inference",
                 side_effect=InferenceInvocationError("mock inference boom"),
             ), patch("scripts.ops.run_shadow_daily.run_shadow_rebalance") as rebalance_mock:
@@ -274,9 +389,11 @@ class TestShadowDailyInference(unittest.TestCase):
                     "turnover": 0.0,
                 })()
 
-            with patch("scripts.ops.run_shadow_daily._build_data_status", return_value=self.data_status), patch(
-                "scripts.ops.run_shadow_daily._build_feature_status", return_value=self.feature_status
-            ), patch("scripts.ops.run_shadow_daily.run_shadow_daily_inference") as inference_mock, patch(
+            with patch("scripts.ops.run_shadow_daily.resolve_daily_trade_date", return_value=self.date_resolution), patch(
+                "scripts.ops.run_shadow_daily._build_data_status", return_value=self.data_status
+            ), patch("scripts.ops.run_shadow_daily._build_feature_status", return_value=self.feature_status), patch(
+                "scripts.ops.run_shadow_daily.run_shadow_daily_inference"
+            ) as inference_mock, patch(
                 "scripts.ops.run_shadow_daily.run_shadow_rebalance", side_effect=fake_rebalance
             ):
                 inference_mock.return_value = type("InferenceArtifacts", (), {

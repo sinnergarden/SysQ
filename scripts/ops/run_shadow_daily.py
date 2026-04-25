@@ -21,6 +21,7 @@ from qsys.ops import (
     initialize_run,
     latest_shadow_model_is_usable,
     read_latest_shadow_model,
+    resolve_daily_trade_date,
     run_shadow_daily_inference,
     run_shadow_rebalance,
     send_shadow_run_notification,
@@ -71,6 +72,12 @@ def _update_manifest_model_info(context, model_payload: dict[str, Any]) -> None:
     manifest["bundle_id"] = str(model_payload.get("bundle_id", manifest.get("bundle_id", "")))
     manifest["model_name"] = str(model_payload.get("model_name", manifest.get("model_name", "")))
     manifest["model_snapshot_path"] = str(model_payload.get("model_path", manifest.get("model_snapshot_path", "")))
+    atomic_write_json(context.manifest_path, manifest)
+
+
+def _write_date_resolution(context, payload: dict[str, Any]) -> None:
+    manifest = load_json(context.manifest_path)
+    manifest["date_resolution"] = dict(payload)
     atomic_write_json(context.manifest_path, manifest)
 
 
@@ -165,17 +172,31 @@ def _resolve_daily_decision_status(manifest: dict[str, Any]) -> str:
     return summarize_overall_status([item["status"] for item in stage_status.values()])
 
 
-def run_shadow_daily(base_dir: str | Path, *, run_id: str | None = None, triggered_by: str = "manual") -> dict[str, object]:
+def run_shadow_daily(
+    base_dir: str | Path,
+    *,
+    run_id: str | None = None,
+    triggered_by: str = "manual",
+    trade_date: str | None = None,
+    allow_date_fallback: bool = True,
+) -> dict[str, object]:
     now = datetime.now()
     resolved_run_id = run_id or format_run_id("daily", now)
     base_dir = Path(base_dir)
     latest_model_pointer = str(base_dir / "models" / "latest_shadow_model.json")
     mainline_object_name = DEFAULT_MAINLINE_OBJECT_NAME
+    date_resolution = resolve_daily_trade_date(
+        trade_date,
+        universe=DEFAULT_UNIVERSE,
+        allow_fallback_to_latest=allow_date_fallback,
+    )
+    effective_trade_date = date_resolution.get("resolved_trade_date") or date_resolution["requested_date"]
 
     context = initialize_run(
         base_dir,
         run_type="daily",
         run_id=resolved_run_id,
+        trade_date=effective_trade_date,
         mainline_object_name=mainline_object_name,
         bundle_id=MAINLINE_OBJECTS[mainline_object_name].bundle_id,
         model_name="",
@@ -185,6 +206,10 @@ def run_shadow_daily(base_dir: str | Path, *, run_id: str | None = None, trigger
             "triggered_by": triggered_by,
             "check_mode": "lightweight_only",
             "heavy_data_update_called": False,
+            "requested_date": date_resolution["requested_date"],
+            "resolved_trade_date": date_resolution.get("resolved_trade_date"),
+            "last_qlib_date": date_resolution.get("last_qlib_date"),
+            "date_resolution_status": date_resolution["status"],
         },
         fallback_summary={"used": False},
         notes=[
@@ -192,6 +217,7 @@ def run_shadow_daily(base_dir: str | Path, *, run_id: str | None = None, trigger
             "maybe_retrain stays skipped by design in PR3B.",
         ],
     )
+    _write_date_resolution(context, date_resolution)
 
     notes: list[str] = []
     selected_model_payload: dict[str, Any] | None = None
@@ -213,28 +239,23 @@ def run_shadow_daily(base_dir: str | Path, *, run_id: str | None = None, trigger
 
     data_started = datetime.now().replace(microsecond=0).isoformat()
     update_stage_status(context, stage_name="data_sync", status="running", started_at=data_started, message="Running lightweight data freshness check.")
-    try:
-        data_status_payload = _build_data_status(trade_date=context.trade_date, universe=DEFAULT_UNIVERSE, mainline_object_name=mainline_object_name)
-        data_status_path = _write_json(data_dir / "data_status.json", data_status_payload)
-        data_status = "success" if data_status_payload["status"] == "success" else "failed"
-        _set_stage(
-            context,
-            stage_name="data_sync",
-            status=data_status,
-            started_at=data_started,
-            message="Lightweight data freshness check completed." if data_status == "success" else "Lightweight data freshness check failed.",
-            artifact_pointers={"data_status_path": str(data_status_path)},
-        )
-        if data_status != "success":
-            notes.extend(data_status_payload.get("health_report", {}).get("blocking_issues", []))
-    except Exception as exc:
+    if date_resolution["status"] == "failed":
         data_status_payload = {
             "trade_date": context.trade_date,
+            "requested_date": date_resolution["requested_date"],
+            "resolved_trade_date": date_resolution.get("resolved_trade_date"),
+            "date_resolution_status": date_resolution["status"],
+            "date_resolution": date_resolution,
             "status": "failed",
             "mode": "freshness_check_only",
             "lightweight_check_only": True,
             "mainline_object_name": mainline_object_name,
-            "error": str(exc),
+            "error": date_resolution["reason"],
+            "health_report": {
+                "requested_date": date_resolution["requested_date"],
+                "last_qlib_date": date_resolution.get("last_qlib_date"),
+                "blocking_issues": [date_resolution["reason"]],
+            },
         }
         data_status_path = _write_json(data_dir / "data_status.json", data_status_payload)
         _set_stage(
@@ -242,10 +263,52 @@ def run_shadow_daily(base_dir: str | Path, *, run_id: str | None = None, trigger
             stage_name="data_sync",
             status="failed",
             started_at=data_started,
-            message=f"Lightweight data freshness check failed: {exc}",
+            message=f"Lightweight data freshness check failed: {date_resolution['reason']}",
             artifact_pointers={"data_status_path": str(data_status_path)},
         )
-        notes.append(f"data_sync failed: {exc}")
+        notes.append(date_resolution["reason"])
+    else:
+        try:
+            data_status_payload = _build_data_status(trade_date=context.trade_date, universe=DEFAULT_UNIVERSE, mainline_object_name=mainline_object_name)
+            data_status_payload["requested_date"] = date_resolution["requested_date"]
+            data_status_payload["resolved_trade_date"] = date_resolution.get("resolved_trade_date")
+            data_status_payload["date_resolution_status"] = date_resolution["status"]
+            data_status_payload["date_resolution"] = date_resolution
+            data_status_path = _write_json(data_dir / "data_status.json", data_status_payload)
+            data_status = "success" if data_status_payload["status"] == "success" else "failed"
+            _set_stage(
+                context,
+                stage_name="data_sync",
+                status=data_status,
+                started_at=data_started,
+                message="Lightweight data freshness check completed." if data_status == "success" else "Lightweight data freshness check failed.",
+                artifact_pointers={"data_status_path": str(data_status_path)},
+            )
+            if data_status != "success":
+                notes.extend(data_status_payload.get("health_report", {}).get("blocking_issues", []))
+        except Exception as exc:
+            data_status_payload = {
+                "trade_date": context.trade_date,
+                "requested_date": date_resolution["requested_date"],
+                "resolved_trade_date": date_resolution.get("resolved_trade_date"),
+                "date_resolution_status": date_resolution["status"],
+                "date_resolution": date_resolution,
+                "status": "failed",
+                "mode": "freshness_check_only",
+                "lightweight_check_only": True,
+                "mainline_object_name": mainline_object_name,
+                "error": str(exc),
+            }
+            data_status_path = _write_json(data_dir / "data_status.json", data_status_payload)
+            _set_stage(
+                context,
+                stage_name="data_sync",
+                status="failed",
+                started_at=data_started,
+                message=f"Lightweight data freshness check failed: {exc}",
+                artifact_pointers={"data_status_path": str(data_status_path)},
+            )
+            notes.append(f"data_sync failed: {exc}")
 
     feature_started = datetime.now().replace(microsecond=0).isoformat()
     update_stage_status(context, stage_name="feature_refresh", status="running", started_at=feature_started, message="Running lightweight feature readiness check.")
@@ -564,7 +627,10 @@ def run_shadow_daily(base_dir: str | Path, *, run_id: str | None = None, trigger
     summary = finalize_run(
         context,
         daily_summary={
+            "requested_date": date_resolution["requested_date"],
             "trade_date": manifest["trade_date"],
+            "date_resolution_status": date_resolution["status"],
+            "date_resolution": date_resolution,
             "run_id": context.run_id,
             "run_type": "shadow_daily",
             "overall_status": summary_overall_status,
@@ -620,9 +686,18 @@ def main() -> None:
     parser.add_argument("--base-dir", default=str(PROJECT_ROOT), help="Base directory for runs/ and models/")
     parser.add_argument("--run-id", default=None, help="Optional run_id override")
     parser.add_argument("--triggered-by", default="manual", help="Trigger source label")
+    parser.add_argument("--trade-date", default=None, help="Requested trade date (YYYY-MM-DD)")
+    parser.add_argument("--allow-date-fallback", dest="allow_date_fallback", action="store_true", default=True, help="Allow fallback to latest available qlib trading date")
+    parser.add_argument("--no-allow-date-fallback", dest="allow_date_fallback", action="store_false", help="Fail if requested trade date is not available in qlib")
     args = parser.parse_args()
 
-    result = run_shadow_daily(args.base_dir, run_id=args.run_id, triggered_by=args.triggered_by)
+    result = run_shadow_daily(
+        args.base_dir,
+        run_id=args.run_id,
+        triggered_by=args.triggered_by,
+        trade_date=args.trade_date,
+        allow_date_fallback=args.allow_date_fallback,
+    )
     print(json.dumps(result, indent=2, sort_keys=True))
 
 
