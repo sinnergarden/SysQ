@@ -225,6 +225,16 @@ class TestShadowOpsProtocol(unittest.TestCase):
     def test_daily_runner_no_model_fails_cleanly(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             with patch(
+                "scripts.ops.run_shadow_daily.resolve_daily_trade_date",
+                return_value={
+                    "requested_date": "2026-04-25",
+                    "resolved_trade_date": "2026-04-25",
+                    "last_qlib_date": "2026-04-25",
+                    "status": "success",
+                    "reason": "requested_date is available in qlib",
+                    "is_exact_match": True,
+                },
+            ), patch(
                 "scripts.ops.run_shadow_daily._build_data_status",
                 return_value={
                     "trade_date": "2026-04-25",
@@ -290,7 +300,17 @@ class TestShadowOpsProtocol(unittest.TestCase):
                 command=["python", "scripts/run_train.py"],
             )
 
-            with patch("scripts.ops.run_shadow_retrain_weekly.run_weekly_shadow_training", return_value=artifacts):
+            with patch(
+                "scripts.ops.run_shadow_retrain_weekly.resolve_training_end_date",
+                return_value={
+                    "requested_date": "2026-04-25",
+                    "resolved_trade_date": "2026-04-25",
+                    "last_qlib_date": "2026-04-25",
+                    "status": "success",
+                    "reason": "requested train_end is available in qlib",
+                    "is_exact_match": True,
+                },
+            ), patch("scripts.ops.run_shadow_retrain_weekly.run_weekly_shadow_training", return_value=artifacts):
                 result = run_shadow_retrain_weekly(base_dir, run_id="shadow_retrain_2026-04-25_090807", triggered_by="test")
 
             run_dir = Path(result["run_dir"])
@@ -336,6 +356,16 @@ class TestShadowOpsProtocol(unittest.TestCase):
             write_latest_shadow_model(base_dir, old_payload)
 
             with patch(
+                "scripts.ops.run_shadow_retrain_weekly.resolve_training_end_date",
+                return_value={
+                    "requested_date": "2026-04-25",
+                    "resolved_trade_date": "2026-04-25",
+                    "last_qlib_date": "2026-04-25",
+                    "status": "success",
+                    "reason": "requested train_end is available in qlib",
+                    "is_exact_match": True,
+                },
+            ), patch(
                 "scripts.ops.run_shadow_retrain_weekly.run_weekly_shadow_training",
                 side_effect=TrainingInvocationError(
                     "boom",
@@ -371,6 +401,16 @@ class TestShadowOpsProtocol(unittest.TestCase):
     def test_weekly_runner_hard_failure_without_previous_model(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             with patch(
+                "scripts.ops.run_shadow_retrain_weekly.resolve_training_end_date",
+                return_value={
+                    "requested_date": "2026-04-25",
+                    "resolved_trade_date": "2026-04-25",
+                    "last_qlib_date": "2026-04-25",
+                    "status": "success",
+                    "reason": "requested train_end is available in qlib",
+                    "is_exact_match": True,
+                },
+            ), patch(
                 "scripts.ops.run_shadow_retrain_weekly.run_weekly_shadow_training",
                 side_effect=TrainingInvocationError(
                     "boom",
@@ -423,7 +463,17 @@ class TestShadowOpsProtocol(unittest.TestCase):
                 command=["python", "scripts/run_train.py"],
             )
 
-            with patch("scripts.ops.run_shadow_retrain_weekly.run_weekly_shadow_training", return_value=artifacts):
+            with patch(
+                "scripts.ops.run_shadow_retrain_weekly.resolve_training_end_date",
+                return_value={
+                    "requested_date": "2026-04-25",
+                    "resolved_trade_date": "2026-04-25",
+                    "last_qlib_date": "2026-04-25",
+                    "status": "success",
+                    "reason": "requested train_end is available in qlib",
+                    "is_exact_match": True,
+                },
+            ), patch("scripts.ops.run_shadow_retrain_weekly.run_weekly_shadow_training", return_value=artifacts):
                 result = run_shadow_retrain_weekly(base_dir, run_id="shadow_retrain_2026-04-25_090807", triggered_by="test")
 
             run_dir = Path(result["run_dir"])

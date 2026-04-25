@@ -102,12 +102,25 @@ def initialize_run(
     notes: list[str] | None = None,
 ) -> ShadowRunContext:
     context = build_run_context(base_dir, run_type=run_type, run_id=run_id)
+    effective_trade_date = trade_date or context.trade_date
+    if effective_trade_date != context.trade_date:
+        context = ShadowRunContext(
+            run_type=context.run_type,
+            run_type_value=context.run_type_value,
+            run_id=context.run_id,
+            trade_date=effective_trade_date,
+            run_dir=context.run_dir,
+            manifest_path=context.manifest_path,
+            summary_path=context.summary_path,
+            latest_pointer_path=context.latest_pointer_path,
+            stage_names=context.stage_names,
+        )
     ensure_directory(context.run_dir)
     started_at = utc_now_text()
     manifest_payload = {
         "run_id": context.run_id,
         "run_type": context.run_type_value,
-        "trade_date": trade_date or context.trade_date,
+        "trade_date": effective_trade_date,
         "mainline_object_name": mainline_object_name,
         "bundle_id": bundle_id,
         "model_name": model_name,

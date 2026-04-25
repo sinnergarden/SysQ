@@ -208,16 +208,26 @@ class TestShadowDailyRebalance(unittest.TestCase):
                 "prediction_count": len(rows),
             })()
 
+        def exact_resolution(requested_date, **kwargs):
+            return {
+                "requested_date": requested_date,
+                "resolved_trade_date": requested_date,
+                "last_qlib_date": requested_date,
+                "status": "success",
+                "reason": "requested_date is available in qlib",
+                "is_exact_match": True,
+            }
+
         with tempfile.TemporaryDirectory() as tmpdir:
             base_dir = Path(tmpdir)
             _make_usable_latest_model(base_dir)
-            with patch("scripts.ops.run_shadow_daily._build_data_status", return_value=_fake_data_status()), patch(
-                "scripts.ops.run_shadow_daily._build_feature_status", return_value=_fake_feature_status()
-            ), patch("scripts.ops.run_shadow_daily.run_shadow_daily_inference", side_effect=varied_inference), patch(
-                "qsys.ops.shadow_rebalance._fetch_market_snapshot", side_effect=_fake_market_snapshot
-            ):
-                first = run_shadow_daily(base_dir, run_id="shadow_2026-04-25_090807", triggered_by="test")
-                second = run_shadow_daily(base_dir, run_id="shadow_2026-04-26_090807", triggered_by="test")
+            with patch("scripts.ops.run_shadow_daily.resolve_daily_trade_date", side_effect=exact_resolution), patch(
+                "scripts.ops.run_shadow_daily._build_data_status", return_value=_fake_data_status()
+            ), patch("scripts.ops.run_shadow_daily._build_feature_status", return_value=_fake_feature_status()), patch(
+                "scripts.ops.run_shadow_daily.run_shadow_daily_inference", side_effect=varied_inference
+            ), patch("qsys.ops.shadow_rebalance._fetch_market_snapshot", side_effect=_fake_market_snapshot):
+                first = run_shadow_daily(base_dir, run_id="shadow_2026-04-25_090807", triggered_by="test", trade_date="2026-04-25")
+                second = run_shadow_daily(base_dir, run_id="shadow_2026-04-26_090807", triggered_by="test", trade_date="2026-04-26")
 
             account = load_json(base_dir / "shadow" / "account.json")
             positions = pd.read_csv(base_dir / "shadow" / "positions.csv")

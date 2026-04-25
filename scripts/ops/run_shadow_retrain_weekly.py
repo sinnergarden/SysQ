@@ -17,6 +17,7 @@ from qsys.ops import (
     finalize_run,
     format_run_id,
     initialize_run,
+    resolve_training_end_date,
     send_shadow_run_notification,
     update_stage_status,
     write_latest_shadow_model,
@@ -39,7 +40,13 @@ def _write_json(path: Path, payload: dict[str, Any]) -> Path:
     return path
 
 
-def _prepare_training_payload(run_id: str, trade_date: str, triggered_by: str, spec: Any) -> dict[str, object]:
+def _prepare_training_payload(
+    run_id: str,
+    trade_date: str,
+    triggered_by: str,
+    spec: Any,
+    date_resolution: dict[str, Any],
+) -> dict[str, object]:
     return {
         "stage": "prepare_training",
         "run_id": run_id,
@@ -48,6 +55,7 @@ def _prepare_training_payload(run_id: str, trade_date: str, triggered_by: str, s
         "mainline_object_name": spec.mainline_object_name,
         "bundle_id": spec.bundle_id,
         "model_name": spec.model_name,
+        "date_resolution": dict(date_resolution),
     }
 
 
@@ -94,12 +102,20 @@ def _build_archive_payload(manifest_path: Path, summary_path: Path, notes: list[
     }
 
 
+def _write_date_resolution(context, payload: dict[str, Any]) -> None:
+    manifest = load_json(context.manifest_path)
+    manifest["date_resolution"] = dict(payload)
+    atomic_write_json(context.manifest_path, manifest)
+
+
 def run_shadow_retrain_weekly(
     base_dir: str | Path,
     *,
     run_id: str | None = None,
     triggered_by: str = "manual",
     mainline_object_name: str = DEFAULT_MAINLINE_OBJECT_NAME,
+    train_end: str | None = None,
+    allow_date_fallback: bool = True,
 ) -> dict[str, object]:
     now = datetime.now()
     resolved_run_id = run_id or format_run_id("weekly_retrain", now)
@@ -108,11 +124,18 @@ def run_shadow_retrain_weekly(
     spec = MAINLINE_OBJECTS[mainline_object_name]
     previous_model_payload = read_latest_shadow_model(base_dir)
     previous_model_usable = latest_shadow_model_is_usable(base_dir, previous_model_payload)
+    date_resolution = resolve_training_end_date(
+        train_end,
+        universe="csi300",
+        allow_fallback_to_latest=allow_date_fallback,
+    )
+    effective_train_end = date_resolution.get("resolved_trade_date") or date_resolution["requested_date"]
 
     context = initialize_run(
         base_dir,
         run_type="weekly_retrain",
         run_id=resolved_run_id,
+        trade_date=effective_train_end,
         mainline_object_name=spec.mainline_object_name,
         bundle_id=spec.bundle_id,
         model_name=spec.model_name,
@@ -122,183 +145,223 @@ def run_shadow_retrain_weekly(
             "triggered_by": triggered_by,
             "mainline_object_name": spec.mainline_object_name,
             "bundle_id": spec.bundle_id,
+            "requested_date": date_resolution["requested_date"],
+            "resolved_trade_date": date_resolution.get("resolved_trade_date"),
+            "last_qlib_date": date_resolution.get("last_qlib_date"),
+            "date_resolution_status": date_resolution["status"],
         },
         fallback_summary={"used": False},
         notes=[f"Weekly retrain targets mainline object {spec.mainline_object_name}."],
     )
+    _write_date_resolution(context, date_resolution)
 
     notes: list[str] = []
     fallback_summary: dict[str, Any] = {"used": False}
     training_artifacts: TrainingArtifacts | None = None
-    active_model_payload = previous_model_payload if previous_model_usable else None
+    active_model_payload = None
 
-    prepare_payload = _prepare_training_payload(context.run_id, context.trade_date, triggered_by, spec)
+    prepare_payload = _prepare_training_payload(context.run_id, context.trade_date, triggered_by, spec, date_resolution)
     prepare_path = _write_json(context.run_dir / "prepare_training.json", prepare_payload)
     started_at = datetime.now().replace(microsecond=0).isoformat()
-    update_stage_status(
-        context,
-        stage_name="prepare_training",
-        status="success",
-        started_at=started_at,
-        ended_at=started_at,
-        message="Weekly retrain configuration prepared.",
-        artifact_pointers={"stage_output": str(prepare_path)},
-    )
-
-    training_stage_started = datetime.now().replace(microsecond=0).isoformat()
-    update_stage_status(
-        context,
-        stage_name="run_training",
-        status="running",
-        started_at=training_stage_started,
-        message="Shadow weekly retrain started.",
-    )
-
-    try:
-        training_artifacts = run_weekly_shadow_training(
-            base_dir,
-            mainline_object_name=spec.mainline_object_name,
-            train_run_id=context.run_id,
+    if date_resolution["status"] == "failed":
+        update_stage_status(
+            context,
+            stage_name="prepare_training",
+            status="failed",
+            started_at=started_at,
+            ended_at=started_at,
+            message=f"Weekly retrain date resolution failed: {date_resolution['reason']}",
+            artifact_pointers={"stage_output": str(prepare_path)},
         )
-        training_payload = _build_training_stage_payload(training_artifacts, latest_model_pointer)
-        training_stage_path = _write_json(context.run_dir / "run_training.json", training_payload)
+        skipped_started = datetime.now().replace(microsecond=0).isoformat()
         update_stage_status(
             context,
             stage_name="run_training",
-            status="success",
-            ended_at=datetime.now().replace(microsecond=0).isoformat(),
-            message="Shadow weekly retrain completed successfully.",
-            artifact_pointers={
-                "stage_output": str(training_stage_path),
-                "training_report_path": training_artifacts.training_report_path,
-                "training_summary_path": training_artifacts.training_summary_path,
-                "config_snapshot_path": training_artifacts.config_snapshot_path,
-                "decisions_path": training_artifacts.decisions_path,
-                "model_path": training_artifacts.model_path,
-                "latest_model_pointer_path": latest_model_pointer,
-            },
+            status="skipped",
+            started_at=skipped_started,
+            ended_at=skipped_started,
+            message="Training skipped because no resolved train_end is available.",
+            artifact_pointers={"date_resolution_status": date_resolution["status"]},
         )
-
-        pointer_payload = build_latest_shadow_model_payload(
-            model_name=training_artifacts.model_name,
-            model_path=training_artifacts.model_path,
-            mainline_object_name=training_artifacts.mainline_object_name,
-            bundle_id=training_artifacts.bundle_id,
-            train_run_id=context.run_id,
-            trained_at=training_artifacts.trained_at,
-            status="success",
-        )
-        pointer_path = write_latest_shadow_model(base_dir, pointer_payload)
-        pointer_stage_path = _write_json(context.run_dir / "update_model_pointer.json", _build_pointer_stage_payload(pointer_payload, str(pointer_path)))
         update_stage_status(
             context,
             stage_name="update_model_pointer",
-            status="success",
-            started_at=datetime.now().replace(microsecond=0).isoformat(),
-            ended_at=datetime.now().replace(microsecond=0).isoformat(),
-            message="Latest shadow model pointer updated.",
-            artifact_pointers={
-                "stage_output": str(pointer_stage_path),
-                "latest_model_pointer_path": str(pointer_path),
-                "model_path": pointer_payload["model_path"],
-            },
+            status="skipped",
+            started_at=skipped_started,
+            ended_at=skipped_started,
+            message="Latest shadow model pointer update skipped because training did not run.",
+            artifact_pointers={"date_resolution_status": date_resolution["status"]},
         )
-        active_model_payload = pointer_payload
-        notes.append(f"Updated latest shadow model pointer to {pointer_payload['model_name']}.")
-    except TrainingInvocationError as exc:
-        failure_payload = {
-            "stage": "run_training",
-            "status": "failed",
-            "error": str(exc),
-            "command": exc.command,
-            "returncode": exc.returncode,
-            "stdout_tail": exc.stdout_tail,
-            "stderr_tail": exc.stderr_tail,
-            "mainline_object_name": spec.mainline_object_name,
-            "bundle_id": spec.bundle_id,
-        }
-        training_stage_path = _write_json(context.run_dir / "run_training.json", failure_payload)
-        if previous_model_usable:
-            fallback_summary = {
-                "used": True,
-                "reason": "training_failed_retained_previous_model",
-                "retained_previous_model": previous_model_payload,
-            }
+        notes.append(date_resolution["reason"])
+    else:
+        update_stage_status(
+            context,
+            stage_name="prepare_training",
+            status="success",
+            started_at=started_at,
+            ended_at=started_at,
+            message="Weekly retrain configuration prepared.",
+            artifact_pointers={"stage_output": str(prepare_path)},
+        )
+
+        training_stage_started = datetime.now().replace(microsecond=0).isoformat()
+        update_stage_status(
+            context,
+            stage_name="run_training",
+            status="running",
+            started_at=training_stage_started,
+            message="Shadow weekly retrain started.",
+        )
+
+        try:
+            training_artifacts = run_weekly_shadow_training(
+                base_dir,
+                mainline_object_name=spec.mainline_object_name,
+                train_run_id=context.run_id,
+                extra_args=["--end", effective_train_end, "--infer_date", effective_train_end],
+            )
+            training_payload = _build_training_stage_payload(training_artifacts, latest_model_pointer)
+            training_stage_path = _write_json(context.run_dir / "run_training.json", training_payload)
             update_stage_status(
                 context,
                 stage_name="run_training",
-                status="fallback",
+                status="success",
                 ended_at=datetime.now().replace(microsecond=0).isoformat(),
-                message=f"Training failed; retained previous model. {exc}",
+                message="Shadow weekly retrain completed successfully.",
                 artifact_pointers={
                     "stage_output": str(training_stage_path),
+                    "training_report_path": training_artifacts.training_report_path,
+                    "training_summary_path": training_artifacts.training_summary_path,
+                    "config_snapshot_path": training_artifacts.config_snapshot_path,
+                    "decisions_path": training_artifacts.decisions_path,
+                    "model_path": training_artifacts.model_path,
                     "latest_model_pointer_path": latest_model_pointer,
-                    "retained_model_path": previous_model_payload["model_path"],
-                    "command": exc.command,
-                    "returncode": exc.returncode,
                 },
             )
+
+            pointer_payload = build_latest_shadow_model_payload(
+                model_name=training_artifacts.model_name,
+                model_path=training_artifacts.model_path,
+                mainline_object_name=training_artifacts.mainline_object_name,
+                bundle_id=training_artifacts.bundle_id,
+                train_run_id=context.run_id,
+                trained_at=training_artifacts.trained_at,
+                status="success",
+            )
+            pointer_path = write_latest_shadow_model(base_dir, pointer_payload)
             pointer_stage_path = _write_json(
                 context.run_dir / "update_model_pointer.json",
-                {
-                    "stage": "update_model_pointer",
-                    "status": "fallback",
-                    "message": "Retained previous model pointer after training failure.",
-                    "latest_model_pointer_path": latest_model_pointer,
-                    "retained_previous_model": previous_model_payload,
-                },
+                _build_pointer_stage_payload(pointer_payload, str(pointer_path)),
             )
             update_stage_status(
                 context,
                 stage_name="update_model_pointer",
-                status="fallback",
+                status="success",
                 started_at=datetime.now().replace(microsecond=0).isoformat(),
                 ended_at=datetime.now().replace(microsecond=0).isoformat(),
-                message="Retained previous model pointer after training failure.",
+                message="Latest shadow model pointer updated.",
                 artifact_pointers={
                     "stage_output": str(pointer_stage_path),
-                    "latest_model_pointer_path": latest_model_pointer,
-                    "retained_model_path": previous_model_payload["model_path"],
+                    "latest_model_pointer_path": str(pointer_path),
+                    "model_path": pointer_payload["model_path"],
                 },
             )
-            active_model_payload = previous_model_payload
-            notes.append(f"Training failed; retained previous model {previous_model_payload['model_name']}.")
-        else:
-            fallback_summary = {
-                "used": False,
-                "reason": "training_failed_without_previous_model",
+            active_model_payload = pointer_payload
+            notes.append(f"Updated latest shadow model pointer to {pointer_payload['model_name']}.")
+        except TrainingInvocationError as exc:
+            failure_payload = {
+                "stage": "run_training",
+                "status": "failed",
+                "error": str(exc),
+                "command": exc.command,
+                "returncode": exc.returncode,
+                "stdout_tail": exc.stdout_tail,
+                "stderr_tail": exc.stderr_tail,
+                "mainline_object_name": spec.mainline_object_name,
+                "bundle_id": spec.bundle_id,
             }
-            update_stage_status(
-                context,
-                stage_name="run_training",
-                status="failed",
-                ended_at=datetime.now().replace(microsecond=0).isoformat(),
-                message=f"Training failed and no previous model is available. {exc}",
-                artifact_pointers={
-                    "stage_output": str(training_stage_path),
-                    "command": exc.command,
-                    "returncode": exc.returncode,
-                },
-            )
-            pointer_stage_path = _write_json(
-                context.run_dir / "update_model_pointer.json",
-                {
-                    "stage": "update_model_pointer",
-                    "status": "failed",
-                    "message": "No latest shadow model pointer update because training failed.",
-                    "latest_model_pointer_path": latest_model_pointer,
-                },
-            )
-            update_stage_status(
-                context,
-                stage_name="update_model_pointer",
-                status="failed",
-                started_at=datetime.now().replace(microsecond=0).isoformat(),
-                ended_at=datetime.now().replace(microsecond=0).isoformat(),
-                message="Training failed and there is no previous model to retain.",
-                artifact_pointers={"stage_output": str(pointer_stage_path)},
-            )
-            notes.append("Training failed and no previous shadow model was available to retain.")
+            training_stage_path = _write_json(context.run_dir / "run_training.json", failure_payload)
+            if previous_model_usable:
+                fallback_summary = {
+                    "used": True,
+                    "reason": "training_failed_retained_previous_model",
+                    "retained_previous_model": previous_model_payload,
+                }
+                update_stage_status(
+                    context,
+                    stage_name="run_training",
+                    status="fallback",
+                    ended_at=datetime.now().replace(microsecond=0).isoformat(),
+                    message=f"Training failed; retained previous model. {exc}",
+                    artifact_pointers={
+                        "stage_output": str(training_stage_path),
+                        "latest_model_pointer_path": latest_model_pointer,
+                        "retained_model_path": previous_model_payload["model_path"],
+                        "command": exc.command,
+                        "returncode": exc.returncode,
+                    },
+                )
+                pointer_stage_path = _write_json(
+                    context.run_dir / "update_model_pointer.json",
+                    {
+                        "stage": "update_model_pointer",
+                        "status": "fallback",
+                        "message": "Retained previous model pointer after training failure.",
+                        "latest_model_pointer_path": latest_model_pointer,
+                        "retained_previous_model": previous_model_payload,
+                    },
+                )
+                update_stage_status(
+                    context,
+                    stage_name="update_model_pointer",
+                    status="fallback",
+                    started_at=datetime.now().replace(microsecond=0).isoformat(),
+                    ended_at=datetime.now().replace(microsecond=0).isoformat(),
+                    message="Retained previous model pointer after training failure.",
+                    artifact_pointers={
+                        "stage_output": str(pointer_stage_path),
+                        "latest_model_pointer_path": latest_model_pointer,
+                        "retained_model_path": previous_model_payload["model_path"],
+                    },
+                )
+                active_model_payload = previous_model_payload
+                notes.append(f"Training failed; retained previous model {previous_model_payload['model_name']}.")
+            else:
+                fallback_summary = {
+                    "used": False,
+                    "reason": "training_failed_without_previous_model",
+                }
+                update_stage_status(
+                    context,
+                    stage_name="run_training",
+                    status="failed",
+                    ended_at=datetime.now().replace(microsecond=0).isoformat(),
+                    message=f"Training failed and no previous model is available. {exc}",
+                    artifact_pointers={
+                        "stage_output": str(training_stage_path),
+                        "command": exc.command,
+                        "returncode": exc.returncode,
+                    },
+                )
+                pointer_stage_path = _write_json(
+                    context.run_dir / "update_model_pointer.json",
+                    {
+                        "stage": "update_model_pointer",
+                        "status": "failed",
+                        "message": "No latest shadow model pointer update because training failed.",
+                        "latest_model_pointer_path": latest_model_pointer,
+                    },
+                )
+                update_stage_status(
+                    context,
+                    stage_name="update_model_pointer",
+                    status="failed",
+                    started_at=datetime.now().replace(microsecond=0).isoformat(),
+                    ended_at=datetime.now().replace(microsecond=0).isoformat(),
+                    message="Training failed and there is no previous model to retain.",
+                    artifact_pointers={"stage_output": str(pointer_stage_path)},
+                )
+                notes.append("Training failed and no previous shadow model was available to retain.")
 
     archive_status = "success"
     archive_message = "Weekly retrain manifest and summary archived."
@@ -355,7 +418,10 @@ def run_shadow_retrain_weekly(
     finalize_run(
         context,
         daily_summary={
+            "requested_date": date_resolution["requested_date"],
             "trade_date": manifest["trade_date"],
+            "date_resolution_status": date_resolution["status"],
+            "date_resolution": date_resolution,
             "run_id": context.run_id,
             "run_type": "shadow_retrain_weekly",
             "data_status": manifest["stage_status"]["prepare_training"]["status"],
@@ -403,8 +469,17 @@ def main() -> None:
     parser.add_argument("--base-dir", default=str(PROJECT_ROOT), help="Project root for writing shadow ops artifacts")
     parser.add_argument("--run-id", help="Optional stable run_id for reruns")
     parser.add_argument("--triggered-by", default="manual", help="Who triggered this run")
+    parser.add_argument("--train-end", default=None, help="Requested train end date (YYYY-MM-DD)")
+    parser.add_argument("--allow-date-fallback", dest="allow_date_fallback", action="store_true", default=True, help="Allow fallback to latest available qlib trading date")
+    parser.add_argument("--no-allow-date-fallback", dest="allow_date_fallback", action="store_false", help="Fail if requested train end is not available in qlib")
     args = parser.parse_args()
-    result = run_shadow_retrain_weekly(args.base_dir, run_id=args.run_id, triggered_by=args.triggered_by)
+    result = run_shadow_retrain_weekly(
+        args.base_dir,
+        run_id=args.run_id,
+        triggered_by=args.triggered_by,
+        train_end=args.train_end,
+        allow_date_fallback=args.allow_date_fallback,
+    )
     print(json.dumps(result, indent=2, sort_keys=True))
 
 

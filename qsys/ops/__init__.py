@@ -22,6 +22,7 @@ from .model_registry import (
 )
 from .notification import send_shadow_run_notification, send_wecom_webhook_message, write_notification_result
 from .state import ALLOWED_STATUSES, write_latest_pointer
+from .trade_date import resolve_daily_trade_date, resolve_training_end_date
 
 __all__ = [
     "ALLOWED_STATUSES",
@@ -48,4 +49,6 @@ __all__ = [
     "send_wecom_webhook_message",
     "send_shadow_run_notification",
     "write_notification_result",
+    "resolve_daily_trade_date",
+    "resolve_training_end_date",
 ]
