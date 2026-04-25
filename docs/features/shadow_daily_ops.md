@@ -1,12 +1,13 @@
 # Shadow Daily Ops
 
-This document defines the PR1 protocol files and the PR2 weekly retrain wiring.
+This document defines the PR1 protocol shell, the PR2 weekly retrain wiring, and the PR3A daily latest-model inference loop.
 
 ## Scope
 
-- Daily runner remains a protocol skeleton.
+- Daily runner now consumes `models/latest_shadow_model.json`, performs lightweight data/readiness checks, and writes inference artifacts.
 - Weekly retrain now calls real training through `scripts/run_train.py`.
-- No daily inference, rebalancing, MiniQMT, systemd, UI, or research-framework changes are part of this flow.
+- Daily runner still does not retrain, rebalance, touch ledger, call MiniQMT, call `update_data_all.py`, or run `BacktestEngine.run()`.
+- No systemd, UI, or research-framework changes are part of this flow.
 
 ## Run identity
 
@@ -53,6 +54,23 @@ Behavior:
 - if training fails and the existing latest model pointer is usable, the runner keeps that pointer and marks the retrain as `fallback`
 - if training fails and no usable latest model pointer exists, the retrain is `failed`
 - a failed training run never overwrites the previous latest model pointer
+
+## Daily runner semantics
+
+The daily entrypoint is `scripts/ops/run_shadow_daily.py`.
+
+Behavior:
+
+- `data_sync` is a lightweight freshness/environment check only; it does not call heavy update scripts
+- `feature_refresh` is a lightweight readiness check only; it does not materialize features in bulk
+- `maybe_retrain` is always `skipped` in PR3A by design
+- `select_model` reads `models/latest_shadow_model.json` via `read_latest_shadow_model()` and gates execution with `latest_shadow_model_is_usable()`
+- when no usable latest model exists, `select_model=failed`, `inference=skipped`, `shadow_rebalance=skipped`, and the daily run finishes `failed`
+- when a usable latest model exists, the runner writes `03_model/selected_model.json` and runs inference only
+- inference outputs are written to `04_inference/predictions.csv` and `04_inference/inference_summary.json`
+- `shadow_rebalance` is intentionally `skipped` after both successful and failed inference; this is deliberate scope control, not a runner fault
+- because `maybe_retrain` and `shadow_rebalance` are intentionally `skipped`, a successful inference-only daily run currently finalizes with `overall_status=skipped`
+- when inference fails after model selection, `04_inference/inference_summary.json` is still written with `status=failed` and the error message, and the run finishes `failed`
 
 ## Manifest contract
 
@@ -160,7 +178,7 @@ The latest model pointer lives at `models/latest_shadow_model.json` and contains
 - `trained_at`
 - `status`
 
-A latest model pointer is considered usable only when all required fields exist and `model_path` still exists.
+A latest model pointer is considered usable only when all required fields exist, `status == "success"`, `model_path` exists and is a directory, and the model directory still contains `config_snapshot.json`, `training_summary.json`, and `decisions.json`.
 
 ## Helper API
 
@@ -173,6 +191,7 @@ The protocol helper layer in `qsys/ops/` supports:
 - reading and validating the latest shadow model pointer
 - writing the latest shadow model pointer
 - invoking the real weekly training flow
+- invoking the daily latest-model inference flow
 
 ## Idempotency and re-entry
 
@@ -187,5 +206,5 @@ The protocol helper layer in `qsys/ops/` supports:
 - `scripts/ops/run_shadow_daily.py`
 - `scripts/ops/run_shadow_retrain_weekly.py`
 
-The daily runner is still stub-only.
-The weekly retrain runner now executes the real training path and archives traceable protocol artifacts for the run directory.
+The daily runner now consumes the latest usable shadow model, writes traceable inference artifacts, and deliberately stops before rebalance.
+The weekly retrain runner executes the real training path and archives traceable protocol artifacts for the run directory.
