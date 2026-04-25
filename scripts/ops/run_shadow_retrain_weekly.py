@@ -201,6 +201,10 @@ def run_shadow_retrain_weekly(
             "stage": "run_training",
             "status": "failed",
             "error": str(exc),
+            "command": exc.command,
+            "returncode": exc.returncode,
+            "stdout_tail": exc.stdout_tail,
+            "stderr_tail": exc.stderr_tail,
             "mainline_object_name": spec.mainline_object_name,
             "bundle_id": spec.bundle_id,
         }
@@ -221,6 +225,8 @@ def run_shadow_retrain_weekly(
                     "stage_output": str(training_stage_path),
                     "latest_model_pointer_path": latest_model_pointer,
                     "retained_model_path": previous_model_payload["model_path"],
+                    "command": exc.command,
+                    "returncode": exc.returncode,
                 },
             )
             pointer_stage_path = _write_json(
@@ -259,7 +265,11 @@ def run_shadow_retrain_weekly(
                 status="failed",
                 ended_at=datetime.now().replace(microsecond=0).isoformat(),
                 message=f"Training failed and no previous model is available. {exc}",
-                artifact_pointers={"stage_output": str(training_stage_path)},
+                artifact_pointers={
+                    "stage_output": str(training_stage_path),
+                    "command": exc.command,
+                    "returncode": exc.returncode,
+                },
             )
             pointer_stage_path = _write_json(
                 context.run_dir / "update_model_pointer.json",

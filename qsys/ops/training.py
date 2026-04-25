@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+from qsys.config import cfg
 from qsys.research.mainline import MAINLINE_OBJECTS
 
 
@@ -25,7 +26,28 @@ class TrainingArtifacts:
 
 
 class TrainingInvocationError(RuntimeError):
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        command: list[str] | None = None,
+        returncode: int | None = None,
+        stdout_tail: str = "",
+        stderr_tail: str = "",
+    ) -> None:
+        super().__init__(message)
+        self.command = list(command or [])
+        self.returncode = returncode
+        self.stdout_tail = stdout_tail
+        self.stderr_tail = stderr_tail
+
+
+def _tail_text(text: str, *, max_lines: int = 20, max_chars: int = 4000) -> str:
+    if not text:
+        return ""
+    lines = text.splitlines()
+    tail = "\n".join(lines[-max_lines:])
+    return tail[-max_chars:]
 
 
 def run_weekly_shadow_training(
@@ -63,9 +85,15 @@ def run_weekly_shadow_training(
     )
     if completed.returncode != 0:
         detail = completed.stderr.strip() or completed.stdout.strip() or f"exit code {completed.returncode}"
-        raise TrainingInvocationError(detail)
+        raise TrainingInvocationError(
+            detail,
+            command=command,
+            returncode=completed.returncode,
+            stdout_tail=_tail_text(completed.stdout),
+            stderr_tail=_tail_text(completed.stderr),
+        )
 
-    model_dir = project_root / "data" / "models" / spec.model_name
+    model_dir = cfg.get_path("root") / "models" / spec.model_name
     config_snapshot_path = model_dir / "config_snapshot.json"
     training_summary_path = model_dir / "training_summary.json"
     decisions_path = model_dir / "decisions.json"
@@ -76,7 +104,13 @@ def run_weekly_shadow_training(
         if not path.exists()
     ]
     if missing:
-        raise TrainingInvocationError(f"Training completed but artifacts are missing: {missing}")
+        raise TrainingInvocationError(
+            f"Training completed but artifacts are missing: {missing}",
+            command=command,
+            returncode=completed.returncode,
+            stdout_tail=_tail_text(completed.stdout),
+            stderr_tail=_tail_text(completed.stderr),
+        )
 
     report_candidates = []
     if reports_dir.exists():

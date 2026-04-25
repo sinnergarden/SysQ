@@ -113,6 +113,8 @@ class TestShadowOpsProtocol(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             model_dir = Path(tmpdir) / "data" / "models" / "model_a"
             model_dir.mkdir(parents=True)
+            for name in ["config_snapshot.json", "training_summary.json", "decisions.json"]:
+                (model_dir / name).write_text("{}\n", encoding="utf-8")
             path = write_latest_shadow_model(
                 tmpdir,
                 build_latest_shadow_model_payload(
@@ -139,6 +141,46 @@ class TestShadowOpsProtocol(unittest.TestCase):
             self.assertEqual(payload["train_run_id"], "shadow_retrain_2026-04-25_090807")
             self.assertEqual(read_latest_shadow_model(tmpdir)["model_name"], "model_a")
             self.assertTrue(latest_shadow_model_is_usable(tmpdir))
+
+    def test_latest_shadow_model_requires_success_status(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            model_dir = Path(tmpdir) / "data" / "models" / "model_a"
+            model_dir.mkdir(parents=True)
+            for name in ["config_snapshot.json", "training_summary.json", "decisions.json"]:
+                (model_dir / name).write_text("{}\n", encoding="utf-8")
+            write_latest_shadow_model(
+                tmpdir,
+                build_latest_shadow_model_payload(
+                    model_name="model_a",
+                    model_path=str(model_dir),
+                    mainline_object_name="mainline_a",
+                    bundle_id="bundle_a",
+                    train_run_id="shadow_retrain_2026-04-25_090807",
+                    trained_at="2026-04-25T09:08:07",
+                    status="failed",
+                ),
+            )
+            self.assertFalse(latest_shadow_model_is_usable(tmpdir))
+
+    def test_latest_shadow_model_requires_complete_artifacts(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            model_dir = Path(tmpdir) / "data" / "models" / "model_a"
+            model_dir.mkdir(parents=True)
+            (model_dir / "training_summary.json").write_text("{}\n", encoding="utf-8")
+            (model_dir / "decisions.json").write_text("{}\n", encoding="utf-8")
+            write_latest_shadow_model(
+                tmpdir,
+                build_latest_shadow_model_payload(
+                    model_name="model_a",
+                    model_path=str(model_dir),
+                    mainline_object_name="mainline_a",
+                    bundle_id="bundle_a",
+                    train_run_id="shadow_retrain_2026-04-25_090807",
+                    trained_at="2026-04-25T09:08:07",
+                    status="success",
+                ),
+            )
+            self.assertFalse(latest_shadow_model_is_usable(tmpdir))
 
     def test_daily_runner_writes_complete_stub_run(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -214,6 +256,8 @@ class TestShadowOpsProtocol(unittest.TestCase):
             base_dir = Path(tmpdir)
             retained_model_dir = base_dir / "data" / "models" / "retained_model"
             retained_model_dir.mkdir(parents=True)
+            for name in ["config_snapshot.json", "training_summary.json", "decisions.json"]:
+                (retained_model_dir / name).write_text("{}\n", encoding="utf-8")
             old_payload = build_latest_shadow_model_payload(
                 model_name="retained_model",
                 model_path=str(retained_model_dir),
@@ -227,7 +271,13 @@ class TestShadowOpsProtocol(unittest.TestCase):
 
             with patch(
                 "scripts.ops.run_shadow_retrain_weekly.run_weekly_shadow_training",
-                side_effect=TrainingInvocationError("boom"),
+                side_effect=TrainingInvocationError(
+                    "boom",
+                    command=["python", "scripts/run_train.py"],
+                    returncode=2,
+                    stdout_tail="tail out",
+                    stderr_tail="tail err",
+                ),
             ):
                 result = run_shadow_retrain_weekly(base_dir, run_id="shadow_retrain_2026-04-25_090807", triggered_by="test")
 
@@ -244,6 +294,11 @@ class TestShadowOpsProtocol(unittest.TestCase):
             self.assertEqual(summary["train_status"], "fallback")
             self.assertTrue(summary["model_used"]["fallback"])
             self.assertEqual(summary["model_used"]["model_name"], "retained_model")
+            failure_payload = load_json(run_dir / "run_training.json")
+            self.assertEqual(failure_payload["command"], ["python", "scripts/run_train.py"])
+            self.assertEqual(failure_payload["returncode"], 2)
+            self.assertEqual(failure_payload["stdout_tail"], "tail out")
+            self.assertEqual(failure_payload["stderr_tail"], "tail err")
             joined_notes = " ".join(summary["notes"])
             self.assertIn("Retained previous model", joined_notes)
 
@@ -251,7 +306,13 @@ class TestShadowOpsProtocol(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             with patch(
                 "scripts.ops.run_shadow_retrain_weekly.run_weekly_shadow_training",
-                side_effect=TrainingInvocationError("boom"),
+                side_effect=TrainingInvocationError(
+                    "boom",
+                    command=["python", "scripts/run_train.py"],
+                    returncode=3,
+                    stdout_tail="stdout tail",
+                    stderr_tail="stderr tail",
+                ),
             ):
                 result = run_shadow_retrain_weekly(tmpdir, run_id="shadow_retrain_2026-04-25_090807", triggered_by="test")
 
@@ -264,6 +325,11 @@ class TestShadowOpsProtocol(unittest.TestCase):
             self.assertFalse((Path(tmpdir) / "models" / "latest_shadow_model.json").exists())
             self.assertEqual(summary["train_status"], "failed")
             self.assertTrue(summary["model_used"]["fallback"] is False)
+            failure_payload = load_json(run_dir / "run_training.json")
+            self.assertEqual(failure_payload["command"], ["python", "scripts/run_train.py"])
+            self.assertEqual(failure_payload["returncode"], 3)
+            self.assertEqual(failure_payload["stdout_tail"], "stdout tail")
+            self.assertEqual(failure_payload["stderr_tail"], "stderr tail")
             self.assertIn("No usable model", " ".join(summary["notes"]))
 
     def test_weekly_runner_artifact_contract_paths_are_traceable(self):

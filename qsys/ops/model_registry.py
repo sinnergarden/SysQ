@@ -59,7 +59,20 @@ def latest_shadow_model_is_usable(base_dir: str | Path, payload: dict[str, Any] 
     payload = payload or read_latest_shadow_model(base_dir)
     if not payload:
         return False
-    model_path = payload.get("model_path")
-    if not model_path:
+    if payload.get("status") != "success":
         return False
-    return Path(model_path).exists()
+
+    model_path_value = payload.get("model_path")
+    if not model_path_value:
+        return False
+
+    model_path = Path(model_path_value)
+    if not model_path.exists() or not model_path.is_dir():
+        return False
+
+    required_artifacts = [
+        model_path / "config_snapshot.json",
+        model_path / "training_summary.json",
+        model_path / "decisions.json",
+    ]
+    return all(path.exists() and path.is_file() for path in required_artifacts)
