@@ -182,21 +182,43 @@ class TestShadowOpsProtocol(unittest.TestCase):
             )
             self.assertFalse(latest_shadow_model_is_usable(tmpdir))
 
-    def test_daily_runner_writes_complete_stub_run(self):
+    def test_daily_runner_no_model_fails_cleanly(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            result = run_shadow_daily(tmpdir, run_id="shadow_2026-04-25_090807", triggered_by="test")
+            with patch(
+                "scripts.ops.run_shadow_daily._build_data_status",
+                return_value={
+                    "trade_date": "2026-04-25",
+                    "status": "success",
+                    "mode": "freshness_check_only",
+                    "lightweight_check_only": True,
+                    "mainline_object_name": "feature_173",
+                    "health_report": {"blocking_issues": []},
+                },
+            ), patch(
+                "scripts.ops.run_shadow_daily._build_feature_status",
+                return_value={
+                    "trade_date": "2026-04-25",
+                    "status": "success",
+                    "mode": "readiness_check_only",
+                    "lightweight_check_only": True,
+                    "mainline_object_name": "feature_173",
+                    "degradation_level": "core_ok",
+                    "notes": ["lightweight_check_only"],
+                },
+            ):
+                result = run_shadow_daily(tmpdir, run_id="shadow_2026-04-25_090807", triggered_by="test")
             run_dir = Path(result["run_dir"])
             manifest = load_json(run_dir / "manifest.json")
             summary = load_json(run_dir / "daily_summary.json")
             latest = load_json(Path(tmpdir) / "runs" / "latest_shadow_daily.json")
-            self.assertEqual(result["overall_status"], "success")
+            self.assertEqual(result["overall_status"], "failed")
             self.assertEqual(manifest["run_type"], "shadow_daily")
             self.assertEqual(summary["run_type"], "shadow_daily")
+            self.assertEqual(manifest["stage_status"]["maybe_retrain"]["status"], "skipped")
+            self.assertEqual(manifest["stage_status"]["select_model"]["status"], "failed")
+            self.assertEqual(manifest["stage_status"]["inference"]["status"], "skipped")
             self.assertEqual(latest["run_id"], result["run_id"])
             self.assertIn("daily_summary_path", latest)
-            for stage_name in DAILY_STAGES:
-                self.assertEqual(manifest["stage_status"][stage_name]["status"], "success")
-                self.assertTrue((run_dir / f"{stage_name}.json").exists())
 
     def test_weekly_runner_success_updates_model_pointer_and_artifacts(self):
         with tempfile.TemporaryDirectory() as tmpdir:

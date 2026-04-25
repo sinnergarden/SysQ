@@ -7,6 +7,7 @@ from .manifest import (
     initialize_run,
     update_stage_status,
 )
+from .inference import InferenceArtifacts, InferenceInvocationError, run_shadow_daily_inference, write_failed_inference_summary
 from .model_registry import (
     build_latest_shadow_model_payload,
     latest_shadow_model_is_usable,
@@ -25,6 +26,10 @@ __all__ = [
     "initialize_run",
     "update_stage_status",
     "write_latest_pointer",
+    "InferenceArtifacts",
+    "InferenceInvocationError",
+    "run_shadow_daily_inference",
+    "write_failed_inference_summary",
     "build_latest_shadow_model_payload",
     "read_latest_shadow_model",
     "latest_shadow_model_is_usable",
