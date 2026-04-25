@@ -1,11 +1,12 @@
 # Shadow Daily Ops
 
-This document defines the PR1 file protocol skeleton for shadow daily operations.
+This document defines the PR1 protocol files and the PR2 weekly retrain wiring.
 
 ## Scope
 
-PR1 only adds protocol files and stub runners. It does not call real training,
-inference, rebalancing, MiniQMT, systemd, or UI code.
+- Daily runner remains a protocol skeleton.
+- Weekly retrain now calls real training through `scripts/run_train.py`.
+- No daily inference, rebalancing, MiniQMT, systemd, UI, or research-framework changes are part of this flow.
 
 ## Run identity
 
@@ -39,6 +40,20 @@ inference, rebalancing, MiniQMT, systemd, or UI code.
 - `update_model_pointer`
 - `archive_report`
 
+## Weekly retrain semantics
+
+The weekly retrain entrypoint is `scripts/ops/run_shadow_retrain_weekly.py`.
+
+Behavior:
+
+- default `mainline_object_name` is fixed to `feature_173`
+- training is delegated to `scripts/run_train.py --model qlib_lgbm --bundle_id bundle_feature_173`
+- the runner reuses the normal training outputs under the model directory resolved by `cfg.get_path("root") / "models" / <model_name>`
+- after a verified success, the runner writes `models/latest_shadow_model.json`
+- if training fails and the existing latest model pointer is usable, the runner keeps that pointer and marks the retrain as `fallback`
+- if training fails and no usable latest model pointer exists, the retrain is `failed`
+- a failed training run never overwrites the previous latest model pointer
+
 ## Manifest contract
 
 Each run writes `manifest.json` under its run directory.
@@ -69,6 +84,21 @@ Each `stage_status[stage_name]` entry contains:
 - `message`
 - `artifact_pointers`
 
+Weekly retrain writes real artifact pointers for:
+
+- `training_report_path`
+- `training_summary_path`
+- `config_snapshot_path`
+- `decisions_path`
+- `model_path`
+- `latest_model_pointer_path`
+
+The manifest also records:
+
+- `model_name`
+- `model_snapshot_path`
+- `latest_model_pointer`
+
 ## Summary contract
 
 Daily runs write `daily_summary.json` with these fields:
@@ -87,8 +117,14 @@ Daily runs write `daily_summary.json` with these fields:
 - `decision_status`
 - `notes`
 
-Weekly retrain also writes `daily_summary.json` in PR1 so both runners share one
-summary artifact shape while business logic is still stubbed.
+Weekly retrain still writes `daily_summary.json` so both runners share one summary artifact shape.
+For weekly retrain, the summary reflects:
+
+- training stage result in `train_status`
+- chosen model details in `model_used`
+- fallback usage in `model_used.fallback`
+- pointer outcome in `decision_status`
+- retained previous-model notes when fallback is used
 
 ## Latest pointers
 
@@ -124,6 +160,8 @@ The latest model pointer lives at `models/latest_shadow_model.json` and contains
 - `trained_at`
 - `status`
 
+A latest model pointer is considered usable only when all required fields exist and `model_path` still exists.
+
 ## Helper API
 
 The protocol helper layer in `qsys/ops/` supports:
@@ -132,7 +170,9 @@ The protocol helper layer in `qsys/ops/` supports:
 - updating stage status
 - finalizing a run
 - atomically writing latest pointers
+- reading and validating the latest shadow model pointer
 - writing the latest shadow model pointer
+- invoking the real weekly training flow
 
 ## Idempotency and re-entry
 
@@ -140,11 +180,12 @@ The protocol helper layer in `qsys/ops/` supports:
 - Re-running with the same `run_id` rewrites protocol files in place.
 - Latest pointers are updated with atomic replace.
 - `finalize_run()` derives `overall_status` from `stage_status`.
+- Weekly retrain updates `models/latest_shadow_model.json` only after successful training artifact validation.
 
-## Stub runners
+## Runners
 
 - `scripts/ops/run_shadow_daily.py`
 - `scripts/ops/run_shadow_retrain_weekly.py`
 
-These scripts only write protocol artifacts and stub JSON payloads so the ops
-control surface can be integrated before any real execution logic is connected.
+The daily runner is still stub-only.
+The weekly retrain runner now executes the real training path and archives traceable protocol artifacts for the run directory.
