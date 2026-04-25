@@ -19,9 +19,11 @@ from qsys.ops import (
     initialize_run,
     resolve_training_end_date,
     send_shadow_run_notification,
+    send_shadow_run_telegram_notification,
     update_stage_status,
     write_latest_shadow_model,
     write_notification_result,
+    write_telegram_notification_result,
 )
 from qsys.ops.model_registry import (
     build_latest_shadow_model_payload,
@@ -441,15 +443,21 @@ def run_shadow_retrain_weekly(
 
     notification_result = send_shadow_run_notification(context.summary_path, context.manifest_path)
     notification_result_path = write_notification_result(context.run_dir / "06_notification" / "notification_result.json", notification_result)
+    telegram_notification_result = send_shadow_run_telegram_notification(context.summary_path, context.manifest_path)
+    telegram_notification_result_path = write_telegram_notification_result(
+        context.run_dir / "06_notification" / "telegram_notification_result.json", telegram_notification_result
+    )
 
     summary_payload = load_json(context.summary_path)
     summary_payload["notification_status"] = notification_result["status"]
+    summary_payload["telegram_notification_status"] = telegram_notification_result["status"]
     atomic_write_json(context.summary_path, summary_payload)
 
     manifest = load_json(context.manifest_path)
     archive_stage = manifest["stage_status"]["archive_report"]
     archive_artifacts = dict(archive_stage.get("artifact_pointers") or {})
     archive_artifacts["notification_result_path"] = str(notification_result_path)
+    archive_artifacts["telegram_notification_result_path"] = str(telegram_notification_result_path)
     archive_stage["artifact_pointers"] = archive_artifacts
     manifest["stage_status"]["archive_report"] = archive_stage
     atomic_write_json(context.manifest_path, manifest)
