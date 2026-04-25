@@ -75,6 +75,130 @@ class TestShadowDailyInference(unittest.TestCase):
             self.assertEqual(execution_summary["status"], "failed")
             self.assertFalse((run_dir / "05_shadow" / "order_intents.csv").exists())
 
+    def test_data_sync_failure_blocks_downstream_and_keeps_shadow_state_untouched(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_dir = Path(tmpdir)
+            shadow_dir = base_dir / "shadow"
+            shadow_dir.mkdir(parents=True, exist_ok=True)
+            original_account = {
+                "trade_date": "2026-04-24",
+                "cash": 1000000.0,
+                "available_cash": 1000000.0,
+                "market_value": 0.0,
+                "total_value": 1000000.0,
+                "last_run_id": "shadow_2026-04-24_090807",
+                "initial_capital": 1000000.0,
+            }
+            account_path = _write_json(shadow_dir / "account.json", original_account)
+            ledger_path = shadow_dir / "ledger.csv"
+            ledger_path.write_text("run_id,trade_date,instrument,side,quantity,price,amount,fee,status,reason\n", encoding="utf-8")
+            account_before = account_path.read_text(encoding="utf-8")
+            ledger_before = ledger_path.read_text(encoding="utf-8")
+            data_failed = dict(self.data_status)
+            data_failed["status"] = "failed"
+            data_failed["health_report"] = {"blocking_issues": ["raw_latest stale"]}
+            with patch("scripts.ops.run_shadow_daily._build_data_status", return_value=data_failed), patch(
+                "scripts.ops.run_shadow_daily._build_feature_status", return_value=self.feature_status
+            ), patch("scripts.ops.run_shadow_daily.run_shadow_daily_inference") as inference_mock, patch(
+                "scripts.ops.run_shadow_daily.run_shadow_rebalance"
+            ) as rebalance_mock:
+                result = run_shadow_daily(base_dir, run_id="shadow_2026-04-25_090807", triggered_by="test")
+
+            run_dir = Path(result["run_dir"])
+            manifest = load_json(run_dir / "manifest.json")
+            summary = load_json(run_dir / "daily_summary.json")
+            inference_summary = load_json(run_dir / "04_inference" / "inference_summary.json")
+            execution_summary = load_json(run_dir / "05_shadow" / "execution_summary.json")
+            self.assertEqual(result["overall_status"], "failed")
+            self.assertEqual(manifest["stage_status"]["select_model"]["status"], "skipped")
+            self.assertEqual(manifest["stage_status"]["inference"]["status"], "skipped")
+            self.assertEqual(manifest["stage_status"]["shadow_rebalance"]["status"], "skipped")
+            self.assertEqual(summary["overall_status"], "failed")
+            self.assertEqual(summary["decision_status"], "blocked_data_sync")
+            self.assertEqual(inference_summary["status"], "failed")
+            self.assertEqual(execution_summary["status"], "failed")
+            self.assertEqual(account_path.read_text(encoding="utf-8"), account_before)
+            self.assertEqual(ledger_path.read_text(encoding="utf-8"), ledger_before)
+            inference_mock.assert_not_called()
+            rebalance_mock.assert_not_called()
+
+    def test_feature_refresh_failure_blocks_downstream_and_does_not_create_shadow_state(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_dir = Path(tmpdir)
+            feature_failed = dict(self.feature_status)
+            feature_failed["status"] = "failed"
+            feature_failed["degradation_level"] = "blocked"
+            feature_failed["notes"] = ["feature coverage insufficient"]
+            with patch("scripts.ops.run_shadow_daily._build_data_status", return_value=self.data_status), patch(
+                "scripts.ops.run_shadow_daily._build_feature_status", return_value=feature_failed
+            ), patch("scripts.ops.run_shadow_daily.run_shadow_daily_inference") as inference_mock, patch(
+                "scripts.ops.run_shadow_daily.run_shadow_rebalance"
+            ) as rebalance_mock:
+                result = run_shadow_daily(base_dir, run_id="shadow_2026-04-25_090807", triggered_by="test")
+
+            run_dir = Path(result["run_dir"])
+            manifest = load_json(run_dir / "manifest.json")
+            summary = load_json(run_dir / "daily_summary.json")
+            self.assertEqual(manifest["stage_status"]["select_model"]["status"], "skipped")
+            self.assertEqual(manifest["stage_status"]["inference"]["status"], "skipped")
+            self.assertEqual(manifest["stage_status"]["shadow_rebalance"]["status"], "skipped")
+            self.assertEqual(summary["overall_status"], "failed")
+            self.assertEqual(summary["decision_status"], "blocked_feature_refresh")
+            self.assertFalse((base_dir / "shadow" / "account.json").exists())
+            self.assertFalse((base_dir / "shadow" / "ledger.csv").exists())
+            inference_mock.assert_not_called()
+            rebalance_mock.assert_not_called()
+
+    def test_feature_refresh_extended_warn_still_allows_rebalance(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_dir = Path(tmpdir)
+            _make_usable_latest_model(base_dir)
+            feature_warn = dict(self.feature_status)
+            feature_warn["status"] = "warn"
+            feature_warn["degradation_level"] = "extended_warn"
+            with patch("scripts.ops.run_shadow_daily._build_data_status", return_value=self.data_status), patch(
+                "scripts.ops.run_shadow_daily._build_feature_status", return_value=feature_warn
+            ), patch("scripts.ops.run_shadow_daily.run_shadow_daily_inference") as inference_mock, patch(
+                "scripts.ops.run_shadow_daily.run_shadow_rebalance"
+            ) as rebalance_mock:
+                inference_mock.return_value = type("InferenceArtifacts", (), {
+                    "predictions_path": str(base_dir / "runs" / "2026-04-25" / "shadow_2026-04-25_090807" / "04_inference" / "predictions.csv"),
+                    "inference_summary_path": str(base_dir / "runs" / "2026-04-25" / "shadow_2026-04-25_090807" / "04_inference" / "inference_summary.json"),
+                    "prediction_count": 1,
+                })()
+                pred_path = Path(inference_mock.return_value.predictions_path)
+                pred_path.parent.mkdir(parents=True, exist_ok=True)
+                pred_path.write_text(
+                    "trade_date,instrument,score,model_name,mainline_object_name,bundle_id,train_run_id\n"
+                    "2026-04-25,SH600000,0.2,qlib_lgbm_extended,feature_173,bundle_feature_173,shadow_retrain_2026-04-25_090807\n",
+                    encoding="utf-8",
+                )
+                _write_json(Path(inference_mock.return_value.inference_summary_path), {"status": "success"})
+                rebalance_mock.return_value = type("RebalanceArtifacts", (), {
+                    "execution_summary_path": str(base_dir / "runs" / "2026-04-25" / "shadow_2026-04-25_090807" / "05_shadow" / "execution_summary.json"),
+                    "target_weights_path": str(base_dir / "runs" / "2026-04-25" / "shadow_2026-04-25_090807" / "05_shadow" / "target_weights.csv"),
+                    "order_intents_path": str(base_dir / "runs" / "2026-04-25" / "shadow_2026-04-25_090807" / "05_shadow" / "order_intents.csv"),
+                    "account_after_path": str(base_dir / "runs" / "2026-04-25" / "shadow_2026-04-25_090807" / "05_shadow" / "account_after.json"),
+                    "positions_after_path": str(base_dir / "runs" / "2026-04-25" / "shadow_2026-04-25_090807" / "05_shadow" / "positions_after.csv"),
+                    "shadow_account_path": str(base_dir / "shadow" / "account.json"),
+                    "shadow_positions_path": str(base_dir / "shadow" / "positions.csv"),
+                    "shadow_ledger_path": str(base_dir / "shadow" / "ledger.csv"),
+                    "order_count": 0,
+                    "filled_count": 0,
+                    "rejected_count": 0,
+                    "turnover": 0.0,
+                    "cash_after": 1000000.0,
+                    "total_value_after": 1000000.0,
+                })()
+                Path(rebalance_mock.return_value.execution_summary_path).parent.mkdir(parents=True, exist_ok=True)
+                _write_json(Path(rebalance_mock.return_value.execution_summary_path), {"status": "success"})
+                result = run_shadow_daily(base_dir, run_id="shadow_2026-04-25_090807", triggered_by="test")
+
+            manifest = load_json(Path(result["run_dir"]) / "manifest.json")
+            self.assertEqual(manifest["stage_status"]["feature_refresh"]["status"], "success")
+            self.assertEqual(manifest["stage_status"]["shadow_rebalance"]["status"], "success")
+            rebalance_mock.assert_called_once()
+
     def test_inference_failure_does_not_trigger_rebalance(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             base_dir = Path(tmpdir)

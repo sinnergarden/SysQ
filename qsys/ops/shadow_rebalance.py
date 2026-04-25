@@ -20,6 +20,47 @@ DEFAULT_TURNOVER_BUFFER = 0.0
 DEFAULT_STRATEGY_VARIANT = "top5_equal_weight"
 DEFAULT_PRICE_MODE = "shadow_mark_price"
 DEFAULT_REBALANCE_MODE = "daily"
+TARGET_WEIGHT_COLUMNS = [
+    "trade_date",
+    "instrument",
+    "score",
+    "target_weight",
+    "model_name",
+    "mainline_object_name",
+    "strategy_variant",
+]
+ORDER_INTENT_COLUMNS = [
+    "trade_date",
+    "instrument",
+    "side",
+    "target_weight",
+    "current_weight",
+    "target_value",
+    "current_value",
+    "diff_value",
+    "requested_qty",
+    "reason",
+]
+POSITION_COLUMNS = [
+    "instrument",
+    "quantity",
+    "sellable_quantity",
+    "cost_price",
+    "last_price",
+    "market_value",
+]
+LEDGER_COLUMNS = [
+    "run_id",
+    "trade_date",
+    "instrument",
+    "side",
+    "quantity",
+    "price",
+    "amount",
+    "fee",
+    "status",
+    "reason",
+]
 
 
 class ShadowRebalanceError(RuntimeError):
@@ -89,7 +130,7 @@ def _load_shadow_account(shadow_dir: Path) -> tuple[Account, dict[str, Any], pd.
             "market_value": 0.0,
             "total_value": DEFAULT_INITIAL_CAPITAL,
             "last_run_id": None,
-        }, pd.DataFrame(columns=["instrument", "quantity", "sellable_quantity", "cost_price", "last_price", "market_value"])
+        }, pd.DataFrame(columns=POSITION_COLUMNS)
 
     payload = json.loads(account_path.read_text(encoding="utf-8"))
     account = Account(init_cash=float(payload.get("initial_capital", DEFAULT_INITIAL_CAPITAL)))
@@ -97,7 +138,7 @@ def _load_shadow_account(shadow_dir: Path) -> tuple[Account, dict[str, Any], pd.
     if positions_path.exists():
         positions = pd.read_csv(positions_path)
     else:
-        positions = pd.DataFrame(columns=["instrument", "quantity", "sellable_quantity", "cost_price", "last_price", "market_value"])
+        positions = pd.DataFrame(columns=POSITION_COLUMNS)
 
     for row in positions.to_dict("records"):
         instrument = str(row.get("instrument", ""))
@@ -168,7 +209,7 @@ def _build_target_weights(predictions: pd.DataFrame, current_prices: dict[str, f
                 "strategy_variant": DEFAULT_STRATEGY_VARIANT,
             }
         )
-    return weights, pd.DataFrame(rows)
+    return weights, pd.DataFrame(rows, columns=TARGET_WEIGHT_COLUMNS)
 
 
 def _build_order_intents(account: Account, target_weights: dict[str, float], current_prices: dict[str, float], trade_date: str) -> tuple[list[dict[str, Any]], pd.DataFrame, float, float, float]:
@@ -200,7 +241,7 @@ def _build_order_intents(account: Account, target_weights: dict[str, float], cur
                 "reason": "rebalance_to_target_weight",
             }
         )
-    return orders, pd.DataFrame(rows), cash_before, market_value_before, total_value_before
+    return orders, pd.DataFrame(rows, columns=ORDER_INTENT_COLUMNS), cash_before, market_value_before, total_value_before
 
 
 def _positions_frame(account: Account, current_prices: dict[str, float]) -> pd.DataFrame:
@@ -219,12 +260,12 @@ def _positions_frame(account: Account, current_prices: dict[str, float]) -> pd.D
                 "market_value": market_value,
             }
         )
-    return pd.DataFrame(rows, columns=["instrument", "quantity", "sellable_quantity", "cost_price", "last_price", "market_value"])
+    return pd.DataFrame(rows, columns=POSITION_COLUMNS)
 
 
 def _append_ledger(path: Path, rows: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    fieldnames = ["run_id", "trade_date", "instrument", "side", "quantity", "price", "amount", "fee", "status", "reason"]
+    fieldnames = LEDGER_COLUMNS
     exists = path.exists()
     with path.open("a", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)

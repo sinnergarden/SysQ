@@ -63,7 +63,9 @@ The daily entrypoint is `scripts/ops/run_shadow_daily.py`.
 Behavior:
 
 - `data_sync` is a lightweight freshness/environment check only; it does not call heavy update scripts
+- `data_sync=failed` forces `select_model` / `inference` / `shadow_rebalance` to `skipped`, writes failed `04_inference/inference_summary.json` and `05_shadow/execution_summary.json`, and does not modify persistent `shadow/` state
 - `feature_refresh` is a lightweight readiness check only; it does not materialize features in bulk
+- `feature_refresh=failed` or blocked forces the same downstream skip-and-freeze behavior; `extended_warn` may continue
 - `maybe_retrain` is always `skipped` by design; daily runner still does not train
 - `select_model` reads `models/latest_shadow_model.json` via `read_latest_shadow_model()` and gates execution with `latest_shadow_model_is_usable()`
 - a latest model pointer is loadable only when required fields exist, `status == "success"`, `model_path` is a directory, and `config_snapshot.json`, `training_summary.json`, `decisions.json`, `meta.yaml`, and `model.pkl` all exist
@@ -126,6 +128,8 @@ Each successful daily rebalance writes under `05_shadow/`:
 - `execution_summary.json`
 - `account_after.json`
 - `positions_after.csv`
+
+These CSV artifacts keep fixed headers even when a given run produces zero rows.
 
 `target_weights.csv` minimum fields:
 

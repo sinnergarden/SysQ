@@ -8,7 +8,7 @@ from unittest.mock import patch
 import pandas as pd
 
 from qsys.ops import build_latest_shadow_model_payload, write_latest_shadow_model
-from qsys.ops.shadow_rebalance import ShadowRebalanceArtifacts, ShadowRebalanceError
+from qsys.ops.shadow_rebalance import ORDER_INTENT_COLUMNS, POSITION_COLUMNS, TARGET_WEIGHT_COLUMNS, ShadowRebalanceArtifacts, ShadowRebalanceError
 from qsys.ops.state import load_json
 from scripts.ops.run_shadow_daily import run_shadow_daily
 
@@ -228,6 +228,78 @@ class TestShadowDailyRebalance(unittest.TestCase):
             self.assertIn("shadow_2026-04-25_090807", set(ledger["run_id"]))
             self.assertIn("shadow_2026-04-26_090807", set(ledger["run_id"]))
             self.assertEqual(load_json(Path(second["run_dir"]) / "daily_summary.json")["overall_status"], "success")
+
+    def test_no_order_day_keeps_artifact_contract_stable(self):
+        def no_order_market_snapshot(trade_date, instruments):
+            prices = {instrument: 10.0 + idx for idx, instrument in enumerate(sorted(instruments))}
+            market_status = pd.DataFrame(
+                {
+                    "is_suspended": False,
+                    "is_limit_up": False,
+                    "is_limit_down": False,
+                },
+                index=sorted(instruments),
+            )
+            return prices, market_status
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_dir = Path(tmpdir)
+            _make_usable_latest_model(base_dir)
+            shadow_dir = base_dir / "shadow"
+            shadow_dir.mkdir(parents=True, exist_ok=True)
+            _write_json(
+                shadow_dir / "account.json",
+                {
+                    "trade_date": "2026-04-24",
+                    "cash": 0.0,
+                    "available_cash": 0.0,
+                    "market_value": 1000000.0,
+                    "total_value": 1000000.0,
+                    "last_run_id": "shadow_2026-04-24_090807",
+                    "initial_capital": 1000000.0,
+                },
+            )
+            pd.DataFrame(
+                [
+                    {
+                        "instrument": "SH600000",
+                        "quantity": 50000,
+                        "sellable_quantity": 50000,
+                        "cost_price": 10.0,
+                        "last_price": 10.0,
+                        "market_value": 500000.0,
+                    },
+                    {
+                        "instrument": "SZ000001",
+                        "quantity": 45454,
+                        "sellable_quantity": 45454,
+                        "cost_price": 11.0,
+                        "last_price": 11.0,
+                        "market_value": 499994.0,
+                    },
+                ],
+                columns=POSITION_COLUMNS,
+            ).to_csv(shadow_dir / "positions.csv", index=False)
+            with patch("scripts.ops.run_shadow_daily._build_data_status", return_value=_fake_data_status()), patch(
+                "scripts.ops.run_shadow_daily._build_feature_status", return_value=_fake_feature_status()
+            ), patch("scripts.ops.run_shadow_daily.run_shadow_daily_inference", side_effect=_fake_inference), patch(
+                "qsys.ops.shadow_rebalance._fetch_market_snapshot", side_effect=no_order_market_snapshot
+            ), patch("qsys.ops.shadow_rebalance.OrderGenerator.generate_orders", return_value=[]):
+                result = run_shadow_daily(base_dir, run_id="shadow_2026-04-25_090807", triggered_by="test")
+
+            run_dir = Path(result["run_dir"])
+            order_intents = pd.read_csv(run_dir / "05_shadow" / "order_intents.csv")
+            target_weights = pd.read_csv(run_dir / "05_shadow" / "target_weights.csv")
+            positions_after = pd.read_csv(run_dir / "05_shadow" / "positions_after.csv")
+            execution_summary = load_json(run_dir / "05_shadow" / "execution_summary.json")
+            ledger_text = (base_dir / "shadow" / "ledger.csv").read_text(encoding="utf-8")
+            self.assertEqual(order_intents.columns.tolist(), ORDER_INTENT_COLUMNS)
+            self.assertTrue(order_intents.empty)
+            self.assertEqual(target_weights.columns.tolist(), TARGET_WEIGHT_COLUMNS)
+            self.assertEqual(positions_after.columns.tolist(), POSITION_COLUMNS)
+            self.assertEqual(execution_summary["status"], "success")
+            self.assertEqual(execution_summary["order_count"], 0)
+            self.assertEqual(ledger_text.strip(), "run_id,trade_date,instrument,side,quantity,price,amount,fee,status,reason")
 
     def test_rebalance_failure_marks_daily_failed(self):
         with tempfile.TemporaryDirectory() as tmpdir:
