@@ -8,6 +8,12 @@ from .manifest import (
     update_stage_status,
 )
 from .inference import InferenceArtifacts, InferenceInvocationError, run_shadow_daily_inference, write_failed_inference_summary
+from .shadow_rebalance import (
+    ShadowRebalanceArtifacts,
+    ShadowRebalanceError,
+    run_shadow_rebalance,
+    write_failed_execution_summary,
+)
 from .model_registry import (
     build_latest_shadow_model_payload,
     latest_shadow_model_is_usable,
@@ -30,6 +36,10 @@ __all__ = [
     "InferenceInvocationError",
     "run_shadow_daily_inference",
     "write_failed_inference_summary",
+    "ShadowRebalanceArtifacts",
+    "ShadowRebalanceError",
+    "run_shadow_rebalance",
+    "write_failed_execution_summary",
     "build_latest_shadow_model_payload",
     "read_latest_shadow_model",
     "latest_shadow_model_is_usable",

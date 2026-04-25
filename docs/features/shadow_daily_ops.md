@@ -1,12 +1,13 @@
 # Shadow Daily Ops
 
-This document defines the PR1 protocol shell, the PR2 weekly retrain wiring, and the PR3A daily latest-model inference loop.
+This document defines the PR1 protocol shell, the PR2 weekly retrain wiring, the PR3A daily latest-model inference loop, and the PR3B shadow rebalance + ledger minimum loop.
 
 ## Scope
 
-- Daily runner now consumes `models/latest_shadow_model.json`, performs lightweight data/readiness checks, and writes inference artifacts.
-- Weekly retrain now calls real training through `scripts/run_train.py`.
-- Daily runner still does not retrain, rebalance, touch ledger, call MiniQMT, call `update_data_all.py`, or run `BacktestEngine.run()`.
+- Daily runner now consumes `models/latest_shadow_model.json`, performs lightweight data/readiness checks, runs inference, and writes shadow rebalance artifacts.
+- Weekly retrain calls real training through `scripts/run_train.py`.
+- Daily runner still does not retrain, touch MiniQMT, place real orders, call `update_data_all.py`, or run `BacktestEngine.run()`.
+- Shadow rebalance is paper-only: it writes intents, account state, positions, and ledger updates under `shadow/`.
 - No systemd, UI, or research-framework changes are part of this flow.
 
 ## Run identity
@@ -63,14 +64,124 @@ Behavior:
 
 - `data_sync` is a lightweight freshness/environment check only; it does not call heavy update scripts
 - `feature_refresh` is a lightweight readiness check only; it does not materialize features in bulk
-- `maybe_retrain` is always `skipped` in PR3A by design
+- `maybe_retrain` is always `skipped` by design; daily runner still does not train
 - `select_model` reads `models/latest_shadow_model.json` via `read_latest_shadow_model()` and gates execution with `latest_shadow_model_is_usable()`
+- a latest model pointer is loadable only when required fields exist, `status == "success"`, `model_path` is a directory, and `config_snapshot.json`, `training_summary.json`, `decisions.json`, `meta.yaml`, and `model.pkl` all exist
 - when no usable latest model exists, `select_model=failed`, `inference=skipped`, `shadow_rebalance=skipped`, and the daily run finishes `failed`
-- when a usable latest model exists, the runner writes `03_model/selected_model.json` and runs inference only
-- inference outputs are written to `04_inference/predictions.csv` and `04_inference/inference_summary.json`
-- `shadow_rebalance` is intentionally `skipped` after both successful and failed inference; this is deliberate scope control, not a runner fault
-- because `maybe_retrain` and `shadow_rebalance` are intentionally `skipped`, a successful inference-only daily run currently finalizes with `overall_status=skipped`
-- when inference fails after model selection, `04_inference/inference_summary.json` is still written with `status=failed` and the error message, and the run finishes `failed`
+- when inference fails after model selection, `shadow_rebalance=skipped`, `05_shadow/execution_summary.json` is still written with `status=failed`, and the daily run finishes `failed`
+- when inference succeeds, the runner writes `03_model/selected_model.json`, `04_inference/predictions.csv`, `04_inference/inference_summary.json`, then runs shadow rebalance
+- shadow rebalance is paper-only: it generates target weights, order intents, matched shadow fills, and persistent shadow state; it never sends real orders
+- shadow execution currently uses end-of-day mark prices from the inference trade date and records `price_mode=shadow_mark_price`
+- successful shadow rebalance finishes with `shadow_rebalance=success`, `decision_status=shadow_rebalanced`, and `overall_status=success`
+- failed shadow rebalance finishes with `shadow_rebalance=failed`, `decision_status=failed`, and `overall_status=failed`
+
+## Shadow state contract
+
+Persistent shadow state lives under `shadow/`:
+
+- `shadow/account.json`
+- `shadow/positions.csv`
+- `shadow/ledger.csv`
+
+`shadow/account.json` minimum fields:
+
+- `trade_date`
+- `cash`
+- `total_value`
+- `market_value`
+- `available_cash`
+- `last_run_id`
+
+`shadow/positions.csv` minimum fields:
+
+- `instrument`
+- `quantity`
+- `cost_price`
+- `last_price`
+- `market_value`
+
+The implementation also persists `sellable_quantity` so the next shadow run can reuse the previous state.
+
+`shadow/ledger.csv` minimum fields:
+
+- `run_id`
+- `trade_date`
+- `instrument`
+- `side`
+- `quantity`
+- `price`
+- `amount`
+- `fee`
+- `status`
+- `reason`
+
+If no prior shadow state exists, the runner initializes paper capital with `1_000_000`.
+
+## Shadow rebalance artifacts
+
+Each successful daily rebalance writes under `05_shadow/`:
+
+- `target_weights.csv`
+- `order_intents.csv`
+- `execution_summary.json`
+- `account_after.json`
+- `positions_after.csv`
+
+`target_weights.csv` minimum fields:
+
+- `trade_date`
+- `instrument`
+- `score`
+- `target_weight`
+- `model_name`
+- `mainline_object_name`
+- `strategy_variant`
+
+`order_intents.csv` minimum fields:
+
+- `trade_date`
+- `instrument`
+- `side`
+- `target_weight`
+- `current_weight`
+- `target_value`
+- `current_value`
+- `diff_value`
+- `requested_qty`
+- `reason`
+
+`execution_summary.json` minimum fields:
+
+- `trade_date`
+- `run_id`
+- `status`
+- `strategy_variant`
+- `top_k`
+- `turnover_buffer`
+- `price_mode`
+- `order_count`
+- `buy_count`
+- `sell_count`
+- `skipped_count`
+- `filled_count`
+- `rejected_count`
+- `cash_before`
+- `cash_after`
+- `market_value_before`
+- `market_value_after`
+- `total_value_before`
+- `total_value_after`
+- `turnover`
+- `notes`
+
+Current minimum strategy settings are fixed for PR3B:
+
+- `mainline_object_name=feature_173`
+- `top_k=5`
+- `strategy_variant=top5_equal_weight`
+- `turnover_buffer=0.0`
+- `rebalance_mode=daily`
+- `price_mode=shadow_mark_price`
 
 ## Manifest contract
 
@@ -102,6 +213,16 @@ Each `stage_status[stage_name]` entry contains:
 - `message`
 - `artifact_pointers`
 
+Daily runs now archive traceable artifact pointers for:
+
+- `data_status_path`
+- `feature_status_path`
+- `selected_model_path`
+- `predictions_path`
+- `inference_summary_path`
+- `execution_summary_path`
+- `daily_summary_path`
+
 Weekly retrain writes real artifact pointers for:
 
 - `training_report_path`
@@ -111,12 +232,6 @@ Weekly retrain writes real artifact pointers for:
 - `model_path`
 - `latest_model_pointer_path`
 
-The manifest also records:
-
-- `model_name`
-- `model_snapshot_path`
-- `latest_model_pointer`
-
 ## Summary contract
 
 Daily runs write `daily_summary.json` with these fields:
@@ -124,6 +239,7 @@ Daily runs write `daily_summary.json` with these fields:
 - `trade_date`
 - `run_id`
 - `run_type`
+- `overall_status`
 - `data_status`
 - `feature_status`
 - `train_status`
@@ -131,18 +247,25 @@ Daily runs write `daily_summary.json` with these fields:
 - `inference_status`
 - `rebalance_status`
 - `shadow_order_count`
+- `filled_count`
+- `rejected_count`
+- `turnover`
+- `cash_after`
+- `total_value_after`
+- `strategy_variant`
+- `price_mode`
 - `degradation_level`
 - `decision_status`
 - `notes`
 
-Weekly retrain still writes `daily_summary.json` so both runners share one summary artifact shape.
-For weekly retrain, the summary reflects:
+Daily status semantics:
 
-- training stage result in `train_status`
-- chosen model details in `model_used`
-- fallback usage in `model_used.fallback`
-- pointer outcome in `decision_status`
-- retained previous-model notes when fallback is used
+- no usable model -> `decision_status=failed`
+- inference failed -> `decision_status=failed`
+- rebalance failed -> `decision_status=failed`
+- rebalance success -> `decision_status=shadow_rebalanced`
+
+Weekly retrain still writes `daily_summary.json` so both runners share one summary artifact family.
 
 ## Latest pointers
 
@@ -178,8 +301,6 @@ The latest model pointer lives at `models/latest_shadow_model.json` and contains
 - `trained_at`
 - `status`
 
-A latest model pointer is considered usable only when all required fields exist, `status == "success"`, `model_path` exists and is a directory, and the model directory still contains `config_snapshot.json`, `training_summary.json`, and `decisions.json`.
-
 ## Helper API
 
 The protocol helper layer in `qsys/ops/` supports:
@@ -192,6 +313,7 @@ The protocol helper layer in `qsys/ops/` supports:
 - writing the latest shadow model pointer
 - invoking the real weekly training flow
 - invoking the daily latest-model inference flow
+- running the paper-only shadow rebalance flow and persisting `shadow/` state
 
 ## Idempotency and re-entry
 
@@ -200,11 +322,12 @@ The protocol helper layer in `qsys/ops/` supports:
 - Latest pointers are updated with atomic replace.
 - `finalize_run()` derives `overall_status` from `stage_status`.
 - Weekly retrain updates `models/latest_shadow_model.json` only after successful training artifact validation.
+- Daily rebalance reuses `shadow/account.json`, `shadow/positions.csv`, and appends to `shadow/ledger.csv`.
 
 ## Runners
 
 - `scripts/ops/run_shadow_daily.py`
 - `scripts/ops/run_shadow_retrain_weekly.py`
 
-The daily runner now consumes the latest usable shadow model, writes traceable inference artifacts, and deliberately stops before rebalance.
+The daily runner now consumes the latest usable shadow model, writes traceable inference artifacts, produces shadow rebalance intents, and updates the paper shadow ledger without touching real brokerage paths.
 The weekly retrain runner executes the real training path and archives traceable protocol artifacts for the run directory.

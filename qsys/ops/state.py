@@ -13,8 +13,8 @@ STATUS_PRIORITY = {
     "fallback": 4,
     "running": 3,
     "pending": 2,
-    "skipped": 1,
-    "success": 0,
+    "success": 1,
+    "skipped": 0,
 }
 
 

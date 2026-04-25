@@ -113,7 +113,7 @@ class TestShadowOpsProtocol(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             model_dir = Path(tmpdir) / "data" / "models" / "model_a"
             model_dir.mkdir(parents=True)
-            for name in ["config_snapshot.json", "training_summary.json", "decisions.json"]:
+            for name in ["config_snapshot.json", "training_summary.json", "decisions.json", "meta.yaml", "model.pkl"]:
                 (model_dir / name).write_text("{}\n", encoding="utf-8")
             path = write_latest_shadow_model(
                 tmpdir,
@@ -146,7 +146,7 @@ class TestShadowOpsProtocol(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             model_dir = Path(tmpdir) / "data" / "models" / "model_a"
             model_dir.mkdir(parents=True)
-            for name in ["config_snapshot.json", "training_summary.json", "decisions.json"]:
+            for name in ["config_snapshot.json", "training_summary.json", "decisions.json", "meta.yaml", "model.pkl"]:
                 (model_dir / name).write_text("{}\n", encoding="utf-8")
             write_latest_shadow_model(
                 tmpdir,
@@ -166,8 +166,48 @@ class TestShadowOpsProtocol(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             model_dir = Path(tmpdir) / "data" / "models" / "model_a"
             model_dir.mkdir(parents=True)
-            (model_dir / "training_summary.json").write_text("{}\n", encoding="utf-8")
-            (model_dir / "decisions.json").write_text("{}\n", encoding="utf-8")
+            for name in ["training_summary.json", "decisions.json", "config_snapshot.json", "model.pkl"]:
+                (model_dir / name).write_text("{}\n", encoding="utf-8")
+            write_latest_shadow_model(
+                tmpdir,
+                build_latest_shadow_model_payload(
+                    model_name="model_a",
+                    model_path=str(model_dir),
+                    mainline_object_name="mainline_a",
+                    bundle_id="bundle_a",
+                    train_run_id="shadow_retrain_2026-04-25_090807",
+                    trained_at="2026-04-25T09:08:07",
+                    status="success",
+                ),
+            )
+            self.assertFalse(latest_shadow_model_is_usable(tmpdir))
+
+    def test_latest_shadow_model_requires_meta_yaml(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            model_dir = Path(tmpdir) / "data" / "models" / "model_a"
+            model_dir.mkdir(parents=True)
+            for name in ["config_snapshot.json", "training_summary.json", "decisions.json", "model.pkl"]:
+                (model_dir / name).write_text("{}\n", encoding="utf-8")
+            write_latest_shadow_model(
+                tmpdir,
+                build_latest_shadow_model_payload(
+                    model_name="model_a",
+                    model_path=str(model_dir),
+                    mainline_object_name="mainline_a",
+                    bundle_id="bundle_a",
+                    train_run_id="shadow_retrain_2026-04-25_090807",
+                    trained_at="2026-04-25T09:08:07",
+                    status="success",
+                ),
+            )
+            self.assertFalse(latest_shadow_model_is_usable(tmpdir))
+
+    def test_latest_shadow_model_requires_model_pkl(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            model_dir = Path(tmpdir) / "data" / "models" / "model_a"
+            model_dir.mkdir(parents=True)
+            for name in ["config_snapshot.json", "training_summary.json", "decisions.json", "meta.yaml"]:
+                (model_dir / name).write_text("{}\n", encoding="utf-8")
             write_latest_shadow_model(
                 tmpdir,
                 build_latest_shadow_model_payload(
@@ -230,6 +270,8 @@ class TestShadowOpsProtocol(unittest.TestCase):
             (model_dir / "training_summary.json").write_text("{}\n", encoding="utf-8")
             (model_dir / "config_snapshot.json").write_text("{}\n", encoding="utf-8")
             (model_dir / "decisions.json").write_text("{}\n", encoding="utf-8")
+            (model_dir / "meta.yaml").write_text("{}\n", encoding="utf-8")
+            (model_dir / "model.pkl").write_text("{}\n", encoding="utf-8")
             report_path = base_dir / "experiments" / "reports" / "train_success.json"
             report_path.parent.mkdir(parents=True)
             report_path.write_text("{}\n", encoding="utf-8")
@@ -280,7 +322,7 @@ class TestShadowOpsProtocol(unittest.TestCase):
             base_dir = Path(tmpdir)
             retained_model_dir = base_dir / "data" / "models" / "retained_model"
             retained_model_dir.mkdir(parents=True)
-            for name in ["config_snapshot.json", "training_summary.json", "decisions.json"]:
+            for name in ["config_snapshot.json", "training_summary.json", "decisions.json", "meta.yaml", "model.pkl"]:
                 (retained_model_dir / name).write_text("{}\n", encoding="utf-8")
             old_payload = build_latest_shadow_model_payload(
                 model_name="retained_model",
@@ -361,7 +403,7 @@ class TestShadowOpsProtocol(unittest.TestCase):
             base_dir = Path(tmpdir)
             model_dir = base_dir / "data" / "models" / "qlib_lgbm_extended"
             model_dir.mkdir(parents=True)
-            for name in ["training_summary.json", "config_snapshot.json", "decisions.json"]:
+            for name in ["training_summary.json", "config_snapshot.json", "decisions.json", "meta.yaml", "model.pkl"]:
                 (model_dir / name).write_text("{}\n", encoding="utf-8")
             report_path = base_dir / "experiments" / "reports" / "train_success.json"
             report_path.parent.mkdir(parents=True)
@@ -415,7 +457,7 @@ class TestShadowOpsProtocol(unittest.TestCase):
 
     def test_overall_status_priority(self):
         self.assertEqual(summarize_overall_status(["success", "success"]), "success")
-        self.assertEqual(summarize_overall_status(["success", "skipped"]), "skipped")
+        self.assertEqual(summarize_overall_status(["success", "skipped"]), "success")
         self.assertEqual(summarize_overall_status(["success", "failed"]), "failed")
 
 

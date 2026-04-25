@@ -74,5 +74,7 @@ def latest_shadow_model_is_usable(base_dir: str | Path, payload: dict[str, Any] 
         model_path / "config_snapshot.json",
         model_path / "training_summary.json",
         model_path / "decisions.json",
+        model_path / "meta.yaml",
+        model_path / "model.pkl",
     ]
     return all(path.exists() and path.is_file() for path in required_artifacts)
