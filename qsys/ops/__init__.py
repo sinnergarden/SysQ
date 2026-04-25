@@ -23,6 +23,14 @@ from .model_registry import (
 from .notification import send_shadow_run_notification, send_wecom_webhook_message, write_notification_result
 from .state import ALLOWED_STATUSES, write_latest_pointer
 from .trade_date import resolve_daily_trade_date, resolve_training_end_date
+from .telegram import (
+    append_gateway_command_log,
+    build_command_log_entry,
+    get_telegram_updates,
+    send_shadow_run_telegram_notification,
+    send_telegram_message,
+    write_telegram_notification_result,
+)
 
 __all__ = [
     "ALLOWED_STATUSES",
@@ -51,4 +59,10 @@ __all__ = [
     "write_notification_result",
     "resolve_daily_trade_date",
     "resolve_training_end_date",
+    "send_telegram_message",
+    "send_shadow_run_telegram_notification",
+    "get_telegram_updates",
+    "append_gateway_command_log",
+    "build_command_log_entry",
+    "write_telegram_notification_result",
 ]

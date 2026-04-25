@@ -2,6 +2,16 @@ import os
 import yaml
 from pathlib import Path
 
+
+def _resolve_env_placeholders(value):
+    if isinstance(value, dict):
+        return {key: _resolve_env_placeholders(val) for key, val in value.items()}
+    if isinstance(value, list):
+        return [_resolve_env_placeholders(item) for item in value]
+    if isinstance(value, str) and value.startswith("ENV:"):
+        return os.environ.get(value[4:], "")
+    return value
+
 class ConfigManager:
     _instance = None
     _config = None
@@ -24,7 +34,7 @@ class ConfigManager:
             )
 
         with open(config_path, 'r', encoding='utf-8') as f:
-            self._config = yaml.safe_load(f) or {}
+            self._config = _resolve_env_placeholders(yaml.safe_load(f) or {})
 
         self._init_directories()
 
