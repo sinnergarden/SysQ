@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -35,6 +36,38 @@ def _build_payload(
     }
 
 
+def _probe_has_rows(adapter: QlibAdapter, *, universe: str, probe_date: str) -> bool:
+    frame = adapter.get_features(
+        universe,
+        DEFAULT_PROBE_FIELDS,
+        start_time=probe_date,
+        end_time=probe_date,
+    )
+    return frame is not None and not frame.empty
+
+
+def _read_calendar_dates(adapter: QlibAdapter) -> list[str]:
+    cal_path = Path(adapter.qlib_dir) / "calendars" / "day.txt"
+    if not cal_path.exists():
+        return []
+    try:
+        df = pd.read_csv(cal_path, header=None)
+    except Exception:
+        return []
+    if df.empty:
+        return []
+    return [pd.Timestamp(value).strftime("%Y-%m-%d") for value in df.iloc[:, 0].tolist()]
+
+
+def _get_latest_available_date_on_or_before(adapter: QlibAdapter, requested_date: str, universe: str) -> str | None:
+    requested_ts = pd.Timestamp(requested_date)
+    candidates = [date for date in _read_calendar_dates(adapter) if pd.Timestamp(date) <= requested_ts]
+    for candidate in reversed(candidates):
+        if _probe_has_rows(adapter, universe=universe, probe_date=candidate):
+            return candidate
+    return None
+
+
 def resolve_daily_trade_date(
     requested_date: str | None,
     *,
@@ -56,13 +89,7 @@ def resolve_daily_trade_date(
             reason="no available qlib trading date",
         )
 
-    requested_frame = adapter.get_features(
-        universe,
-        DEFAULT_PROBE_FIELDS,
-        start_time=requested,
-        end_time=requested,
-    )
-    if requested_frame is not None and not requested_frame.empty:
+    if _probe_has_rows(adapter, universe=universe, probe_date=requested):
         return _build_payload(
             requested_date=requested,
             resolved_trade_date=requested,
@@ -80,27 +107,22 @@ def resolve_daily_trade_date(
             reason="requested_date has no qlib feature rows and fallback is disabled",
         )
 
-    latest_frame = adapter.get_features(
-        universe,
-        DEFAULT_PROBE_FIELDS,
-        start_time=last_qlib_date,
-        end_time=last_qlib_date,
-    )
-    if latest_frame is None or latest_frame.empty:
+    fallback_date = _get_latest_available_date_on_or_before(adapter, requested, universe)
+    if fallback_date is None:
         return _build_payload(
             requested_date=requested,
             resolved_trade_date=None,
             last_qlib_date=last_qlib_date,
             status="failed",
-            reason="no available qlib trading date",
+            reason="no available qlib trading date on or before requested_date",
         )
 
     return _build_payload(
         requested_date=requested,
-        resolved_trade_date=last_qlib_date,
+        resolved_trade_date=fallback_date,
         last_qlib_date=last_qlib_date,
         status="fallback_to_latest_available",
-        reason="requested_date has no qlib feature rows; using latest available trading date",
+        reason="requested_date has no qlib feature rows; using latest available trading date on or before requested_date",
     )
 
 

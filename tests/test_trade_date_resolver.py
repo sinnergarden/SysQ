@@ -11,6 +11,12 @@ from scripts.ops.run_shadow_retrain_weekly import run_shadow_retrain_weekly
 
 
 class TestTradeDateResolver(unittest.TestCase):
+    def _mock_calendar(self, adapter, dates: list[str]) -> None:
+        cal_dir = Path(tempfile.mkdtemp()) / "calendars"
+        cal_dir.mkdir(parents=True, exist_ok=True)
+        (cal_dir / "day.txt").write_text("\n".join(dates) + "\n", encoding="utf-8")
+        adapter.qlib_dir = cal_dir.parent
+
     def test_exact_match(self):
         with patch("qsys.ops.trade_date.QlibAdapter") as adapter_cls:
             adapter = adapter_cls.return_value
@@ -25,10 +31,11 @@ class TestTradeDateResolver(unittest.TestCase):
         self.assertEqual(payload["status"], "success")
         self.assertTrue(payload["is_exact_match"])
 
-    def test_fallback_to_latest_available(self):
+    def test_requested_after_global_latest_can_fallback_to_global_latest(self):
         with patch("qsys.ops.trade_date.QlibAdapter") as adapter_cls:
             adapter = adapter_cls.return_value
             adapter.get_last_qlib_date.return_value = pd.Timestamp("2026-04-17")
+            self._mock_calendar(adapter, ["2026-04-17"])
             adapter.get_features.side_effect = [
                 pd.DataFrame(columns=["$close"]),
                 pd.DataFrame({"$close": [1.0]}),
@@ -39,6 +46,34 @@ class TestTradeDateResolver(unittest.TestCase):
         self.assertEqual(payload["resolved_trade_date"], "2026-04-17")
         self.assertEqual(payload["status"], "fallback_to_latest_available")
         self.assertFalse(payload["is_exact_match"])
+
+    def test_requested_before_global_latest_must_not_fallback_to_future(self):
+        with patch("qsys.ops.trade_date.QlibAdapter") as adapter_cls:
+            adapter = adapter_cls.return_value
+            adapter.get_last_qlib_date.return_value = pd.Timestamp("2026-04-24")
+            self._mock_calendar(adapter, ["2026-04-17", "2026-04-24"])
+            adapter.get_features.side_effect = [
+                pd.DataFrame(columns=["$close"]),
+                pd.DataFrame({"$close": [1.0]}),
+            ]
+
+            payload = resolve_daily_trade_date("2026-04-20")
+
+        self.assertEqual(payload["resolved_trade_date"], "2026-04-17")
+        self.assertLessEqual(payload["resolved_trade_date"], payload["requested_date"])
+        self.assertNotEqual(payload["resolved_trade_date"], "2026-04-24")
+
+    def test_requested_before_earliest_available_date_should_fail(self):
+        with patch("qsys.ops.trade_date.QlibAdapter") as adapter_cls:
+            adapter = adapter_cls.return_value
+            adapter.get_last_qlib_date.return_value = pd.Timestamp("2026-04-17")
+            self._mock_calendar(adapter, ["2026-04-17"])
+            adapter.get_features.return_value = pd.DataFrame(columns=["$close"])
+
+            payload = resolve_daily_trade_date("2026-01-01")
+
+        self.assertEqual(payload["status"], "failed")
+        self.assertIsNone(payload["resolved_trade_date"])
 
     def test_no_available_data(self):
         with patch("qsys.ops.trade_date.QlibAdapter") as adapter_cls:
@@ -55,6 +90,7 @@ class TestTradeDateResolver(unittest.TestCase):
         with patch("qsys.ops.trade_date.QlibAdapter") as adapter_cls:
             adapter = adapter_cls.return_value
             adapter.get_last_qlib_date.return_value = pd.Timestamp("2026-04-17")
+            self._mock_calendar(adapter, ["2026-04-17"])
             adapter.get_features.side_effect = [
                 pd.DataFrame(columns=["$close"]),
                 pd.DataFrame({"$close": [1.0]}),
@@ -64,6 +100,21 @@ class TestTradeDateResolver(unittest.TestCase):
 
         self.assertEqual(payload["status"], "fallback_to_latest_available")
         self.assertIn("train_end", payload["reason"])
+
+    def test_training_resolver_must_not_fallback_to_future(self):
+        with patch("qsys.ops.trade_date.QlibAdapter") as adapter_cls:
+            adapter = adapter_cls.return_value
+            adapter.get_last_qlib_date.return_value = pd.Timestamp("2026-04-24")
+            self._mock_calendar(adapter, ["2026-04-17", "2026-04-24"])
+            adapter.get_features.side_effect = [
+                pd.DataFrame(columns=["$close"]),
+                pd.DataFrame({"$close": [1.0]}),
+            ]
+
+            payload = resolve_training_end_date("2026-04-20")
+
+        self.assertEqual(payload["resolved_trade_date"], "2026-04-17")
+        self.assertLessEqual(payload["resolved_trade_date"], payload["requested_date"])
 
     def test_weekly_runner_uses_resolved_train_end(self):
         resolved = {
