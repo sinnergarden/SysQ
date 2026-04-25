@@ -21,9 +21,13 @@ from qsys.ops import (
     initialize_run,
     latest_shadow_model_is_usable,
     read_latest_shadow_model,
+    run_shadow_daily_inference,
+    run_shadow_rebalance,
     update_stage_status,
+    write_failed_execution_summary,
 )
-from qsys.ops.inference import InferenceArtifacts, InferenceInvocationError, run_shadow_daily_inference, write_failed_inference_summary
+from qsys.ops.inference import InferenceArtifacts, InferenceInvocationError, write_failed_inference_summary
+from qsys.ops.shadow_rebalance import ShadowRebalanceArtifacts, ShadowRebalanceError
 from qsys.ops.state import atomic_write_json, load_json, summarize_overall_status
 from qsys.research.mainline import MAINLINE_OBJECTS, resolve_mainline_feature_config
 from qsys.research.readiness import build_feature_coverage, build_readiness_summary
@@ -134,20 +138,28 @@ def _select_latest_model(base_dir: Path) -> tuple[dict[str, Any] | None, str | N
 
 def _resolve_daily_decision_status(manifest: dict[str, Any]) -> str:
     stage_status = manifest["stage_status"]
+    data_status = stage_status["data_sync"]["status"]
+    feature_status = stage_status["feature_refresh"]["status"]
     select_status = stage_status["select_model"]["status"]
     inference_status = stage_status["inference"]["status"]
     rebalance_status = stage_status["shadow_rebalance"]["status"]
 
+    if data_status == "failed":
+        return "blocked_data_sync"
+    if feature_status == "failed":
+        return "blocked_feature_refresh"
     if select_status == "failed":
         return "failed"
     if inference_status == "failed":
         return "failed"
-    if inference_status == "success" and rebalance_status == "skipped":
-        return "rebalance_skipped_by_design"
-    if inference_status == "success":
-        return "inference_ready"
+    if rebalance_status == "failed":
+        return "failed"
+    if rebalance_status == "success":
+        return "shadow_rebalanced"
     if inference_status == "skipped":
         return "blocked_no_model"
+    if inference_status == "success":
+        return "inference_ready"
     return summarize_overall_status([item["status"] for item in stage_status.values()])
 
 
@@ -174,24 +186,27 @@ def run_shadow_daily(base_dir: str | Path, *, run_id: str | None = None, trigger
         },
         fallback_summary={"used": False},
         notes=[
-            "Daily shadow runner consumes latest shadow model and only runs lightweight checks plus inference.",
-            "maybe_retrain and shadow_rebalance stay skipped by design in PR3A.",
+            "Daily shadow runner consumes latest shadow model and only runs lightweight checks plus inference and shadow rebalance.",
+            "maybe_retrain stays skipped by design in PR3B.",
         ],
     )
 
     notes: list[str] = []
     selected_model_payload: dict[str, Any] | None = None
     inference_artifacts: InferenceArtifacts | None = None
+    rebalance_artifacts: ShadowRebalanceArtifacts | None = None
     data_status_payload: dict[str, Any] | None = None
     feature_status_payload: dict[str, Any] | None = None
     selected_model_path: Path | None = None
     inference_summary_path: Path | None = None
     predictions_path: Path | None = None
+    execution_summary_path: Path | None = None
 
     data_dir = context.run_dir / "01_data"
     feature_dir = context.run_dir / "02_features"
     model_dir = context.run_dir / "03_model"
     inference_dir = context.run_dir / "04_inference"
+    shadow_dir = context.run_dir / "05_shadow"
 
     data_started = datetime.now().replace(microsecond=0).isoformat()
     update_stage_status(context, stage_name="data_sync", status="running", started_at=data_started, message="Running lightweight data freshness check.")
@@ -234,7 +249,9 @@ def run_shadow_daily(base_dir: str | Path, *, run_id: str | None = None, trigger
     try:
         feature_status_payload = _build_feature_status(trade_date=context.trade_date, universe=DEFAULT_UNIVERSE, mainline_object_name=mainline_object_name)
         feature_status_path = _write_json(feature_dir / "feature_status.json", feature_status_payload)
-        feature_status = "success" if feature_status_payload["status"] == "success" else "failed"
+        feature_status_value = str(feature_status_payload.get("status", "failed"))
+        degradation_level = str(feature_status_payload.get("degradation_level", ""))
+        feature_status = "success" if feature_status_value == "success" or degradation_level == "extended_warn" else "failed"
         _set_stage(
             context,
             stage_name="feature_refresh",
@@ -270,7 +287,7 @@ def run_shadow_daily(base_dir: str | Path, *, run_id: str | None = None, trigger
         {
             "stage": "maybe_retrain",
             "status": "skipped",
-            "reason": "daily_runner_does_not_train_in_pr3a",
+            "reason": "daily_runner_does_not_train_in_pr3b",
             "triggered_by": triggered_by,
         },
     )
@@ -278,14 +295,15 @@ def run_shadow_daily(base_dir: str | Path, *, run_id: str | None = None, trigger
         context,
         stage_name="maybe_retrain",
         status="skipped",
-        message="PR3A keeps daily retrain disabled by design.",
+        message="Daily runner does not train in PR3B.",
         artifact_pointers={"stage_output": str(maybe_retrain_path)},
     )
 
-    select_started = datetime.now().replace(microsecond=0).isoformat()
-    update_stage_status(context, stage_name="select_model", status="running", started_at=select_started, message="Selecting latest usable shadow model.")
-    selected_model_payload, model_error = _select_latest_model(base_dir)
-    if selected_model_payload is None:
+    data_stage_status = load_json(context.manifest_path)["stage_status"]["data_sync"]["status"]
+    feature_stage_status = load_json(context.manifest_path)["stage_status"]["feature_refresh"]["status"]
+    should_block_after_checks = data_stage_status == "failed" or feature_stage_status == "failed"
+    if should_block_after_checks:
+        block_reason = "data_sync failed" if data_stage_status == "failed" else "feature_refresh failed"
         selected_model_payload = {
             "model_name": "",
             "model_path": "",
@@ -293,132 +311,206 @@ def run_shadow_daily(base_dir: str | Path, *, run_id: str | None = None, trigger
             "bundle_id": "",
             "train_run_id": "",
             "status": "failed",
-            "error": model_error or "no usable latest model",
+            "error": block_reason,
         }
         selected_model_path = _write_json(model_dir / "selected_model.json", selected_model_payload)
         _set_stage(
             context,
             stage_name="select_model",
-            status="failed",
-            started_at=select_started,
-            message=model_error or "no usable latest model",
+            status="skipped",
+            message=f"Select model skipped because {block_reason}.",
             artifact_pointers={"selected_model_path": str(selected_model_path)},
         )
         inference_summary_path = write_failed_inference_summary(
             trade_date=context.trade_date,
             model_payload=selected_model_payload,
             output_dir=inference_dir,
-            error=model_error or "no usable latest model",
+            error=block_reason,
         )
         _set_stage(
             context,
             stage_name="inference",
             status="skipped",
-            message="Inference skipped because there is no usable latest model.",
+            message=f"Inference skipped because {block_reason}.",
             artifact_pointers={"inference_summary_path": str(inference_summary_path)},
         )
-        shadow_rebalance_path = _write_json(
-            context.run_dir / "shadow_rebalance.json",
-            {
-                "stage": "shadow_rebalance",
-                "status": "skipped",
-                "reason": "inference_not_available",
-                "message": model_error or "no usable latest model",
-            },
+        execution_summary_path = write_failed_execution_summary(
+            output_dir=shadow_dir,
+            trade_date=context.trade_date,
+            run_id=context.run_id,
+            error=block_reason,
         )
         _set_stage(
             context,
             stage_name="shadow_rebalance",
             status="skipped",
-            message="Shadow rebalance skipped because inference did not run.",
-            artifact_pointers={"stage_output": str(shadow_rebalance_path)},
+            message=f"Shadow rebalance skipped because {block_reason}.",
+            artifact_pointers={"execution_summary_path": str(execution_summary_path)},
         )
-        notes.append(model_error or "no usable latest model")
+        notes.append(block_reason)
     else:
-        _update_manifest_model_info(context, selected_model_payload)
-        selected_model_path = _write_json(model_dir / "selected_model.json", selected_model_payload)
-        _set_stage(
-            context,
-            stage_name="select_model",
-            status="success",
-            started_at=select_started,
-            message="Latest usable shadow model selected.",
-            artifact_pointers={
-                "selected_model_path": str(selected_model_path),
-                "model_path": str(selected_model_payload["model_path"]),
-            },
-        )
-        inference_started = datetime.now().replace(microsecond=0).isoformat()
-        update_stage_status(context, stage_name="inference", status="running", started_at=inference_started, message="Running daily inference with latest shadow model.")
-        try:
-            inference_artifacts = run_shadow_daily_inference(
-                trade_date=context.trade_date,
-                model_payload=selected_model_payload,
-                output_dir=inference_dir,
-                universe=DEFAULT_UNIVERSE,
-            )
-            predictions_path = Path(inference_artifacts.predictions_path)
-            inference_summary_path = Path(inference_artifacts.inference_summary_path)
+        select_started = datetime.now().replace(microsecond=0).isoformat()
+        update_stage_status(context, stage_name="select_model", status="running", started_at=select_started, message="Selecting latest usable shadow model.")
+        selected_model_payload, model_error = _select_latest_model(base_dir)
+        if selected_model_payload is None:
+            selected_model_payload = {
+                "model_name": "",
+                "model_path": "",
+                "mainline_object_name": "",
+                "bundle_id": "",
+                "train_run_id": "",
+                "status": "failed",
+                "error": model_error or "no usable latest model",
+            }
+            selected_model_path = _write_json(model_dir / "selected_model.json", selected_model_payload)
             _set_stage(
                 context,
-                stage_name="inference",
-                status="success",
-                started_at=inference_started,
-                message="Daily inference completed successfully.",
-                artifact_pointers={
-                    "predictions_path": str(predictions_path),
-                    "inference_summary_path": str(inference_summary_path),
-                },
+                stage_name="select_model",
+                status="failed",
+                started_at=select_started,
+                message=model_error or "no usable latest model",
+                artifact_pointers={"selected_model_path": str(selected_model_path)},
             )
-            shadow_rebalance_path = _write_json(
-                context.run_dir / "shadow_rebalance.json",
-                {
-                    "stage": "shadow_rebalance",
-                    "status": "skipped",
-                    "reason": "pr3a_inference_only",
-                    "message": "Shadow rebalance remains intentionally skipped in PR3A.",
-                },
-            )
-            _set_stage(
-                context,
-                stage_name="shadow_rebalance",
-                status="skipped",
-                message="Shadow rebalance intentionally skipped in PR3A.",
-                artifact_pointers={"stage_output": str(shadow_rebalance_path)},
-            )
-            notes.append(f"Inference produced {inference_artifacts.prediction_count} predictions.")
-        except (InferenceInvocationError, Exception) as exc:
             inference_summary_path = write_failed_inference_summary(
                 trade_date=context.trade_date,
                 model_payload=selected_model_payload,
                 output_dir=inference_dir,
-                error=str(exc),
+                error=model_error or "no usable latest model",
             )
             _set_stage(
                 context,
                 stage_name="inference",
-                status="failed",
-                started_at=inference_started,
-                message=f"Daily inference failed: {exc}",
+                status="skipped",
+                message="Inference skipped because there is no usable latest model.",
                 artifact_pointers={"inference_summary_path": str(inference_summary_path)},
             )
-            shadow_rebalance_path = _write_json(
-                context.run_dir / "shadow_rebalance.json",
-                {
-                    "stage": "shadow_rebalance",
-                    "status": "skipped",
-                    "reason": "inference_failed",
-                    "message": str(exc),
-                },
+            execution_summary_path = write_failed_execution_summary(
+                output_dir=shadow_dir,
+                trade_date=context.trade_date,
+                run_id=context.run_id,
+                error=model_error or "no usable latest model",
             )
             _set_stage(
                 context,
                 stage_name="shadow_rebalance",
                 status="skipped",
-                message="Shadow rebalance skipped because inference failed.",
-                artifact_pointers={"stage_output": str(shadow_rebalance_path)},
+                message="Shadow rebalance skipped because inference did not run.",
+                artifact_pointers={"execution_summary_path": str(execution_summary_path)},
             )
-            notes.append(f"inference failed: {exc}")
+            notes.append(model_error or "no usable latest model")
+        else:
+            _update_manifest_model_info(context, selected_model_payload)
+            selected_model_path = _write_json(model_dir / "selected_model.json", selected_model_payload)
+            _set_stage(
+                context,
+                stage_name="select_model",
+                status="success",
+                started_at=select_started,
+                message="Latest usable shadow model selected.",
+                artifact_pointers={
+                    "selected_model_path": str(selected_model_path),
+                    "model_path": str(selected_model_payload["model_path"]),
+                },
+            )
+            inference_started = datetime.now().replace(microsecond=0).isoformat()
+            update_stage_status(context, stage_name="inference", status="running", started_at=inference_started, message="Running daily inference with latest shadow model.")
+            try:
+                inference_artifacts = run_shadow_daily_inference(
+                    trade_date=context.trade_date,
+                    model_payload=selected_model_payload,
+                    output_dir=inference_dir,
+                    universe=DEFAULT_UNIVERSE,
+                )
+                predictions_path = Path(inference_artifacts.predictions_path)
+                inference_summary_path = Path(inference_artifacts.inference_summary_path)
+                _set_stage(
+                    context,
+                    stage_name="inference",
+                    status="success",
+                    started_at=inference_started,
+                    message="Daily inference completed successfully.",
+                    artifact_pointers={
+                        "predictions_path": str(predictions_path),
+                        "inference_summary_path": str(inference_summary_path),
+                    },
+                )
+                notes.append(f"Inference produced {inference_artifacts.prediction_count} predictions.")
+            except (InferenceInvocationError, Exception) as exc:
+                inference_summary_path = write_failed_inference_summary(
+                    trade_date=context.trade_date,
+                    model_payload=selected_model_payload,
+                    output_dir=inference_dir,
+                    error=str(exc),
+                )
+                _set_stage(
+                    context,
+                    stage_name="inference",
+                    status="failed",
+                    started_at=inference_started,
+                    message=f"Daily inference failed: {exc}",
+                    artifact_pointers={"inference_summary_path": str(inference_summary_path)},
+                )
+                execution_summary_path = write_failed_execution_summary(
+                    output_dir=shadow_dir,
+                    trade_date=context.trade_date,
+                    run_id=context.run_id,
+                    error=str(exc),
+                )
+                _set_stage(
+                    context,
+                    stage_name="shadow_rebalance",
+                    status="skipped",
+                    message="Shadow rebalance skipped because inference failed.",
+                    artifact_pointers={"execution_summary_path": str(execution_summary_path)},
+                )
+                notes.append(f"inference failed: {exc}")
+
+    if predictions_path and inference_artifacts is not None:
+        rebalance_started = datetime.now().replace(microsecond=0).isoformat()
+        update_stage_status(context, stage_name="shadow_rebalance", status="running", started_at=rebalance_started, message="Generating shadow rebalance intents and ledger updates.")
+        try:
+            rebalance_artifacts = run_shadow_rebalance(
+                base_dir=base_dir,
+                run_id=context.run_id,
+                trade_date=context.trade_date,
+                predictions_path=predictions_path,
+                output_dir=shadow_dir,
+            )
+            execution_summary_path = Path(rebalance_artifacts.execution_summary_path)
+            _set_stage(
+                context,
+                stage_name="shadow_rebalance",
+                status="success",
+                started_at=rebalance_started,
+                message="Shadow rebalance completed successfully.",
+                artifact_pointers={
+                    "target_weights_path": rebalance_artifacts.target_weights_path,
+                    "order_intents_path": rebalance_artifacts.order_intents_path,
+                    "execution_summary_path": rebalance_artifacts.execution_summary_path,
+                    "account_after_path": rebalance_artifacts.account_after_path,
+                    "positions_after_path": rebalance_artifacts.positions_after_path,
+                    "shadow_account_path": rebalance_artifacts.shadow_account_path,
+                    "shadow_positions_path": rebalance_artifacts.shadow_positions_path,
+                    "shadow_ledger_path": rebalance_artifacts.shadow_ledger_path,
+                },
+            )
+            notes.append(f"Shadow rebalance wrote {rebalance_artifacts.order_count} order intents.")
+        except (ShadowRebalanceError, Exception) as exc:
+            execution_summary_path = write_failed_execution_summary(
+                output_dir=shadow_dir,
+                trade_date=context.trade_date,
+                run_id=context.run_id,
+                error=str(exc),
+            )
+            _set_stage(
+                context,
+                stage_name="shadow_rebalance",
+                status="failed",
+                started_at=rebalance_started,
+                message=f"Shadow rebalance failed: {exc}",
+                artifact_pointers={"execution_summary_path": str(execution_summary_path)},
+            )
+            notes.append(f"shadow_rebalance failed: {exc}")
 
     archive_payload = {
         "stage": "archive_report",
@@ -428,6 +520,7 @@ def run_shadow_daily(base_dir: str | Path, *, run_id: str | None = None, trigger
         "selected_model_path": str(selected_model_path) if selected_model_path else "",
         "predictions_path": str(predictions_path) if predictions_path else None,
         "inference_summary_path": str(inference_summary_path) if inference_summary_path else None,
+        "execution_summary_path": str(execution_summary_path) if execution_summary_path else None,
         "daily_summary_path": str(context.summary_path),
     }
     archive_path = _write_json(context.run_dir / "archive_report.json", archive_payload)
@@ -443,6 +536,7 @@ def run_shadow_daily(base_dir: str | Path, *, run_id: str | None = None, trigger
             "selected_model_path": archive_payload["selected_model_path"],
             "predictions_path": archive_payload["predictions_path"],
             "inference_summary_path": archive_payload["inference_summary_path"],
+            "execution_summary_path": archive_payload["execution_summary_path"],
             "daily_summary_path": archive_payload["daily_summary_path"],
         },
     )
@@ -460,6 +554,7 @@ def run_shadow_daily(base_dir: str | Path, *, run_id: str | None = None, trigger
     if inference_summary_path and Path(inference_summary_path).exists():
         inference_summary_payload = load_json(inference_summary_path)
         inference_error = inference_summary_payload.get("error")
+    execution_payload = load_json(execution_summary_path) if execution_summary_path and Path(execution_summary_path).exists() else {}
     summary_overall_status = summarize_overall_status(
         [manifest["stage_status"][name]["status"] for name in manifest["stage_status"]]
     )
@@ -476,10 +571,17 @@ def run_shadow_daily(base_dir: str | Path, *, run_id: str | None = None, trigger
             "model_used": model_used,
             "inference_status": manifest["stage_status"]["inference"]["status"],
             "rebalance_status": manifest["stage_status"]["shadow_rebalance"]["status"],
-            "shadow_order_count": 0,
+            "shadow_order_count": int(execution_payload.get("order_count", 0) or 0),
+            "filled_count": int(execution_payload.get("filled_count", 0) or 0),
+            "rejected_count": int(execution_payload.get("rejected_count", 0) or 0),
+            "turnover": float(execution_payload.get("turnover", 0.0) or 0.0),
+            "cash_after": execution_payload.get("cash_after"),
+            "total_value_after": execution_payload.get("total_value_after"),
+            "strategy_variant": execution_payload.get("strategy_variant"),
+            "price_mode": execution_payload.get("price_mode"),
             "degradation_level": feature_status_payload.get("degradation_level", "unknown") if feature_status_payload else "unknown",
             "decision_status": _resolve_daily_decision_status(manifest),
-            "error": inference_error or selected_model_payload.get("error") if selected_model_payload else None,
+            "error": execution_payload.get("error") or inference_error or selected_model_payload.get("error") if selected_model_payload else None,
             "notes": notes or ["Daily shadow runner completed."],
         },
         notes=notes or ["Daily shadow runner completed."],
