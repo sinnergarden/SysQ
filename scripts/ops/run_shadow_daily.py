@@ -23,8 +23,10 @@ from qsys.ops import (
     read_latest_shadow_model,
     run_shadow_daily_inference,
     run_shadow_rebalance,
+    send_shadow_run_notification,
     update_stage_status,
     write_failed_execution_summary,
+    write_notification_result,
 )
 from qsys.ops.inference import InferenceArtifacts, InferenceInvocationError, write_failed_inference_summary
 from qsys.ops.shadow_rebalance import ShadowRebalanceArtifacts, ShadowRebalanceError
@@ -207,6 +209,7 @@ def run_shadow_daily(base_dir: str | Path, *, run_id: str | None = None, trigger
     model_dir = context.run_dir / "03_model"
     inference_dir = context.run_dir / "04_inference"
     shadow_dir = context.run_dir / "05_shadow"
+    notification_dir = context.run_dir / "06_notification"
 
     data_started = datetime.now().replace(microsecond=0).isoformat()
     update_stage_status(context, stage_name="data_sync", status="running", started_at=data_started, message="Running lightweight data freshness check.")
@@ -587,13 +590,28 @@ def run_shadow_daily(base_dir: str | Path, *, run_id: str | None = None, trigger
         notes=notes or ["Daily shadow runner completed."],
         fallback_summary={"used": False},
     )
+    notification_result = send_shadow_run_notification(context.summary_path, context.manifest_path)
+    notification_result_path = write_notification_result(notification_dir / "notification_result.json", notification_result)
+
+    summary_payload = load_json(context.summary_path)
+    summary_payload["notification_status"] = notification_result["status"]
+    atomic_write_json(context.summary_path, summary_payload)
+
+    manifest_payload = load_json(context.manifest_path)
+    archive_stage = manifest_payload["stage_status"]["archive_report"]
+    archive_artifacts = dict(archive_stage.get("artifact_pointers") or {})
+    archive_artifacts["notification_result_path"] = str(notification_result_path)
+    archive_stage["artifact_pointers"] = archive_artifacts
+    manifest_payload["stage_status"]["archive_report"] = archive_stage
+    atomic_write_json(context.manifest_path, manifest_payload)
+
     return {
         "run_id": context.run_id,
         "run_dir": str(context.run_dir),
         "manifest_path": str(context.manifest_path),
         "summary_path": str(context.summary_path),
         "overall_status": load_json(context.manifest_path)["overall_status"],
-        "daily_summary": summary,
+        "daily_summary": load_json(context.summary_path),
     }
 
 

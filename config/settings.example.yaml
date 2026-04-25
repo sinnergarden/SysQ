@@ -5,7 +5,9 @@
 tushare_token: "YOUR_TUSHARE_TOKEN"
 
 # 2. Notifications
-webhook_url: "https://example.com/webhook"  # Enterprise WeChat / DingTalk / Slack Webhook
+ops:
+  notification:
+    wecom_webhook_url: "https://example.com/webhook"  # Enterprise WeChat webhook
 
 # 3. Paths (Relative to Project Root)
 data_root: "data"

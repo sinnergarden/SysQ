@@ -12,7 +12,16 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from qsys.ops import RETRAIN_STAGES, finalize_run, format_run_id, initialize_run, update_stage_status, write_latest_shadow_model
+from qsys.ops import (
+    RETRAIN_STAGES,
+    finalize_run,
+    format_run_id,
+    initialize_run,
+    send_shadow_run_notification,
+    update_stage_status,
+    write_latest_shadow_model,
+    write_notification_result,
+)
 from qsys.ops.model_registry import (
     build_latest_shadow_model_payload,
     latest_shadow_model_is_usable,
@@ -364,7 +373,21 @@ def run_shadow_retrain_weekly(
         fallback_summary=fallback_summary,
     )
 
+    notification_result = send_shadow_run_notification(context.summary_path, context.manifest_path)
+    notification_result_path = write_notification_result(context.run_dir / "06_notification" / "notification_result.json", notification_result)
+
+    summary_payload = load_json(context.summary_path)
+    summary_payload["notification_status"] = notification_result["status"]
+    atomic_write_json(context.summary_path, summary_payload)
+
     manifest = load_json(context.manifest_path)
+    archive_stage = manifest["stage_status"]["archive_report"]
+    archive_artifacts = dict(archive_stage.get("artifact_pointers") or {})
+    archive_artifacts["notification_result_path"] = str(notification_result_path)
+    archive_stage["artifact_pointers"] = archive_artifacts
+    manifest["stage_status"]["archive_report"] = archive_stage
+    atomic_write_json(context.manifest_path, manifest)
+
     return {
         "run_id": context.run_id,
         "run_dir": str(context.run_dir),
