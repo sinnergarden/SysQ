@@ -217,6 +217,8 @@ class TestShadowOpsProtocol(unittest.TestCase):
             self.assertEqual(manifest["stage_status"]["maybe_retrain"]["status"], "skipped")
             self.assertEqual(manifest["stage_status"]["select_model"]["status"], "failed")
             self.assertEqual(manifest["stage_status"]["inference"]["status"], "skipped")
+            self.assertEqual(summary["overall_status"], "failed")
+            self.assertEqual(summary["decision_status"], "failed")
             self.assertEqual(latest["run_id"], result["run_id"])
             self.assertIn("daily_summary_path", latest)
 

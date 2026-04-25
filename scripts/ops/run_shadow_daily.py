@@ -24,7 +24,7 @@ from qsys.ops import (
     update_stage_status,
 )
 from qsys.ops.inference import InferenceArtifacts, InferenceInvocationError, run_shadow_daily_inference, write_failed_inference_summary
-from qsys.ops.state import atomic_write_json, load_json
+from qsys.ops.state import atomic_write_json, load_json, summarize_overall_status
 from qsys.research.mainline import MAINLINE_OBJECTS, resolve_mainline_feature_config
 from qsys.research.readiness import build_feature_coverage, build_readiness_summary
 
@@ -130,6 +130,25 @@ def _select_latest_model(base_dir: Path) -> tuple[dict[str, Any] | None, str | N
     if not latest_shadow_model_is_usable(base_dir, payload):
         return None, "no usable latest model"
     return payload, None
+
+
+def _resolve_daily_decision_status(manifest: dict[str, Any]) -> str:
+    stage_status = manifest["stage_status"]
+    select_status = stage_status["select_model"]["status"]
+    inference_status = stage_status["inference"]["status"]
+    rebalance_status = stage_status["shadow_rebalance"]["status"]
+
+    if select_status == "failed":
+        return "failed"
+    if inference_status == "failed":
+        return "failed"
+    if inference_status == "success" and rebalance_status == "skipped":
+        return "rebalance_skipped_by_design"
+    if inference_status == "success":
+        return "inference_ready"
+    if inference_status == "skipped":
+        return "blocked_no_model"
+    return summarize_overall_status([item["status"] for item in stage_status.values()])
 
 
 def run_shadow_daily(base_dir: str | Path, *, run_id: str | None = None, triggered_by: str = "manual") -> dict[str, object]:
@@ -441,12 +460,16 @@ def run_shadow_daily(base_dir: str | Path, *, run_id: str | None = None, trigger
     if inference_summary_path and Path(inference_summary_path).exists():
         inference_summary_payload = load_json(inference_summary_path)
         inference_error = inference_summary_payload.get("error")
+    summary_overall_status = summarize_overall_status(
+        [manifest["stage_status"][name]["status"] for name in manifest["stage_status"]]
+    )
     summary = finalize_run(
         context,
         daily_summary={
             "trade_date": manifest["trade_date"],
             "run_id": context.run_id,
             "run_type": "shadow_daily",
+            "overall_status": summary_overall_status,
             "data_status": manifest["stage_status"]["data_sync"]["status"],
             "feature_status": manifest["stage_status"]["feature_refresh"]["status"],
             "train_status": manifest["stage_status"]["maybe_retrain"]["status"],
@@ -455,7 +478,7 @@ def run_shadow_daily(base_dir: str | Path, *, run_id: str | None = None, trigger
             "rebalance_status": manifest["stage_status"]["shadow_rebalance"]["status"],
             "shadow_order_count": 0,
             "degradation_level": feature_status_payload.get("degradation_level", "unknown") if feature_status_payload else "unknown",
-            "decision_status": manifest["stage_status"]["archive_report"]["status"],
+            "decision_status": _resolve_daily_decision_status(manifest),
             "error": inference_error or selected_model_payload.get("error") if selected_model_payload else None,
             "notes": notes or ["Daily shadow runner completed."],
         },

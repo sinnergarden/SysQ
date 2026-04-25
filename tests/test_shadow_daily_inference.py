@@ -70,6 +70,9 @@ class TestShadowDailyInference(unittest.TestCase):
             self.assertEqual(manifest["stage_status"]["select_model"]["status"], "failed")
             self.assertEqual(manifest["stage_status"]["inference"]["status"], "skipped")
             self.assertEqual(manifest["stage_status"]["shadow_rebalance"]["status"], "skipped")
+            self.assertEqual(summary["overall_status"], "failed")
+            self.assertEqual(summary["decision_status"], "failed")
+            self.assertNotEqual(summary["decision_status"], "success")
             self.assertEqual(summary["error"], "no usable latest model")
             self.assertEqual(inference_summary["status"], "failed")
             self.assertEqual(inference_summary["error"], "no usable latest model")
@@ -101,6 +104,9 @@ class TestShadowDailyInference(unittest.TestCase):
             summary = load_json(run_dir / "daily_summary.json")
             self.assertEqual(result["overall_status"], "failed")
             self.assertEqual(manifest["stage_status"]["select_model"]["status"], "failed")
+            self.assertEqual(summary["overall_status"], "failed")
+            self.assertEqual(summary["decision_status"], "failed")
+            self.assertNotEqual(summary["decision_status"], "success")
             self.assertEqual(summary["error"], "no usable latest model")
 
     def test_successful_inference_writes_contract_artifacts(self):
@@ -192,6 +198,8 @@ class TestShadowDailyInference(unittest.TestCase):
             self.assertEqual(archive_artifacts["predictions_path"], str(predictions_path))
             self.assertEqual(archive_artifacts["inference_summary_path"], str(inference_summary_path))
             self.assertEqual(latest_daily["run_id"], result["run_id"])
+            self.assertEqual(summary["overall_status"], "skipped")
+            self.assertEqual(summary["decision_status"], "rebalance_skipped_by_design")
             self.assertEqual(summary["model_used"]["model_name"], latest_payload["model_name"])
             self.assertEqual(summary["model_used"]["train_run_id"], latest_payload["train_run_id"])
             self.assertEqual(latest_model, latest_payload)
@@ -218,6 +226,9 @@ class TestShadowDailyInference(unittest.TestCase):
             self.assertEqual(manifest["stage_status"]["shadow_rebalance"]["status"], "skipped")
             self.assertEqual(inference_summary["status"], "failed")
             self.assertEqual(inference_summary["error"], "mock inference boom")
+            self.assertEqual(summary["overall_status"], "failed")
+            self.assertEqual(summary["decision_status"], "failed")
+            self.assertNotEqual(summary["decision_status"], "success")
             self.assertEqual(summary["error"], "mock inference boom")
 
     def test_daily_runner_still_does_not_retrain(self):
