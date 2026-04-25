@@ -48,7 +48,7 @@ Behavior:
 
 - default `mainline_object_name` is fixed to `feature_173`
 - training is delegated to `scripts/run_train.py --model qlib_lgbm --bundle_id bundle_feature_173`
-- the runner reuses the normal training outputs under `data/models/qlib_lgbm_extended/`
+- the runner reuses the normal training outputs under the model directory resolved by `cfg.get_path("root") / "models" / <model_name>`
 - after a verified success, the runner writes `models/latest_shadow_model.json`
 - if training fails and the existing latest model pointer is usable, the runner keeps that pointer and marks the retrain as `fallback`
 - if training fails and no usable latest model pointer exists, the retrain is `failed`
