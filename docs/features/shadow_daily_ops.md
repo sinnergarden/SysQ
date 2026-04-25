@@ -128,6 +128,7 @@ Each successful daily rebalance writes under `05_shadow/`:
 - `execution_summary.json`
 - `account_after.json`
 - `positions_after.csv`
+- `06_notification/notification_result.json`
 
 These CSV artifacts keep fixed headers even when a given run produces zero rows.
 
@@ -225,6 +226,7 @@ Daily runs now archive traceable artifact pointers for:
 - `predictions_path`
 - `inference_summary_path`
 - `execution_summary_path`
+- `notification_result_path`
 - `daily_summary_path`
 
 Weekly retrain writes real artifact pointers for:
@@ -260,6 +262,7 @@ Daily runs write `daily_summary.json` with these fields:
 - `price_mode`
 - `degradation_level`
 - `decision_status`
+- `notification_status`
 - `notes`
 
 Daily status semantics:
@@ -305,6 +308,17 @@ The latest model pointer lives at `models/latest_shadow_model.json` and contains
 - `trained_at`
 - `status`
 
+## Notification config
+
+Enterprise WeChat webhook config is read through `qsys.config.cfg`.
+Lookup order:
+
+- `ops.notification.wecom_webhook_url`
+- `notification.wecom_webhook_url`
+- legacy top-level `webhook_url`
+
+If none is configured, notification is recorded as `skipped` and the daily/weekly run status is unchanged.
+
 ## Helper API
 
 The protocol helper layer in `qsys/ops/` supports:
@@ -318,6 +332,7 @@ The protocol helper layer in `qsys/ops/` supports:
 - invoking the real weekly training flow
 - invoking the daily latest-model inference flow
 - running the paper-only shadow rebalance flow and persisting `shadow/` state
+- sending a post-finalize Enterprise WeChat webhook notification without changing the run status
 
 ## Idempotency and re-entry
 
@@ -333,5 +348,5 @@ The protocol helper layer in `qsys/ops/` supports:
 - `scripts/ops/run_shadow_daily.py`
 - `scripts/ops/run_shadow_retrain_weekly.py`
 
-The daily runner now consumes the latest usable shadow model, writes traceable inference artifacts, produces shadow rebalance intents, and updates the paper shadow ledger without touching real brokerage paths.
-The weekly retrain runner executes the real training path and archives traceable protocol artifacts for the run directory.
+The daily runner now consumes the latest usable shadow model, writes traceable inference artifacts, produces shadow rebalance intents, updates the paper shadow ledger, then attempts a post-finalize Enterprise WeChat webhook notification without touching real brokerage paths.
+The weekly retrain runner executes the real training path, archives traceable protocol artifacts for the run directory, and applies the same post-finalize notification rule.
