@@ -1,5 +1,6 @@
 import json
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -7,6 +8,9 @@ from pathlib import Path
 from qsys.ops import build_latest_shadow_model_payload, write_latest_shadow_model
 from qsys.ops.state import atomic_write_json
 from scripts.ops.check_shadow_status import build_latest_ops_status
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 class TestShadowOpsStatus(unittest.TestCase):
@@ -149,6 +153,17 @@ class TestShadowOpsStatus(unittest.TestCase):
         self.assertEqual(payload["overall_status"], "degraded")
         self.assertTrue(any("notification failed" in item for item in payload["issues"]))
 
+    def test_latest_model_missing_with_existing_state_is_failed(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_dir = Path(tmpdir)
+            self._write_daily_run(base_dir, run_id="shadow_2026-04-25_090807", overall_status="success", decision_status="shadow_rebalanced", notification_status="success")
+            self._write_weekly_run(base_dir, run_id="shadow_retrain_2026-04-25_090807", overall_status="success", decision_status="update_model_pointer", notification_status="success")
+            self._write_account_and_ledger(base_dir)
+            payload = build_latest_ops_status(base_dir)
+        self.assertEqual(payload["overall_status"], "failed")
+        self.assertEqual(payload["latest_model"]["status"], "missing")
+        self.assertTrue(any("latest model missing" in item for item in payload["issues"]))
+
     def test_weekly_fallback_is_degraded(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             base_dir = Path(tmpdir)
@@ -168,12 +183,12 @@ class TestShadowOpsStatus(unittest.TestCase):
             self._write_usable_model(base_dir)
             self._write_account_and_ledger(base_dir)
 
-            json_cmd = ["/home/liuming/.openclaw/workspace/SysQ/.envs/test/bin/python", "scripts/ops/check_shadow_status.py", "--base-dir", tmpdir, "--format", "json", "--write-latest"]
-            json_proc = subprocess.run(json_cmd, cwd="/home/liuming/.openclaw/workspace/SysQ", capture_output=True, text=True, check=True)
+            json_cmd = [sys.executable, "scripts/ops/check_shadow_status.py", "--base-dir", tmpdir, "--format", "json", "--write-latest"]
+            json_proc = subprocess.run(json_cmd, cwd=REPO_ROOT, capture_output=True, text=True, check=True)
             payload = json.loads(json_proc.stdout)
             self.assertEqual(payload["overall_status"], "success")
             self.assertTrue((base_dir / "runs" / "latest_ops_status.json").exists())
 
-            text_cmd = ["/home/liuming/.openclaw/workspace/SysQ/.envs/test/bin/python", "scripts/ops/check_shadow_status.py", "--base-dir", tmpdir, "--format", "text"]
-            text_proc = subprocess.run(text_cmd, cwd="/home/liuming/.openclaw/workspace/SysQ", capture_output=True, text=True, check=True)
+            text_cmd = [sys.executable, "scripts/ops/check_shadow_status.py", "--base-dir", tmpdir, "--format", "text"]
+            text_proc = subprocess.run(text_cmd, cwd=REPO_ROOT, capture_output=True, text=True, check=True)
             self.assertIn("overall_status: success", text_proc.stdout)

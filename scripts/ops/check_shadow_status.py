@@ -161,9 +161,12 @@ def _resolve_overall_status(
     ledger_seen: bool,
     issues: list[str],
 ) -> str:
-    if not daily_seen and not weekly_seen and not model_seen and not account_seen and not ledger_seen:
+    system_has_any_state = daily_seen or weekly_seen or account_seen or ledger_seen
+    if not system_has_any_state and not model_seen:
         return "unknown"
 
+    if latest_model.get("status") == "missing" and system_has_any_state:
+        return "failed"
     if model_seen and not latest_model.get("usable", False):
         return "failed"
     if daily_summary.get("overall_status") == "failed":
@@ -185,7 +188,7 @@ def _resolve_overall_status(
         return "degraded"
     if not daily_seen or not weekly_seen or not account_seen or not ledger_seen:
         return "degraded"
-    if any(any(marker in item for marker in degraded_markers) for item in issues):
+    if any(any(marker in item for marker in degraded_markers) for item in issues if item != "latest model missing"):
         return "degraded"
     return "success"
 
