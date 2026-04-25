@@ -1,0 +1,10 @@
+[Unit]
+Description=Qsys Shadow Weekly Retrain Timer
+
+[Timer]
+OnCalendar=Sun 08:00:00
+Persistent=true
+Unit=qsys-shadow-retrain-weekly.service
+
+[Install]
+WantedBy=timers.target

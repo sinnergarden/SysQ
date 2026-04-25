@@ -350,3 +350,25 @@ The protocol helper layer in `qsys/ops/` supports:
 
 The daily runner now consumes the latest usable shadow model, writes traceable inference artifacts, produces shadow rebalance intents, updates the paper shadow ledger, then attempts a post-finalize Enterprise WeChat webhook notification without touching real brokerage paths.
 The weekly retrain runner executes the real training path, archives traceable protocol artifacts for the run directory, and applies the same post-finalize notification rule.
+
+## Systemd deployment and status check
+
+The files under `deploy/systemd/` are deployment samples only. They use placeholders, not local hardcoded paths.
+
+- Replace `QSYS_ROOT` with the absolute SysQ checkout path
+- Replace `QSYS_PYTHON` with the Python interpreter path you want systemd to use, for example `.envs/test/bin/python`
+- Daily timer is intended for after close, such as `15:30` or `16:00`
+- Weekly retrain timer is intended for weekend morning or early Monday before the market opens
+- OpenClaw cron can be used for manual helper jobs, but not as the production scheduling path
+
+Manual execution examples:
+
+```bash
+PYTHONPATH=QSYS_ROOT QSYS_PYTHON QSYS_ROOT/scripts/ops/run_shadow_daily.py --base-dir QSYS_ROOT --triggered-by manual
+PYTHONPATH=QSYS_ROOT QSYS_PYTHON QSYS_ROOT/scripts/ops/run_shadow_retrain_weekly.py --base-dir QSYS_ROOT --triggered-by manual
+PYTHONPATH=QSYS_ROOT QSYS_PYTHON QSYS_ROOT/scripts/ops/check_shadow_status.py --base-dir QSYS_ROOT --format json
+PYTHONPATH=QSYS_ROOT QSYS_PYTHON QSYS_ROOT/scripts/ops/check_shadow_status.py --base-dir QSYS_ROOT --format text
+PYTHONPATH=QSYS_ROOT QSYS_PYTHON QSYS_ROOT/scripts/ops/check_shadow_status.py --base-dir QSYS_ROOT --format json --write-latest
+```
+
+The status check writes `runs/latest_ops_status.json` when `--write-latest` is set, and the latest snapshot is the quickest way to inspect daily / weekly / model / notification / shadow ledger health.
