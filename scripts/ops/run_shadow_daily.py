@@ -49,6 +49,31 @@ DEFAULT_MIN_PREDICTION_COUNT = SHADOW_DEFAULT_MIN_PREDICTION_COUNT
 DEFAULT_MIN_ACTIVE_INSTRUMENTS = INSTRUMENT_COVERAGE_MIN_ACTIVE
 
 
+def _load_latest_presync(base_dir: Path) -> dict[str, Any]:
+    latest = load_json(base_dir / "runs" / "latest_shadow_presync.json")
+    if not latest:
+        return {}
+    summary_path = latest.get("presync_summary_path")
+    if summary_path:
+        summary_payload = load_json(Path(str(summary_path)))
+        if summary_payload:
+            latest["summary"] = summary_payload
+            latest.setdefault("ready_for_daily_shadow", summary_payload.get("ready_for_daily_shadow"))
+            latest.setdefault("overall_status", summary_payload.get("overall_status"))
+    return latest
+
+
+def _build_latest_presync_payload(latest_presync: dict[str, Any]) -> dict[str, Any] | None:
+    if not latest_presync:
+        return None
+    summary = latest_presync.get("summary") or {}
+    return {
+        "run_id": latest_presync.get("run_id") or summary.get("run_id"),
+        "overall_status": latest_presync.get("overall_status") or summary.get("overall_status"),
+        "ready_for_daily_shadow": bool(latest_presync.get("ready_for_daily_shadow") or summary.get("ready_for_daily_shadow")),
+    }
+
+
 def _write_json(path: Path, payload: dict[str, Any]) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -91,9 +116,55 @@ def _write_date_resolution(context, payload: dict[str, Any]) -> None:
     atomic_write_json(context.manifest_path, manifest)
 
 
-def _build_data_status(*, trade_date: str, universe: str, mainline_object_name: str) -> dict[str, Any]:
+def _build_data_status(*, trade_date: str, universe: str, mainline_object_name: str, latest_presync: dict[str, Any] | None = None, require_presync_ready: bool = False) -> dict[str, Any]:
     data_root = cfg.get_path("root")
     qlib_dir = cfg.get_path("qlib_bin")
+    latest_presync_payload = _build_latest_presync_payload(latest_presync or {})
+    if require_presync_ready:
+        if latest_presync_payload is None:
+            return {
+                "trade_date": trade_date,
+                "status": "failed",
+                "mode": "freshness_check_only",
+                "lightweight_check_only": True,
+                "universe": universe,
+                "mainline_object_name": mainline_object_name,
+                "data_root": str(data_root),
+                "qlib_dir": str(qlib_dir),
+                "data_root_exists": bool(data_root.exists()),
+                "qlib_dir_exists": bool(qlib_dir.exists()),
+                "last_qlib_date": None,
+                "health_report": {"blocking_issues": ["presync_required_but_missing"]},
+                "active_instruments": 0,
+                "min_active_instruments": DEFAULT_MIN_ACTIVE_INSTRUMENTS,
+                "instrument_coverage_status": "unknown",
+                "instrument_coverage": {},
+                "latest_presync": None,
+                "require_presync_ready": True,
+                "error": "presync_required_but_missing",
+            }
+        if not bool(latest_presync_payload.get("ready_for_daily_shadow")):
+            return {
+                "trade_date": trade_date,
+                "status": "failed",
+                "mode": "freshness_check_only",
+                "lightweight_check_only": True,
+                "universe": universe,
+                "mainline_object_name": mainline_object_name,
+                "data_root": str(data_root),
+                "qlib_dir": str(qlib_dir),
+                "data_root_exists": bool(data_root.exists()),
+                "qlib_dir_exists": bool(qlib_dir.exists()),
+                "last_qlib_date": None,
+                "health_report": {"blocking_issues": ["presync_required_but_not_ready"]},
+                "active_instruments": 0,
+                "min_active_instruments": DEFAULT_MIN_ACTIVE_INSTRUMENTS,
+                "instrument_coverage_status": "unknown",
+                "instrument_coverage": {},
+                "latest_presync": latest_presync_payload,
+                "require_presync_ready": True,
+                "error": "presync_required_but_not_ready",
+            }
     feature_fields = resolve_mainline_feature_config(mainline_object_name) or ["$close"]
     adapter = QlibAdapter()
     adapter.init_qlib()
@@ -122,6 +193,8 @@ def _build_data_status(*, trade_date: str, universe: str, mainline_object_name: 
         "min_active_instruments": DEFAULT_MIN_ACTIVE_INSTRUMENTS,
         "instrument_coverage_status": instrument_summary.coverage_status,
         "instrument_coverage": instrument_summary.to_dict(),
+        "latest_presync": latest_presync_payload,
+        "require_presync_ready": require_presync_ready,
         "error": None if not blocking_issues else "; ".join(blocking_issues),
     }
 
@@ -218,12 +291,14 @@ def run_shadow_daily(
     triggered_by: str = "manual",
     trade_date: str | None = None,
     allow_date_fallback: bool = True,
+    require_presync_ready: bool = False,
 ) -> dict[str, object]:
     now = datetime.now()
     resolved_run_id = run_id or format_run_id("daily", now)
     base_dir = Path(base_dir)
     latest_model_pointer = str(base_dir / "models" / "latest_shadow_model.json")
     mainline_object_name = DEFAULT_MAINLINE_OBJECT_NAME
+    latest_presync = _load_latest_presync(base_dir)
     date_resolution = resolve_daily_trade_date(
         trade_date,
         universe=DEFAULT_UNIVERSE,
@@ -249,6 +324,8 @@ def run_shadow_daily(
             "resolved_trade_date": date_resolution.get("resolved_trade_date"),
             "last_qlib_date": date_resolution.get("last_qlib_date"),
             "date_resolution_status": date_resolution["status"],
+            "require_presync_ready": require_presync_ready,
+            "latest_presync": _build_latest_presync_payload(latest_presync),
         },
         fallback_summary={"used": False},
         notes=[
@@ -308,7 +385,13 @@ def run_shadow_daily(
         notes.append(date_resolution["reason"])
     else:
         try:
-            data_status_payload = _build_data_status(trade_date=context.trade_date, universe=DEFAULT_UNIVERSE, mainline_object_name=mainline_object_name)
+            data_status_payload = _build_data_status(
+                trade_date=context.trade_date,
+                universe=DEFAULT_UNIVERSE,
+                mainline_object_name=mainline_object_name,
+                latest_presync=latest_presync,
+                require_presync_ready=require_presync_ready,
+            )
             data_status_payload["requested_date"] = date_resolution["requested_date"]
             data_status_payload["resolved_trade_date"] = date_resolution.get("resolved_trade_date")
             data_status_payload["date_resolution_status"] = date_resolution["status"]
@@ -764,6 +847,8 @@ def main() -> None:
     parser.add_argument("--trade-date", default=None, help="Requested trade date (YYYY-MM-DD)")
     parser.add_argument("--allow-date-fallback", dest="allow_date_fallback", action="store_true", default=True, help="Allow fallback to latest available qlib trading date")
     parser.add_argument("--no-allow-date-fallback", dest="allow_date_fallback", action="store_false", help="Fail if requested trade date is not available in qlib")
+    parser.add_argument("--require-presync-ready", dest="require_presync_ready", action="store_true", default=False, help="Fail data_sync if latest presync is missing or not ready")
+    parser.add_argument("--no-require-presync-ready", dest="require_presync_ready", action="store_false", help="Do not require latest presync readiness before daily")
     args = parser.parse_args()
 
     result = run_shadow_daily(
@@ -772,6 +857,7 @@ def main() -> None:
         triggered_by=args.triggered_by,
         trade_date=args.trade_date,
         allow_date_fallback=args.allow_date_fallback,
+        require_presync_ready=args.require_presync_ready,
     )
     print(json.dumps(result, indent=2, sort_keys=True))
 

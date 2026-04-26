@@ -1,5 +1,6 @@
 from .manifest import (
     DAILY_STAGES,
+    PRESYNC_STAGES,
     RETRAIN_STAGES,
     ShadowRunContext,
     finalize_run,
@@ -37,6 +38,7 @@ __all__ = [
     "ALLOWED_STATUSES",
     "DAILY_STAGES",
     "RETRAIN_STAGES",
+    "PRESYNC_STAGES",
     "ShadowRunContext",
     "finalize_run",
     "format_run_id",

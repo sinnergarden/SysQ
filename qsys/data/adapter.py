@@ -456,13 +456,13 @@ class QlibAdapter:
                 collapsed[col] = selected
         return collapsed
 
-    def _prepare_csvs(self, since_date=None):
+    def _prepare_csvs(self, since_date=None, *, selected_symbols=None, output_dir=None):
         """
         Prepare CSVs from Feather files.
         If since_date is provided, only include rows AFTER this date.
         Returns path to csv_dir and count of files generated.
         """
-        csv_dir = self.qlib_dir.parent / "qlib_csv_tmp"
+        csv_dir = Path(output_dir) if output_dir is not None else self.qlib_dir.parent / "qlib_csv_tmp"
         if csv_dir.exists():
             try:
                 shutil.rmtree(csv_dir)
@@ -490,6 +490,9 @@ class QlibAdapter:
             code_to_industry = stock_df.set_index("ts_code")["industry"].to_dict()
         
         files = list(self.raw_dir.glob("*.feather"))
+        if selected_symbols:
+            selected_normalized = {str(symbol).strip().upper() for symbol in selected_symbols if str(symbol).strip()}
+            files = [f for f in files if f.stem.strip().upper() in selected_normalized]
         if not files:
             log.warning("No feather files found.")
             return csv_dir, 0
