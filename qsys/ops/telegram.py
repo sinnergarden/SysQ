@@ -11,6 +11,7 @@ from typing import Any
 import requests
 
 from qsys.config import cfg
+from qsys.ops.digest import build_shadow_run_digest
 from qsys.ops.state import atomic_write_json, ensure_directory, load_json
 
 CHANNEL_NAME = "telegram"
@@ -81,10 +82,12 @@ def _resolve_chat_id(explicit_chat_id: str | None = None) -> str | None:
     return chat_ids[0] if chat_ids else None
 
 
-def _resolve_parse_mode() -> str:
+def _resolve_parse_mode() -> str | None:
     config = _resolve_telegram_config()["notification"]
     parse_mode = config.get("parse_mode")
-    return str(parse_mode or "Markdown")
+    if parse_mode in (None, ""):
+        return None
+    return str(parse_mode)
 
 
 def _resolve_timeout_seconds() -> int:
@@ -122,8 +125,10 @@ def send_telegram_message(text: str, *, bot_token: str | None = None, chat_id: s
     payload = {
         "chat_id": resolved_chat_id,
         "text": text,
-        "parse_mode": _resolve_parse_mode(),
     }
+    parse_mode = _resolve_parse_mode()
+    if parse_mode:
+        payload["parse_mode"] = parse_mode
     try:
         response = requests.post(url, json=payload, timeout=_resolve_timeout_seconds())
         http_status = int(response.status_code)
@@ -175,19 +180,30 @@ def send_shadow_run_telegram_notification(summary_path: str | Path, manifest_pat
     manifest_path = Path(manifest_path)
     summary = load_json(summary_path)
     manifest = load_json(manifest_path)
-    run_type = str(summary.get("run_type") or manifest.get("run_type") or "")
-    lines = [
-        f"*Qsys {run_type or 'shadow_run'}*",
-        f"trade_date: `{summary.get('trade_date', '')}`",
-        f"run_id: `{summary.get('run_id', '')}`",
-        f"status: `{manifest.get('overall_status', summary.get('overall_status', 'unknown'))}`",
-        f"summary: `{_relative_to_runs(summary_path)}`",
-    ]
-    if summary.get("decision_status"):
-        lines.append(f"decision_status: `{summary['decision_status']}`")
-    result = send_telegram_message("\n".join(lines))
+    digest_status = "success"
+    digest_error = None
+    try:
+        message_text = build_shadow_run_digest(summary_path, manifest_path)
+    except Exception as exc:
+        digest_status = "failed"
+        digest_error = _sanitize_telegram_text(str(exc))
+        run_type = str(summary.get("run_type") or manifest.get("run_type") or "")
+        lines = [
+            f"Qsys {run_type or 'shadow_run'}",
+            f"trade_date: {summary.get('trade_date', '')}",
+            f"run_id: {summary.get('run_id', '')}",
+            f"status: {manifest.get('overall_status', summary.get('overall_status', 'unknown'))}",
+            f"summary: {_relative_to_runs(summary_path)}",
+        ]
+        if summary.get("decision_status"):
+            lines.append(f"decision_status: {summary['decision_status']}")
+        message_text = "\n".join(lines)
+    result = send_telegram_message(message_text)
     result["summary_path"] = _relative_to_runs(summary_path)
     result["manifest_path"] = _relative_to_runs(manifest_path)
+    result["digest_status"] = digest_status
+    if digest_error:
+        result["digest_error"] = digest_error
     return result
 
 

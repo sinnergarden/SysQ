@@ -20,6 +20,7 @@ from .model_registry import (
     read_latest_shadow_model,
     write_latest_shadow_model,
 )
+from .digest import build_shadow_daily_digest, build_shadow_retrain_digest, build_shadow_run_digest
 from .notification import send_shadow_run_notification, send_wecom_webhook_message, write_notification_result
 from .state import ALLOWED_STATUSES, write_latest_pointer
 from .trade_date import resolve_daily_trade_date, resolve_training_end_date
@@ -54,6 +55,9 @@ __all__ = [
     "read_latest_shadow_model",
     "latest_shadow_model_is_usable",
     "write_latest_shadow_model",
+    "build_shadow_daily_digest",
+    "build_shadow_retrain_digest",
+    "build_shadow_run_digest",
     "send_wecom_webhook_message",
     "send_shadow_run_notification",
     "write_notification_result",

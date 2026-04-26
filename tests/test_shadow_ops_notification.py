@@ -68,14 +68,14 @@ def _fake_inference(*, trade_date, model_payload, output_dir, universe):
         f"{trade_date},SH600000,0.9,{model_payload['model_name']},{model_payload['mainline_object_name']},{model_payload['bundle_id']},{model_payload['train_run_id']}\n",
         encoding="utf-8",
     )
-    _write_json(output_dir / "inference_summary.json", {"trade_date": trade_date, "status": "success"})
+    _write_json(output_dir / "inference_summary.json", {"trade_date": trade_date, "status": "success", "prediction_count": 60})
     return type(
         "InferenceArtifacts",
         (),
         {
             "predictions_path": str(predictions_path),
             "inference_summary_path": str(output_dir / "inference_summary.json"),
-            "prediction_count": 1,
+            "prediction_count": 60,
         },
     )()
 
@@ -96,6 +96,11 @@ def _fake_rebalance(*, base_dir, run_id, trade_date, predictions_path, output_di
     (output_dir / "positions_after.csv").write_text(
         "instrument,quantity,sellable_quantity,cost_price,last_price,market_value\n"
         "SH600000,100000,100000,10.0,10.0,1000000.0\n",
+        encoding="utf-8",
+    )
+    (output_dir / "rebalance_audit.csv").write_text(
+        "trade_date,instrument,score,target_weight,current_weight,target_value,current_value,diff_value,requested_qty,action,reason\n"
+        f"{trade_date},SH600000,0.9,1.0,0.0,1000000.0,0.0,1000000.0,100000,buy,rebalance_to_target_weight\n",
         encoding="utf-8",
     )
     _write_json(
@@ -140,6 +145,7 @@ def _fake_rebalance(*, base_dir, run_id, trade_date, predictions_path, output_di
             "shadow_account_path": str(shadow_dir / "account.json"),
             "shadow_positions_path": str(shadow_dir / "positions.csv"),
             "shadow_ledger_path": str(shadow_dir / "ledger.csv"),
+            "rebalance_audit_path": str(output_dir / "rebalance_audit.csv"),
             "order_count": 1,
             "filled_count": 1,
             "rejected_count": 0,

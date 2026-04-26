@@ -67,6 +67,33 @@ class TestTelegramOps(unittest.TestCase):
         self.assertEqual(result["status"], "success")
         self.assertNotIn("123:ABC", json.dumps(result))
 
+    def test_send_telegram_message_default_payload_has_no_parse_mode(self):
+        with patch("qsys.ops.telegram._resolve_bot_token", return_value="123:ABC"), patch(
+            "qsys.ops.telegram._resolve_chat_id", return_value="42"
+        ), patch("qsys.ops.telegram.requests.post", return_value=_FakeResponse(200, '{"ok": true, "result": {}}')) as post_mock:
+            result = send_telegram_message("decision_status: shadow_rebalanced")
+        self.assertEqual(result["status"], "success")
+        payload = post_mock.call_args.kwargs["json"]
+        self.assertNotIn("parse_mode", payload)
+
+    def test_send_telegram_message_underscore_message_succeeds(self):
+        with patch("qsys.ops.telegram._resolve_bot_token", return_value="123:ABC"), patch(
+            "qsys.ops.telegram._resolve_chat_id", return_value="42"
+        ), patch("qsys.ops.telegram.requests.post", return_value=_FakeResponse(200, '{"ok": true, "result": {}}')):
+            result = send_telegram_message("decision_status: shadow_rebalanced, run_type=shadow_daily")
+        self.assertEqual(result["status"], "success")
+
+    def test_send_telegram_message_explicit_parse_mode_still_works(self):
+        with patch("qsys.ops.telegram._resolve_bot_token", return_value="123:ABC"), patch(
+            "qsys.ops.telegram._resolve_chat_id", return_value="42"
+        ), patch("qsys.ops.telegram._resolve_parse_mode", return_value="HTML"), patch(
+            "qsys.ops.telegram.requests.post", return_value=_FakeResponse(200, '{"ok": true, "result": {}}')
+        ) as post_mock:
+            result = send_telegram_message("<b>hello</b>")
+        self.assertEqual(result["status"], "success")
+        payload = post_mock.call_args.kwargs["json"]
+        self.assertEqual(payload["parse_mode"], "HTML")
+
     def test_send_telegram_message_ok_false_failed(self):
         with patch("qsys.ops.telegram._resolve_bot_token", return_value="123:ABC"), patch(
             "qsys.ops.telegram._resolve_chat_id", return_value="42"
@@ -89,12 +116,19 @@ class TestTelegramOps(unittest.TestCase):
     def test_send_shadow_run_telegram_notification_builds_message(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             run_dir = Path(tmpdir) / "runs" / "2026-04-25" / "shadow_2026-04-25_090807"
-            summary_path = _write_json(run_dir / "daily_summary.json", {"run_type": "shadow_daily", "trade_date": "2026-04-25", "run_id": "r1", "decision_status": "shadow_rebalanced"})
+            summary_path = _write_json(run_dir / "daily_summary.json", {"run_type": "shadow_daily", "trade_date": "2026-04-25", "run_id": "r1", "decision_status": "shadow_rebalanced", "telegram_notification_status": "success"})
             manifest_path = _write_json(run_dir / "manifest.json", {"overall_status": "success"})
-            with patch("qsys.ops.telegram.send_telegram_message", return_value={"status": "success", "channel": "telegram", "configured": True, "chat_id_configured": True, "message": "ok", "error": None}) as send_mock:
+            with patch("qsys.ops.telegram._resolve_bot_token", return_value="123:ABC"), patch(
+                "qsys.ops.telegram._resolve_chat_id", return_value="42"
+            ), patch("qsys.ops.telegram.requests.post", return_value=_FakeResponse(200, '{"ok": true, "result": {}}')) as post_mock:
                 result = send_shadow_run_telegram_notification(summary_path, manifest_path)
         self.assertEqual(result["status"], "success")
-        self.assertIn("Qsys shadow_daily", send_mock.call_args.args[0])
+        payload = post_mock.call_args.kwargs["json"]
+        self.assertNotIn("parse_mode", payload)
+        self.assertIn("Qsys Daily Shadow", payload["text"])
+        self.assertIn("decision: shadow_rebalanced", payload["text"])
+        self.assertNotIn("*Qsys", payload["text"])
+        self.assertNotIn("`", payload["text"])
 
     def test_daily_summary_writes_telegram_notification_status(self):
         fake_model = {

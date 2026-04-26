@@ -8,7 +8,14 @@ from unittest.mock import patch
 import pandas as pd
 
 from qsys.ops import build_latest_shadow_model_payload, write_latest_shadow_model
-from qsys.ops.shadow_rebalance import ORDER_INTENT_COLUMNS, POSITION_COLUMNS, TARGET_WEIGHT_COLUMNS, ShadowRebalanceArtifacts, ShadowRebalanceError
+from qsys.ops.shadow_rebalance import (
+    ORDER_INTENT_COLUMNS,
+    POSITION_COLUMNS,
+    REBALANCE_AUDIT_COLUMNS,
+    TARGET_WEIGHT_COLUMNS,
+    ShadowRebalanceArtifacts,
+    ShadowRebalanceError,
+)
 from qsys.ops.state import load_json
 from scripts.ops.run_shadow_daily import run_shadow_daily
 
@@ -109,7 +116,7 @@ def _fake_inference(*, trade_date, model_payload, output_dir, universe):
             "mainline_object_name": model_payload["mainline_object_name"],
             "bundle_id": model_payload["bundle_id"],
             "train_run_id": model_payload["train_run_id"],
-            "prediction_count": 2,
+            "prediction_count": 60,
             "score_min": 0.17,
             "score_max": 0.23,
             "score_mean": 0.20,
@@ -119,7 +126,7 @@ def _fake_inference(*, trade_date, model_payload, output_dir, universe):
     return type("InferenceArtifacts", (), {
         "predictions_path": str(predictions_path),
         "inference_summary_path": str(output_dir / "inference_summary.json"),
-        "prediction_count": 2,
+        "prediction_count": 60,
     })()
 
 
@@ -201,11 +208,11 @@ class TestShadowDailyRebalance(unittest.TestCase):
                             "train_run_id": model_payload["train_run_id"],
                         }
                     )
-            _write_json(output_dir / "inference_summary.json", {"trade_date": trade_date, "status": "success"})
+            _write_json(output_dir / "inference_summary.json", {"trade_date": trade_date, "status": "success", "prediction_count": 60})
             return type("InferenceArtifacts", (), {
                 "predictions_path": str(predictions_path),
                 "inference_summary_path": str(output_dir / "inference_summary.json"),
-                "prediction_count": len(rows),
+                "prediction_count": 60,
             })()
 
         def exact_resolution(requested_date, **kwargs):
@@ -302,13 +309,18 @@ class TestShadowDailyRebalance(unittest.TestCase):
             target_weights = pd.read_csv(run_dir / "05_shadow" / "target_weights.csv")
             positions_after = pd.read_csv(run_dir / "05_shadow" / "positions_after.csv")
             execution_summary = load_json(run_dir / "05_shadow" / "execution_summary.json")
+            rebalance_audit = pd.read_csv(run_dir / "05_shadow" / "rebalance_audit.csv")
             ledger_text = (base_dir / "shadow" / "ledger.csv").read_text(encoding="utf-8")
             self.assertEqual(order_intents.columns.tolist(), ORDER_INTENT_COLUMNS)
             self.assertTrue(order_intents.empty)
             self.assertEqual(target_weights.columns.tolist(), TARGET_WEIGHT_COLUMNS)
+            self.assertEqual(rebalance_audit.columns.tolist(), REBALANCE_AUDIT_COLUMNS)
             self.assertEqual(positions_after.columns.tolist(), POSITION_COLUMNS)
             self.assertEqual(execution_summary["status"], "success")
             self.assertEqual(execution_summary["order_count"], 0)
+            self.assertTrue(execution_summary["no_trade_reason_counts"])
+            self.assertIn("already_at_target", execution_summary["no_trade_reason_counts"])
+            self.assertIn("already_at_target", set(rebalance_audit["reason"]))
             self.assertEqual(ledger_text.strip(), "run_id,trade_date,instrument,side,quantity,price,amount,fee,status,reason")
 
     def test_rebalance_failure_marks_daily_failed(self):
