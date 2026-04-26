@@ -216,6 +216,69 @@ class TestShadowDailyInference(unittest.TestCase):
             inference_mock.assert_not_called()
             rebalance_mock.assert_not_called()
 
+    def test_require_presync_ready_missing_blocks_data_sync(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_dir = Path(tmpdir)
+            with patch("scripts.ops.run_shadow_daily.resolve_daily_trade_date", return_value=self.date_resolution), patch(
+                "scripts.ops.run_shadow_daily._build_feature_status", return_value=self.feature_status
+            ):
+                result = run_shadow_daily(
+                    base_dir,
+                    run_id="shadow_2026-04-25_090807",
+                    triggered_by="test",
+                    require_presync_ready=True,
+                )
+
+            summary = load_json(Path(result["run_dir"]) / "daily_summary.json")
+            data_status = load_json(Path(result["run_dir"]) / "01_data" / "data_status.json")
+            self.assertEqual(summary["decision_status"], "blocked_data_sync")
+            self.assertEqual(data_status["latest_presync"], None)
+            self.assertTrue(any("presync_required_but_missing" in issue for issue in data_status["health_report"]["blocking_issues"]))
+
+    def test_require_presync_ready_not_ready_blocks_data_sync(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_dir = Path(tmpdir)
+            _write_json(
+                base_dir / "runs" / "latest_shadow_presync.json",
+                {"run_id": "shadow_presync_2026-04-25_080000", "overall_status": "partial", "ready_for_daily_shadow": False},
+            )
+            with patch("scripts.ops.run_shadow_daily.resolve_daily_trade_date", return_value=self.date_resolution), patch(
+                "scripts.ops.run_shadow_daily._build_feature_status", return_value=self.feature_status
+            ):
+                result = run_shadow_daily(
+                    base_dir,
+                    run_id="shadow_2026-04-25_090807",
+                    triggered_by="test",
+                    require_presync_ready=True,
+                )
+
+            summary = load_json(Path(result["run_dir"]) / "daily_summary.json")
+            data_status = load_json(Path(result["run_dir"]) / "01_data" / "data_status.json")
+            self.assertEqual(summary["decision_status"], "blocked_data_sync")
+            self.assertEqual(data_status["latest_presync"]["ready_for_daily_shadow"], False)
+            self.assertTrue(any("presync_required_but_not_ready" in issue for issue in data_status["health_report"]["blocking_issues"]))
+
+    def test_require_presync_ready_allows_normal_path_when_ready(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_dir = Path(tmpdir)
+            _write_json(
+                base_dir / "runs" / "latest_shadow_presync.json",
+                {"run_id": "shadow_presync_2026-04-25_080000", "overall_status": "success", "ready_for_daily_shadow": True},
+            )
+            with patch("scripts.ops.run_shadow_daily.resolve_daily_trade_date", return_value=self.date_resolution), patch(
+                "scripts.ops.run_shadow_daily._build_data_status", return_value={**self.data_status, "latest_presync": {"run_id": "shadow_presync_2026-04-25_080000", "overall_status": "success", "ready_for_daily_shadow": True}}
+            ), patch("scripts.ops.run_shadow_daily._build_feature_status", return_value=self.feature_status):
+                result = run_shadow_daily(
+                    base_dir,
+                    run_id="shadow_2026-04-25_090807",
+                    triggered_by="test",
+                    require_presync_ready=True,
+                )
+
+            data_status = load_json(Path(result["run_dir"]) / "01_data" / "data_status.json")
+            self.assertEqual(data_status["latest_presync"]["ready_for_daily_shadow"], True)
+            self.assertNotEqual(load_json(Path(result["run_dir"]) / "daily_summary.json")["decision_status"], "blocked_data_sync")
+
     def test_feature_refresh_failure_blocks_downstream_and_does_not_create_shadow_state(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             base_dir = Path(tmpdir)

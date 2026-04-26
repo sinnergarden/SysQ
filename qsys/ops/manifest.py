@@ -24,6 +24,14 @@ RETRAIN_STAGES = [
     "archive_report",
 ]
 
+PRESYNC_STAGES = [
+    "universe_sync",
+    "raw_update",
+    "qlib_sync",
+    "instrument_sync",
+    "archive_report",
+]
+
 RUN_TYPES = {
     "daily": {
         "run_type_value": "shadow_daily",
@@ -38,6 +46,13 @@ RUN_TYPES = {
         "run_prefix": "shadow_retrain",
         "latest_pointer_name": "latest_shadow_retrain.json",
         "summary_file_name": "daily_summary.json",
+    },
+    "presync": {
+        "run_type_value": "shadow_presync",
+        "stage_names": PRESYNC_STAGES,
+        "run_prefix": "shadow_presync",
+        "latest_pointer_name": "latest_shadow_presync.json",
+        "summary_file_name": "presync_summary.json",
     },
 }
 
@@ -199,6 +214,8 @@ def finalize_run(
     }
     if context.run_type == "daily":
         latest_payload["daily_summary_path"] = str(context.summary_path)
+    elif context.run_type == "presync":
+        latest_payload["presync_summary_path"] = str(context.summary_path)
     write_latest_pointer(context.latest_pointer_path, latest_payload)
     return summary_payload
 
