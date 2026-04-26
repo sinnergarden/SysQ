@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -9,6 +10,7 @@ import pandas as pd
 
 from qsys.data.adapter import QlibAdapter
 from qsys.research.mainline import MAINLINE_OBJECTS, MainlineObjectSpec, resolve_mainline_feature_config
+from qsys.strategy.generator import SignalGenerator
 
 CORE_OK = "core_ok"
 EXTENDED_WARN = "extended_warn"
@@ -19,6 +21,8 @@ DEFAULT_MAINLINE_READINESS_NAMES = [
     "feature_254",
     "feature_254_absnorm",
 ]
+
+RAW_FIELD_PATTERN = re.compile(r"\$[A-Za-z_][A-Za-z0-9_]*")
 
 
 @dataclass(frozen=True)
@@ -55,39 +59,61 @@ def fetch_mainline_feature_frame(
     return adapter.get_features(universe, fields, start_time=start, end_time=end)
 
 
+def build_model_input_frame(*, feature_frame: pd.DataFrame, model_path: str | Path | None) -> pd.DataFrame:
+    if feature_frame is None:
+        return pd.DataFrame()
+    if model_path is None:
+        return feature_frame.copy()
+    model_dir = Path(model_path)
+    if not model_dir.exists():
+        return feature_frame.copy()
+    generator = SignalGenerator(model_dir)
+    feature_config = list(generator.model.feature_config or [])
+    if not feature_config:
+        return feature_frame.copy()
+    if any(field not in feature_frame.columns for field in feature_config):
+        return feature_frame.copy()
+    return generator.model._apply_preprocess(feature_frame[feature_config].copy())
+
+
 def build_feature_coverage(
     *,
     spec: MainlineObjectSpec,
     frame: pd.DataFrame,
     thresholds: ReadinessThresholds | None = None,
+    model_input_frame: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     thresholds = thresholds or ReadinessThresholds()
     rows: list[dict[str, Any]] = []
     feature_fields = resolve_mainline_feature_config(spec.mainline_object_name) or []
     total_rows = len(frame.index) if frame is not None else 0
+    uses_model_input = model_input_frame is not None and not model_input_frame.empty
+    coverage_frame = model_input_frame if uses_model_input else frame
+    coverage_total_rows = len(coverage_frame.index) if coverage_frame is not None else total_rows
 
     for field in feature_fields:
-        if frame is None or frame.empty or field not in frame.columns:
-            rows.append(_missing_field_row(spec, field, total_rows, notes="field_missing_from_frame"))
+        if coverage_frame is None or coverage_frame.empty or field not in coverage_frame.columns:
+            rows.append(_missing_field_row(spec, field, coverage_total_rows, notes="field_missing_from_frame"))
             continue
-        series = pd.to_numeric(frame[field], errors="coerce")
-        if total_rows == 0:
-            rows.append(_missing_field_row(spec, field, total_rows, notes="empty_frame"))
+        series = pd.to_numeric(coverage_frame[field], errors="coerce")
+        if coverage_total_rows == 0:
+            rows.append(_missing_field_row(spec, field, coverage_total_rows, notes="empty_frame"))
             continue
         non_na = series.notna().sum()
-        coverage_ratio = float(non_na / total_rows)
+        coverage_ratio = float(non_na / coverage_total_rows)
         missing_ratio = float(1.0 - coverage_ratio)
-        zero_ratio = float((series.fillna(0.0) == 0).mean()) if total_rows else None
-        constant_ratio = _constant_ratio(frame, field)
+        zero_ratio = float((series.fillna(0.0) == 0).mean()) if coverage_total_rows else None
+        constant_ratio = _constant_ratio(coverage_frame, field)
         degradation_level = _field_degradation_level(
             coverage_ratio=coverage_ratio,
             constant_ratio=constant_ratio,
             thresholds=thresholds,
             is_core=spec.mainline_object_name == "feature_173",
+            uses_model_input=uses_model_input,
         )
         usable_for_train = bool(
             coverage_ratio >= thresholds.usable_coverage_ratio
-            and constant_ratio < thresholds.constant_ratio_threshold
+            and (uses_model_input or constant_ratio < thresholds.constant_ratio_threshold)
         )
         notes = _field_notes(
             coverage_ratio=coverage_ratio,
@@ -109,6 +135,7 @@ def build_feature_coverage(
                 "usable_for_train": usable_for_train,
                 "degradation_level": degradation_level,
                 "notes": notes,
+                "coverage_source": "model_input" if uses_model_input else "raw_feature_frame",
             }
         )
     return pd.DataFrame(rows)
@@ -141,6 +168,7 @@ def build_missingness_summary(coverage: pd.DataFrame) -> dict[str, Any]:
         "high_missing_field_count": int((coverage["missing_ratio"] >= 0.3).sum()),
         "dead_or_constant_field_count": int((coverage["constant_ratio"] >= 0.95).sum()),
         "degradation_level": degradation_level,
+        "coverage_source": str(coverage.iloc[0].get("coverage_source") or "raw_feature_frame"),
     }
 
 
@@ -197,6 +225,33 @@ def compare_readiness(*, base_coverage: pd.DataFrame, target_coverage: pd.DataFr
     }
 
 
+def field_dependency_summary(field_name: str) -> dict[str, Any]:
+    raw_dependencies = sorted(set(RAW_FIELD_PATTERN.findall(field_name or "")))
+    is_raw_field = bool(field_name and field_name.startswith("$") and field_name in raw_dependencies)
+    is_expression = bool(raw_dependencies and not is_raw_field)
+    if is_raw_field:
+        feature_kind = "raw_field"
+        feature_group = "fundamental_raw" if field_name not in {"$open", "$high", "$low", "$close", "$volume", "$amount", "$vwap"} else "qlib_raw_field"
+        expected_source = "raw_qlib"
+    elif is_expression:
+        feature_kind = "expression"
+        feature_group = "qlib_expression"
+        expected_source = "qlib_expression"
+    else:
+        feature_kind = "other"
+        feature_group = "other"
+        expected_source = "other"
+    return {
+        "feature_name": field_name,
+        "feature_group": feature_group,
+        "feature_kind": feature_kind,
+        "expected_source": expected_source,
+        "is_raw_field": is_raw_field,
+        "is_expression": is_expression,
+        "raw_dependencies": raw_dependencies,
+    }
+
+
 def write_json(path: str | Path, payload: dict[str, Any]) -> str:
     path_obj = Path(path)
     path_obj.parent.mkdir(parents=True, exist_ok=True)
@@ -217,6 +272,7 @@ def _missing_field_row(spec: MainlineObjectSpec, field: str, total_rows: int, no
         "usable_for_train": False,
         "degradation_level": EXTENDED_BLOCKED if spec.mainline_object_name == "feature_173" else EXTENDED_WARN,
         "notes": notes,
+        "coverage_source": "raw_feature_frame",
     }
 
 
@@ -232,8 +288,8 @@ def _constant_ratio(frame: pd.DataFrame, field: str) -> float:
     return float(constant_flags.mean())
 
 
-def _field_degradation_level(*, coverage_ratio: float, constant_ratio: float, thresholds: ReadinessThresholds, is_core: bool) -> str:
-    if coverage_ratio >= thresholds.usable_coverage_ratio and constant_ratio < thresholds.constant_ratio_threshold:
+def _field_degradation_level(*, coverage_ratio: float, constant_ratio: float, thresholds: ReadinessThresholds, is_core: bool, uses_model_input: bool = False) -> str:
+    if coverage_ratio >= thresholds.usable_coverage_ratio and (uses_model_input or constant_ratio < thresholds.constant_ratio_threshold):
         return CORE_OK
     if is_core:
         return EXTENDED_BLOCKED

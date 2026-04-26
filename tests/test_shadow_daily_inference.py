@@ -5,7 +5,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 from qsys.ops import build_latest_shadow_model_payload, write_latest_shadow_model
-from qsys.ops.inference import InferenceInvocationError
+import pandas as pd
+
+from qsys.ops.inference import InferenceInvocationError, _build_prediction_frame, run_shadow_daily_inference
 from qsys.ops.state import load_json
 from scripts.ops.run_shadow_daily import run_shadow_daily
 
@@ -35,6 +37,52 @@ def _make_usable_latest_model(base_dir: Path) -> dict[str, str]:
 
 
 class TestShadowDailyInference(unittest.TestCase):
+    def test_no_hidden_top3_truncation(self):
+        index = pd.MultiIndex.from_tuples(
+            [(f"000{i:03d}.SZ", pd.Timestamp("2026-04-17")) for i in range(100)],
+            names=["instrument", "datetime"],
+        )
+        scores = pd.Series(range(100), index=index)
+        frame = _build_prediction_frame(
+            scores=scores,
+            trade_date="2026-04-17",
+            model_payload={
+                "model_name": "qlib_lgbm_extended",
+                "mainline_object_name": "feature_173",
+                "bundle_id": "bundle_feature_173",
+                "train_run_id": "shadow_retrain_x",
+            },
+        )
+        self.assertEqual(len(frame), 100)
+
+    def test_inference_requests_full_universe_not_sample_only(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_dir = Path(tmpdir)
+            model_payload = _make_usable_latest_model(base_dir)
+            feature_frame = pd.DataFrame(
+                {"$close": list(range(100))},
+                index=pd.MultiIndex.from_tuples(
+                    [(f"000{i:03d}.SZ", pd.Timestamp("2026-04-17")) for i in range(100)],
+                    names=["instrument", "datetime"],
+                ),
+            )
+            with patch("qsys.ops.inference.resolve_mainline_feature_config", return_value=["$close"]), \
+                 patch("qsys.ops.inference.QlibAdapter") as adapter_cls, \
+                 patch("qsys.ops.inference.SignalGenerator") as generator_cls:
+                adapter = adapter_cls.return_value
+                adapter.init_qlib.return_value = None
+                adapter.get_features.return_value = feature_frame
+                generator_cls.return_value.predict.return_value = pd.Series(range(100), index=feature_frame.index)
+                artifacts = run_shadow_daily_inference(
+                    trade_date="2026-04-17",
+                    model_payload=model_payload,
+                    output_dir=base_dir / "out",
+                    universe="csi300",
+                )
+
+            self.assertEqual(adapter.get_features.call_args.args[0], "csi300")
+            self.assertEqual(artifacts.prediction_count, 100)
+
     def setUp(self):
         self.date_resolution = {
             "requested_date": "2026-04-25",
@@ -82,6 +130,42 @@ class TestShadowDailyInference(unittest.TestCase):
             self.assertEqual(summary["error"], "no usable latest model")
             self.assertEqual(execution_summary["status"], "failed")
             self.assertFalse((run_dir / "05_shadow" / "order_intents.csv").exists())
+
+    def test_data_sync_hard_gate_blocks_low_active_instruments(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_dir = Path(tmpdir)
+            shadow_dir = base_dir / "shadow"
+            shadow_dir.mkdir(parents=True, exist_ok=True)
+            account_path = _write_json(shadow_dir / "account.json", {"cash": 1.0, "last_run_id": "shadow_prev"})
+            ledger_path = shadow_dir / "ledger.csv"
+            ledger_path.write_text("run_id,trade_date\n", encoding="utf-8")
+            account_before = account_path.read_text(encoding="utf-8")
+            ledger_before = ledger_path.read_text(encoding="utf-8")
+            data_failed = dict(self.data_status)
+            data_failed["status"] = "failed"
+            data_failed["active_instruments"] = 3
+            data_failed["min_active_instruments"] = 50
+            data_failed["instrument_coverage_status"] = "mismatch"
+            data_failed["health_report"] = {"blocking_issues": ["instrument_coverage_mismatch: active_instruments=3 < min_active_instruments=50"]}
+            with patch("scripts.ops.run_shadow_daily.resolve_daily_trade_date", return_value=self.date_resolution), patch(
+                "scripts.ops.run_shadow_daily._build_data_status", return_value=data_failed
+            ), patch("scripts.ops.run_shadow_daily._build_feature_status", return_value=self.feature_status), patch(
+                "scripts.ops.run_shadow_daily.run_shadow_daily_inference"
+            ) as inference_mock, patch(
+                "scripts.ops.run_shadow_daily.run_shadow_rebalance"
+            ) as rebalance_mock:
+                result = run_shadow_daily(base_dir, run_id="shadow_2026-04-25_090807", triggered_by="test")
+
+            run_dir = Path(result["run_dir"])
+            summary = load_json(run_dir / "daily_summary.json")
+            manifest = load_json(run_dir / "manifest.json")
+            self.assertEqual(summary["decision_status"], "blocked_data_sync")
+            self.assertEqual(manifest["stage_status"]["inference"]["status"], "skipped")
+            self.assertEqual(manifest["stage_status"]["shadow_rebalance"]["status"], "skipped")
+            self.assertEqual(account_path.read_text(encoding="utf-8"), account_before)
+            self.assertEqual(ledger_path.read_text(encoding="utf-8"), ledger_before)
+            inference_mock.assert_not_called()
+            rebalance_mock.assert_not_called()
 
     def test_data_sync_failure_blocks_downstream_and_keeps_shadow_state_untouched(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -156,6 +240,7 @@ class TestShadowDailyInference(unittest.TestCase):
             self.assertEqual(manifest["stage_status"]["shadow_rebalance"]["status"], "skipped")
             self.assertEqual(summary["overall_status"], "failed")
             self.assertEqual(summary["decision_status"], "blocked_feature_refresh")
+            self.assertEqual(summary["readiness_status"], "blocked")
             self.assertFalse((base_dir / "shadow" / "account.json").exists())
             self.assertFalse((base_dir / "shadow" / "ledger.csv").exists())
             inference_mock.assert_not_called()
@@ -178,7 +263,7 @@ class TestShadowDailyInference(unittest.TestCase):
                 inference_mock.return_value = type("InferenceArtifacts", (), {
                     "predictions_path": str(base_dir / "runs" / "2026-04-25" / "shadow_2026-04-25_090807" / "04_inference" / "predictions.csv"),
                     "inference_summary_path": str(base_dir / "runs" / "2026-04-25" / "shadow_2026-04-25_090807" / "04_inference" / "inference_summary.json"),
-                    "prediction_count": 1,
+                    "prediction_count": 60,
                 })()
                 pred_path = Path(inference_mock.return_value.predictions_path)
                 pred_path.parent.mkdir(parents=True, exist_ok=True)
@@ -197,6 +282,7 @@ class TestShadowDailyInference(unittest.TestCase):
                     "shadow_account_path": str(base_dir / "shadow" / "account.json"),
                     "shadow_positions_path": str(base_dir / "shadow" / "positions.csv"),
                     "shadow_ledger_path": str(base_dir / "shadow" / "ledger.csv"),
+                    "rebalance_audit_path": str(base_dir / "runs" / "2026-04-25" / "shadow_2026-04-25_090807" / "05_shadow" / "rebalance_audit.csv"),
                     "order_count": 0,
                     "filled_count": 0,
                     "rejected_count": 0,
@@ -237,7 +323,7 @@ class TestShadowDailyInference(unittest.TestCase):
                 inference_mock.return_value = type("InferenceArtifacts", (), {
                     "predictions_path": str(base_dir / "runs" / "2026-04-25" / "shadow_2026-04-25_090807" / "04_inference" / "predictions.csv"),
                     "inference_summary_path": str(base_dir / "runs" / "2026-04-25" / "shadow_2026-04-25_090807" / "04_inference" / "inference_summary.json"),
-                    "prediction_count": 1,
+                    "prediction_count": 60,
                 })()
                 pred_path = Path(inference_mock.return_value.predictions_path)
                 pred_path.parent.mkdir(parents=True, exist_ok=True)
@@ -256,6 +342,7 @@ class TestShadowDailyInference(unittest.TestCase):
                     "shadow_account_path": str(base_dir / "shadow" / "account.json"),
                     "shadow_positions_path": str(base_dir / "shadow" / "positions.csv"),
                     "shadow_ledger_path": str(base_dir / "shadow" / "ledger.csv"),
+                    "rebalance_audit_path": str(base_dir / "runs" / "2026-04-25" / "shadow_2026-04-25_090807" / "05_shadow" / "rebalance_audit.csv"),
                     "order_count": 0,
                     "filled_count": 0,
                     "rejected_count": 0,
@@ -383,6 +470,7 @@ class TestShadowDailyInference(unittest.TestCase):
                     "shadow_account_path": str(base_dir / "shadow" / "account.json"),
                     "shadow_positions_path": str(base_dir / "shadow" / "positions.csv"),
                     "shadow_ledger_path": str(base_dir / "shadow" / "ledger.csv"),
+                    "rebalance_audit_path": str(output_dir / "rebalance_audit.csv"),
                     "order_count": 0,
                     "filled_count": 0,
                     "rejected_count": 0,
@@ -399,7 +487,7 @@ class TestShadowDailyInference(unittest.TestCase):
                 inference_mock.return_value = type("InferenceArtifacts", (), {
                     "predictions_path": str(base_dir / "runs" / "2026-04-25" / "shadow_2026-04-25_090807" / "04_inference" / "predictions.csv"),
                     "inference_summary_path": str(base_dir / "runs" / "2026-04-25" / "shadow_2026-04-25_090807" / "04_inference" / "inference_summary.json"),
-                    "prediction_count": 1,
+                    "prediction_count": 60,
                 })()
                 pred_path = Path(inference_mock.return_value.predictions_path)
                 pred_path.parent.mkdir(parents=True, exist_ok=True)

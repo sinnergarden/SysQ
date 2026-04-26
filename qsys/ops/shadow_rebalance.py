@@ -20,6 +20,7 @@ DEFAULT_TURNOVER_BUFFER = 0.0
 DEFAULT_STRATEGY_VARIANT = "top5_equal_weight"
 DEFAULT_PRICE_MODE = "shadow_mark_price"
 DEFAULT_REBALANCE_MODE = "daily"
+DEFAULT_MIN_PREDICTION_COUNT = 50
 TARGET_WEIGHT_COLUMNS = [
     "trade_date",
     "instrument",
@@ -39,6 +40,19 @@ ORDER_INTENT_COLUMNS = [
     "current_value",
     "diff_value",
     "requested_qty",
+    "reason",
+]
+REBALANCE_AUDIT_COLUMNS = [
+    "trade_date",
+    "instrument",
+    "score",
+    "target_weight",
+    "current_weight",
+    "target_value",
+    "current_value",
+    "diff_value",
+    "requested_qty",
+    "action",
     "reason",
 ]
 POSITION_COLUMNS = [
@@ -85,6 +99,7 @@ class ShadowRebalanceArtifacts:
     shadow_account_path: str
     shadow_positions_path: str
     shadow_ledger_path: str
+    rebalance_audit_path: str
     order_count: int
     buy_count: int
     sell_count: int
@@ -212,36 +227,73 @@ def _build_target_weights(predictions: pd.DataFrame, current_prices: dict[str, f
     return weights, pd.DataFrame(rows, columns=TARGET_WEIGHT_COLUMNS)
 
 
-def _build_order_intents(account: Account, target_weights: dict[str, float], current_prices: dict[str, float], trade_date: str) -> tuple[list[dict[str, Any]], pd.DataFrame, float, float, float]:
+def _build_order_intents(account: Account, predictions: pd.DataFrame, target_weights: dict[str, float], current_prices: dict[str, float], trade_date: str) -> tuple[list[dict[str, Any]], pd.DataFrame, pd.DataFrame, float, float, float]:
     total_value_before = float(account.get_total_equity(current_prices))
     market_value_before = float(account.get_market_value(current_prices))
     cash_before = float(account.cash)
     order_gen = OrderGenerator(min_trade_buffer_ratio=DEFAULT_TURNOVER_BUFFER)
     orders = order_gen.generate_orders(target_weights, account, current_prices)
+    order_lookup = {(order["symbol"], order["side"]): order for order in orders}
+    score_lookup = predictions.set_index("instrument")["score"].to_dict()
     rows = []
-    for order in orders:
-        instrument = order["symbol"]
-        price = float(current_prices[instrument])
+    audit_rows = []
+    tracked_instruments = sorted(set(target_weights) | set(account.positions.keys()))
+    for instrument in tracked_instruments:
+        price = float(current_prices.get(instrument, 0.0) or 0.0)
         current_qty = account.positions.get(instrument).total_amount if instrument in account.positions else 0
         current_value = float(current_qty * price)
         target_weight = float(target_weights.get(instrument, 0.0))
         target_value = float(total_value_before * target_weight)
         diff_value = float(target_value - current_value)
-        rows.append(
+        current_weight = float(current_value / total_value_before) if total_value_before > 0 else 0.0
+        score = score_lookup.get(instrument)
+        buy_order = order_lookup.get((instrument, "buy"))
+        sell_order = order_lookup.get((instrument, "sell"))
+        order = buy_order or sell_order
+        requested_qty = int(order["amount"]) if order else 0
+        if order is not None:
+            action = order["side"]
+            reason = "rebalance_to_target_weight"
+            rows.append(
+                {
+                    "trade_date": trade_date,
+                    "instrument": instrument,
+                    "side": action,
+                    "target_weight": target_weight,
+                    "current_weight": current_weight,
+                    "target_value": target_value,
+                    "current_value": current_value,
+                    "diff_value": diff_value,
+                    "requested_qty": requested_qty,
+                    "reason": reason,
+                }
+            )
+        else:
+            if target_weight <= 0 and current_qty <= 0:
+                action = "skip"
+                reason = "no_target_selected"
+            elif abs(diff_value) < max(price, 1.0) * 100:
+                action = "hold"
+                reason = "diff_below_lot_size"
+            else:
+                action = "hold"
+                reason = "already_at_target"
+        audit_rows.append(
             {
                 "trade_date": trade_date,
                 "instrument": instrument,
-                "side": order["side"],
+                "score": float(score) if score is not None else None,
                 "target_weight": target_weight,
-                "current_weight": float(current_value / total_value_before) if total_value_before > 0 else 0.0,
+                "current_weight": current_weight,
                 "target_value": target_value,
                 "current_value": current_value,
                 "diff_value": diff_value,
-                "requested_qty": int(order["amount"]),
-                "reason": "rebalance_to_target_weight",
+                "requested_qty": requested_qty,
+                "action": action,
+                "reason": reason,
             }
         )
-    return orders, pd.DataFrame(rows, columns=ORDER_INTENT_COLUMNS), cash_before, market_value_before, total_value_before
+    return orders, pd.DataFrame(rows, columns=ORDER_INTENT_COLUMNS), pd.DataFrame(audit_rows, columns=REBALANCE_AUDIT_COLUMNS), cash_before, market_value_before, total_value_before
 
 
 def _positions_frame(account: Account, current_prices: dict[str, float]) -> pd.DataFrame:
@@ -286,7 +338,7 @@ def run_shadow_rebalance(*, base_dir: str | Path, run_id: str, trade_date: str, 
     instruments = sorted(set(predictions["instrument"].astype(str)) | set(account.positions.keys()))
     current_prices, market_status = _fetch_market_snapshot(trade_date, instruments)
     target_weights, target_frame = _build_target_weights(predictions, current_prices)
-    orders, order_intents, cash_before, market_value_before, total_value_before = _build_order_intents(account, target_weights, current_prices, trade_date)
+    orders, order_intents, rebalance_audit, cash_before, market_value_before, total_value_before = _build_order_intents(account, predictions, target_weights, current_prices, trade_date)
 
     matcher = MatchEngine(slippage=0.0)
     results = matcher.match(orders, account, market_status, current_prices)
@@ -309,6 +361,7 @@ def run_shadow_rebalance(*, base_dir: str | Path, run_id: str, trade_date: str, 
     order_intents_path = output_dir / "order_intents.csv"
     account_after_path = output_dir / "account_after.json"
     positions_after_path = output_dir / "positions_after.csv"
+    rebalance_audit_path = output_dir / "rebalance_audit.csv"
     execution_summary_path = output_dir / "execution_summary.json"
     shadow_account_path = shadow_dir / "account.json"
     shadow_positions_path = shadow_dir / "positions.csv"
@@ -316,6 +369,7 @@ def run_shadow_rebalance(*, base_dir: str | Path, run_id: str, trade_date: str, 
 
     target_frame.to_csv(target_path, index=False)
     order_intents.to_csv(order_intents_path, index=False)
+    rebalance_audit.to_csv(rebalance_audit_path, index=False)
     positions_after.to_csv(positions_after_path, index=False)
 
     account_after = {
@@ -374,6 +428,7 @@ def run_shadow_rebalance(*, base_dir: str | Path, run_id: str, trade_date: str, 
         "total_value_before": total_value_before,
         "total_value_after": total_value_after,
         "turnover": turnover,
+        "no_trade_reason_counts": {str(key): int(value) for key, value in pd.Series(rebalance_audit["reason"]).value_counts().items()} if not rebalance_audit.empty else {},
         "notes": [
             "shadow_only",
             "price_mode=shadow_mark_price",
@@ -399,6 +454,7 @@ def run_shadow_rebalance(*, base_dir: str | Path, run_id: str, trade_date: str, 
         shadow_account_path=str(shadow_account_path),
         shadow_positions_path=str(shadow_positions_path),
         shadow_ledger_path=str(shadow_ledger_path),
+        rebalance_audit_path=str(rebalance_audit_path),
         order_count=len(orders),
         buy_count=buy_count,
         sell_count=sell_count,
@@ -411,7 +467,7 @@ def run_shadow_rebalance(*, base_dir: str | Path, run_id: str, trade_date: str, 
     )
 
 
-def write_failed_execution_summary(*, output_dir: str | Path, trade_date: str, run_id: str, error: str) -> Path:
+def write_failed_execution_summary(*, output_dir: str | Path, trade_date: str, run_id: str, error: str, extra: dict[str, Any] | None = None) -> Path:
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     return _write_json(
@@ -440,5 +496,6 @@ def write_failed_execution_summary(*, output_dir: str | Path, trade_date: str, r
             "turnover": 0.0,
             "error": error,
             "notes": ["shadow_rebalance_failed"],
+            **(extra or {}),
         },
     )

@@ -33,13 +33,20 @@ from qsys.ops import (
     write_telegram_notification_result,
 )
 from qsys.ops.inference import InferenceArtifacts, InferenceInvocationError, write_failed_inference_summary
-from qsys.ops.shadow_rebalance import ShadowRebalanceArtifacts, ShadowRebalanceError
+from qsys.ops.instrument_coverage import DEFAULT_MIN_ACTIVE_INSTRUMENTS as INSTRUMENT_COVERAGE_MIN_ACTIVE, summarize_universe_registry
+from qsys.ops.shadow_rebalance import (
+    DEFAULT_MIN_PREDICTION_COUNT as SHADOW_DEFAULT_MIN_PREDICTION_COUNT,
+    ShadowRebalanceArtifacts,
+    ShadowRebalanceError,
+)
 from qsys.ops.state import atomic_write_json, load_json, summarize_overall_status
 from qsys.research.mainline import MAINLINE_OBJECTS, resolve_mainline_feature_config
-from qsys.research.readiness import build_feature_coverage, build_readiness_summary
+from qsys.research.readiness import build_feature_coverage, build_model_input_frame, build_readiness_summary
 
 DEFAULT_MAINLINE_OBJECT_NAME = "feature_173"
 DEFAULT_UNIVERSE = "csi300"
+DEFAULT_MIN_PREDICTION_COUNT = SHADOW_DEFAULT_MIN_PREDICTION_COUNT
+DEFAULT_MIN_ACTIVE_INSTRUMENTS = INSTRUMENT_COVERAGE_MIN_ACTIVE
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> Path:
@@ -92,9 +99,15 @@ def _build_data_status(*, trade_date: str, universe: str, mainline_object_name: 
     adapter.init_qlib()
     last_qlib_date = adapter.get_last_qlib_date()
     report = inspect_qlib_data_health(trade_date, feature_fields, universe=universe)
+    instrument_summary = summarize_universe_registry(adapter, universe=universe, trade_date=trade_date)
+    blocking_issues = list(report.to_dict().get("blocking_issues", []))
+    if instrument_summary.active_on_trade_date < DEFAULT_MIN_ACTIVE_INSTRUMENTS:
+        blocking_issues.append(
+            f"instrument_coverage_mismatch: active_instruments={instrument_summary.active_on_trade_date} < min_active_instruments={DEFAULT_MIN_ACTIVE_INSTRUMENTS}"
+        )
     return {
         "trade_date": trade_date,
-        "status": "success" if report.ok else "failed",
+        "status": "success" if not blocking_issues else "failed",
         "mode": "freshness_check_only",
         "lightweight_check_only": True,
         "universe": universe,
@@ -104,8 +117,12 @@ def _build_data_status(*, trade_date: str, universe: str, mainline_object_name: 
         "data_root_exists": bool(data_root.exists()),
         "qlib_dir_exists": bool(qlib_dir.exists()),
         "last_qlib_date": last_qlib_date.strftime("%Y-%m-%d") if last_qlib_date is not None else None,
-        "health_report": report.to_dict(),
-        "error": None,
+        "health_report": {**report.to_dict(), "blocking_issues": blocking_issues},
+        "active_instruments": instrument_summary.active_on_trade_date,
+        "min_active_instruments": DEFAULT_MIN_ACTIVE_INSTRUMENTS,
+        "instrument_coverage_status": instrument_summary.coverage_status,
+        "instrument_coverage": instrument_summary.to_dict(),
+        "error": None if not blocking_issues else "; ".join(blocking_issues),
     }
 
 
@@ -128,7 +145,13 @@ def _build_feature_status(*, trade_date: str, universe: str, mainline_object_nam
     adapter = QlibAdapter()
     adapter.init_qlib()
     frame = adapter.get_features(universe, feature_config, start_time=trade_date, end_time=trade_date)
-    coverage = build_feature_coverage(spec=MAINLINE_OBJECTS[mainline_object_name], frame=frame)
+    model_path = cfg.get_path("root") / "models" / MAINLINE_OBJECTS[mainline_object_name].model_name
+    model_input_frame = build_model_input_frame(feature_frame=frame, model_path=model_path if model_path.exists() else None)
+    coverage = build_feature_coverage(
+        spec=MAINLINE_OBJECTS[mainline_object_name],
+        frame=frame,
+        model_input_frame=model_input_frame,
+    )
     summary = build_readiness_summary(spec=MAINLINE_OBJECTS[mainline_object_name], coverage=coverage)
     return {
         "trade_date": trade_date,
@@ -148,6 +171,16 @@ def _select_latest_model(base_dir: Path) -> tuple[dict[str, Any] | None, str | N
     return payload, None
 
 
+def _resolve_feature_stage_status(payload: dict[str, Any]) -> str:
+    degradation_level = str(payload.get("degradation_level", "") or "")
+    status_value = str(payload.get("status", "failed") or "failed")
+    if degradation_level in {"blocked", "extended_blocked"}:
+        return "failed"
+    if degradation_level == "extended_warn":
+        return "success"
+    return "success" if status_value == "success" else "failed"
+
+
 def _resolve_daily_decision_status(manifest: dict[str, Any]) -> str:
     stage_status = manifest["stage_status"]
     data_status = stage_status["data_sync"]["status"]
@@ -164,6 +197,9 @@ def _resolve_daily_decision_status(manifest: dict[str, Any]) -> str:
         return "failed"
     if inference_status == "failed":
         return "failed"
+    rebalance_message = str(stage_status["shadow_rebalance"].get("message") or "")
+    if rebalance_status in {"skipped", "failed"} and "prediction coverage" in rebalance_message:
+        return "blocked_low_prediction_coverage"
     if rebalance_status == "failed":
         return "failed"
     if rebalance_status == "success":
@@ -318,9 +354,7 @@ def run_shadow_daily(
     try:
         feature_status_payload = _build_feature_status(trade_date=context.trade_date, universe=DEFAULT_UNIVERSE, mainline_object_name=mainline_object_name)
         feature_status_path = _write_json(feature_dir / "feature_status.json", feature_status_payload)
-        feature_status_value = str(feature_status_payload.get("status", "failed"))
-        degradation_level = str(feature_status_payload.get("degradation_level", ""))
-        feature_status = "success" if feature_status_value == "success" or degradation_level == "extended_warn" else "failed"
+        feature_status = _resolve_feature_stage_status(feature_status_payload)
         _set_stage(
             context,
             stage_name="feature_refresh",
@@ -535,51 +569,77 @@ def run_shadow_daily(
                 notes.append(f"inference failed: {exc}")
 
     if predictions_path and inference_artifacts is not None:
-        rebalance_started = datetime.now().replace(microsecond=0).isoformat()
-        update_stage_status(context, stage_name="shadow_rebalance", status="running", started_at=rebalance_started, message="Generating shadow rebalance intents and ledger updates.")
-        try:
-            rebalance_artifacts = run_shadow_rebalance(
-                base_dir=base_dir,
-                run_id=context.run_id,
-                trade_date=context.trade_date,
-                predictions_path=predictions_path,
-                output_dir=shadow_dir,
-            )
-            execution_summary_path = Path(rebalance_artifacts.execution_summary_path)
-            _set_stage(
-                context,
-                stage_name="shadow_rebalance",
-                status="success",
-                started_at=rebalance_started,
-                message="Shadow rebalance completed successfully.",
-                artifact_pointers={
-                    "target_weights_path": rebalance_artifacts.target_weights_path,
-                    "order_intents_path": rebalance_artifacts.order_intents_path,
-                    "execution_summary_path": rebalance_artifacts.execution_summary_path,
-                    "account_after_path": rebalance_artifacts.account_after_path,
-                    "positions_after_path": rebalance_artifacts.positions_after_path,
-                    "shadow_account_path": rebalance_artifacts.shadow_account_path,
-                    "shadow_positions_path": rebalance_artifacts.shadow_positions_path,
-                    "shadow_ledger_path": rebalance_artifacts.shadow_ledger_path,
-                },
-            )
-            notes.append(f"Shadow rebalance wrote {rebalance_artifacts.order_count} order intents.")
-        except (ShadowRebalanceError, Exception) as exc:
+        min_prediction_count = int((cfg.get("ops", {}) or {}).get("shadow", {}).get("min_prediction_count", DEFAULT_MIN_PREDICTION_COUNT) if isinstance((cfg.get("ops", {}) or {}).get("shadow", {}), dict) else DEFAULT_MIN_PREDICTION_COUNT)
+        if int(inference_artifacts.prediction_count) < min_prediction_count:
             execution_summary_path = write_failed_execution_summary(
                 output_dir=shadow_dir,
                 trade_date=context.trade_date,
                 run_id=context.run_id,
-                error=str(exc),
+                error="prediction_count below min_prediction_count",
+                extra={
+                    "prediction_count": int(inference_artifacts.prediction_count),
+                    "min_prediction_count": int(min_prediction_count),
+                    "coverage_status": "blocked_low_prediction_coverage",
+                    "no_trade_reason_counts": {"prediction_count below min_prediction_count": 1},
+                },
             )
             _set_stage(
                 context,
                 stage_name="shadow_rebalance",
                 status="failed",
-                started_at=rebalance_started,
-                message=f"Shadow rebalance failed: {exc}",
+                message="Shadow rebalance failed because prediction coverage is below minimum prediction coverage.",
                 artifact_pointers={"execution_summary_path": str(execution_summary_path)},
             )
-            notes.append(f"shadow_rebalance failed: {exc}")
+            notes.append(
+                f"prediction coverage blocked rebalance: {inference_artifacts.prediction_count} < {min_prediction_count}."
+            )
+        else:
+            rebalance_started = datetime.now().replace(microsecond=0).isoformat()
+            update_stage_status(context, stage_name="shadow_rebalance", status="running", started_at=rebalance_started, message="Generating shadow rebalance intents and ledger updates.")
+            try:
+                rebalance_artifacts = run_shadow_rebalance(
+                    base_dir=base_dir,
+                    run_id=context.run_id,
+                    trade_date=context.trade_date,
+                    predictions_path=predictions_path,
+                    output_dir=shadow_dir,
+                )
+                execution_summary_path = Path(rebalance_artifacts.execution_summary_path)
+                _set_stage(
+                    context,
+                    stage_name="shadow_rebalance",
+                    status="success",
+                    started_at=rebalance_started,
+                    message="Shadow rebalance completed successfully.",
+                    artifact_pointers={
+                        "target_weights_path": rebalance_artifacts.target_weights_path,
+                        "order_intents_path": rebalance_artifacts.order_intents_path,
+                        "execution_summary_path": rebalance_artifacts.execution_summary_path,
+                        "account_after_path": rebalance_artifacts.account_after_path,
+                        "positions_after_path": rebalance_artifacts.positions_after_path,
+                        "shadow_account_path": rebalance_artifacts.shadow_account_path,
+                        "shadow_positions_path": rebalance_artifacts.shadow_positions_path,
+                        "shadow_ledger_path": rebalance_artifacts.shadow_ledger_path,
+                        "rebalance_audit_path": rebalance_artifacts.rebalance_audit_path,
+                    },
+                )
+                notes.append(f"Shadow rebalance wrote {rebalance_artifacts.order_count} order intents.")
+            except (ShadowRebalanceError, Exception) as exc:
+                execution_summary_path = write_failed_execution_summary(
+                    output_dir=shadow_dir,
+                    trade_date=context.trade_date,
+                    run_id=context.run_id,
+                    error=str(exc),
+                )
+                _set_stage(
+                    context,
+                    stage_name="shadow_rebalance",
+                    status="failed",
+                    started_at=rebalance_started,
+                    message=f"Shadow rebalance failed: {exc}",
+                    artifact_pointers={"execution_summary_path": str(execution_summary_path)},
+                )
+                notes.append(f"shadow_rebalance failed: {exc}")
 
     archive_payload = {
         "stage": "archive_report",
@@ -651,7 +711,13 @@ def run_shadow_daily(
             "total_value_after": execution_payload.get("total_value_after"),
             "strategy_variant": execution_payload.get("strategy_variant"),
             "price_mode": execution_payload.get("price_mode"),
+            "mainline_object_name": model_used.get("mainline_object_name") or mainline_object_name,
+            "bundle_id": model_used.get("bundle_id") or MAINLINE_OBJECTS[mainline_object_name].bundle_id,
+            "prediction_count": int(getattr(inference_artifacts, "prediction_count", 0) or 0),
+            "min_prediction_count": int((cfg.get("ops", {}) or {}).get("shadow", {}).get("min_prediction_count", DEFAULT_MIN_PREDICTION_COUNT) if isinstance((cfg.get("ops", {}) or {}).get("shadow", {}), dict) else DEFAULT_MIN_PREDICTION_COUNT),
+            "prediction_coverage_status": execution_payload.get("coverage_status") or ("ok" if manifest["stage_status"]["shadow_rebalance"]["status"] == "success" else "unknown"),
             "degradation_level": feature_status_payload.get("degradation_level", "unknown") if feature_status_payload else "unknown",
+            "readiness_status": "blocked" if (feature_status_payload and str(feature_status_payload.get("degradation_level", "")) in {"blocked", "extended_blocked"}) else ("warn" if feature_status_payload and str(feature_status_payload.get("degradation_level", "")) == "extended_warn" else "ok"),
             "decision_status": _resolve_daily_decision_status(manifest),
             "error": execution_payload.get("error") or inference_error or selected_model_payload.get("error") if selected_model_payload else None,
             "notes": notes or ["Daily shadow runner completed."],
