@@ -19,10 +19,11 @@ from qsys.ops.qlib_sync import run_targeted_qlib_sync
 from qsys.ops.raw_sync import RAW_PLAN_COLUMNS, load_success_symbols_from_plan, run_targeted_raw_update
 from qsys.ops.state import atomic_write_json, load_json
 from qsys.ops.trade_date import resolve_daily_trade_date
-from qsys.ops.universe_sync import build_universe_snapshot
+from qsys.ops.universe_sync import BOOTSTRAP_SUPPORTED_UNIVERSES, build_universe_snapshot
 
 
 DEFAULT_UNIVERSE = "csi300"
+SUPPORTED_UNIVERSES = set(BOOTSTRAP_SUPPORTED_UNIVERSES)
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> Path:
@@ -126,7 +127,7 @@ def run_shadow_presync(
     skip_instrument_repair: bool = False,
     resume: bool = False,
 ) -> dict[str, Any]:
-    if universe != DEFAULT_UNIVERSE:
+    if universe not in SUPPORTED_UNIVERSES:
         raise ValueError(f"Unsupported universe for shadow presync: {universe}")
     if raw_only and qlib_only:
         raise ValueError("raw_only and qlib_only cannot both be true")
@@ -169,7 +170,7 @@ def run_shadow_presync(
             "resume": resume,
         },
         fallback_summary={"used": date_resolution.get("status") != "success"},
-        notes=["Targeted shadow presync is csi300-only and stays dry-run unless --apply is set."],
+        notes=["Targeted shadow presync supports bootstrap-able index universes and stays dry-run unless --apply is set."],
     )
     manifest = load_json(context.manifest_path)
     manifest["date_resolution"] = date_resolution
@@ -186,6 +187,7 @@ def run_shadow_presync(
         universe=universe,
         as_of_date=resolved_trade_date,
         output_dir=universe_dir,
+        apply=apply,
     )
     selected_symbols = _select_symbols(universe_symbols, max_symbols=max_symbols, symbols=symbols, symbols_file=symbols_file)
     selected_symbols_path = _write_selected_symbols(universe_dir, selected_symbols)
