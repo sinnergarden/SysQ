@@ -98,6 +98,7 @@ class TushareCollector:
                 "margin_total_balance", "lend_volume", "lend_sell_volume", "lend_repay_volume",
             ],
         )
+        self._signed_numeric_cols = {"pct_chg", "net_buy", "net_amount"}
         self._sparse_event_cols = {
             'exalter', 'buy', 'sell', 'net_buy', 'name', 'buyer_sum', 'seller_sum', 'net_amount', 'reason'
         }
@@ -695,6 +696,8 @@ class TushareCollector:
         df = df.sort_values('trade_date').reset_index(drop=True)
         non_negative_cols = self._non_negative_cols
         for col in non_negative_cols:
+            if col in self._signed_numeric_cols:
+                continue
             if col in df.columns:
                 bad = df[col] < 0
                 bad_count = int(bad.sum())
@@ -1057,13 +1060,19 @@ class TushareCollector:
             if stock_df is None or stock_df.empty:
                 return []
             return stock_df["ts_code"].head(50).tolist()
-        if key_lower in {"csi300", "csi500"}:
-            index_code = "000300.SH" if key_lower == "csi300" else "000905.SH"
+        if key_lower in {"csi300", "csi500", "csi800"}:
+            index_code_map = {
+                "csi300": "000300.SH",
+                "csi500": "000905.SH",
+                "csi800": "000906.SH",
+            }
+            index_code = index_code_map[key_lower]
             df = self.get_index_weights(index_code)
             if df is None or df.empty:
                 return []
             codes = df["con_code"].dropna().unique().tolist()
-            if len(codes) < 200:
+            min_expected = {"csi300": 200, "csi500": 300, "csi800": 500}[key_lower]
+            if len(codes) < min_expected:
                 try:
                     df_member = self._fetch_with_retry(self.pro.index_member, index_code=index_code)
                 except Exception:
@@ -1374,6 +1383,11 @@ class TushareCollector:
         if df_big is None or df_big.empty:
             return
         grouped = df_big.groupby('ts_code')
+        financial_like_cols = [
+            *self.financial_cols,
+            'ann_date',
+            'end_date',
+        ]
         for code in code_list:
             if code not in grouped.groups:
                 continue
@@ -1384,6 +1398,9 @@ class TushareCollector:
                 df_part = pd.concat([existing_df, df_part], ignore_index=True)
                 df_part = df_part.drop_duplicates(subset=['trade_date'], keep='last')
                 df_part = df_part.sort_values('trade_date').reset_index(drop=True)
+                for col in financial_like_cols:
+                    if col in df_part.columns:
+                        df_part[col] = df_part[col].ffill()
             self.store.save_daily(df_part, code, existing_df=None)
 
     def update_history(self, code: str, start_date='20100101', end_date=None, incremental=True, include_basic=True, include_limit=True, include_adj=True, include_moneyflow=True, include_margin=True):
