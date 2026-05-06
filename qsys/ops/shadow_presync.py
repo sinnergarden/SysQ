@@ -260,7 +260,28 @@ def run_shadow_presync(
             "reason": "raw-only mode skips qlib sync",
         }
         affected_symbols_path = _write_csv(qlib_dir / "affected_symbols.csv", [], ["symbol", "selected_for_apply"])
-        qlib_symbol_sync_path = _write_csv(qlib_dir / "qlib_symbol_sync.csv", [], ["symbol", "original_feature_path", "raw_last_date", "qlib_last_date_before", "qlib_last_date_after", "sync_status", "validated_on_target_date", "backup_path", "backup_status", "error"])
+        qlib_symbol_sync_path = _write_csv(
+            qlib_dir / "qlib_symbol_sync.csv",
+            [],
+            [
+                "symbol",
+                "original_feature_path",
+                "raw_history_start",
+                "raw_last_date",
+                "raw_row_count",
+                "qlib_history_start_before",
+                "qlib_last_date_before",
+                "qlib_row_count_before",
+                "qlib_history_start_after",
+                "qlib_last_date_after",
+                "qlib_row_count_after",
+                "sync_status",
+                "validated_on_target_date",
+                "backup_path",
+                "backup_status",
+                "error",
+            ],
+        )
         qlib_summary_path = _write_json(qlib_dir / "qlib_sync_summary.json", qlib_summary)
         qlib_stage_status = "success"
     else:
@@ -273,6 +294,7 @@ def run_shadow_presync(
             skip_sync=skip_qlib_sync,
             base_dir=base_dir,
             target_date=resolved_trade_date,
+            universe=universe,
         )
         qlib_stage_status = "success" if qlib_summary["qlib_update_status"] in {"success", "skipped", "skipped_requires_manual_rebuild"} else "failed"
     _set_stage(
