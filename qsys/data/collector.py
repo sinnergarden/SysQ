@@ -99,6 +99,18 @@ class TushareCollector:
             ],
         )
         self._signed_numeric_cols = {"pct_chg", "net_buy", "net_amount"}
+        self._percent_financial_cols = {
+            "roe",
+            "roe_waa",
+            "roe_ttm",
+            "grossprofit_margin",
+            "debt_to_assets",
+            "q_gr_yoy",
+            "dt_netprofit_yoy",
+            "profit_to_gr",
+            "net_profit_margin",
+        }
+        self._percent_like_threshold = 3.0
         self._sparse_event_cols = {
             'exalter', 'buy', 'sell', 'net_buy', 'name', 'buyer_sum', 'seller_sum', 'net_amount', 'reason'
         }
@@ -340,6 +352,21 @@ class TushareCollector:
             
         return pd.concat(dfs, ignore_index=True)
 
+    def _normalize_percent_financial_columns(self, df: pd.DataFrame, columns=None) -> pd.DataFrame:
+        if df is None or df.empty:
+            return df
+        df = df.copy()
+        target_cols = set(columns or self._percent_financial_cols)
+        threshold = float(getattr(self, "_percent_like_threshold", 3.0))
+        for col in target_cols:
+            if col not in df.columns:
+                continue
+            values = pd.to_numeric(df[col], errors="coerce")
+            mask = values.abs() > threshold
+            if mask.any():
+                df.loc[mask, col] = values.loc[mask] / 100.0
+        return df
+
     def _prepare_financial_frame(self, df: pd.DataFrame, value_cols):
         if df is None or df.empty:
             return pd.DataFrame()
@@ -516,6 +543,7 @@ class TushareCollector:
                 "net_profit_margin",
             ],
         )
+        fina_indicator = self._normalize_percent_financial_columns(fina_indicator)
         
         frames = [f for f in [income, balancesheet, cashflow, fina_indicator] if not f.empty]
         if not frames:
@@ -575,7 +603,7 @@ class TushareCollector:
                     daily_df[col] = np.nan
             return daily_df
         daily_df = daily_df.copy()
-        fin_df = fin_df.copy()
+        fin_df = self._normalize_percent_financial_columns(fin_df.copy())
         daily_df["_orig_idx"] = np.arange(len(daily_df))
         daily_df["trade_date"] = daily_df["trade_date"].astype(str)
         fin_df["ann_date"] = fin_df["ann_date"].astype(str)
