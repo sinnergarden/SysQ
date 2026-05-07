@@ -541,7 +541,7 @@ def build_candidate_gap_audit(
 
 def _pick_sample_symbols(by_symbol_rows: list[dict[str, Any]], raw_first_last_by_symbol: dict[str, dict[str, Any]]) -> list[tuple[str, str]]:
     best = [row["symbol"] for row in sorted(by_symbol_rows, key=lambda row: (-row["eligible_coverage"], row["symbol"]))[:5]]
-    worst = [row["symbol"] for row in sorted(by_symbol_rows, key=lambda row: (-row["true_missing_cells"], row["symbol"]))[:5]]
+    worst = [row["symbol"] for row in sorted(by_symbol_rows, key=lambda row: (row["naive_coverage"], row["symbol"]))[:5]]
     new_listing = [
         symbol for symbol, _ in sorted(
             ((symbol, stats.get("raw_first_date")) for symbol, stats in raw_first_last_by_symbol.items() if stats.get("raw_first_date")),
@@ -549,11 +549,10 @@ def _pick_sample_symbols(by_symbol_rows: list[dict[str, Any]], raw_first_last_by
             reverse=True,
         )[:5]
     ]
-    core_candidates = ["600519.SH", "300750.SZ", "601318.SH", "601398.SH", "000001.SZ", "600036.SH", "000333.SZ"]
+    core_candidates = ["600519.SH", "300750.SZ", "601318.SH", "601398.SH", "600036.SH", "000001.SZ", "000333.SZ"]
     core = [symbol for symbol in core_candidates if symbol in raw_first_last_by_symbol][:5]
 
     ordered: list[tuple[str, str]] = []
-    seen: set[str] = set()
     for bucket, symbols in [
         ("A_best", best),
         ("B_worst", worst),
@@ -561,9 +560,6 @@ def _pick_sample_symbols(by_symbol_rows: list[dict[str, Any]], raw_first_last_by
         ("D_core_largecap", core),
     ]:
         for symbol in symbols:
-            if symbol in seen:
-                continue
-            seen.add(symbol)
             ordered.append((bucket, symbol))
     return ordered
 
