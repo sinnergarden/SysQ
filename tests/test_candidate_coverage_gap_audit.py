@@ -143,6 +143,8 @@ class TestCandidateCoverageGapAudit(unittest.TestCase):
         self.assertAlmostEqual(summary["naive_core_market_field_coverage"], 0.5)
         self.assertAlmostEqual(summary["eligible_core_market_field_coverage"], 1.0)
         self.assertEqual(summary["excluded_static_universe_cells"], 6)
+        self.assertEqual(summary["true_missing_cells"], 0)
+        self.assertEqual(summary["eligible_non_null_cells"], 6)
         self.assertEqual(recommendation["root_cause"], "validator_denominator_too_strict")
         self.assertFalse(recommendation["safe_to_switch_candidate"])
 
@@ -190,6 +192,7 @@ class TestCandidateCoverageGapAudit(unittest.TestCase):
         summary = audit["summary"]
         recommendation = audit["recommendation"]
         self.assertAlmostEqual(summary["eligible_core_market_field_coverage"], 0.5)
+        self.assertEqual(summary["naive_core_market_field_coverage"], 0.5)
         self.assertEqual(summary["true_missing_cells"], len(CORE_FIELDS))
         self.assertFalse(recommendation["safe_to_switch_candidate"])
         self.assertNotEqual(recommendation["root_cause"], "validator_denominator_too_strict")
