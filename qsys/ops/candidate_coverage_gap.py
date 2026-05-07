@@ -246,7 +246,7 @@ def _build_recommendation(summary: dict[str, Any], reason_counter: Counter[str],
         root_cause = "validator_denominator_too_strict"
         should_adjust_validator_denominator = True
         recommendation = (
-            "主要问题不是核心行情真缺，而是 static CSI800 bootstrap 下的上市前/非活跃区间被一并算进 validator 分母。"
+            "主要问题不是核心行情真缺，而是 validator 把长期停牌/无交易区间也算进了核心行情覆盖分母。"
             "先修 validator denominator，再重跑 candidate validation。"
         )
     elif eligible < threshold:
