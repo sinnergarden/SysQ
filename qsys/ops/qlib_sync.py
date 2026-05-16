@@ -53,11 +53,27 @@ def _write_csv(path: Path, rows: list[dict[str, Any]], fieldnames: list[str]) ->
     return path
 
 
-def can_run_incremental_qlib_sync(adapter: QlibAdapter) -> bool:
+def can_run_incremental_qlib_sync(adapter: QlibAdapter, target_date: str | None = None) -> bool:
+    """Check if incremental qlib sync (dump_update) can be used.
+
+    Conditions:
+    1. The adapter has a callable convert_incremental method
+    2. target_date does not extend beyond the existing qlib calendar
+       (if it does, we'd need dump_fix to extend the calendar)
+    """
     convert_fn = getattr(adapter, "convert_incremental", None)
     if not callable(convert_fn):
         return False
-    return False
+
+    if target_date is None:
+        return False
+
+    last_date = adapter.get_last_qlib_date()
+    if last_date is None:
+        return False
+
+    # Incremental works when target_date <= last qlib calendar date
+    return pd.Timestamp(target_date) <= last_date
 
 
 def _feature_dir_name(symbol: str) -> str:
@@ -696,6 +712,49 @@ def run_targeted_qlib_sync(
             "reason": "base_dir or target_date missing for selected symbol refresh",
         }
         sync_rows = []
+    elif can_run_incremental_qlib_sync(adapter, target_date=target_date):
+        try:
+            adapter.convert_incremental(target_date)
+            status = "success"
+            convert_mode = "incremental"
+            reason = f"incremental qlib sync via dump_update (target={target_date})"
+            post_sync = str(pd.Timestamp(target_date).strftime("%Y-%m-%d"))
+        except Exception as exc:
+            status = "failed"
+            convert_mode = "incremental"
+            reason = f"incremental qlib sync failed, falling back: {exc}"
+            # Fallback to the full fix path
+            refresh_result = refresh_selected_symbols_from_raw(
+                base_dir,
+                unique_symbols,
+                universe=universe,
+                target_date=target_date,
+                apply=apply,
+                output_dir=output_dir,
+            )
+            summary = refresh_result["summary"]
+            sync_rows = refresh_result["rows"]
+            summary["reason"] = f"incremental failed, used fallback; {reason}"
+            affected_path = _write_csv(output_dir / "affected_symbols.csv", rows, AFFECTED_SYMBOL_COLUMNS)
+            symbol_sync_path = _write_csv(output_dir / "qlib_symbol_sync.csv", sync_rows, QLIB_SYMBOL_SYNC_COLUMNS)
+            summary_path = _write_json(output_dir / "qlib_sync_summary.json", summary)
+            return summary, affected_path, summary_path, symbol_sync_path
+        else:
+            summary = {
+                "previous_qlib_last_date": previous,
+                "post_sync_qlib_last_date": post_sync,
+                "affected_symbol_count": len(rows),
+                "symbols_attempted": len(unique_symbols),
+                "symbols_synced": len(unique_symbols),
+                "symbols_failed": 0,
+                "symbols_validated": 0,
+                "backup_status": "not_needed",
+                "rollback_status": "not_needed",
+                "qlib_update_status": status,
+                "convert_mode": convert_mode,
+                "reason": reason,
+            }
+            sync_rows = []
     else:
         refresh_result = refresh_selected_symbols_from_raw(
             base_dir,

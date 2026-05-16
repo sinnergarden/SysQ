@@ -143,26 +143,49 @@ class StockDataStore:
 
     # === Dragon-Tiger List (龙虎榜) Storage ===
 
+    _TOP_INST_COLS = ["trade_date", "ts_code", "exalter", "buy", "sell", "net_buy"]
+    _TOP_LIST_COLS = ["trade_date", "ts_code", "name", "close", "pct_chg",
+                      "turnover_rate", "amount", "buyer_sum", "seller_sum",
+                      "net_amount", "reason"]
+
+    def _save_with_upsert(self, df: pd.DataFrame, table: str, schema_cols: list[str], pk_cols: list[str]):
+        """Save DataFrame to SQLite table with INSERT OR REPLACE, ensuring column alignment."""
+        # Add any missing columns with NULL
+        for col in schema_cols:
+            if col not in df.columns:
+                df[col] = None
+        # Reorder to match schema
+        df = df[schema_cols]
+        # Drop rows where all PK columns are null
+        df = df.dropna(subset=pk_cols, how='any')
+        if df.empty:
+            return
+
+        with sqlite3.connect(self.meta_db_path) as conn:
+            # Create table if not exists
+            col_defs = ", ".join(f'"{c}" REAL' if c in ("buy", "sell", "net_buy", "close", "pct_chg",
+                              "turnover_rate", "amount", "buyer_sum", "seller_sum", "net_amount")
+                                 else f'"{c}" TEXT' for c in schema_cols)
+            pk_def = ", ".join(f'"{c}"' for c in pk_cols)
+            conn.execute(f"""
+                CREATE TABLE IF NOT EXISTS {table} (
+                    {col_defs},
+                    PRIMARY KEY ({pk_def})
+                )
+            """)
+            # Use a temp table + INSERT OR REPLACE to safely upsert
+            df.to_sql(f"_tmp_{table}", conn, if_exists='replace', index=False)
+            col_list = ", ".join(f'"{c}"' for c in schema_cols)
+            conn.execute(f"INSERT OR REPLACE INTO {table} ({col_list}) SELECT {col_list} FROM _tmp_{table}")
+            conn.execute(f"DROP TABLE _tmp_{table}")
+
     def save_top_inst(self, df: pd.DataFrame, trade_date: str):
         """Save top_inst (机构席位) data to SQLite."""
         if df is None or df.empty:
             return
-        table = "top_inst"
         try:
-            with sqlite3.connect(self.meta_db_path) as conn:
-                conn.execute(f"""
-                    CREATE TABLE IF NOT EXISTS {table} (
-                        trade_date TEXT,
-                        ts_code TEXT,
-                        exalter TEXT,
-                        buy REAL,
-                        sell REAL,
-                        net_buy REAL,
-                        PRIMARY KEY (trade_date, ts_code, exalter)
-                    )
-                """)
-                df.to_sql(table, conn, if_exists='append', index=False, 
-                          method='multi', chunksize=1000)
+            self._save_with_upsert(df, "top_inst", self._TOP_INST_COLS,
+                                   ["trade_date", "ts_code", "exalter"])
             log.info(f"Saved top_inst: {len(df)} records for {trade_date}")
         except Exception as e:
             log.error(f"Failed to save top_inst: {e}")
@@ -171,27 +194,9 @@ class StockDataStore:
         """Save top_list (龙虎榜列表) data to SQLite."""
         if df is None or df.empty:
             return
-        table = "top_list"
         try:
-            with sqlite3.connect(self.meta_db_path) as conn:
-                conn.execute(f"""
-                    CREATE TABLE IF NOT EXISTS {table} (
-                        trade_date TEXT,
-                        ts_code TEXT,
-                        name TEXT,
-                        close REAL,
-                        pct_chg REAL,
-                        turnover_rate REAL,
-                        amount REAL,
-                        buyer_sum REAL,
-                        seller_sum REAL,
-                        net_amount REAL,
-                        reason TEXT,
-                        PRIMARY KEY (trade_date, ts_code)
-                    )
-                """)
-                df.to_sql(table, conn, if_exists='append', index=False,
-                          method='multi', chunksize=1000)
+            self._save_with_upsert(df, "top_list", self._TOP_LIST_COLS,
+                                   ["trade_date", "ts_code", "reason"])
             log.info(f"Saved top_list: {len(df)} records for {trade_date}")
         except Exception as e:
             log.error(f"Failed to save top_list: {e}")
@@ -202,7 +207,7 @@ class StockDataStore:
             with sqlite3.connect(self.meta_db_path) as conn:
                 if trade_date:
                     return pd.read_sql(
-                        f"SELECT * FROM top_inst WHERE trade_date = '{trade_date}'", conn
+                        "SELECT * FROM top_inst WHERE trade_date = ?", conn, params=(trade_date,)
                     )
                 return pd.read_sql("SELECT * FROM top_inst", conn)
         except Exception as e:
@@ -215,7 +220,7 @@ class StockDataStore:
             with sqlite3.connect(self.meta_db_path) as conn:
                 if trade_date:
                     return pd.read_sql(
-                        f"SELECT * FROM top_list WHERE trade_date = '{trade_date}'", conn
+                        "SELECT * FROM top_list WHERE trade_date = ?", conn, params=(trade_date,)
                     )
                 return pd.read_sql("SELECT * FROM top_list", conn)
         except Exception as e:

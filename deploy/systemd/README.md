@@ -13,6 +13,7 @@ Copy the service and timer files into your systemd unit directory, then replace 
 
 ## Suggested schedule
 
+- csi800 daily data sync: after close, e.g. `21:30` (triggers `qsys-csi800-daily-sync.service`)
 - daily shadow run: after close, e.g. `15:30` or `16:00`
 - nightly full-universe backfill: evening off-hours, e.g. `20:30`
 - weekly retrain: weekend morning, or early Monday before market open
@@ -20,10 +21,30 @@ Copy the service and timer files into your systemd unit directory, then replace 
 ## Manual run
 
 ```bash
+# CSI800 daily data sync
+PYTHONPATH=QSYS_ROOT QSYS_PYTHON QSYS_ROOT/scripts/ops/sync_csi800_daily.py --apply
+
+# Daily shadow run
 PYTHONPATH=QSYS_ROOT QSYS_PYTHON QSYS_ROOT/scripts/ops/run_shadow_daily.py --base-dir QSYS_ROOT --triggered-by manual
 PYTHONPATH=QSYS_ROOT QSYS_PYTHON QSYS_ROOT/scripts/ops/run_shadow_retrain_weekly.py --base-dir QSYS_ROOT --triggered-by manual
 PYTHONPATH=QSYS_ROOT QSYS_PYTHON QSYS_ROOT/scripts/ops/run_full_universe_backfill.py --base-dir QSYS_ROOT --apply --batch-size 50 --max-batches 4 --triggered-by manual
 ```
+
+## CSI800 Daily Data Sync
+
+The `qsys-csi800-daily-sync.service` + `.timer` replace the earlier `setup_openclaw_qsys_cron.sh` approach.
+
+Flow:
+1. Resolve the last completed trading day
+2. Fetch latest CSI800 constituents via `index_weight` API
+3. Pre-check: skip stocks that already have the target date (read feather `trade_date` column)
+4. Batch fetch missing data (daily, daily_basic, adj_factor, moneyflow, margin, stk_limit)
+5. Convert to Qlib bin (incremental, fallback to fix)
+6. Refresh csi300 + csi800 instrument files
+7. Run readiness check (6 core field null rates, active count >= 750)
+8. Write structured audit JSON to `data/audit/`
+
+Audit records are per-day JSON files: `data/audit/sync_csi800_{YYYYMMDD}.json`. Contents include step timing, constituent count, and readiness check results.
 
 ## Status check
 

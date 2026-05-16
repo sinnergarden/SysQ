@@ -41,7 +41,7 @@ class TestDataContractReady(unittest.TestCase):
                 "close": [float("nan")],
                 "close_x": [10.5],
                 "vol": [2.0],
-                "amount": [3.0],  # thousand RMB from tushare
+                "amount": [3000.0],  # already converted to Yuan by collector
                 "adj_factor": [1.0],
                 "up_limit": [11.55],
                 "down_limit": [9.45],
@@ -84,10 +84,13 @@ class TestDataContractReady(unittest.TestCase):
         csv_dir.mkdir(parents=True, exist_ok=True)
 
         with patch("qsys.data.adapter.subprocess.run") as mock_run, \
-             patch.object(adapter, "_clean_artifacts"):
+             patch.object(adapter, "_clean_artifacts"), \
+             patch.object(adapter, "_refresh_universe_instruments") as mock_refresh:
             adapter._run_dump_script(csv_dir, mode="dump_all")
 
-        self.assertGreaterEqual(mock_run.call_count, 2)
+        # dump_bin subprocess called once; instrument refresh done inline
+        mock_run.assert_called_once()
+        self.assertEqual(mock_refresh.call_count, 2)  # csi300 + csi800
 
 
 if __name__ == "__main__":
