@@ -73,7 +73,7 @@ openclaw cron add \
   --tz Asia/Shanghai \
   --announce \
   --expect-final \
-  --thinking low \
+  --thinking high \
   "${DISABLED_FLAG[@]}" \
   --message "$DAILY_MESSAGE"
 
@@ -86,7 +86,7 @@ openclaw cron add \
   --tz Asia/Shanghai \
   --announce \
   --expect-final \
-  --thinking low \
+  --thinking high \
   "${DISABLED_FLAG[@]}" \
   --message "$WEEKLY_MESSAGE"
 

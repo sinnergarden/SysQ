@@ -54,6 +54,13 @@ class ConfigManager:
             "clean": data_root / "clean"
         }
 
+        qlib_override = os.environ.get("QSYS_QLIB_BIN", "").strip()
+        if qlib_override:
+            override_path = Path(qlib_override).expanduser()
+            if not override_path.is_absolute():
+                override_path = (self.project_root / override_path).resolve()
+            self.dirs["qlib_bin"] = override_path
+
         # Create directories
         for path in self.dirs.values():
             path.mkdir(parents=True, exist_ok=True)
