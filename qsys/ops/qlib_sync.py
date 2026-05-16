@@ -72,8 +72,10 @@ def can_run_incremental_qlib_sync(adapter: QlibAdapter, target_date: str | None 
     if last_date is None:
         return False
 
-    # Incremental works when target_date <= last qlib calendar date
-    return pd.Timestamp(target_date) <= last_date
+    # Incremental works when target_date is NEWER than last qlib date
+    # (appending new data). If target_date <= last_date, we're fixing
+    # existing data and should use dump_fix instead.
+    return pd.Timestamp(target_date) > last_date
 
 
 def _feature_dir_name(symbol: str) -> str:

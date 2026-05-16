@@ -892,6 +892,7 @@ class QlibAdapter:
             self.touch_qlib_mtime()
         except subprocess.CalledProcessError as e:
             log.error(f"Qlib dump failed: {e}")
+            raise
         finally:
             if cleanup_csv_dir and csv_dir.exists():
                 shutil.rmtree(csv_dir)
