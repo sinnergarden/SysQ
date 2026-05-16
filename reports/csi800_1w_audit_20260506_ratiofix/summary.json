@@ -1,0 +1,27 @@
+{
+  "asof_raw_latest": "20260430",
+  "week": [
+    "20260424",
+    "20260430"
+  ],
+  "csi800_symbol_count": 800,
+  "raw_symbols_present": 319,
+  "raw_week_symbols_with_5_days": 50,
+  "raw_duplicate_rows_total": 0,
+  "qlib_week_rows": 250,
+  "qlib_week_symbols": 50,
+  "qlib_close_fill_ratio": 1.0,
+  "qlib_fundamental_fill_ratio_median": 0.94,
+  "qlib_fundamental_fill_ratio_min": 0.8200000000000001,
+  "pit_field_match_rate": {
+    "roe": 1.0,
+    "grossprofit_margin": 1.0,
+    "debt_to_assets": 1.0,
+    "current_ratio": 1.0,
+    "net_income": 1.0,
+    "revenue": 1.0,
+    "total_assets": 1.0,
+    "equity": 1.0,
+    "op_cashflow": 1.0
+  }
+}

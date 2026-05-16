@@ -76,6 +76,8 @@ class TestShadowPresync(unittest.TestCase):
         collector=None,
         store=None,
         can_sync=False,
+        universe: str = "csi300",
+        bootstrap_symbols: list[str] | None = None,
         **kwargs,
     ):
         tmpdir = tempfile.TemporaryDirectory()
@@ -116,13 +118,18 @@ class TestShadowPresync(unittest.TestCase):
             "qsys.ops.shadow_presync.QlibAdapter", return_value=adapter
         ), patch("qsys.ops.raw_sync.StockDataStore", return_value=store), patch(
             "qsys.ops.raw_sync.TushareCollector", return_value=collector
+        ), patch(
+            "qsys.ops.universe_sync.TushareCollector"
+        ) as mock_universe_collector, patch(
+            "qsys.ops.universe_sync.read_calendar_summary", return_value={"calendar_first_date": "2010-01-04", "calendar_last_date": "2026-04-17", "calendar_count": 1}
         ), patch("qsys.ops.qlib_sync.refresh_selected_symbols_from_raw", return_value=refresh_result), patch(
             "qsys.ops.shadow_presync.build_instrument_coverage_rows", return_value=coverage_rows
         ), patch("qsys.ops.shadow_presync.build_repair_plan", return_value=repair_plan):
+            mock_universe_collector.return_value.get_universe.return_value = bootstrap_symbols or [f"{i:06d}.SZ" for i in range(300)]
             result = run_shadow_presync(
                 base_dir,
                 run_id="shadow_presync_2026-04-25_090807",
-                universe="csi300",
+                universe=universe,
                 target_date="2026-04-25",
                 lookback_days=20,
                 apply=apply,
@@ -255,6 +262,23 @@ class TestShadowPresync(unittest.TestCase):
         summary_bad = load_json(Path(result_bad["summary_path"]))
         self.assertFalse(summary_bad["ready_for_daily_shadow"])
         self.assertIn(summary_bad["overall_status"], {"failed", "partial"})
+
+    def test_apply_bootstraps_missing_csi800_registry(self):
+        bootstrap_symbols = [f"{i:06d}.SZ" for i in range(800)]
+        base_dir, result, _, _ = self._run(
+            active_symbols=300,
+            apply=True,
+            universe="csi800",
+            max_symbols=5,
+            bootstrap_symbols=bootstrap_symbols,
+        )
+        summary = load_json(Path(result["summary_path"]))
+        universe_summary = load_json(Path(result["run_dir"]) / "01_universe" / "universe_summary.json")
+        csi800_path = base_dir / "data" / "qlib_bin" / "instruments" / "csi800.txt"
+        self.assertTrue(csi800_path.exists())
+        self.assertEqual(summary["universe"], "csi800")
+        self.assertEqual(universe_summary["source"], "bootstrapped_registry")
+        self.assertEqual(universe_summary["symbol_count"], 800)
 
 
 if __name__ == "__main__":

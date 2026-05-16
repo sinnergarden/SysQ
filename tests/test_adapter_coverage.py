@@ -82,6 +82,35 @@ class TestAdapterCoverage(unittest.TestCase):
         self.assertFalse(report.ok)
         self.assertTrue(any("coverage mismatch blocks planning" in issue for issue in report.blocking_issues))
 
+    @patch.object(QlibAdapter, "_run_dump_script")
+    @patch.object(QlibAdapter, "_prepare_csvs")
+    @patch.object(QlibAdapter, "_list_symbols_with_raw_at_or_after")
+    def test_convert_fix_rebuilds_full_history_for_affected_symbols(
+        self,
+        mock_list_symbols,
+        mock_prepare_csvs,
+        mock_run_dump,
+    ):
+        adapter = QlibAdapter()
+        mock_list_symbols.return_value = ["000001.SZ", "600519.SH"]
+        mock_prepare_csvs.return_value = (adapter.qlib_dir.parent / "qlib_csv_tmp", 2)
+
+        adapter.convert_fix(pd.Timestamp("2026-04-17"))
+
+        mock_list_symbols.assert_called_once_with(pd.Timestamp("2026-04-17"))
+        mock_prepare_csvs.assert_called_once_with(selected_symbols=["000001.SZ", "600519.SH"])
+        mock_run_dump.assert_called_once()
+        self.assertEqual(mock_run_dump.call_args.kwargs["mode"], "dump_fix")
+
+    @patch.object(QlibAdapter, "touch_qlib_mtime")
+    @patch.object(QlibAdapter, "_list_symbols_with_raw_at_or_after", return_value=[])
+    def test_convert_fix_touches_qlib_when_nothing_needs_refresh(self, _mock_list_symbols, mock_touch):
+        adapter = QlibAdapter()
+
+        adapter.convert_fix(pd.Timestamp("2026-04-17"))
+
+        mock_touch.assert_called_once_with()
+
 
 if __name__ == "__main__":
     unittest.main()

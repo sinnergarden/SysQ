@@ -45,6 +45,28 @@ class TestFinancialDerivation(unittest.TestCase):
         self.assertAlmostEqual(row["debt_to_assets"], 0.6, places=6)
         self.assertAlmostEqual(row["current_ratio"], 1.5, places=6)
 
+    def test_merge_financials_normalizes_tushare_percent_ratios(self):
+        collector = TushareCollector()
+        daily_df = pd.DataFrame({
+            "ts_code": ["300308.SZ"],
+            "trade_date": ["20260430"],
+        })
+        fin_df = pd.DataFrame({
+            "ts_code": ["300308.SZ"],
+            "ann_date": ["20260417"],
+            "end_date": ["20260331"],
+            "roe": [44.1614],
+            "grossprofit_margin": [42.0356],
+            "debt_to_assets": [30.1790],
+            "current_ratio": [2.6893],
+        })
+        merged = collector._merge_financials(daily_df, fin_df)
+        row = merged.iloc[0]
+        self.assertAlmostEqual(row["roe"], 0.441614, places=6)
+        self.assertAlmostEqual(row["grossprofit_margin"], 0.420356, places=6)
+        self.assertAlmostEqual(row["debt_to_assets"], 0.30179, places=6)
+        self.assertAlmostEqual(row["current_ratio"], 2.6893, places=6)
+
 
 if __name__ == "__main__":
     unittest.main()

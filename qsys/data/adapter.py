@@ -41,9 +41,22 @@ class InstrumentCoverageReport:
 
 
 class QlibAdapter:
-    def __init__(self):
-        self.qlib_dir = Path(str(cfg.get_path("qlib_bin")))
-        self.raw_dir = Path(str(cfg.get_path("raw_daily")))
+    _PERCENT_FINANCIAL_COLS = {
+        "roe",
+        "roe_waa",
+        "roe_ttm",
+        "grossprofit_margin",
+        "debt_to_assets",
+        "q_gr_yoy",
+        "dt_netprofit_yoy",
+        "profit_to_gr",
+        "net_profit_margin",
+    }
+    _PERCENT_LIKE_THRESHOLD = 3.0
+
+    def __init__(self, *, qlib_dir: str | Path | None = None, raw_dir: str | Path | None = None):
+        self.qlib_dir = Path(qlib_dir).expanduser() if qlib_dir is not None else Path(str(cfg.get_path("qlib_bin")))
+        self.raw_dir = Path(raw_dir).expanduser() if raw_dir is not None else Path(str(cfg.get_path("raw_daily")))
         self.meta_db_path = Path(str(cfg.get_path("root"))) / "meta.db"
 
     def get_last_qlib_date(self):
@@ -178,6 +191,30 @@ class QlibAdapter:
             "aligned": aligned,
             "gap_days": gap,
         }
+
+    def touch_qlib_mtime(self):
+        """Touch the qlib roots after any successful write so freshness checks stay accurate."""
+        for path in [self.qlib_dir, self.qlib_dir / "features", self.qlib_dir / "instruments"]:
+            if path.exists():
+                os.utime(path, None)
+
+    def _list_symbols_with_raw_at_or_after(self, since_date) -> list[str]:
+        if since_date is None:
+            return []
+        threshold = pd.Timestamp(since_date)
+        affected = []
+        for feather_path in self.raw_dir.glob("*.feather"):
+            try:
+                frame = pd.read_feather(feather_path, columns=["trade_date"])
+            except Exception as err:
+                log.warning(f"Failed to inspect {feather_path.name} for same-date repair: {err}")
+                continue
+            if frame.empty or "trade_date" not in frame.columns:
+                continue
+            dates = pd.to_datetime(frame["trade_date"], errors="coerce").dropna()
+            if not dates.empty and dates.max() >= threshold:
+                affected.append(feather_path.stem)
+        return sorted(set(affected))
 
     def check_and_update(self, force=False):
         """
@@ -456,11 +493,12 @@ class QlibAdapter:
                 collapsed[col] = selected
         return collapsed
 
-    def _prepare_csvs(self, since_date=None, *, selected_symbols=None, output_dir=None):
+    def _prepare_csvs(self, since_date=None, *, until_date=None, selected_symbols=None, output_dir=None):
         """
         Prepare CSVs from Feather files.
-        If since_date is provided, only include rows AFTER this date.
-        Returns path to csv_dir and count of files generated.
+        If ``since_date`` is provided, only include rows on/after that date.
+        If ``until_date`` is provided, only include rows on/before that date.
+        Returns path to ``csv_dir`` and count of files generated.
         """
         csv_dir = Path(output_dir) if output_dir is not None else self.qlib_dir.parent / "qlib_csv_tmp"
         if csv_dir.exists():
@@ -564,6 +602,14 @@ class QlibAdapter:
                         deduped[col_name] = collapsed
                 df = pd.DataFrame(deduped)
                 
+                for col in self._PERCENT_FINANCIAL_COLS:
+                    if col not in df.columns:
+                        continue
+                    values = pd.to_numeric(df[col], errors="coerce")
+                    mask = values.abs() > self._PERCENT_LIKE_THRESHOLD
+                    if mask.any():
+                        df.loc[mask, col] = values.loc[mask] / 100.0
+
                 # Unit Conversion (Tushare -> Qlib Standard)
                 # Tushare vol is in lots (100 shares), Qlib expects shares
                 if 'volume' in df.columns:
@@ -666,14 +712,16 @@ class QlibAdapter:
                         converted.loc[~ymd_mask] = pd.to_datetime(date_as_str.loc[~ymd_mask], errors='coerce')
                     df['date'] = converted
                 
-                # Incremental Filter
-                if since_date:
+                # Bound CSV export to the requested date window.
+                if since_date is not None:
                     # Include the latest qlib date itself so repaired raw rows on the same
                     # trading day can overwrite stale or partially converted values.
                     df = df[df['date'] >= since_date]
-                    if df.empty:
-                        continue
-                        
+                if until_date is not None:
+                    df = df[df['date'] <= until_date]
+                if df.empty:
+                    continue
+
                 df['date'] = df['date'].dt.strftime('%Y-%m-%d')
                 
                 # Fill NaNs
@@ -738,12 +786,21 @@ class QlibAdapter:
         self._run_dump_script(csv_dir, mode="dump_update")
 
     def convert_fix(self, since_date):
-        """Repair latest-date feature files using dump_fix when raw rows changed in-place."""
+        """Repair same-date changes without collapsing symbol history to a one-day slice."""
         log.info(f"Starting same-date repair update (since {since_date})...")
-        csv_dir, count = self._prepare_csvs(since_date)
+        affected_symbols = self._list_symbols_with_raw_at_or_after(since_date)
+        if not affected_symbols:
+            log.info("No repaired symbols found to update.")
+            self.touch_qlib_mtime()
+            return
+
+        # dump_fix rewrites the full per-symbol bin file, so export complete history
+        # for the affected symbols instead of only the latest-date slice.
+        csv_dir, count = self._prepare_csvs(selected_symbols=affected_symbols)
 
         if count == 0:
             log.info("No repaired data found to update.")
+            self.touch_qlib_mtime()
             return
 
         log.info(f"Found {count} stocks with repaired data. Running dump_fix...")
@@ -776,19 +833,26 @@ class QlibAdapter:
             return False
         return False
 
-    def convert_all(self):
+    def convert_all(self, *, output_qlib_dir=None, selected_symbols=None, until_date=None, csv_output_dir=None, refresh_universes=None):
         """Full update using dump_all"""
         log.info("Starting full Qlib data conversion...")
-        csv_dir, count = self._prepare_csvs(since_date=None)
+        original_qlib_dir = self.qlib_dir
+        if output_qlib_dir is not None:
+            self.qlib_dir = Path(output_qlib_dir).expanduser()
+        csv_dir, count = self._prepare_csvs(since_date=None, until_date=until_date, selected_symbols=selected_symbols, output_dir=csv_output_dir)
         
         if count == 0:
             log.error("No CSV files generated for full dump.")
+            self.qlib_dir = original_qlib_dir
             return
 
         log.info(f"Generated {count} CSV files. Running dump_all...")
-        self._run_dump_script(csv_dir, mode="dump_all")
+        try:
+            self._run_dump_script(csv_dir, mode="dump_all", refresh_universes=refresh_universes)
+        finally:
+            self.qlib_dir = original_qlib_dir
 
-    def _run_dump_script(self, csv_dir, mode="dump_all"):
+    def _run_dump_script(self, csv_dir, mode="dump_all", *, refresh_universes=None, cleanup_csv_dir=True):
         """Helper to run the dump_bin.py script"""
         # Use cfg.project_root to find the script reliably
         dump_script = cfg.project_root / "scripts" / "dump_bin.py"
@@ -819,11 +883,15 @@ class QlibAdapter:
         try:
             subprocess.run(cmd, check=True)
             log.info(f"Qlib {mode} completed successfully.")
-            self._refresh_universe_instruments()
+            if refresh_universes is None:
+                refresh_universes = ["csi300"]
+            for universe in refresh_universes:
+                self._refresh_universe_instruments(universe=universe)
+            self.touch_qlib_mtime()
         except subprocess.CalledProcessError as e:
             log.error(f"Qlib dump failed: {e}")
         finally:
-            if csv_dir.exists():
+            if cleanup_csv_dir and csv_dir.exists():
                 shutil.rmtree(csv_dir)
             self._clean_artifacts()
 
