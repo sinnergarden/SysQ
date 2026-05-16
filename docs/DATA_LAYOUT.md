@@ -4,11 +4,12 @@
 
 SysQ 只保留下面几层职责：
 
-- `data/raw/`：长期原始数据。
+- `data/raw/daily/`：日线原始数据（Feather 格式，每只股票一个文件）。
 - `data/qlib_bin/`：QLib serving 数据。
 - `data/models/`：模型与生产 manifest。
-- `data/meta/`：长期小型账本与映射；默认账户主库是 `data/meta/real_account.db`。
+- `data/meta/`：长期小型账本与映射；默认账户主库是 `data/meta/real_account.db`，另含 `meta.db`（股票基本信息、交易日历、龙虎榜、两融等 SQLite 表）。
 - `data/derived/`：从 `daily/{date}` 抽出的长期结构化汇总表。
+- `data/audit/`：每日数据同步 audit 记录（JSON）。
 - `daily/{date}/`：单个交易日的 evidence package。
 - `experiments/`：研究、训练、回测、参数扫描等输出。
 - `runs/{date}/`：runner 级最小编排证据。
@@ -21,11 +22,14 @@ SysQ 只保留下面几层职责：
 .
 ├── data/
 │   ├── raw/
-│   ├── qlib_bin/
-│   ├── models/
+│   │   └── daily/           # 日线 Feather 文件，~800 files（每只 CSI800 成分股一个）
+│   ├── qlib_bin/            # QLib 转换后的 bin 数据
+│   ├── models/              # 模型与生产 manifest
 │   ├── meta/
-│   │   └── real_account.db
-│   └── derived/
+│   │   ├── real_account.db  # 账户主库
+│   │   └── meta.db          # 股票信息、日历、龙虎榜、两融等
+│   ├── derived/             # 长期结构化汇总表
+│   └── audit/               # 每日 sync audit JSON（由 sync_csi800_daily.py 写入）
 ├── daily/
 │   └── {date}/
 │       ├── pre_open/

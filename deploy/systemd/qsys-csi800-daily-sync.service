@@ -1,0 +1,16 @@
+[Unit]
+Description=Qsys CSI800 Daily Data Sync
+Documentation=https://github.com/sinnergarden/SysQ
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/liuming/.openclaw/workspace/SysQ
+Environment=PYTHONPATH=/home/liuming/.openclaw/workspace/SysQ
+ExecStart=/home/liuming/.openclaw/workspace/.mamba/envs/dl/bin/python /home/liuming/.openclaw/workspace/SysQ/scripts/ops/sync_csi800_daily.py --apply
+StandardOutput=append:/home/liuming/.openclaw/logs/sync_csi800_daily.log
+StandardError=append:/home/liuming/.openclaw/logs/sync_csi800_daily.log
+
+[Install]
+WantedBy=default.target

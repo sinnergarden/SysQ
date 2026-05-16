@@ -1,0 +1,14 @@
+[Unit]
+Description=Qsys CSI800 Daily Data Sync Timer
+Documentation=https://github.com/sinnergarden/SysQ
+
+[Timer]
+# Run weekdays at 21:30 (market closed + buffer)
+OnCalendar=Mon..Fri 21:30:00
+# Catch up if system was down
+Persistent=true
+# Label for systemd-analyze
+Unit=qsys-csi800-daily-sync.service
+
+[Install]
+WantedBy=timers.target

@@ -14,6 +14,10 @@ from qsys.feature.groups.microstructure import build_microstructure_features
 from qsys.feature.groups.liquidity import build_liquidity_features
 from qsys.feature.groups.tradability import build_tradability_features
 from qsys.feature.groups.relative_strength import build_relative_strength_features
+from qsys.feature.groups.index_context import attach_index_context
+from qsys.feature.groups.industry_context import build_industry_context_features
+from qsys.feature.groups.regime import build_regime_features
+from qsys.feature.groups.fundamental_context import build_fundamental_context_features
 from qsys.feature.transforms import apply_cross_sectional_standardization
 from qsys.utils.logger import log
 
@@ -44,7 +48,11 @@ def main(codes, start, end, output):
     out = build_microstructure_features(full)
     out = build_liquidity_features(out)
     out = build_tradability_features(out)
+    out = attach_index_context(out, index_name='hs300')
     out = build_relative_strength_features(out)
+    out = build_industry_context_features(out)
+    out = build_regime_features(out)
+    out = build_fundamental_context_features(out)
     out = apply_cross_sectional_standardization(
         out,
         [

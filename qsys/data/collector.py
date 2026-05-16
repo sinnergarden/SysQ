@@ -296,9 +296,6 @@ class TushareCollector:
             curr = chunk_end + timedelta(days=1)
             
         for i, code in enumerate(code_list):
-            if i > 0 and i % 5 == 0:
-                time.sleep(0.1)
-                
             for c_start, c_end in chunks:
                 df = self._fetch_with_retry(
                     api,
@@ -309,6 +306,9 @@ class TushareCollector:
                 )
                 if df is not None and not df.empty:
                     dfs.append(df)
+                # Rate limiting: Tushare API rate limit is 200 calls/min per interface.
+                # Sleep 0.35s between calls to stay at ~170 calls/min (under limit).
+                time.sleep(0.35)
                     
         if not dfs:
             return pd.DataFrame()
@@ -900,15 +900,10 @@ class TushareCollector:
             else:
                 log.warning(f"{date} margin data empty")
 
-            fin_df = self._fetch_financials(date, date)
-            if fin_df is None or fin_df.empty:
-                log.warning(f"{date} financials empty")
-            df_daily = self._merge_financials(df_daily, fin_df)
-
             # Fill missing adj_factor with 1.0 (new listings might miss it?)
             if 'adj_factor' in df_daily.columns:
                 df_daily['adj_factor'] = df_daily['adj_factor'].fillna(1.0)
-            
+
             # Save by code
             ignore_columns = []
             if df_basic is None or df_basic.empty:
@@ -919,8 +914,6 @@ class TushareCollector:
                 ignore_columns += self.moneyflow_fields + self._moneyflow_derived
             if margin_df is None or margin_df.empty:
                 ignore_columns += self.margin_cols
-            if fin_df is None or fin_df.empty:
-                ignore_columns += self.financial_cols
             df_daily = self._validate_and_clean(df_daily, "ALL", ignore_columns=ignore_columns)
             codes = df_daily['ts_code'].unique()
             log.info(f"Saving data for {len(codes)} stocks...")
@@ -1117,7 +1110,7 @@ class TushareCollector:
             return [c.strip() for c in key.split(",") if c.strip()]
         return [key]
 
-    def update_universe_history(self, universe='csi300', start_date='20100101', end_date=None, incremental=True, include_basic=True, include_limit=True, include_adj=True, batch_size=50, include_moneyflow=True):
+    def update_universe_history(self, universe='csi300', start_date='20100101', end_date=None, incremental=True, include_basic=True, include_limit=True, include_adj=True, batch_size=50, include_moneyflow=True, include_margin=True):
         start_ts = time.time()
         start_date = self._normalize_date(start_date)
         if end_date is None:
@@ -1146,6 +1139,7 @@ class TushareCollector:
                 include_limit=include_limit,
                 include_adj=include_adj,
                 include_moneyflow=include_moneyflow,
+                include_margin=include_margin,
             )
             batch_elapsed = time.time() - batch_start_ts
             avg_elapsed = (time.time() - start_ts) / batch_no
@@ -1242,6 +1236,13 @@ class TushareCollector:
              if df_limit_all is not None and not df_limit_all.empty:
                 df_limit_all["trade_date"] = df_limit_all["trade_date"].astype(str)
 
+        # 4. Margin (Outside Loop) — fetch once for the full period instead of per chunk
+        df_margin_all = pd.DataFrame()
+        if include_margin:
+            df_margin_all = self._fetch_by_date_range("margin", code_list, start_date, end_date)
+            if df_margin_all is not None and not df_margin_all.empty and "trade_date" in df_margin_all.columns:
+                df_margin_all["trade_date"] = df_margin_all["trade_date"].astype(str)
+
         # Get List Date Map
         stock_df = self.store.get_stock_list()
         list_date_map = {}
@@ -1321,12 +1322,13 @@ class TushareCollector:
                         fields=self._get_interface_fields("moneyflow"),
                     )
 
-                # 3.5 Margin (Batch by date range)
+                # 3.5 Margin — subset from pre-fetched full-period data
                 df_margin = pd.DataFrame()
-                if include_margin:
-                    df_margin = self._fetch_by_date_range("margin", valid_codes, chunk_start, chunk_end)
-                    if df_margin is not None and not df_margin.empty and "trade_date" in df_margin.columns:
-                        df_margin["trade_date"] = df_margin["trade_date"].astype(str)
+                if include_margin and df_margin_all is not None and not df_margin_all.empty:
+                    df_margin = df_margin_all[
+                        df_margin_all["trade_date"].between(chunk_start, chunk_end) &
+                        df_margin_all["ts_code"].isin(valid_codes)
+                    ].copy()
 
                 # 4. Filter Basic/Limit from All
                 df_basic = pd.DataFrame()
