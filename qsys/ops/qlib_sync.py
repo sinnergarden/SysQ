@@ -56,10 +56,13 @@ def _write_csv(path: Path, rows: list[dict[str, Any]], fieldnames: list[str]) ->
 def can_run_incremental_qlib_sync(adapter: QlibAdapter, target_date: str | None = None) -> bool:
     """Check if incremental qlib sync (dump_update) can be used.
 
+    dump_update appends new dates; dump_fix rewrites per-symbol bins.
+    Use incremental when target_date is NEWER than last qlib date
+    (appending new data). For existing dates, use dump_fix instead.
+
     Conditions:
     1. The adapter has a callable convert_incremental method
-    2. target_date does not extend beyond the existing qlib calendar
-       (if it does, we'd need dump_fix to extend the calendar)
+    2. target_date > last_qlib_date (new date to append)
     """
     convert_fn = getattr(adapter, "convert_incremental", None)
     if not callable(convert_fn):
