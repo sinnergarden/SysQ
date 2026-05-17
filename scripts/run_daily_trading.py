@@ -56,6 +56,9 @@ from qsys.reports.unified_schema import unified_run_artifacts, write_csv, write_
 from qsys.trader.order_intents import build_order_intents, save_order_intents
 from qsys.utils.logger import log, log_event, log_stage
 
+from qsys.core.archive import discover_runs, init_run_dir, resolve_run_dir, save_input, save_output, write_manifest
+from qsys.core.contracts import RunManifest, build_run_id
+
 
 TRAINING_FIELDS = [
     "training_mode",
@@ -171,6 +174,16 @@ def _resolve_model_feature_set(model_path: str, feature_config) -> str:
         except Exception as exc:
             log.warning(f"Failed to read feature_set from {feature_selection_path}: {exc}")
 
+    # Fallback: extract feature set name from model directory name
+    # e.g. "qlib_lgbm_semantic_all_features" -> "semantic_all_features"
+    model_dir_name = Path(model_path).name
+    model_prefix = "qlib_lgbm_"
+    if model_dir_name.startswith(model_prefix):
+        feature_name = model_dir_name[len(model_prefix):]
+        if feature_name:
+            log.info(f"Extracted feature_set='{feature_name}' from model directory name")
+            return str(feature_name)
+
     return "alpha158"
 
 
@@ -267,6 +280,23 @@ def _resolve_cli_path(path_str: str) -> str:
     if not path.is_absolute():
         path = project_root / path
     return str(path)
+
+
+def _resolve_run_id_for_plan(plan_path: Path, account_name: str) -> str | None:
+    """Read signal_date from a plan CSV and construct the expected run_id."""
+    try:
+        df = pd.read_csv(plan_path, nrows=1)
+        signal_date = str(df["signal_date"].iloc[0]) if "signal_date" in df.columns else None
+        if signal_date:
+            return build_run_id(
+                trade_date=signal_date.replace("-", ""),
+                mode="paper",
+                account_id=account_name,
+                seq=1,
+            )
+    except Exception:
+        pass
+    return None
 
 
 def _resolve_ops_paths(
@@ -665,10 +695,19 @@ def run_preopen_workflow(
         )
         if plan_path and plan_path.exists():
             log_stage("shadow_account", "simulate_previous_plan", plan_path=str(plan_path), signal_date=signal_date)
+
+            # Try to discover the run archive for this plan
+            _exec_run_id = _resolve_run_id_for_plan(plan_path, shadow_account_name)
+            _exec_run_dir = resolve_run_dir(_exec_run_id) if _exec_run_id else None
+            if _exec_run_dir and not _exec_run_dir.exists():
+                _exec_run_dir = None  # archive may not exist yet (first run)
+
             execution_audit_rows = shadow_sim.simulate_execution(
                 str(plan_path),
                 signal_date,
                 volume_participation_cap=0.1,
+                run_dir=_exec_run_dir,
+                run_id=_exec_run_id or "",
             ).to_dict(orient="records")
         else:
             log_stage("shadow_account", "skip_simulation", reason="previous plan missing", plan_path=str(plan_path) if plan_path else None)
@@ -741,6 +780,49 @@ def run_preopen_workflow(
     )
     result["artifacts"]["shadow_order_intents"] = shadow_intents_path
     result["artifacts"]["real_order_intents"] = real_intents_path
+
+    # ── Run archive creation (shadow account) ─────────────────────────
+    try:
+        shadow_run_id = build_run_id(
+            trade_date=signal_date.replace("-", ""),
+            mode="paper",
+            account_id=shadow_account_name,
+            seq=1,
+        )
+        run_dir = init_run_dir(shadow_run_id)
+        manifest = RunManifest(
+            run_id=shadow_run_id,
+            trade_date=signal_date,
+            mode="paper",
+            account_id=shadow_account_name,
+            model_path=model_path or "",
+            feature_set=_resolve_model_feature_set(model_path, feature_config) if model_path else "extended",
+            top_k=top_k,
+            universe="csi300",
+            created_at=datetime.now().isoformat(),
+        )
+        write_manifest(run_dir, manifest)
+
+        # Copy signal basket to archive inputs
+        if signal_basket_path and Path(signal_basket_path).exists():
+            import shutil
+            shutil.copy2(signal_basket_path, run_dir / "inputs" / "signal_basket.csv")
+
+        # Save plan CSV and order intents to archive outputs
+        if isinstance(plan_shadow, pd.DataFrame) and not plan_shadow.empty:
+            save_output(run_dir, "plan", plan_shadow)
+        if isinstance(shadow_intents, dict):
+            save_output(run_dir, "order_intents", shadow_intents)
+
+        # Save account snapshot
+        shadow_snapshot = result.get("account_snapshots", {}).get(shadow_account_name)
+        if shadow_snapshot:
+            save_input(run_dir, "account_snapshot_before", shadow_snapshot)
+
+        result["run_archive"] = str(run_dir)
+        log.info("Created run archive: %s", run_dir)
+    except Exception as e:
+        log.warning("Failed to create run archive (non-blocking): %s", e)
 
     result["cash_utilization"] = {
         shadow_account_name: {

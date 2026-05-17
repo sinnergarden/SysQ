@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -44,3 +45,22 @@ def unified_run_artifacts(report_dir: str | Path) -> dict[str, Path]:
         "selection_daily": root / "selection_daily.csv",
         "decisions": root / "decisions.json",
     }
+
+
+def write_json(path: str | Path, data: Any) -> str:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    return str(path)
+
+
+def write_csv(path: str | Path, data: Any) -> str:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if isinstance(data, pd.DataFrame):
+        data.to_csv(path, index=False)
+    elif isinstance(data, list):
+        pd.DataFrame(data).to_csv(path, index=False)
+    else:
+        path.write_text(str(data), encoding="utf-8")
+    return str(path)

@@ -61,41 +61,47 @@ class ModelScheduler:
             log.warning("Could not determine model age from metadata. Skipping retrain check (assuming manual control).")
             
         if needs_retrain:
+            # Extract feature set name from model directory name
+            # e.g. "data/models/qlib_lgbm_semantic_all_features" -> "semantic_all_features"
+            # e.g. "data/models/qlib_lgbm_extended" -> "extended"
+            # e.g. "data/models/qlib_lgbm" -> "alpha158" (bare model name)
+            model_dir_name = Path(model_path).name
+            model_prefix = "qlib_lgbm_"
+            if model_dir_name.startswith(model_prefix):
+                feature_set = model_dir_name[len(model_prefix):]
+            elif model_dir_name == "qlib_lgbm":
+                feature_set = "alpha158"
+            else:
+                feature_set = "extended"
+
+            log.info(f"Extracted feature_set='{feature_set}' from model path '{model_path}'")
+
             # Calculate new training period
             # End date: yesterday (to avoid lookahead bias, or T-1)
             new_end_dt = current_dt - timedelta(days=1)
             new_start_dt = new_end_dt - timedelta(days=train_window_years*365)
-            
+
             new_start = new_start_dt.strftime("%Y-%m-%d")
             new_end = new_end_dt.strftime("%Y-%m-%d")
-            
+
             log.info(f"Retraining model from {new_start} to {new_end}...")
-            
-            # Run training script
-            # Use sys.executable to ensure we use the same python environment
+
+            # Run training script preserving the original feature set
             cmd = [
                 sys.executable, "scripts/run_train.py",
                 "--model", "qlib_lgbm",
                 "--start", new_start,
-                "--end", new_end
+                "--end", new_end,
+                "--feature_set", feature_set,
             ]
-            
+
             try:
                 subprocess.check_call(cmd)
-                
-                # Find the new model
-                # It should be in data/models/qlib_lgbm_phase123_{timestamp}
-                models_root = Path("data/models")
-                if models_root.exists():
-                    candidates = sorted([d for d in models_root.iterdir() if d.is_dir() and "qlib_lgbm" in d.name])
-                    if candidates:
-                        new_model_path = candidates[-1]
-                        log.info(f"New model trained at: {new_model_path}")
-                        return str(new_model_path)
-                
-                log.error("Training finished but could not find new model directory.")
-                return model_path # Fallback
-                    
+                # run_train.py saves to data/models/{model_name} which equals
+                # the current model_path directory — model is updated in-place.
+                log.info(f"Retrained model at: {model_path}")
+                return model_path
+
             except subprocess.CalledProcessError as e:
                 log.error(f"Retraining failed: {e}")
                 return model_path # Fallback

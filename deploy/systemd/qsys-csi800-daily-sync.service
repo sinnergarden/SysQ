@@ -8,6 +8,9 @@ Wants=network-online.target
 Type=oneshot
 WorkingDirectory=/home/liuming/.openclaw/workspace/SysQ
 Environment=PYTHONPATH=/home/liuming/.openclaw/workspace/SysQ
+Environment=HTTPS_PROXY=http://172.31.144.1:12334
+Environment=HTTP_PROXY=http://172.31.144.1:12334
+EnvironmentFile=/home/liuming/.openclaw/.env
 ExecStart=/home/liuming/.openclaw/workspace/.mamba/envs/dl/bin/python /home/liuming/.openclaw/workspace/SysQ/scripts/ops/sync_csi800_daily.py --apply
 StandardOutput=append:/home/liuming/.openclaw/logs/sync_csi800_daily.log
 StandardError=append:/home/liuming/.openclaw/logs/sync_csi800_daily.log

@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 import json
 
 import pandas as pd
@@ -471,3 +471,61 @@ def reconciliation_to_markdown(result: ReconciliationResult, *, top_n_positions:
         lines.append(f"- Trade rows: {len(result.real_trades)}")
 
     return "\n".join(lines)
+
+
+def reconciliation_result_to_dict(result: ReconciliationResult) -> dict[str, Any]:
+    """Convert a ReconciliationResult to a JSON-safe dict for archiving."""
+    summary_dict: dict[str, dict[str, float]] = {}
+    if not result.summary.empty:
+        for _, row in result.summary.iterrows():
+            metric = str(row["metric"])
+            summary_dict[metric] = {
+                "real": float(row["real"]),
+                "shadow": float(row["shadow"]),
+                "diff": float(row["diff"]),
+            }
+
+    position_gaps: list[dict[str, Any]] = []
+    if not result.positions.empty:
+        for _, row in result.positions.iterrows():
+            position_gaps.append({
+                "symbol": str(row["symbol"]),
+                "real_amount": int(row["real_amount"]),
+                "shadow_amount": int(row["shadow_amount"]),
+                "amount_diff": int(row["amount_diff"]),
+                "real_market_value": float(row["real_market_value"]),
+                "shadow_market_value": float(row["shadow_market_value"]),
+                "market_value_diff": float(row["market_value_diff"]),
+                "real_cost_basis": float(row["real_cost_basis"]),
+                "shadow_cost_basis": float(row["shadow_cost_basis"]),
+                "cost_basis_diff": float(row["cost_basis_diff"]),
+            })
+
+    real_trades_list: list[dict[str, Any]] = []
+    if not result.real_trades.empty:
+        real_trades_list = result.real_trades.fillna("").to_dict(orient="records")
+
+    return {
+        "summary": summary_dict,
+        "position_gaps": position_gaps,
+        "position_gap_count": len(position_gaps),
+        "position_gap_with_diff_count": len([g for g in position_gaps if g["amount_diff"] != 0]),
+        "real_trades": real_trades_list,
+        "real_trades_count": len(real_trades_list),
+    }
+
+
+def write_reconciliation_report_json(
+    result: ReconciliationResult,
+    report_path: str | Path,
+) -> Path:
+    """Write reconciliation_report.json to a run archive outputs directory."""
+    report_path = Path(report_path)
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = reconciliation_result_to_dict(result)
+    report_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, default=str),
+        encoding="utf-8",
+    )
+    log.info("Wrote reconciliation report: %s", report_path)
+    return report_path

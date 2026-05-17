@@ -1,4 +1,11 @@
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
 import pandas as pd
+
+from qsys.core.contracts import ExecutionResult
 from qsys.live.account import RealAccount
 from qsys.utils.logger import log
 
@@ -57,7 +64,45 @@ class ShadowSimulator:
         )
         return True
 
-    def simulate_execution(self, plan_csv: str, date: str, volume_participation_cap: float | None = None):
+    @staticmethod
+    def audit_to_execution_results(
+        audit_df: pd.DataFrame,
+        *,
+        trade_date: str,
+        account_id: str,
+        source_run_id: str = "",
+    ) -> list[dict[str, Any]]:
+        """Convert a simulation audit DataFrame to ExecutionResult-compatible dicts."""
+        results: list[dict[str, Any]] = []
+        for _, row in audit_df.iterrows():
+            symbol = str(row.get("symbol", ""))
+            side = str(row.get("side", "")).lower()
+            intent_id = f"{trade_date}:{account_id}:{side}:{symbol}"
+            results.append({
+                "intent_id": intent_id,
+                "trade_date": trade_date,
+                "account_id": account_id,
+                "symbol": symbol,
+                "side": side,
+                "requested_quantity": int(row.get("requested_amount", 0)),
+                "filled_quantity": int(row.get("filled_amount", 0)),
+                "avg_price": float(row.get("simulated_fill_price") or row.get("plan_price", 0.0) or 0.0),
+                "status": str(row.get("status", "rejected")),
+                "reject_reason": str(row.get("reject_reason") or None) or None,
+                "fees": float(row.get("fee", 0.0)),
+                "source_run_id": source_run_id,
+            })
+        return results
+
+    def simulate_execution(
+        self,
+        plan_csv: str,
+        date: str,
+        volume_participation_cap: float | None = None,
+        *,
+        run_dir: str | Path | None = None,
+        run_id: str = "",
+    ):
         prev_date = self.account.get_latest_date(self.account_name, before_date=date)
         if not prev_date:
             log.error("No previous shadow state found. Simulation skipped.")
@@ -202,7 +247,22 @@ class ShadowSimulator:
             log.info(
                 f"Shadow Simulation for {date} completed. Cash: {state['cash']:,.2f}, Total: {state['total_assets']:,.2f}"
             )
-        return pd.DataFrame(audit_rows, columns=EXECUTION_AUDIT_COLUMNS)
+
+        audit_df = pd.DataFrame(audit_rows, columns=EXECUTION_AUDIT_COLUMNS)
+
+        # Write execution_results.json if a run archive is provided
+        if run_dir is not None:
+            exec_results = self.audit_to_execution_results(
+                audit_df,
+                trade_date=date,
+                account_id=self.account_name,
+                source_run_id=run_id,
+            )
+            from qsys.core.archive import save_output
+            run_path = Path(run_dir) if not isinstance(run_dir, Path) else run_dir
+            save_output(run_path, "execution_results", exec_results)
+
+        return audit_df
 
     def _sync_state(self, date: str, cash: float, positions: dict):
         rows = []
