@@ -1,14 +1,22 @@
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
 import pandas as pd
+
+from qsys.core.contracts import ExecutionResult
 from qsys.live.account import RealAccount
 from qsys.utils.logger import log
 
 
 EXECUTION_AUDIT_COLUMNS = [
+    "intent_id",
     "date",
     "account_name",
     "symbol",
     "side",
-    "requested_amount",
+    "requested_amount",  # in shares (A-share: 1 lot = 100 shares, but planned in shares)
     "filled_amount",
     "status",
     "reject_reason",
@@ -57,7 +65,50 @@ class ShadowSimulator:
         )
         return True
 
-    def simulate_execution(self, plan_csv: str, date: str, volume_participation_cap: float | None = None):
+    @staticmethod
+    def audit_to_execution_results(
+        audit_df: pd.DataFrame,
+        *,
+        trade_date: str,
+        account_id: str,
+        source_run_id: str = "",
+    ) -> list[dict[str, Any]]:
+        """Convert a simulation audit DataFrame to ExecutionResult-compatible dicts.
+
+        Uses the original *intent_id* from the audit row (carried from
+        order_intents → plan CSV → audit).  Falls back to reconstructing from
+        (trade_date, account_id, side, symbol) for legacy plan CSVs.
+        """
+        results: list[dict[str, Any]] = []
+        for _, row in audit_df.iterrows():
+            symbol = str(row.get("symbol", ""))
+            side = str(row.get("side", "")).lower()
+            intent_id = str(row.get("intent_id") or "") or f"{trade_date}:{account_id}:{side}:{symbol}"
+            results.append({
+                "intent_id": intent_id,
+                "trade_date": trade_date,
+                "account_id": account_id,
+                "symbol": symbol,
+                "side": side,
+                "requested_quantity": int(row.get("requested_amount", 0)),
+                "filled_quantity": int(row.get("filled_amount", 0)),
+                "avg_price": float(row.get("simulated_fill_price") or row.get("plan_price", 0.0) or 0.0),
+                "status": str(row.get("status", "rejected")),
+                "reject_reason": str(row.get("reject_reason") or None) or None,
+                "fees": float(row.get("fee", 0.0)),
+                "source_run_id": source_run_id,
+            })
+        return results
+
+    def simulate_execution(
+        self,
+        plan_csv: str,
+        date: str,
+        volume_participation_cap: float | None = None,
+        *,
+        run_dir: str | Path | None = None,
+        run_id: str = "",
+    ):
         prev_date = self.account.get_latest_date(self.account_name, before_date=date)
         if not prev_date:
             log.error("No previous shadow state found. Simulation skipped.")
@@ -91,6 +142,9 @@ class ShadowSimulator:
             return pd.DataFrame(columns=EXECUTION_AUDIT_COLUMNS)
 
         for _, row in plan_df.iterrows():
+            # Carry the original intent_id from order_intents; absent in legacy
+            # plan CSVs where it falls back to a reconstructed value.
+            intent_id = str(row.get("intent_id") or "") or f"{date}:{self.account_name}:{str(row.get('side', '?')).lower()}:{str(row.get('symbol', '?'))}"
             symbol = str(row["symbol"])
             side = str(row["side"]).lower()
             amount = int(abs(row.get("amount", 0)))
@@ -175,6 +229,7 @@ class ShadowSimulator:
                     self.account.record_trade(date=date, account_name=self.account_name, symbol=symbol, side="sell", amount=sell_amount, price=trade_price, fee=fee, tax=tax, total_cost=trade_value - fee - tax)
 
             audit_rows.append({
+                "intent_id": intent_id,
                 "date": date,
                 "account_name": self.account_name,
                 "symbol": symbol,
@@ -202,7 +257,22 @@ class ShadowSimulator:
             log.info(
                 f"Shadow Simulation for {date} completed. Cash: {state['cash']:,.2f}, Total: {state['total_assets']:,.2f}"
             )
-        return pd.DataFrame(audit_rows, columns=EXECUTION_AUDIT_COLUMNS)
+
+        audit_df = pd.DataFrame(audit_rows, columns=EXECUTION_AUDIT_COLUMNS)
+
+        # Write execution_results.json if a run archive is provided
+        if run_dir is not None:
+            exec_results = self.audit_to_execution_results(
+                audit_df,
+                trade_date=date,
+                account_id=self.account_name,
+                source_run_id=run_id,
+            )
+            from qsys.core.archive import save_output
+            run_path = Path(run_dir) if not isinstance(run_dir, Path) else run_dir
+            save_output(run_path, "execution_results", exec_results)
+
+        return audit_df
 
     def _sync_state(self, date: str, cash: float, positions: dict):
         rows = []

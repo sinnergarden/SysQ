@@ -37,13 +37,17 @@ from qsys.live.ops_paths import build_stage_paths, find_plan_path_for_execution_
 from qsys.live.reconciliation import (
     build_reconciliation_result,
     reconciliation_to_markdown,
+    reconciliation_result_to_dict,
     sync_real_account_from_csv,
     write_reconciliation_outputs,
+    write_reconciliation_report_json,
 )
 from qsys.live.signal_monitoring import collect_signal_quality_snapshot, write_signal_quality_outputs
 from qsys.live.signal_monitoring import build_signal_quality_blockers
 from qsys.reports.daily import DailyOpsReport
 from qsys.utils.logger import log
+
+from qsys.core.archive import discover_runs, resolve_run_dir, save_output, save_input, write_summary
 
 
 def _resolve_cli_path(path_str: str) -> str:
@@ -86,6 +90,57 @@ def _resolve_ops_paths(
     }
 
 
+def _count_plan_intents(run_dir: Path) -> dict[str, int | float]:
+    """Count buy/sell intents from order_intents.json in the run archive."""
+    intents_path = run_dir / "outputs" / "order_intents.json"
+    if not intents_path.exists():
+        return {"plan_buy_count": 0, "plan_sell_count": 0, "plan_total_count": 0}
+
+    try:
+        import json
+        payload = json.loads(intents_path.read_text(encoding="utf-8"))
+        intents = payload.get("intents", [])
+        buy = sum(1 for i in intents if i.get("side") == "buy")
+        sell = sum(1 for i in intents if i.get("side") == "sell")
+        return {"plan_buy_count": buy, "plan_sell_count": sell, "plan_total_count": len(intents)}
+    except Exception:
+        return {"plan_buy_count": 0, "plan_sell_count": 0, "plan_total_count": 0}
+
+
+def _compute_fill_stats(run_dir: Path) -> dict[str, int | float]:
+    """Compute fill stats from execution_results.json in the run archive."""
+    exec_path = run_dir / "outputs" / "execution_results.json"
+    if not exec_path.exists():
+        return {"filled_count": 0, "rejected_count": 0, "fill_rate": 0.0}
+
+    try:
+        import json
+        results = json.loads(exec_path.read_text(encoding="utf-8"))
+        if not isinstance(results, list):
+            return {"filled_count": 0, "rejected_count": 0, "fill_rate": 0.0}
+        total = len(results)
+        filled = sum(1 for r in results if r.get("status") in ("filled", "partial_fill"))
+        rejected = sum(1 for r in results if r.get("status") == "rejected")
+        return {
+            "filled_count": filled,
+            "rejected_count": rejected,
+            "fill_rate": round(filled / total, 4) if total > 0 else 0.0,
+        }
+    except Exception:
+        return {"filled_count": 0, "rejected_count": 0, "fill_rate": 0.0}
+
+
+def _summarize_snapshot(snapshot: dict | None) -> dict:
+    """Extract key fields from an account snapshot for summary.json."""
+    if not snapshot:
+        return {}
+    return {
+        "cash": snapshot.get("cash", 0),
+        "total_assets": snapshot.get("total_assets", 0),
+        "position_count": len(snapshot.get("positions", {})),
+    }
+
+
 def main():
     start_time = time.time()
     blockers = []
@@ -113,6 +168,7 @@ def main():
     parser.add_argument("--shadow_account_name", default="shadow", help="Account name for shadow simulation state")
     parser.add_argument("--execution_date", type=str, help="Execution date (defaults to args.date)")
     parser.add_argument("--no_report", action="store_true", help="Skip generating the structured report")
+    parser.add_argument("--require-run-archive", action="store_true", help="Fail if run archive integration fails")
     args = parser.parse_args()
     execution_date = args.execution_date or args.date
     resolved_paths = _resolve_ops_paths(
@@ -208,6 +264,39 @@ def main():
     print(reconciliation_to_markdown(result))
     for name, path in written.items():
         log.info(f"Wrote {name}: {path}")
+
+    # ── Run archive integration ───────────────────────────────────────
+    run_dir = None
+    run_id = ""
+    try:
+        # Use execution_date (not signal_date) to match the run_id prefix
+        run_dirs = discover_runs(execution_date, mode="paper", account_id=args.shadow_account_name)
+        if run_dirs:
+            run_dir = run_dirs[-1]  # latest run for this date
+            run_id = run_dir.name
+            log.info("Discovered run archive: %s", run_dir)
+
+            # Write reconciliation report to run archive
+            recon_report_path = run_dir / "outputs" / "reconciliation_report.json"
+            write_reconciliation_report_json(result, recon_report_path)
+
+            # Save account snapshots to run archive
+            for acct_name, snapshot in account_snapshots.items():
+                if snapshot:
+                    save_input(run_dir, f"account_snapshot_{acct_name}", snapshot)
+
+            # Save reconciliation artifacts to run archive
+            save_output(run_dir, "reconciliation_report", reconciliation_result_to_dict(result))
+        else:
+            msg = f"No run archive found for {args.date}"
+            if args.require_run_archive:
+                raise RuntimeError(msg)
+            log.info(msg)
+    except Exception as e:
+        msg = f"Run archive integration failed: {e}"
+        if args.require_run_archive:
+            raise RuntimeError(msg) from e
+        log.warning(msg)
     
     # Build reconciliation summary for report
     reconciliation_summary = {}
@@ -300,7 +389,30 @@ def main():
         print("\n" + "=" * 60)
         print(report.to_markdown())
         print("=" * 60)
-    
+
+    # ── Write summary.json to run archive ─────────────────────────────
+    if run_dir is not None:
+        try:
+            plan_counts = _count_plan_intents(run_dir)
+            fill_stats = _compute_fill_stats(run_dir)
+
+            summary = {
+                "trade_date": args.date,
+                "execution_date": execution_date,
+                **plan_counts,
+                **fill_stats,
+                "position_gap_count": position_gaps,
+                "reconciliation": reconciliation_summary,
+                "account_snapshots": {k: _summarize_snapshot(v) for k, v in account_snapshots.items() if v},
+                "duration_seconds": duration,
+            }
+            write_summary(run_dir, summary)
+        except Exception as e:
+            msg = f"Failed to write summary.json: {e}"
+            if args.require_run_archive:
+                raise RuntimeError(msg) from e
+            log.warning(msg)
+
     log.info(f"Post-close workflow completed. Duration: {duration:.1f}s")
 
 

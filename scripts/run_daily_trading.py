@@ -56,6 +56,9 @@ from qsys.reports.unified_schema import unified_run_artifacts, write_csv, write_
 from qsys.trader.order_intents import build_order_intents, save_order_intents
 from qsys.utils.logger import log, log_event, log_stage
 
+from qsys.core.archive import init_run_dir, next_run_seq, resolve_run_dir, save_input, save_output, write_manifest
+from qsys.core.contracts import RunManifest, build_run_id
+
 
 TRAINING_FIELDS = [
     "training_mode",
@@ -171,6 +174,16 @@ def _resolve_model_feature_set(model_path: str, feature_config) -> str:
         except Exception as exc:
             log.warning(f"Failed to read feature_set from {feature_selection_path}: {exc}")
 
+    # Fallback: extract feature set name from model directory name
+    # e.g. "qlib_lgbm_semantic_all_features" -> "semantic_all_features"
+    model_dir_name = Path(model_path).name
+    model_prefix = "qlib_lgbm_"
+    if model_dir_name.startswith(model_prefix):
+        feature_name = model_dir_name[len(model_prefix):]
+        if feature_name:
+            log.info(f"Extracted feature_set='{feature_name}' from model directory name")
+            return str(feature_name)
+
     return "alpha158"
 
 
@@ -269,6 +282,25 @@ def _resolve_cli_path(path_str: str) -> str:
     return str(path)
 
 
+def _resolve_run_id_for_plan(plan_path: Path, account_name: str) -> str | None:
+    """Read execution_date from a plan CSV and construct the expected run_id."""
+    try:
+        df = pd.read_csv(plan_path, nrows=1)
+        exec_date = str(df["execution_date"].iloc[0]) if "execution_date" in df.columns else None
+        exec_date = exec_date or (str(df["signal_date"].iloc[0]) if "signal_date" in df.columns else None)
+        if exec_date:
+            seq = max(next_run_seq(exec_date.replace("-", ""), "paper", account_name) - 1, 1)
+            return build_run_id(
+                trade_date=exec_date.replace("-", ""),
+                mode="paper",
+                account_id=account_name,
+                seq=seq,
+            )
+    except Exception:
+        pass
+    return None
+
+
 def _resolve_ops_paths(
     *,
     execution_date: str,
@@ -324,6 +356,7 @@ def run_preopen_workflow(
     train_feature_set: str = "extended",
     label_horizon: int = 5,
     mlflow_root: str | None = None,
+    require_run_archive: bool = False,
 ):
     start_time = time.time()
     blockers = []
@@ -665,10 +698,19 @@ def run_preopen_workflow(
         )
         if plan_path and plan_path.exists():
             log_stage("shadow_account", "simulate_previous_plan", plan_path=str(plan_path), signal_date=signal_date)
+
+            # Try to discover the run archive for this plan
+            _exec_run_id = _resolve_run_id_for_plan(plan_path, shadow_account_name)
+            _exec_run_dir = resolve_run_dir(_exec_run_id) if _exec_run_id else None
+            if _exec_run_dir and not _exec_run_dir.exists():
+                _exec_run_dir = None  # archive may not exist yet (first run)
+
             execution_audit_rows = shadow_sim.simulate_execution(
                 str(plan_path),
                 signal_date,
                 volume_participation_cap=0.1,
+                run_dir=_exec_run_dir,
+                run_id=_exec_run_id or "",
             ).to_dict(orient="records")
         else:
             log_stage("shadow_account", "skip_simulation", reason="previous plan missing", plan_path=str(plan_path) if plan_path else None)
@@ -727,6 +769,12 @@ def run_preopen_workflow(
         model_info=model_info,
         assumptions=assumptions,
     )
+    # Inject intent_id from order intents back into plan_shadow DataFrame
+    if isinstance(plan_shadow, pd.DataFrame) and not plan_shadow.empty and shadow_intents.get("intents"):
+        intent_map = {intent["symbol"]: intent["intent_id"] for intent in shadow_intents["intents"]}
+        plan_shadow = plan_shadow.copy()
+        plan_shadow["intent_id"] = plan_shadow["symbol"].map(intent_map)
+
     shadow_intents_path = save_order_intents(
         shadow_intents,
         output_dir=output_dir,
@@ -741,6 +789,54 @@ def run_preopen_workflow(
     )
     result["artifacts"]["shadow_order_intents"] = shadow_intents_path
     result["artifacts"]["real_order_intents"] = real_intents_path
+
+    # ── Run archive creation (shadow account) ─────────────────────────
+    try:
+        seq = next_run_seq(execution_date.replace("-", ""), "paper", shadow_account_name)
+        shadow_run_id = build_run_id(
+            trade_date=execution_date.replace("-", ""),
+            mode="paper",
+            account_id=shadow_account_name,
+            seq=seq,
+        )
+        run_dir = init_run_dir(shadow_run_id)
+        manifest = RunManifest(
+            run_id=shadow_run_id,
+            execution_date=execution_date,
+            mode="paper",
+            account_id=shadow_account_name,
+            signal_date=signal_date,
+            model_path=model_path or "",
+            feature_set=_resolve_model_feature_set(model_path, feature_config) if model_path else "extended",
+            top_k=top_k,
+            universe="csi300",
+            created_at=datetime.now().isoformat(),
+        )
+        write_manifest(run_dir, manifest)
+
+        # Copy signal basket to archive inputs
+        if signal_basket_path and Path(signal_basket_path).exists():
+            import shutil
+            shutil.copy2(signal_basket_path, run_dir / "inputs" / "signal_basket.csv")
+
+        # Save plan CSV and order intents to archive outputs
+        if isinstance(plan_shadow, pd.DataFrame) and not plan_shadow.empty:
+            save_output(run_dir, "plan", plan_shadow)
+        if isinstance(shadow_intents, dict):
+            save_output(run_dir, "order_intents", shadow_intents)
+
+        # Save account snapshot
+        shadow_snapshot = result.get("account_snapshots", {}).get(shadow_account_name)
+        if shadow_snapshot:
+            save_input(run_dir, "account_snapshot_before", shadow_snapshot)
+
+        result["run_archive"] = str(run_dir)
+        log.info("Created run archive: %s", run_dir)
+    except Exception as e:
+        msg = f"Failed to create run archive: {e}"
+        if require_run_archive:
+            raise RuntimeError(msg) from e
+        log.warning(msg)
 
     result["cash_utilization"] = {
         shadow_account_name: {
@@ -892,6 +988,7 @@ def main():
     parser.add_argument("--train_feature_set", type=str, default="extended", help="Feature set used by preopen training")
     parser.add_argument("--label_horizon", type=int, default=5, help="Label horizon for maturity-safe preopen training")
     parser.add_argument("--mlflow_root", type=str, help="Optional MLflow tracking root used only for future preopen training runs")
+    parser.add_argument("--require-run-archive", action="store_true", help="Fail if run archive creation fails")
     args = parser.parse_args()
     run_preopen_workflow(**vars(args))
 

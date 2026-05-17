@@ -1,0 +1,11 @@
+[Unit]
+Description=Qsys Pre-Open Timer (Mon-Fri 08:00 CST)
+Documentation=https://github.com/sinnergarden/SysQ
+
+[Timer]
+OnCalendar=Mon..Fri 08:00:00
+Persistent=true
+Unit=qsys-preopen.service
+
+[Install]
+WantedBy=timers.target
