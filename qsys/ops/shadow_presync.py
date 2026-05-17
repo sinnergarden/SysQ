@@ -89,7 +89,7 @@ def _load_resume_success_symbols(base_dir: Path, resume: bool) -> set[str]:
 
 def _write_selected_symbols(output_dir: Path, selected_symbols: list[str]) -> Path:
     rows = [{"symbol": symbol} for symbol in selected_symbols]
-    return _write_csv(output_dir / "selected_symbols.csv", rows, ["symbol"])
+    return write_csv(output_dir / "selected_symbols.csv", rows, ["symbol"])
 
 
 def run_shadow_presync(
@@ -157,7 +157,7 @@ def run_shadow_presync(
     )
     manifest = load_json(context.manifest_path)
     manifest["date_resolution"] = date_resolution
-    atomic_write_json(context.manifest_path, manifest)
+    atomicwrite_json(context.manifest_path, manifest)
 
     universe_dir = context.run_dir / "01_universe"
     raw_dir = context.run_dir / "02_raw"
@@ -203,8 +203,8 @@ def run_shadow_presync(
             "symbols_with_raw_on_target": 0,
             "status": "skipped",
         }
-        raw_plan_path = _write_csv(raw_dir / "raw_update_plan.csv", [], RAW_PLAN_COLUMNS)
-        raw_summary_path = _write_json(raw_dir / "raw_update_summary.json", raw_summary)
+        raw_plan_path = write_csv(raw_dir / "raw_update_plan.csv", [], RAW_PLAN_COLUMNS)
+        raw_summary_path = write_json(raw_dir / "raw_update_summary.json", raw_summary)
         affected_symbols = selected_symbols
         raw_stage_status = "success"
     else:
@@ -244,8 +244,8 @@ def run_shadow_presync(
             "convert_mode": "skipped",
             "reason": "raw-only mode skips qlib sync",
         }
-        affected_symbols_path = _write_csv(qlib_dir / "affected_symbols.csv", [], ["symbol", "selected_for_apply"])
-        qlib_symbol_sync_path = _write_csv(
+        affected_symbols_path = write_csv(qlib_dir / "affected_symbols.csv", [], ["symbol", "selected_for_apply"])
+        qlib_symbol_sync_path = write_csv(
             qlib_dir / "qlib_symbol_sync.csv",
             [],
             [
@@ -267,7 +267,7 @@ def run_shadow_presync(
                 "error",
             ],
         )
-        qlib_summary_path = _write_json(qlib_dir / "qlib_sync_summary.json", qlib_summary)
+        qlib_summary_path = write_json(qlib_dir / "qlib_sync_summary.json", qlib_summary)
         qlib_stage_status = "success"
     else:
         qlib_summary, affected_symbols_path, qlib_summary_path, qlib_symbol_sync_path = run_targeted_qlib_sync(
@@ -315,8 +315,8 @@ def run_shadow_presync(
         repair_result["reason"] = "qlib-only mode skips instrument repair"
     elif skip_instrument_repair:
         repair_result["reason"] = "instrument repair explicitly skipped"
-    instrument_summary_path = _write_json(instrument_dir / "instrument_coverage_summary.json", coverage_summary)
-    repair_result_path = _write_json(instrument_dir / "repair_result.json", repair_result)
+    instrument_summary_path = write_json(instrument_dir / "instrument_coverage_summary.json", coverage_summary)
+    repair_result_path = write_json(instrument_dir / "repair_result.json", repair_result)
     _set_stage(
         context,
         stage_name="instrument_sync",
@@ -365,7 +365,7 @@ def run_shadow_presync(
     latest_payload["ready_for_daily_shadow"] = ready_for_daily_shadow
     latest_payload["overall_status"] = overall_status
     latest_payload["presync_summary_path"] = str(context.summary_path)
-    atomic_write_json(context.latest_pointer_path, latest_payload)
+    atomicwrite_json(context.latest_pointer_path, latest_payload)
     return {
         "run_id": context.run_id,
         "run_dir": str(context.run_dir),
