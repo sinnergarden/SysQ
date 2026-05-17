@@ -4,47 +4,74 @@
 
 确保 SysQ 的特征链路在进入训练或盘前推理前，满足：
 - raw 已拉齐
-- feature engineering 已完成
-- bin 已生成
-- 填充率、常数列、对齐口径已检查
+- qlib 已转换
+- 填充率、对齐口径已检查
 
-## 标准流程
+## 特征链路在每日同步中的位置
 
-### Step 1: 拉 raw
-- 先补齐原始行情、估值、资金流、两融、财报等 raw 数据
-- raw 只负责原始信息，不混入派生增量逻辑
+特征链路是 CSI800 日频同步（`sync_csi800_daily.py`）的内嵌步骤，不单独运行。
 
-### Step 2: 做特征工程
-- 基于 raw 统一生成组合特征
-- 支持 float 特征与 sequence/list 特征
-- 保留 feature registry / feature list 作为唯一权威表
+```
+sync_csi800_daily.py
+  ├── 拉 raw（Tushare → feather）
+  ├── qlib 转换（feature 表达式写入 qlib_bin）  ← 特征工程在此
+  └── readiness 检查（6 核心字段 null 率）      ← 特征审计在此
+```
 
-### Step 3: 转 qlib/bin
-- 先生成中间 CSV
-- 再生成 qlib bin
-- 确认 `qlib_bin/features/` 实际落地
+### qlib 转换（特征工程）
 
-### Step 4: 跑 readiness audit
-- 推荐脚本：`scripts/run_feature_readiness_audit.py`
-- 检查：
-  - missing_ratio
-  - 常数列
-  - ready / warning / blocked 分类
+raw 数据 → qlib bin 的转换由 `QlibAdapter` 处理：
 
-### Step 5: 决定训练输入
-- 只让 `ready` 特征直接进训练
-- `warning` 特征单独评估
-- `blocked` 特征先修，不进训练
+```python
+adapter = QlibAdapter()
+adapter.convert_incremental(since="2026-05-15")   # 快速增量
+# 或
+adapter.convert_fix(since="2026-05-15")            # 增量失败时 fallback
+```
+
+转换结果写入 `data/qlib_bin/features/`，每只股票一个目录，包含：
+- `$open`, `$high`, `$low`, `$close`, `$volume`, `$factor` 等核心行情字段
+- 派生表达式字段（由 feature registry 定义）
+
+### readiness 检查（特征审计）
+
+sync 的 `_readiness_check()` 自动检查：
+
+| 检查项 | 标准 |
+|--------|------|
+| 6 核心字段 null 率 | < 5% |
+| 活跃成分股数量 | >= 750 |
+
+不需要额外跑独立的 audit 脚本。
+
+## 特征注册中心
+
+特征集合定义由 `qsys/feature/registry.py` + `qsys/feature/library.py` 维护。
+
+```python
+from qsys.feature.registry import list_feature_groups
+from qsys.feature.library import FeatureLibrary
+```
+
+- `research_ui` 通过 `/api/feature-registry` 浏览
+- 训练和推理通过 feature registry 拉取特征列表
+
+## 研究工具（非日常管道）
+
+以下脚本用于特征研究和实验，不参与每日同步：
+
+- `scripts/run_feature_build.py` — 基于 raw feather 做特征工程研究，输出 CSV
+- `scripts/run_feature_readiness_audit.py` — 一次性特征覆盖率审计
+- `scripts/run_feature_ablation.py` — 特征消融实验
 
 ## 通过标准
 
-- 核心主行情特征接近 0 缺失
-- 日频扩展特征不应大面积长期 100% 缺失
-- PIT/行业特征允许稀疏，但必须可解释
-- 不允许把假警或列名错位当成特征缺失
+- 核心行情特征接近 0 缺失（通过 readiness check 验证）
+- 活跃成分股 >= 750
+- 特征注册中心有明确定义
 
 ## 运维要求
 
-- 日常更新后，若 feature 层有结构性变化，应重跑 readiness audit
-- 训练前默认保留 audit 产物
-- 模型产物应记录使用了哪些 feature / feature group
+- 日常数据同步后，readiness 检查自动验证特征可用性
+- 若特征集合有结构性变化，需更新 feature registry 后再进入训练
+- 模型产物应记录使用了哪些特征组
