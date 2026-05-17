@@ -103,8 +103,8 @@ Qsys 按用途分为三层运行域：
 职责：
 - universe 定义与维护
 - raw 数据抓取与存储
-- feature 构建（qlib 表达式层）
-- qlib 转换与工具文件同步
+- 核心行情字段 qlib 转换
+- 工具文件同步（instruments / calendar）
 - readiness / health check
 - audit 记录
 
