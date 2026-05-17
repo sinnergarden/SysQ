@@ -49,7 +49,7 @@ HTTP_CODE=$(echo "$RESULT" | tail -1)
 BODY=$(echo "$RESULT" | head -n -1)
 
 if [ "$HTTP_CODE" = "200" ]; then
-    echo "Telegram: sent to chat_id=${CHAT_ID}"
+    echo "Telegram: sent (ok)"
 else
     echo "Telegram: HTTP ${HTTP_CODE} - $(echo "$BODY" | head -c 200)"
 fi

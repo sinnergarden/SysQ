@@ -168,6 +168,7 @@ def main():
     parser.add_argument("--shadow_account_name", default="shadow", help="Account name for shadow simulation state")
     parser.add_argument("--execution_date", type=str, help="Execution date (defaults to args.date)")
     parser.add_argument("--no_report", action="store_true", help="Skip generating the structured report")
+    parser.add_argument("--require-run-archive", action="store_true", help="Fail if run archive integration fails")
     args = parser.parse_args()
     execution_date = args.execution_date or args.date
     resolved_paths = _resolve_ops_paths(
@@ -268,8 +269,8 @@ def main():
     run_dir = None
     run_id = ""
     try:
-        # Use signal_date (not args.date) to match the run_id prefix
-        run_dirs = discover_runs(signal_date)
+        # Use execution_date (not signal_date) to match the run_id prefix
+        run_dirs = discover_runs(execution_date, mode="paper", account_id=args.shadow_account_name)
         if run_dirs:
             run_dir = run_dirs[-1]  # latest run for this date
             run_id = run_dir.name
@@ -287,9 +288,15 @@ def main():
             # Save reconciliation artifacts to run archive
             save_output(run_dir, "reconciliation_report", reconciliation_result_to_dict(result))
         else:
-            log.info("No run archive found for %s (skip archive write)", args.date)
+            msg = f"No run archive found for {args.date}"
+            if args.require_run_archive:
+                raise RuntimeError(msg)
+            log.info(msg)
     except Exception as e:
-        log.warning("Run archive integration failed (non-blocking): %s", e)
+        msg = f"Run archive integration failed: {e}"
+        if args.require_run_archive:
+            raise RuntimeError(msg) from e
+        log.warning(msg)
     
     # Build reconciliation summary for report
     reconciliation_summary = {}
@@ -401,7 +408,10 @@ def main():
             }
             write_summary(run_dir, summary)
         except Exception as e:
-            log.warning("Failed to write summary.json (non-blocking): %s", e)
+            msg = f"Failed to write summary.json: {e}"
+            if args.require_run_archive:
+                raise RuntimeError(msg) from e
+            log.warning(msg)
 
     log.info(f"Post-close workflow completed. Duration: {duration:.1f}s")
 

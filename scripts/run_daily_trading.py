@@ -56,7 +56,7 @@ from qsys.reports.unified_schema import unified_run_artifacts, write_csv, write_
 from qsys.trader.order_intents import build_order_intents, save_order_intents
 from qsys.utils.logger import log, log_event, log_stage
 
-from qsys.core.archive import discover_runs, init_run_dir, resolve_run_dir, save_input, save_output, write_manifest
+from qsys.core.archive import init_run_dir, next_run_seq, resolve_run_dir, save_input, save_output, write_manifest
 from qsys.core.contracts import RunManifest, build_run_id
 
 
@@ -283,16 +283,18 @@ def _resolve_cli_path(path_str: str) -> str:
 
 
 def _resolve_run_id_for_plan(plan_path: Path, account_name: str) -> str | None:
-    """Read signal_date from a plan CSV and construct the expected run_id."""
+    """Read execution_date from a plan CSV and construct the expected run_id."""
     try:
         df = pd.read_csv(plan_path, nrows=1)
-        signal_date = str(df["signal_date"].iloc[0]) if "signal_date" in df.columns else None
-        if signal_date:
+        exec_date = str(df["execution_date"].iloc[0]) if "execution_date" in df.columns else None
+        exec_date = exec_date or (str(df["signal_date"].iloc[0]) if "signal_date" in df.columns else None)
+        if exec_date:
+            seq = max(next_run_seq(exec_date.replace("-", ""), "paper", account_name) - 1, 1)
             return build_run_id(
-                trade_date=signal_date.replace("-", ""),
+                trade_date=exec_date.replace("-", ""),
                 mode="paper",
                 account_id=account_name,
-                seq=1,
+                seq=seq,
             )
     except Exception:
         pass
@@ -354,6 +356,7 @@ def run_preopen_workflow(
     train_feature_set: str = "extended",
     label_horizon: int = 5,
     mlflow_root: str | None = None,
+    require_run_archive: bool = False,
 ):
     start_time = time.time()
     blockers = []
@@ -766,6 +769,12 @@ def run_preopen_workflow(
         model_info=model_info,
         assumptions=assumptions,
     )
+    # Inject intent_id from order intents back into plan_shadow DataFrame
+    if isinstance(plan_shadow, pd.DataFrame) and not plan_shadow.empty and shadow_intents.get("intents"):
+        intent_map = {intent["symbol"]: intent["intent_id"] for intent in shadow_intents["intents"]}
+        plan_shadow = plan_shadow.copy()
+        plan_shadow["intent_id"] = plan_shadow["symbol"].map(intent_map)
+
     shadow_intents_path = save_order_intents(
         shadow_intents,
         output_dir=output_dir,
@@ -783,18 +792,20 @@ def run_preopen_workflow(
 
     # ── Run archive creation (shadow account) ─────────────────────────
     try:
+        seq = next_run_seq(execution_date.replace("-", ""), "paper", shadow_account_name)
         shadow_run_id = build_run_id(
-            trade_date=signal_date.replace("-", ""),
+            trade_date=execution_date.replace("-", ""),
             mode="paper",
             account_id=shadow_account_name,
-            seq=1,
+            seq=seq,
         )
         run_dir = init_run_dir(shadow_run_id)
         manifest = RunManifest(
             run_id=shadow_run_id,
-            trade_date=signal_date,
+            execution_date=execution_date,
             mode="paper",
             account_id=shadow_account_name,
+            signal_date=signal_date,
             model_path=model_path or "",
             feature_set=_resolve_model_feature_set(model_path, feature_config) if model_path else "extended",
             top_k=top_k,
@@ -822,7 +833,10 @@ def run_preopen_workflow(
         result["run_archive"] = str(run_dir)
         log.info("Created run archive: %s", run_dir)
     except Exception as e:
-        log.warning("Failed to create run archive (non-blocking): %s", e)
+        msg = f"Failed to create run archive: {e}"
+        if require_run_archive:
+            raise RuntimeError(msg) from e
+        log.warning(msg)
 
     result["cash_utilization"] = {
         shadow_account_name: {
@@ -974,6 +988,7 @@ def main():
     parser.add_argument("--train_feature_set", type=str, default="extended", help="Feature set used by preopen training")
     parser.add_argument("--label_horizon", type=int, default=5, help="Label horizon for maturity-safe preopen training")
     parser.add_argument("--mlflow_root", type=str, help="Optional MLflow tracking root used only for future preopen training runs")
+    parser.add_argument("--require-run-archive", action="store_true", help="Fail if run archive creation fails")
     args = parser.parse_args()
     run_preopen_workflow(**vars(args))
 

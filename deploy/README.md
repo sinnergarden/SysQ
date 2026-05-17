@@ -103,8 +103,8 @@ Feature set 通过名称绑定：
 ### Run Archive 结构
 
 ```
-data/runs/{trade_date}_{mode}_{account_id}_{seq}/
-├── manifest.json       # run_id, trade_date, model_path, feature_set, top_k...
+data/runs/{execution_date}_{mode}_{account_id}_{seq}/
+├── manifest.json       # run_id, execution_date, model_path, feature_set, top_k...
 ├── inputs/
 │   ├── account_snapshot_before.json
 │   └── signal_basket.csv

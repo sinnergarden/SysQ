@@ -29,6 +29,26 @@ def resolve_run_dir(run_id: str) -> Path:
     return _runs_root() / run_id
 
 
+def next_run_seq(trade_date: str, mode: str, account_id: str) -> int:
+    """Return the next available seq number for a run with the given prefix.
+
+    Scans existing archives under *runs_root()/_{trade_date}_{mode}_{account_id}_NNN*
+    and returns one past the highest seq.  Returns 1 when no prior archive exists.
+    """
+    prefix = f"{trade_date.replace('-', '')}_{mode}_{account_id}_"
+    root = _runs_root()
+    max_seq = 0
+    if root.exists():
+        for child in root.iterdir():
+            if child.is_dir() and child.name.startswith(prefix):
+                try:
+                    seq_part = child.name.rsplit("_", 1)[-1]
+                    max_seq = max(max_seq, int(seq_part))
+                except (ValueError, IndexError):
+                    pass
+    return max_seq + 1
+
+
 # ── Directory initialisation ──────────────────────────────────────────
 
 _RUN_DIR_LAYOUT = [
@@ -154,8 +174,21 @@ def read_summary(run_dir: Path) -> dict[str, Any] | None:
 # ── Discovery ─────────────────────────────────────────────────────────
 
 
-def discover_runs(trade_date: str) -> list[Path]:
-    """Return all run directories whose run_id starts with *trade_date*.
+def discover_runs(
+    trade_date: str,
+    mode: str | None = None,
+    account_id: str | None = None,
+) -> list[Path]:
+    """Return run archive directories matching the given criteria.
+
+    Parameters
+    ----------
+    trade_date : str
+        The execution date (YYYY-MM-DD) to filter by.
+    mode : str, optional
+        Filter by run mode (e.g. "paper").
+    account_id : str, optional
+        Filter by account ID (e.g. "shadow").
 
     Results are sorted so that the most recent seq appears last
     (callers can take ``[-1]`` for the latest run of that date).
@@ -164,6 +197,11 @@ def discover_runs(trade_date: str) -> list[Path]:
     if not root.exists():
         return []
     prefix = trade_date.replace("-", "")
+    if mode:
+        prefix += f"_{mode}"
+    if account_id:
+        prefix += f"_{account_id}"
+    prefix += "_"
     candidates: list[Path] = []
     for child in root.iterdir():
         if child.is_dir() and child.name.startswith(prefix):

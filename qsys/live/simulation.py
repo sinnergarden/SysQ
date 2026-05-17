@@ -11,11 +11,12 @@ from qsys.utils.logger import log
 
 
 EXECUTION_AUDIT_COLUMNS = [
+    "intent_id",
     "date",
     "account_name",
     "symbol",
     "side",
-    "requested_amount",
+    "requested_amount",  # in shares (A-share: 1 lot = 100 shares, but planned in shares)
     "filled_amount",
     "status",
     "reject_reason",
@@ -72,12 +73,17 @@ class ShadowSimulator:
         account_id: str,
         source_run_id: str = "",
     ) -> list[dict[str, Any]]:
-        """Convert a simulation audit DataFrame to ExecutionResult-compatible dicts."""
+        """Convert a simulation audit DataFrame to ExecutionResult-compatible dicts.
+
+        Uses the original *intent_id* from the audit row (carried from
+        order_intents → plan CSV → audit).  Falls back to reconstructing from
+        (trade_date, account_id, side, symbol) for legacy plan CSVs.
+        """
         results: list[dict[str, Any]] = []
         for _, row in audit_df.iterrows():
             symbol = str(row.get("symbol", ""))
             side = str(row.get("side", "")).lower()
-            intent_id = f"{trade_date}:{account_id}:{side}:{symbol}"
+            intent_id = str(row.get("intent_id") or "") or f"{trade_date}:{account_id}:{side}:{symbol}"
             results.append({
                 "intent_id": intent_id,
                 "trade_date": trade_date,
@@ -136,6 +142,9 @@ class ShadowSimulator:
             return pd.DataFrame(columns=EXECUTION_AUDIT_COLUMNS)
 
         for _, row in plan_df.iterrows():
+            # Carry the original intent_id from order_intents; absent in legacy
+            # plan CSVs where it falls back to a reconstructed value.
+            intent_id = str(row.get("intent_id") or "") or f"{date}:{self.account_name}:{str(row.get('side', '?')).lower()}:{str(row.get('symbol', '?'))}"
             symbol = str(row["symbol"])
             side = str(row["side"]).lower()
             amount = int(abs(row.get("amount", 0)))
@@ -220,6 +229,7 @@ class ShadowSimulator:
                     self.account.record_trade(date=date, account_name=self.account_name, symbol=symbol, side="sell", amount=sell_amount, price=trade_price, fee=fee, tax=tax, total_cost=trade_value - fee - tax)
 
             audit_rows.append({
+                "intent_id": intent_id,
                 "date": date,
                 "account_name": self.account_name,
                 "symbol": symbol,

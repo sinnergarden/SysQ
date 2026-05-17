@@ -19,9 +19,10 @@ def build_run_id(trade_date: str, mode: str, account_id: str, seq: int = 1) -> s
 
 MANIFEST_KEYS = frozenset({
     "run_id",
-    "trade_date",
+    "execution_date",
     "mode",
     "account_id",
+    "signal_date",
     "model_path",
     "feature_set",
     "top_k",
@@ -52,6 +53,7 @@ TARGET_PORTFOLIO_COLUMNS = [
 # Mirrors reconciliation.STANDARD_PLAN_COLUMNS — the canonical shape
 # that both plan CSV and order intents are expected to align with.
 TRADE_PLAN_COLUMNS = [
+    "intent_id",
     "symbol",
     "side",
     "amount",
@@ -115,9 +117,10 @@ class ExecutionResult:
 @dataclass
 class RunManifest:
     run_id: str
-    trade_date: str
+    execution_date: str       # primary key — the real trading day
     mode: str
     account_id: str
+    signal_date: str = ""     # the data/signal date (may differ over weekends)
     model_path: str = ""
     feature_set: str = ""
     top_k: int = 0
@@ -127,9 +130,10 @@ class RunManifest:
     def to_dict(self) -> dict[str, Any]:
         return {
             "run_id": self.run_id,
-            "trade_date": self.trade_date,
+            "execution_date": self.execution_date,
             "mode": self.mode,
             "account_id": self.account_id,
+            "signal_date": self.signal_date,
             "model_path": self.model_path,
             "feature_set": self.feature_set,
             "top_k": self.top_k,
