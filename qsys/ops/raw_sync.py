@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import csv
-import json
 from datetime import datetime
 from pathlib import Path
-from typing import Any
 
 import pandas as pd
+
+from qsys.utils.json_io import write_csv, write_json
 
 from qsys.data.collector import TushareCollector
 from qsys.data.storage import StockDataStore
@@ -27,21 +26,6 @@ RAW_PLAN_COLUMNS = [
     "status",
     "error",
 ]
-
-
-def _write_json(path: Path, payload: dict[str, Any]) -> Path:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    return path
-
-
-def _write_csv(path: Path, rows: list[dict[str, Any]], fieldnames: list[str]) -> Path:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(rows)
-    return path
 
 
 def _now_text() -> str:
@@ -214,6 +198,6 @@ def run_targeted_raw_update(
         "symbols_with_raw_on_target": raw_on_target,
         "status": status,
     }
-    plan_path = _write_csv(output_dir / "raw_update_plan.csv", plan_rows, RAW_PLAN_COLUMNS)
-    summary_path = _write_json(output_dir / "raw_update_summary.json", summary)
+    plan_path = write_csv(output_dir / "raw_update_plan.csv", plan_rows, RAW_PLAN_COLUMNS)
+    summary_path = write_json(output_dir / "raw_update_summary.json", summary)
     return summary, plan_path, summary_path, sorted(set(affected_symbols))

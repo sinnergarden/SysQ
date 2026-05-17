@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import csv
-import json
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+from qsys.utils.json_io import write_csv, write_json
 
 import pandas as pd
 
@@ -32,23 +32,6 @@ BATCH_PLAN_COLUMNS = [
     "error",
     "symbols",
 ]
-
-
-def _write_json(path: Path, payload: dict[str, Any]) -> Path:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    return path
-
-
-
-def _write_csv(path: Path, rows: list[dict[str, Any]], fieldnames: list[str]) -> Path:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(rows)
-    return path
-
 
 
 def _normalize_date(value: object) -> str | None:
@@ -211,8 +194,8 @@ def run_full_universe_backfill(
         max_batches=max_batches,
     )
 
-    status_path = _write_csv(output_dir / "raw_status.csv", status_rows, RAW_STATUS_COLUMNS)
-    plan_path = _write_csv(output_dir / "batch_plan.csv", plan_rows, BATCH_PLAN_COLUMNS)
+    status_path = write_csv(output_dir / "raw_status.csv", status_rows, RAW_STATUS_COLUMNS)
+    plan_path = write_csv(output_dir / "batch_plan.csv", plan_rows, BATCH_PLAN_COLUMNS)
 
     affected_symbols: list[str] = []
     batch_failures = 0
@@ -234,7 +217,7 @@ def run_full_universe_backfill(
                 row["error"] = str(exc)
                 collector_error = str(exc)
                 batch_failures += 1
-        plan_path = _write_csv(output_dir / "batch_plan.csv", plan_rows, BATCH_PLAN_COLUMNS)
+        plan_path = write_csv(output_dir / "batch_plan.csv", plan_rows, BATCH_PLAN_COLUMNS)
 
     qlib_refresh_result: dict[str, Any] = {
         "status": "skipped",
@@ -290,7 +273,7 @@ def run_full_universe_backfill(
         },
         "qlib_refresh": qlib_refresh_result,
     }
-    summary_path = _write_json(output_dir / "summary.json", summary)
+    summary_path = write_json(output_dir / "summary.json", summary)
     latest_path = base_dir / "runs" / "latest_full_universe_backfill.json"
-    _write_json(latest_path, {**summary, "summary_path": str(summary_path)})
+    write_json(latest_path, {**summary, "summary_path": str(summary_path)})
     return {"summary": summary, "summary_path": str(summary_path)}

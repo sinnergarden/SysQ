@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-import csv
-import json
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 import pandas as pd
+
+from qsys.utils.json_io import write_json
 
 from qsys.data.adapter import QlibAdapter
 from qsys.strategy.engine import StrategyEngine
@@ -109,12 +107,6 @@ class ShadowRebalanceArtifacts:
     turnover: float
     cash_after: float
     total_value_after: float
-
-
-def _write_json(path: Path, payload: dict[str, Any]) -> Path:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    return path
 
 
 def _read_predictions(predictions_path: str | Path) -> pd.DataFrame:
@@ -381,8 +373,8 @@ def run_shadow_rebalance(*, base_dir: str | Path, run_id: str, trade_date: str, 
         "last_run_id": run_id,
         "initial_capital": float(prior_account.get("initial_capital", DEFAULT_INITIAL_CAPITAL)),
     }
-    _write_json(account_after_path, account_after)
-    _write_json(shadow_account_path, account_after)
+    write_json(account_after_path, account_after)
+    write_json(shadow_account_path, account_after)
     positions_after.to_csv(shadow_positions_path, index=False)
 
     ledger_rows = []
@@ -435,7 +427,7 @@ def run_shadow_rebalance(*, base_dir: str | Path, run_id: str, trade_date: str, 
             "no_real_order_submission",
         ],
     }
-    _write_json(execution_summary_path, execution_summary)
+    write_json(execution_summary_path, execution_summary)
 
     return ShadowRebalanceArtifacts(
         trade_date=trade_date,
@@ -470,7 +462,7 @@ def run_shadow_rebalance(*, base_dir: str | Path, run_id: str, trade_date: str, 
 def write_failed_execution_summary(*, output_dir: str | Path, trade_date: str, run_id: str, error: str, extra: dict[str, Any] | None = None) -> Path:
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    return _write_json(
+    return write_json(
         output_dir / "execution_summary.json",
         {
             "trade_date": trade_date,

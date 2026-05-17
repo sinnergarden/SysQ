@@ -1,3 +1,4 @@
+import os
 import tushare as ts
 import pandas as pd
 import time
@@ -11,9 +12,9 @@ import numpy as np
 
 class TushareCollector:
     def __init__(self):
-        token = cfg.get("tushare_token")
+        token = os.environ.get("TUSHARE_TOKEN") or cfg.get("tushare_token")
         if not token:
-            raise ValueError("Tushare token not found in settings")
+            raise ValueError("Tushare token not found: set TUSHARE_TOKEN env or tushare_token in settings.yaml")
         self.pro = ts.pro_api(token)
         self.store = StockDataStore()
         self.max_retries = 3

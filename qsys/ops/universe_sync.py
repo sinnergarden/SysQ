@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import csv
-import json
 from pathlib import Path
 from typing import Any
+
+from qsys.utils.json_io import write_csv, write_json
 
 import pandas as pd
 
@@ -12,21 +12,6 @@ from qsys.data.collector import TushareCollector
 from qsys.ops.instrument_coverage import read_calendar_summary, read_instrument_file
 
 BOOTSTRAP_SUPPORTED_UNIVERSES = {"csi300", "csi500", "csi800"}
-
-
-def _write_json(path: Path, payload: dict[str, Any]) -> Path:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    return path
-
-
-def _write_csv(path: Path, rows: list[dict[str, Any]], fieldnames: list[str]) -> Path:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(rows)
-    return path
 
 
 def _bootstrap_universe_registry_rows(*, adapter: QlibAdapter, universe: str, as_of_date: str) -> tuple[list[str], list[dict[str, str]]]:
@@ -97,6 +82,6 @@ def build_universe_snapshot(
         "bootstrap_supported": bootstrap_supported,
         "instrument_file_written": registry_written,
     }
-    csv_path = _write_csv(output_dir / "universe_snapshot.csv", rows, ["symbol", "universe", "as_of_date"])
-    summary_path = _write_json(output_dir / "universe_summary.json", summary)
+    csv_path = write_csv(output_dir / "universe_snapshot.csv", rows, ["symbol", "universe", "as_of_date"])
+    summary_path = write_json(output_dir / "universe_summary.json", summary)
     return symbols, summary, csv_path, summary_path

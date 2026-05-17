@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import json
-import os
-import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -30,25 +27,6 @@ def ensure_directory(path: str | Path) -> Path:
     return directory
 
 
-def atomic_write_json(path: str | Path, payload: dict[str, Any]) -> Path:
-    path = Path(path)
-    ensure_directory(path.parent)
-    with tempfile.NamedTemporaryFile("w", delete=False, dir=str(path.parent), encoding="utf-8") as handle:
-        json.dump(payload, handle, indent=2, sort_keys=True)
-        handle.write("\n")
-        temp_name = handle.name
-    os.replace(temp_name, path)
-    return path
-
-
-def load_json(path: str | Path) -> dict[str, Any]:
-    path = Path(path)
-    if not path.exists():
-        return {}
-    with path.open("r", encoding="utf-8") as handle:
-        return json.load(handle)
-
-
 def summarize_overall_status(stage_statuses: list[str]) -> str:
     if not stage_statuses:
         return "pending"
@@ -59,3 +37,7 @@ def summarize_overall_status(stage_statuses: list[str]) -> str:
 
 def write_latest_pointer(path: str | Path, payload: dict[str, Any]) -> Path:
     return atomic_write_json(path, payload)
+
+
+# Re-export canonical I/O for backward compat
+from qsys.utils.json_io import atomic_write_json, load_json  # noqa: F401, E402

@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import csv
-import json
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+from qsys.utils.json_io import atomic_write_json, load_json, write_csv, write_json
 
 from qsys.data.adapter import QlibAdapter
 from qsys.ops.instrument_coverage import (
@@ -17,28 +17,11 @@ from qsys.ops.instrument_coverage import (
 from qsys.ops.manifest import finalize_run, format_run_id, initialize_run, update_stage_status
 from qsys.ops.qlib_sync import run_targeted_qlib_sync
 from qsys.ops.raw_sync import RAW_PLAN_COLUMNS, load_success_symbols_from_plan, run_targeted_raw_update
-from qsys.ops.state import atomic_write_json, load_json
 from qsys.ops.trade_date import resolve_daily_trade_date
 from qsys.ops.universe_sync import BOOTSTRAP_SUPPORTED_UNIVERSES, build_universe_snapshot
 
-
 DEFAULT_UNIVERSE = "csi300"
 SUPPORTED_UNIVERSES = set(BOOTSTRAP_SUPPORTED_UNIVERSES)
-
-
-def _write_json(path: Path, payload: dict[str, Any]) -> Path:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    return path
-
-
-def _write_csv(path: Path, rows: list[dict[str, Any]], fieldnames: list[str]) -> Path:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(rows)
-    return path
 
 
 def _set_stage(context, *, stage_name: str, status: str, message: str, artifact_pointers: dict[str, Any] | None = None, started_at: str | None = None) -> None:
@@ -106,7 +89,7 @@ def _load_resume_success_symbols(base_dir: Path, resume: bool) -> set[str]:
 
 def _write_selected_symbols(output_dir: Path, selected_symbols: list[str]) -> Path:
     rows = [{"symbol": symbol} for symbol in selected_symbols]
-    return _write_csv(output_dir / "selected_symbols.csv", rows, ["symbol"])
+    return write_csv(output_dir / "selected_symbols.csv", rows, ["symbol"])
 
 
 def run_shadow_presync(
@@ -220,8 +203,8 @@ def run_shadow_presync(
             "symbols_with_raw_on_target": 0,
             "status": "skipped",
         }
-        raw_plan_path = _write_csv(raw_dir / "raw_update_plan.csv", [], RAW_PLAN_COLUMNS)
-        raw_summary_path = _write_json(raw_dir / "raw_update_summary.json", raw_summary)
+        raw_plan_path = write_csv(raw_dir / "raw_update_plan.csv", [], RAW_PLAN_COLUMNS)
+        raw_summary_path = write_json(raw_dir / "raw_update_summary.json", raw_summary)
         affected_symbols = selected_symbols
         raw_stage_status = "success"
     else:
@@ -261,8 +244,8 @@ def run_shadow_presync(
             "convert_mode": "skipped",
             "reason": "raw-only mode skips qlib sync",
         }
-        affected_symbols_path = _write_csv(qlib_dir / "affected_symbols.csv", [], ["symbol", "selected_for_apply"])
-        qlib_symbol_sync_path = _write_csv(
+        affected_symbols_path = write_csv(qlib_dir / "affected_symbols.csv", [], ["symbol", "selected_for_apply"])
+        qlib_symbol_sync_path = write_csv(
             qlib_dir / "qlib_symbol_sync.csv",
             [],
             [
@@ -284,7 +267,7 @@ def run_shadow_presync(
                 "error",
             ],
         )
-        qlib_summary_path = _write_json(qlib_dir / "qlib_sync_summary.json", qlib_summary)
+        qlib_summary_path = write_json(qlib_dir / "qlib_sync_summary.json", qlib_summary)
         qlib_stage_status = "success"
     else:
         qlib_summary, affected_symbols_path, qlib_summary_path, qlib_symbol_sync_path = run_targeted_qlib_sync(
@@ -332,8 +315,8 @@ def run_shadow_presync(
         repair_result["reason"] = "qlib-only mode skips instrument repair"
     elif skip_instrument_repair:
         repair_result["reason"] = "instrument repair explicitly skipped"
-    instrument_summary_path = _write_json(instrument_dir / "instrument_coverage_summary.json", coverage_summary)
-    repair_result_path = _write_json(instrument_dir / "repair_result.json", repair_result)
+    instrument_summary_path = write_json(instrument_dir / "instrument_coverage_summary.json", coverage_summary)
+    repair_result_path = write_json(instrument_dir / "repair_result.json", repair_result)
     _set_stage(
         context,
         stage_name="instrument_sync",

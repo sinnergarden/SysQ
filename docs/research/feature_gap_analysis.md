@@ -61,8 +61,8 @@
 ## 2.1 离线训练主链路
 当前训练主链路是：
 
-1. `scripts/run_update.py`
-   - 拉原始数据（raw）
+1. `scripts/ops/sync_csi800_daily.py`
+   - 拉原始数据（raw）→ qlib 转换 → readiness 检查
 2. `qsys/data/adapter.py`
    - raw -> qlib csv/bin
 3. `scripts/run_train.py`

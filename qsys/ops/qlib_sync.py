@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import csv
-import json
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any
+
+from qsys.utils.json_io import write_csv, write_json
 
 import pandas as pd
 from qlib.utils import code_to_fname
@@ -36,21 +36,6 @@ QLIB_SYMBOL_SYNC_COLUMNS = [
 ]
 
 QLIB_VALIDATION_FIELDS = ["$open", "$high", "$low", "$close", "$volume", "$amount"]
-
-
-def _write_json(path: Path, payload: dict[str, Any]) -> Path:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    return path
-
-
-def _write_csv(path: Path, rows: list[dict[str, Any]], fieldnames: list[str]) -> Path:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(rows)
-    return path
 
 
 def can_run_incremental_qlib_sync(adapter: QlibAdapter, target_date: str | None = None) -> bool:
@@ -740,9 +725,9 @@ def run_targeted_qlib_sync(
             summary = refresh_result["summary"]
             sync_rows = refresh_result["rows"]
             summary["reason"] = f"incremental failed, used fallback; {reason}"
-            affected_path = _write_csv(output_dir / "affected_symbols.csv", rows, AFFECTED_SYMBOL_COLUMNS)
-            symbol_sync_path = _write_csv(output_dir / "qlib_symbol_sync.csv", sync_rows, QLIB_SYMBOL_SYNC_COLUMNS)
-            summary_path = _write_json(output_dir / "qlib_sync_summary.json", summary)
+            affected_path = write_csv(output_dir / "affected_symbols.csv", rows, AFFECTED_SYMBOL_COLUMNS)
+            symbol_sync_path = write_csv(output_dir / "qlib_symbol_sync.csv", sync_rows, QLIB_SYMBOL_SYNC_COLUMNS)
+            summary_path = write_json(output_dir / "qlib_sync_summary.json", summary)
             return summary, affected_path, summary_path, symbol_sync_path
         else:
             summary = {
@@ -771,7 +756,7 @@ def run_targeted_qlib_sync(
         )
         summary = refresh_result["summary"]
         sync_rows = refresh_result["rows"]
-    affected_path = _write_csv(output_dir / "affected_symbols.csv", rows, AFFECTED_SYMBOL_COLUMNS)
-    symbol_sync_path = _write_csv(output_dir / "qlib_symbol_sync.csv", sync_rows, QLIB_SYMBOL_SYNC_COLUMNS)
-    summary_path = _write_json(output_dir / "qlib_sync_summary.json", summary)
+    affected_path = write_csv(output_dir / "affected_symbols.csv", rows, AFFECTED_SYMBOL_COLUMNS)
+    symbol_sync_path = write_csv(output_dir / "qlib_symbol_sync.csv", sync_rows, QLIB_SYMBOL_SYNC_COLUMNS)
+    summary_path = write_json(output_dir / "qlib_sync_summary.json", summary)
     return summary, affected_path, summary_path, symbol_sync_path
