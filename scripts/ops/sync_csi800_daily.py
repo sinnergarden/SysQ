@@ -238,6 +238,55 @@ def _load_last_audit(audit_dir: Path) -> dict | None:
         return None
 
 
+def _notify_telegram(report: dict) -> None:
+    """Send sync summary to Telegram channel. Non-blocking: failures are logged only."""
+    try:
+        from qsys.ops.telegram import send_telegram_message
+    except Exception as exc:
+        log.warning(f"Telegram notify skipped (import failed): {exc}")
+        return
+
+    target_date = report.get("target_date_display", report.get("target_date", "?"))
+    status = report.get("overall_status", "unknown")
+
+    steps = report.get("steps", {})
+    universe = steps.get("get_universe", {})
+    pre_check = steps.get("pre_check", {})
+    raw_fetch = steps.get("raw_fetch", {})
+    qlib_convert = steps.get("qlib_convert", {})
+    readiness = steps.get("readiness_check", {})
+
+    constituent_count = universe.get("constituent_count", "?")
+    up_to_date = pre_check.get("already_up_to_date", 0)
+    fetched = raw_fetch.get("codes_fetched", raw_fetch.get("would_fetch", 0))
+    qlib_elapsed = qlib_convert.get("elapsed_s", "?")
+
+    # Count readiness checks passed vs total
+    readiness_detail = report.get("readiness", {})
+    passed = sum(1 for k, v in readiness_detail.items()
+                 if isinstance(v, dict) and v.get("passed") is True)
+    total = sum(1 for k, v in readiness_detail.items()
+                if isinstance(v, dict) and "passed" in v)
+
+    lines = [
+        f"Qsys CSI800 Daily Sync — {target_date}",
+        f"Status: {status}",
+        f"Constituents: {constituent_count} | Up-to-date: {up_to_date} | Fetched: {fetched}",
+    ]
+    if isinstance(qlib_elapsed, (int, float)):
+        qlib_mode = qlib_convert.get("mode", "?")
+        lines.append(f"Qlib convert ({qlib_mode}): {qlib_elapsed}s")
+    if total > 0:
+        lines.append(f"Readiness: {passed}/{total} passed")
+    text = "\n".join(lines)
+
+    result = send_telegram_message(text)
+    if result.get("status") == "success":
+        log.info("Telegram notification sent")
+    else:
+        log.warning(f"Telegram notification failed: {result.get('error')}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="csi800 daily incremental data sync")
     parser.add_argument("--target-date", default=None, help="Target trade date (YYYY-MM-DD or YYYYMMDD)")
@@ -363,6 +412,10 @@ def main() -> None:
     # Write audit
     if do_apply:
         _write_audit(Path("data/audit"), report)
+
+    # Step 7: Telegram notification (non-blocking, apply only)
+    if do_apply:
+        _notify_telegram(report)
 
     log.info(f"Done — status={overall}")
 
