@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -177,8 +176,3 @@ def apply_repair_plan(adapter: QlibAdapter, *, universe: str, last_qlib_date: st
         "last_qlib_date": last_qlib_date,
         "repair_targets": sorted(repair_targets),
     }
-
-
-def write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")

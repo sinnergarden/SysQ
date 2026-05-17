@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -250,13 +249,6 @@ def field_dependency_summary(field_name: str) -> dict[str, Any]:
         "is_expression": is_expression,
         "raw_dependencies": raw_dependencies,
     }
-
-
-def write_json(path: str | Path, payload: dict[str, Any]) -> str:
-    path_obj = Path(path)
-    path_obj.parent.mkdir(parents=True, exist_ok=True)
-    path_obj.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    return str(path_obj)
 
 
 def _missing_field_row(spec: MainlineObjectSpec, field: str, total_rows: int, notes: str) -> dict[str, Any]:

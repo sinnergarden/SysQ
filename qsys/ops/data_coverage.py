@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import csv
-import json
 import sqlite3
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -374,20 +372,6 @@ def decide_root_cause(*, raw_summary: dict[str, Any], qlib_summary: dict[str, An
         "root_cause": root_cause,
         "recommendation": recommendation,
     }
-
-
-def write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-
-
-def write_csv(path: Path, rows: list[dict[str, Any]], fieldnames: list[str]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames)
-        writer.writeheader()
-        for row in rows:
-            writer.writerow(row)
 
 
 def load_instrument_sets(adapter: QlibAdapter) -> tuple[set[str], set[str], pd.DataFrame, pd.DataFrame]:
