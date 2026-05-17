@@ -101,26 +101,32 @@ Qsys 按用途分为三层运行域：
 ### 3.1 Data pipeline
 
 职责：
-- 数据抓取
-- raw 存储
-- qlib 转换
-- universe 维护
+- universe 定义与维护
+- raw 数据抓取与存储
+- 核心行情字段 qlib 转换
+- 工具文件同步（instruments / calendar）
 - readiness / health check
+- audit 记录
 
-当前代码骨架：
-- `scripts/run_update.py`
-- `scripts/update_data_all.py`
-- `scripts/create_instrument_csi300.py`
-- `qsys/data/collector.py`
-- `qsys/data/adapter.py`
-- `qsys/data/storage.py`
-- `qsys/data/health.py`
+流程：`universe → raw fetch → qlib convert → instrument refresh → readiness check → audit`
+
+当前代码骨架（数据层）：
+- `qsys/data/collector.py` — Tushare 数据拉取
+- `qsys/data/storage.py` — 本地 feather + SQLite 存储
+- `qsys/data/adapter.py` — qlib 转换与对齐
+- `qsys/data/health.py` — 数据健康检查
+- `qsys/ops/qlib_sync.py` — qlib 增量/全量同步
+
+当前入口（日常管道）：
+- `scripts/ops/sync_csi800_daily.py` — CSI800 日频增量同步（systemd timer 触发）
+  - 解析交易日 → 获取成分股 → 预检 → 拉 raw → qlib 转换 → 刷新工具文件 → readiness 检查 → 写 audit → Telegram 通知
 
 核心产物：
-- `data/raw/`
-- `data/qlib_bin/`
+- `data/raw/daily/` — 日线 Feather 文件
+- `data/qlib_bin/` — QLib serving 数据
+- `data/audit/` — 每日 sync audit JSON
 - instruments / calendar / feature dump
-- data status report
+- data status report（readiness check 内嵌在 sync 中）
 
 ### 3.2 Research pipeline
 
@@ -254,13 +260,15 @@ Qsys 顶层协作统一围绕以下对象：
 - 不承载复杂业务规则
 - 新能力优先并入已有入口，不轻易新长脚本
 
-当前建议保留的主入口：
-- `run_update.py`
-- `run_train.py`
-- `run_backtest.py`
-- `run_daily_trading.py`
-- `run_post_close.py`
-- `run_strict_eval.py`
+当前建议保留的主入口（数据层）：
+- `scripts/ops/sync_csi800_daily.py` — CSI800 日频增量同步
+
+当前建议保留的主入口（研究/运营）：
+- `scripts/run_train.py`
+- `scripts/run_backtest.py`
+- `scripts/run_daily_trading.py`
+- `scripts/run_post_close.py`
+- `scripts/run_strict_eval.py`
 
 ### 5.2 `qsys/data`
 

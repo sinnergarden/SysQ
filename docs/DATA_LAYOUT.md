@@ -9,12 +9,12 @@ SysQ 只保留下面几层职责：
 - `data/models/`：模型与生产 manifest。
 - `data/meta/`：长期小型账本与映射；默认账户主库是 `data/meta/real_account.db`，另含 `meta.db`（股票基本信息、交易日历、龙虎榜、两融等 SQLite 表）。
 - `data/derived/`：从 `daily/{date}` 抽出的长期结构化汇总表。
-- `data/audit/`：每日数据同步 audit 记录（JSON）。
+- `data/audit/`：每日数据同步 audit 记录（JSON），由 `sync_csi800_daily.py` 写入，每文件对应一次 sync 运行结果。
 - `daily/{date}/`：单个交易日的 evidence package。
 - `experiments/`：研究、训练、回测、参数扫描等输出。
 - `runs/{date}/`：runner 级最小编排证据。
 
-一句话：`data/` 放长期主数据，`daily/` 放单日证据，`experiments/` 放研究输出。
+一句话：`data/` 放长期主数据，`data/audit/` 放数据管道审计轨迹，`daily/` 放单日证据，`experiments/` 放研究输出。
 
 ## 2. 当前真实布局
 
@@ -124,6 +124,22 @@ SysQ 只保留下面几层职责：
 - 结构化 JSON 报告默认放 `experiments/reports/`
 
 ## 6. 常用命令
+
+CSI800 每日增量同步（自动触发也手动可用）：
+
+```bash
+python scripts/ops/sync_csi800_daily.py --apply
+# 指定日期
+python scripts/ops/sync_csi800_daily.py --apply --target-date 2026-05-15
+# 只预览不写
+python scripts/ops/sync_csi800_daily.py
+```
+
+查看最新 audit 记录：
+
+```bash
+cat data/audit/sync_csi800_$(date +%Y%m%d).json
+```
 
 盘前：
 
