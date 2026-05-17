@@ -31,6 +31,7 @@ const state = {
     featureId: '',
     account: 'shadow',
     priceMode: 'fq',
+    universe: 'csi300',
   },
   backtest: {
     summary: null,
@@ -149,6 +150,7 @@ function readContextFromInputs() {
     featureId: byId('context-feature-id').value.trim(),
     account: byId('context-account').value.trim() || 'shadow',
     priceMode: byId('context-price-mode').value,
+    universe: byId('context-universe').value.trim() || 'csi300',
   };
 }
 
@@ -158,6 +160,7 @@ function syncInputsFromContext() {
   byId('context-feature-id').value = state.context.featureId || '';
   byId('context-account').value = state.context.account || 'shadow';
   byId('context-price-mode').value = state.context.priceMode || 'fq';
+  byId('context-universe').value = state.context.universe || 'csi300';
   if (state.context.runId && Array.from(byId('backtest-run-select').options || []).some((option) => option.value === state.context.runId)) {
     byId('backtest-run-select').value = state.context.runId;
   }
@@ -171,6 +174,7 @@ function updateContext(updates, { syncInputs = true, syncHash = true } = {}) {
   });
   if (!next.account) next.account = 'shadow';
   if (!next.priceMode) next.priceMode = 'fq';
+  if (!next.universe) next.universe = 'csi300';
   state.context = next;
   if (syncInputs) syncInputsFromContext();
   renderContextPresentation();
@@ -186,6 +190,7 @@ function updateLocationHash() {
   if (state.context.featureId) params.set('feature_id', state.context.featureId);
   if (state.context.account) params.set('account', state.context.account);
   if (state.context.priceMode) params.set('price_mode', state.context.priceMode);
+  if (state.context.universe) params.set('universe', state.context.universe);
   const hashValue = params.toString();
   if (window.location.hash.slice(1) === hashValue) return;
   history.replaceState(null, '', `${window.location.pathname}${hashValue ? `#${hashValue}` : ''}`);
@@ -202,9 +207,21 @@ function applyHashContext() {
     featureId: params.get('feature_id') || state.context.featureId,
     account: params.get('account') || state.context.account,
     priceMode: params.get('price_mode') || state.context.priceMode,
+    universe: params.get('universe') || state.context.universe,
   }, { syncInputs: true, syncHash: false });
   const view = params.get('view');
   if (view && viewMeta[view]) state.currentView = view;
+}
+
+async function refreshInstrumentList() {
+  try {
+    const universe = state.context.universe || 'csi300';
+    const response = await getJson(`/api/instruments?universe=${encodeURIComponent(universe)}&limit=5000`, { useCache: true });
+    const items = unwrapItems(response);
+    byId('instrument-list').innerHTML = items.map((item) =>
+      `<option value="${escapeHtml(item.ts_code)}">${escapeHtml(item.name || item.ts_code)}</option>`
+    ).join('');
+  } catch (_e) { /* instrument list is non-critical */ }
 }
 
 function renderKeyValueItem(label, value) {
@@ -244,6 +261,7 @@ function renderContextPresentation() {
     renderContextCard('Trade Date', tradeDateMarkup, state.context.tradeDate),
     renderContextCard('Instrument', instrumentMarkup, state.context.instrumentId),
     renderContextCard('Feature ID', featureMarkup, state.context.featureId),
+    renderContextCard('Universe', state.context.universe || 'csi300', state.context.universe),
   ].join('');
 
   byId('context-strip').innerHTML = [
@@ -251,6 +269,7 @@ function renderContextPresentation() {
     renderContextCard('Date', tradeDateMarkup, state.context.tradeDate),
     renderContextCard('Instrument', instrumentMarkup, state.context.instrumentId),
     renderContextCard('Account / Price', `<span class="entity-pill">${escapeHtml(state.context.account)} / ${escapeHtml(state.context.priceMode)}</span>`, JSON.stringify({ account: state.context.account, price_mode: state.context.priceMode })),
+    renderContextCard('Universe', state.context.universe || 'csi300', state.context.universe),
   ].join('');
 }
 
@@ -312,11 +331,13 @@ function bindPlotlyHandlers(root, handlers = {}) {
   if (!root || !root.on) return;
   if (typeof root.removeAllListeners === 'function') {
     root.removeAllListeners('plotly_click');
+    root.removeAllListeners('plotly_relayout');
   }
   if (handlers.onClick) root.on('plotly_click', handlers.onClick);
+  if (handlers.onRelayout) root.on('plotly_relayout', handlers.onRelayout);
 }
 
-function renderPlotlyChart(containerId, traces, layout, handlers = {}) {
+function renderPlotlyChart(containerId, traces, layout, handlers = {}, configOverrides = {}) {
   if (!hasPlotly()) {
     renderChartError(containerId, 'Plotly failed to load. Check CDN/network access and refresh.');
     return;
@@ -334,6 +355,7 @@ function renderPlotlyChart(containerId, traces, layout, handlers = {}) {
     modeBarButtonsToRemove: ['lasso2d', 'select2d', 'zoomIn2d', 'zoomOut2d', 'autoScale2d', 'resetScale2d'],
     scrollZoom: false,
     doubleClick: 'reset',
+    ...configOverrides,
   });
   Promise.resolve(renderResult).then(() => bindPlotlyHandlers(root, handlers));
 }
@@ -446,7 +468,7 @@ function buildHoldingSpans(markers = []) {
   return spans;
 }
 
-function renderCandlestickChart(containerId, bars, markers = [], instrumentId = '', { selectedDate = '', annotations = [] } = {}) {
+function renderCandlestickChart(containerId, bars, markers = [], instrumentId = '', { selectedDate = '', volumeBars = null } = {}) {
   const validBars = (bars || []).filter((item) => ['open', 'high', 'low', 'close'].every((key) => toNumber(item[key]) !== null));
   if (!validBars.length) {
     renderChartError(containerId, 'No OHLC data');
@@ -474,6 +496,9 @@ function renderCandlestickChart(containerId, bars, markers = [], instrumentId = 
 
   const holdingSpans = buildHoldingSpans(markers);
 
+  // Lookup for bar high by date, used to offset markers above candle tops
+  const highByDate = new Map(validBars.map((item) => [item.trade_date, Number(item.high)]));
+
   const traces = [{
     type: 'candlestick',
     name: instrumentId || 'OHLC',
@@ -488,13 +513,38 @@ function renderCandlestickChart(containerId, bars, markers = [], instrumentId = 
     hoverlabel: { namelength: -1 },
   }];
 
+  // Volume subplot (shares x-axis)
+  const volumePoints = (volumeBars || [])
+    .map((item) => ({
+      tradeDate: item.trade_date,
+      value: toNumber(item.volume),
+      color: toNumber(item.close) >= toNumber(item.open) ? CHART_COLORS.candleUp : CHART_COLORS.candleDown,
+    }))
+    .filter((item) => item.value !== null);
+  if (volumePoints.length) {
+    traces.push({
+      type: 'bar',
+      name: 'Volume',
+      xaxis: 'x',
+      yaxis: 'y2',
+      x: volumePoints.map((item) => item.tradeDate),
+      y: volumePoints.map((item) => item.value),
+      marker: { color: volumePoints.map((item) => item.color), opacity: 0.78 },
+      hovertemplate: 'Volume<br>%{x}<br>%{y:.0f}<extra></extra>',
+    });
+  }
+
   if (holdingSpans.length) {
     traces.push({
       type: 'scatter',
       mode: 'lines',
       name: 'Holding Span',
       x: holdingSpans.flatMap((item) => [item.startDate, item.endDate, null]),
-      y: holdingSpans.flatMap((item) => [item.startPrice, item.endPrice, null]),
+      y: holdingSpans.flatMap((item) => {
+        const y0 = (highByDate.get(item.startDate) || item.startPrice) * 1.015;
+        const y1 = (highByDate.get(item.endDate) || item.endPrice) * 1.015;
+        return [y0, y1, null];
+      }),
       line: { color: '#7d8f69', width: 2, dash: 'dot' },
       customdata: holdingSpans.flatMap((item) => [[item.quantity, item.pnlPct], [item.quantity, item.pnlPct], [null, null]]),
       hovertemplate: 'Holding Span<br>%{x}<br>Price %{y:.2f}<br>Qty %{customdata[0]:.0f}<br>PnL %{customdata[1]:+.2%}<extra></extra>',
@@ -506,10 +556,10 @@ function renderCandlestickChart(containerId, bars, markers = [], instrumentId = 
       mode: 'markers',
       name: 'Replay Buy Order',
       x: orderBuyMarkers.map((item) => item.tradeDate),
-      y: orderBuyMarkers.map((item) => item.value),
-      marker: { color: CHART_COLORS.strategy, size: 9, symbol: 'circle-open' },
-      customdata: orderBuyMarkers.map((item) => [item.quantity]),
-      hovertemplate: 'Replay Buy Order<br>%{x}<br>Price %{y:.2f}<br>Qty %{customdata[0]:.0f}<extra></extra>',
+      y: orderBuyMarkers.map((item) => (highByDate.get(item.tradeDate) || item.value) * 1.015),
+      marker: { color: CHART_COLORS.strategy, size: 9, symbol: 'circle-open', line: { color: CHART_COLORS.strategy, width: 1.8 } },
+      customdata: orderBuyMarkers.map((item) => [item.quantity, item.value]),
+      hovertemplate: 'Replay Buy Order<br>%{x}<br>Price %{customdata[1]:.2f}<br>Qty %{customdata[0]:.0f}<extra></extra>',
     });
   }
   if (orderSellMarkers.length) {
@@ -518,10 +568,10 @@ function renderCandlestickChart(containerId, bars, markers = [], instrumentId = 
       mode: 'markers',
       name: 'Replay Sell Order',
       x: orderSellMarkers.map((item) => item.tradeDate),
-      y: orderSellMarkers.map((item) => item.value),
-      marker: { color: CHART_COLORS.accent, size: 9, symbol: 'circle-open' },
-      customdata: orderSellMarkers.map((item) => [item.quantity]),
-      hovertemplate: 'Replay Sell Order<br>%{x}<br>Price %{y:.2f}<br>Qty %{customdata[0]:.0f}<extra></extra>',
+      y: orderSellMarkers.map((item) => (highByDate.get(item.tradeDate) || item.value) * 1.015),
+      marker: { color: CHART_COLORS.accent, size: 9, symbol: 'circle-open', line: { color: CHART_COLORS.accent, width: 1.8 } },
+      customdata: orderSellMarkers.map((item) => [item.quantity, item.value]),
+      hovertemplate: 'Replay Sell Order<br>%{x}<br>Price %{customdata[1]:.2f}<br>Qty %{customdata[0]:.0f}<extra></extra>',
     });
   }
   if (buyMarkers.length) {
@@ -530,10 +580,10 @@ function renderCandlestickChart(containerId, bars, markers = [], instrumentId = 
       mode: 'markers',
       name: 'Filled Buy',
       x: buyMarkers.map((item) => item.tradeDate),
-      y: buyMarkers.map((item) => item.value),
-      marker: { color: CHART_COLORS.strategy, size: 11, symbol: 'triangle-up' },
-      customdata: buyMarkers.map((item) => [item.quantity]),
-      hovertemplate: 'Filled Buy<br>%{x}<br>Price %{y:.2f}<br>Qty %{customdata[0]:.0f}<extra></extra>',
+      y: buyMarkers.map((item) => (highByDate.get(item.tradeDate) || item.value) * 1.015),
+      marker: { color: CHART_COLORS.strategy, size: 10, symbol: 'triangle-up-open', line: { color: CHART_COLORS.strategy, width: 2 } },
+      customdata: buyMarkers.map((item) => [item.quantity, item.value]),
+      hovertemplate: 'Filled Buy<br>%{x}<br>Price %{customdata[1]:.2f}<br>Qty %{customdata[0]:.0f}<extra></extra>',
     });
   }
   if (sellMarkers.length) {
@@ -542,55 +592,80 @@ function renderCandlestickChart(containerId, bars, markers = [], instrumentId = 
       mode: 'markers',
       name: 'Filled Sell',
       x: sellMarkers.map((item) => item.tradeDate),
-      y: sellMarkers.map((item) => item.value),
-      marker: { color: CHART_COLORS.accent, size: 11, symbol: 'triangle-down' },
-      customdata: sellMarkers.map((item) => [item.quantity]),
-      hovertemplate: 'Filled Sell<br>%{x}<br>Price %{y:.2f}<br>Qty %{customdata[0]:.0f}<extra></extra>',
+      y: sellMarkers.map((item) => (highByDate.get(item.tradeDate) || item.value) * 1.015),
+      marker: { color: CHART_COLORS.accent, size: 10, symbol: 'triangle-down-open', line: { color: CHART_COLORS.accent, width: 2 } },
+      customdata: sellMarkers.map((item) => [item.quantity, item.value]),
+      hovertemplate: 'Filled Sell<br>%{x}<br>Price %{customdata[1]:.2f}<br>Qty %{customdata[0]:.0f}<extra></extra>',
     });
   }
 
+  const hasVolume = volumePoints && volumePoints.length > 0;
   const layout = plotlyBaseLayout({
     title: `${instrumentId || 'Instrument'} OHLC`,
-    height: 460,
+    height: hasVolume ? 580 : 460,
     yAxisTitle: 'Price',
     hoverMode: 'x',
     showRangeSlider: false,
     selectedDate,
   });
-  const annotationShapes = (annotations || [])
-    .map((item) => ({
+  layout.yaxis.fixedrange = true;
+  layout.xaxis.fixedrange = false;
+  layout.dragmode = 'pan';
+  if (hasVolume) {
+    layout.yaxis.domain = [0.3, 1];
+    layout.yaxis2 = {
+      domain: [0, 0.28],
+      title: { text: 'Volume', font: { size: 11, color: CHART_COLORS.axis } },
+      gridcolor: CHART_COLORS.grid,
+      zerolinecolor: CHART_COLORS.grid,
+      tickfont: { color: CHART_COLORS.axis },
+      fixedrange: true,
+    };
+  }
+  if (selectedDate) {
+    layout.shapes = [{
       type: 'line',
-      x0: toDateLabel(item.trade_date),
-      x1: toDateLabel(item.trade_date),
+      x0: selectedDate,
+      x1: selectedDate,
       xref: 'x',
       y0: 0,
       y1: 1,
       yref: 'paper',
-      line: {
-        color: item.type === 'signal_date' ? '#7d8f69' : '#c27b4f',
-        width: item.type === 'signal_date' ? 1.5 : 2,
-        dash: item.type === 'signal_date' ? 'dash' : 'dot',
-      },
-    }))
-    .filter((item) => item.x0);
-  layout.shapes = [...(layout.shapes || []), ...annotationShapes];
-  layout.annotations = (annotations || [])
-    .map((item) => ({
-      x: toDateLabel(item.trade_date),
-      y: 1,
-      yref: 'paper',
-      xref: 'x',
-      text: escapeHtml(item.label || item.type || ''),
-      showarrow: false,
-      yshift: 12,
-      font: { size: 10, color: item.type === 'signal_date' ? '#7d8f69' : '#c27b4f' },
-      bgcolor: 'rgba(255,252,245,0.92)',
-      bordercolor: 'rgba(194,123,79,0.22)',
-      borderwidth: 1,
-    }))
-    .filter((item) => item.x);
+      line: { color: CHART_COLORS.accent, width: 2, dash: 'dot' },
+    }];
+  }
 
-  renderPlotlyChart(containerId, traces, layout);
+  renderPlotlyChart(containerId, traces, layout, {
+    onRelayout: (event) => {
+      // After x-axis zoom/pan, auto-fit y-axes to visible data
+      if (!event || !('xaxis.range[0]' in event || 'xaxis.range[1]' in event)) return;
+      const root = byId(containerId);
+      if (!root || !root.data) return;
+      const x0 = new Date(event['xaxis.range[0]']).getTime();
+      const x1 = new Date(event['xaxis.range[1]']).getTime();
+      if (!x0 || !x1) return;
+
+      // Find min/max of visible OHLC data
+      let yMin = Infinity, yMax = -Infinity;
+      let volMax = 0;
+      const dates = root.data[0].x;
+      const highs = root.data[0].high;
+      const lows = root.data[0].low;
+      const volumes = volumePoints.length ? root.data[1].y : null;
+      for (let i = 0; i < dates.length; i++) {
+        const t = new Date(dates[i]).getTime();
+        if (t >= x0 && t <= x1) {
+          if (highs[i] > yMax) yMax = highs[i];
+          if (lows[i] < yMin) yMin = lows[i];
+          if (volumes && volumes[i] > volMax) volMax = volumes[i];
+        }
+      }
+      const pad = (yMax - yMin) * 0.08 || yMax * 0.05;
+      const update = { 'yaxis.range': [yMin - pad, yMax + pad] };
+      if (volMax > 0) update['yaxis2.range'] = [0, volMax * 1.15];
+      window.Plotly.relayout(root, update).catch(() => {});
+    },
+  }, { scrollZoom: true });
 }
 
 function rebaseSeries(values, base = 100) {
@@ -1467,19 +1542,25 @@ async function loadCase() {
     const priceMode = state.context.priceMode;
     const backtestRunId = state.context.runId;
     if (!executionDate || !instrumentId) throw new Error('Trade date and instrument are required');
-    const casePayload = await getJson(`/api/cases/${executionDate}:${instrumentId}:${priceMode}`, { useCache: false });
-    const payload = unwrapData(casePayload);
+
+    // Fire bars (fast) and case bundle (slow) in parallel
+    const barsPromise = getJson(`/api/bars?instrument_id=${encodeURIComponent(instrumentId)}&price_mode=${priceMode}`, { useCache: false }).catch(() => null);
+    const casePromise = getJson(`/api/cases/${executionDate}:${instrumentId}:${priceMode}`, { useCache: false });
+
     let backtestTrades = [];
     if (backtestRunId) {
       const tradePayload = await getJson(`/api/backtest-runs/${backtestRunId}/orders?instrument_id=${encodeURIComponent(instrumentId)}&limit=5000`, { useCache: false });
       backtestTrades = unwrapItems(tradePayload);
     }
-    state.caseData = payload;
 
     const priceKeys = priceMode === 'fq'
       ? { open: 'adj_open', high: 'adj_high', low: 'adj_low', close: 'adj_close' }
       : { open: 'open', high: 'high', low: 'low', close: 'close' };
-    const chartBars = (payload.bars || []).map((item) => ({
+
+    // ---- STEP 1: render candlestick chart from fast bars endpoint ----
+    const barsResponse = await barsPromise;
+    const rawBars = barsResponse ? unwrapItems(barsResponse) : [];
+    const chartBars = rawBars.map((item) => ({
       trade_date: toDateLabel(item.trade_date),
       open: item[priceKeys.open],
       high: item[priceKeys.high],
@@ -1487,6 +1568,28 @@ async function loadCase() {
       close: item[priceKeys.close],
       volume: item.volume,
     }));
+    if (chartBars.length) {
+      renderCandlestickChart('case-bars-chart', chartBars, [], instrumentId, {
+        selectedDate: toDateLabel(executionDate),
+        volumeBars: chartBars,
+      });
+      const loadedStart = chartBars[0].trade_date;
+      const loadedEnd = chartBars[chartBars.length - 1].trade_date;
+      byId('case-meta').innerHTML = [
+        renderInstrumentLink(instrumentId, executionDate),
+        makeBadge(priceMode),
+        renderTradeDateLink(toDateLabel(executionDate)),
+        `<span class="muted-text">${escapeHtml(loadedStart)} -> ${escapeHtml(loadedEnd)}</span>`,
+        renderActionButton('Raw', `setCasePriceMode('raw')`, priceMode === 'raw' ? 'primary' : 'ghost'),
+        renderActionButton('FQ', `setCasePriceMode('fq')`, priceMode === 'fq' ? 'primary' : 'ghost'),
+      ].filter(Boolean).join(' ');
+    }
+
+    // ---- STEP 2: wait for full case bundle (features, signal, benchmarks) ----
+    const caseResponse = await casePromise;
+    const payload = unwrapData(caseResponse);
+    state.caseData = payload;
+
     const replayOrderMarkers = (payload.orders || []).map((item) => ({
       trade_date: payload.trade_date,
       value: toNumber(item.price),
@@ -1502,38 +1605,13 @@ async function loadCase() {
       source: 'fill',
     })), ...replayOrderMarkers];
 
-    renderCandlestickChart('case-bars-chart', chartBars, tradeMarkers, payload.instrument_id, {
-      selectedDate: toDateLabel(payload.trade_date),
-      annotations: payload.annotations || [],
-    });
-    const dates = chartBars.map((item) => item.trade_date);
-    const benchmarkValues = alignSeriesByDate(dates, payload.benchmark_bars || [], 'close');
-    const secondaryBenchmarkValues = alignSeriesByDate(dates, payload.secondary_benchmark_bars || [], 'close');
-    renderSeriesChart('case-relative-chart', {
-      dates,
-      title: 'Relative to 100',
-      height: 290,
-      selectedDate: payload.trade_date,
-      series: [
-        { name: payload.instrument_id, values: rebaseSeries(chartBars.map((item) => item.close)), color: CHART_COLORS.strategy },
-        { name: payload.benchmark_label || 'CSI300', values: rebaseSeries(benchmarkValues), color: CHART_COLORS.benchmark, dash: '6 4' },
-        { name: payload.secondary_benchmark_label || 'SSE', values: rebaseSeries(secondaryBenchmarkValues), color: CHART_COLORS.neutral, dash: '2 5' },
-      ],
-      yAxisTitle: 'Rebased',
-    });
-    renderVolumeChart('case-volume-chart', chartBars, { selectedDate: payload.trade_date });
-
-    const loadedStart = chartBars[0]?.trade_date || '';
-    const loadedEnd = chartBars[chartBars.length - 1]?.trade_date || '';
-    byId('case-meta').innerHTML = [
-      renderInstrumentLink(payload.instrument_id, payload.trade_date),
-      makeBadge(payload.price_mode || state.context.priceMode),
-      renderTradeDateLink(toDateLabel(payload.trade_date)),
-      loadedStart && loadedEnd ? `<span class="muted-text">${escapeHtml(loadedStart)} -> ${escapeHtml(loadedEnd)}</span>` : '',
-      renderActionButton('Raw', `setCasePriceMode('raw')`, priceMode === 'raw' ? 'primary' : 'ghost'),
-      renderActionButton('FQ', `setCasePriceMode('fq')`, priceMode === 'fq' ? 'primary' : 'ghost'),
-    ].filter(Boolean).join(' ');
-    byId('case-signal').textContent = JSON.stringify({ signal_snapshot: payload.signal_snapshot, trade_markers: backtestTrades, links: payload.links }, null, 2);
+    // Update candlestick chart with trade markers if any
+    if (chartBars.length) {
+      renderCandlestickChart('case-bars-chart', chartBars, tradeMarkers, payload.instrument_id, {
+        selectedDate: toDateLabel(payload.trade_date),
+        volumeBars: chartBars,
+      });
+    }
     state.caseFeatureSnapshot = payload.feature_snapshot.features || {};
     byId('case-feature-count').textContent = `${Object.keys(state.caseFeatureSnapshot).length} features`;
     renderCaseFeatureTable(state.caseFeatureSnapshot);
@@ -1541,6 +1619,7 @@ async function loadCase() {
     renderCaseSignalSummary(payload, backtestTrades);
     renderCaseLinks(payload);
     byId('case-explanation').innerHTML = buildCaseExplanation(payload, backtestTrades);
+    byId('case-signal').textContent = JSON.stringify({ signal_snapshot: payload.signal_snapshot, trade_markers: backtestTrades, links: payload.links }, null, 2);
 
     const orderRows = [
       ...(payload.positions || []).map((item) => ({ ...item, record_type: 'Previous Position', date: item.as_of_date || payload.trade_date, instrument_id: item.instrument_id || item.symbol })),
@@ -1554,8 +1633,6 @@ async function loadCase() {
     byId('case-orders-table').innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
     byId('case-explanation').innerHTML = `<p>${escapeHtml(error.message)}</p>`;
     renderChartError('case-bars-chart', error.message);
-    renderChartError('case-relative-chart', error.message);
-    renderChartError('case-volume-chart', error.message);
   }
 }
 
@@ -1835,7 +1912,7 @@ async function loadFeatureHealth() {
     const instrumentId = state.context.instrumentId;
     if (!tradeDate || !instrumentId) throw new Error('Trade date and instrument are required');
     const featureNames = resolveFeatureNames();
-    const healthParams = new URLSearchParams({ trade_date: tradeDate, universe: 'csi300' });
+    const healthParams = new URLSearchParams({ trade_date: tradeDate, universe: state.context.universe || 'csi300' });
     featureNames.forEach((name) => healthParams.append('feature_names', name));
     const healthPayload = await getJson(`/api/feature-health?${healthParams.toString()}`, { useCache: false });
     const health = unwrapData(healthPayload);
@@ -1965,13 +2042,8 @@ async function renderReplayInstrumentChart(replay, instrumentId) {
         quantity: item.quantity,
         source: 'order',
       }));
-    const replayAnnotations = [
-      { type: 'signal_date', trade_date: replay.signal_date || replay.trade_date, label: 'Signal' },
-      { type: 'execution_date', trade_date: replay.execution_date || replay.trade_date, label: 'Execution' },
-    ];
     renderCandlestickChart('replay-instrument-chart', chartBars, replayOrderMarkers, instrumentId, {
       selectedDate: toDateLabel(replay.trade_date),
-      annotations: replayAnnotations,
     });
   } catch (error) {
     root.innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
@@ -2208,6 +2280,10 @@ function bindEvents() {
     updateContext({ priceMode: event.target.value }, { syncInputs: false, syncHash: true });
     if (state.currentView === 'case') await loadViewIfNeeded('case', { force: true });
   });
+  byId('context-universe').addEventListener('change', () => {
+    updateContext({ universe: byId('context-universe').value.trim() || 'csi300' }, { syncInputs: false, syncHash: true });
+    refreshInstrumentList();
+  });
   bindFeatureRegistryEvents();
 }
 
@@ -2218,5 +2294,6 @@ bootstrapDefaults().then(() => {
   syncInputsFromContext();
   renderContextPresentation();
   setView(state.currentView || 'backtest');
+  refreshInstrumentList();
   return loadViewIfNeeded(state.currentView || 'backtest', { force: true });
 });

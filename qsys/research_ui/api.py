@@ -44,19 +44,21 @@ def create_app(project_root: str | Path = ".") -> FastAPI:
     def list_instruments(
         q: str | None = None,
         limit: int = Query(200, ge=1, le=5000),
+        universe: str | None = None,
         repo: ResearchCockpitRepository = Depends(get_repo),
     ) -> dict:
-        items = repo.list_instruments(query=q, limit=limit)
-        return _envelope(items=items, meta={"query": q, "limit": limit, "resource": "instrument_list"})
+        items = repo.list_instruments(query=q, limit=limit, universe=universe)
+        return _envelope(items=items, meta={"query": q, "limit": limit, "universe": universe, "resource": "instrument_list"})
 
     @app.get("/api/search")
     def search_instruments(
         q: str = Query(..., min_length=1),
         limit: int = Query(50, ge=1, le=500),
+        universe: str | None = None,
         repo: ResearchCockpitRepository = Depends(get_repo),
     ) -> dict:
-        items = repo.list_instruments(query=q, limit=limit)
-        return _envelope(items=items, meta={"query": q, "limit": limit, "resource": "instrument_search"})
+        items = repo.list_instruments(query=q, limit=limit, universe=universe)
+        return _envelope(items=items, meta={"query": q, "limit": limit, "universe": universe, "resource": "instrument_search"})
 
     @app.get("/api/instruments/{instrument_id}")
     def get_instrument(
@@ -71,8 +73,8 @@ def create_app(project_root: str | Path = ".") -> FastAPI:
     @app.get("/api/bars")
     def get_bars(
         instrument_id: str,
-        start: str,
-        end: str,
+        start: str | None = None,
+        end: str | None = None,
         price_mode: str = Query("fq", pattern="^(raw|fq)$"),
         repo: ResearchCockpitRepository = Depends(get_repo),
     ) -> dict:
@@ -83,7 +85,7 @@ def create_app(project_root: str | Path = ".") -> FastAPI:
             raise HTTPException(status_code=404, detail=f"No bars found for instrument_id={instrument_id}, range={start}..{end}")
         return _envelope(
             items=items,
-            meta={"resource": "bars", "instrument_id": instrument_id, "start": start, "end": end, "price_mode": price_mode},
+            meta={"resource": "bars", "instrument_id": instrument_id, "start": start or "auto", "end": end or "auto", "price_mode": price_mode},
             instrument_id=instrument_id,
             start=start,
             end=end,

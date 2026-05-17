@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Qsys Research UI Cockpit</title>
-  <link rel="stylesheet" href="/ui/styles.css?v=20260412b" />
+  <link rel="stylesheet" href="/ui/styles.css?v=20260517g" />
   <script defer src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
 </head>
 <body>
@@ -51,7 +51,7 @@
         </div>
         <div class="global-filter-bar">
           <label>Trade Date<input id="context-trade-date" value="2025-01-03" /></label>
-          <label>Instrument<input id="context-instrument" value="000001.SZ" /></label>
+          <label>Instrument<input id="context-instrument" value="000001.SZ" list="instrument-list" /><datalist id="instrument-list"></datalist></label>
           <label>Backtest Run
             <select id="backtest-run-select">
               <option value="">loading...</option>
@@ -63,6 +63,13 @@
             <select id="context-price-mode">
               <option value="fq">fq</option>
               <option value="raw">raw</option>
+            </select>
+          </label>
+          <label>Universe
+            <select id="context-universe">
+              <option value="csi300" selected>CSI 300</option>
+              <option value="csi500">CSI 500</option>
+              <option value="csi800">CSI 800</option>
             </select>
           </label>
         </div>
@@ -182,13 +189,11 @@
             <div class="panel-head compact-head">
               <div>
                 <p class="eyebrow">Single Instrument Workbench</p>
-                <h3>Price / Benchmark / Volume</h3>
+                <h3>OHLC + Volume</h3>
               </div>
               <div id="case-meta" class="panel-actions"></div>
             </div>
             <div id="case-bars-chart" class="chart plotly-chart chart-hero"></div>
-            <div id="case-relative-chart" class="chart plotly-chart chart-mid"></div>
-            <div id="case-volume-chart" class="chart plotly-chart chart-mini"></div>
           </section>
 
           <section class="side-stack">
@@ -398,6 +403,6 @@
     </main>
   </div>
 
-  <script defer src="/ui/app.js?v=20260412b"></script>
+  <script defer src="/ui/app.js?v=20260517g"></script>
 </body>
 </html>

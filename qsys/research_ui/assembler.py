@@ -58,12 +58,29 @@ class ResearchCockpitRepository:
         self._backtest_report_index: dict[str, Path] = {}
         self._json_cache: dict[Path, dict[str, Any]] = {}
         self._model_meta_cache: dict[Path, dict[str, Any]] = {}
+        self._universe_cache: dict[str, set[str]] = {}
+        self._feature_snapshot_cache: dict[str, dict[str, Any]] = {}
         self._qlib_ready = False
 
-    def list_instruments(self, *, query: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
+    def _load_universe_set(self, universe: str) -> set[str]:
+        if universe in self._universe_cache:
+            return self._universe_cache[universe]
+        universe_path = self.project_root / "data" / "qlib_bin" / "instruments" / f"{universe}.txt"
+        symbols: set[str] = set()
+        if universe_path.exists():
+            df = pd.read_csv(universe_path, sep="\t", names=["symbol", "start_date", "end_date"])
+            symbols = set(df["symbol"].astype(str))
+        self._universe_cache[universe] = symbols
+        return symbols
+
+    def list_instruments(self, *, query: str | None = None, limit: int = 200, universe: str | None = None) -> list[dict[str, Any]]:
         frame = self._get_stock_list_frame()
         if frame is None or frame.empty:
             return []
+        if universe and universe != "all" and "ts_code" in frame.columns:
+            universe_set = self._load_universe_set(universe)
+            if universe_set:
+                frame = frame[frame["ts_code"].astype(str).isin(universe_set)]
         if query:
             q = str(query).strip().lower()
             mask = pd.Series(False, index=frame.index)
@@ -685,11 +702,13 @@ class ResearchCockpitRepository:
         if start_date is None:
             if raw_daily is not None and not raw_daily.empty and "trade_date" in raw_daily.columns:
                 start_date = str(raw_daily["trade_date"].astype(str).min())
+                start_date = self._normalize_trade_date_value(start_date)
             else:
                 start_date = (pd.Timestamp(trade_date) - pd.Timedelta(days=90)).strftime("%Y-%m-%d")
         if end_date is None:
             if raw_daily is not None and not raw_daily.empty and "trade_date" in raw_daily.columns:
                 end_date = str(raw_daily["trade_date"].astype(str).max())
+                end_date = self._normalize_trade_date_value(end_date)
             else:
                 end_date = trade_date
         frame = self.research_view.get_feature([instrument_id], fields, start_date, end_date)
@@ -739,21 +758,31 @@ class ResearchCockpitRepository:
         return frame.reset_index(drop=True)
 
     def _load_feature_snapshot(self, *, trade_date: str, instrument_id: str, feature_names: list[str] | None = None) -> dict[str, Any]:
+        cache_key = f"{trade_date}:{instrument_id}:{','.join(sorted(feature_names)) if feature_names else '_all'}"
+        cached = self._feature_snapshot_cache.get(cache_key)
+        if cached is not None:
+            return cached
         features = feature_names or self._list_snapshot_feature_names()
         qlib_fields = self._normalize_feature_fields(features)
         try:
             frame = self._load_qlib_features_batched([instrument_id], qlib_fields, trade_date, trade_date)
         except Exception:
-            return {"trade_date": trade_date, "instrument_id": instrument_id, "features": {}}
+            empty = {"trade_date": trade_date, "instrument_id": instrument_id, "features": {}}
+            self._feature_snapshot_cache[cache_key] = empty
+            return empty
         if frame.empty:
-            return {"trade_date": trade_date, "instrument_id": instrument_id, "features": {}}
+            empty = {"trade_date": trade_date, "instrument_id": instrument_id, "features": {}}
+            self._feature_snapshot_cache[cache_key] = empty
+            return empty
         row = frame.reset_index().iloc[-1].to_dict()
         payload = {}
         for key, value in row.items():
             if key in ("trade_date", "ts_code", "datetime", "instrument"):
                 continue
             payload[self._normalize_registry_feature_name(str(key))] = self._normalize_scalar(value)
-        return {"trade_date": trade_date, "instrument_id": instrument_id, "features": payload}
+        result = {"trade_date": trade_date, "instrument_id": instrument_id, "features": payload}
+        self._feature_snapshot_cache[cache_key] = result
+        return result
 
     def _normalize_trade_date_value(self, value: Any) -> str:
         if value is None:
