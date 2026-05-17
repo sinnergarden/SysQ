@@ -13,13 +13,28 @@ class ResearchDataView(IDataView):
         df = self.store.load_daily(code)
         if df is None:
             return None
-            
+
+        # Normalize date format: feather stores YYYYMMDD string, API queries use YYYY-MM-DD
+        if not df.empty and 'trade_date' in df.columns:
+            first = str(df['trade_date'].iloc[0])
+            if '-' not in first:
+                df['trade_date'] = pd.to_datetime(
+                    df['trade_date'].astype(str), format='%Y%m%d', errors='coerce'
+                ).dt.strftime('%Y-%m-%d')
+
+        # Coalesce duplicate columns from Tushare merge artifacts
+        for target, sources in [('close', ['close_x']), ('volume', ['vol'])]:
+            if target in df.columns:
+                for src in sources:
+                    if src in df.columns:
+                        df[target] = df[target].combine_first(df[src])
+
         # Filter by date
         mask = (df['trade_date'] >= start_date)
         if end_date:
             mask &= (df['trade_date'] <= end_date)
         df = df[mask].copy()
-        
+
         if df.empty:
             return None
             
