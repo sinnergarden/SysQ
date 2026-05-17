@@ -157,7 +157,7 @@ def run_shadow_presync(
     )
     manifest = load_json(context.manifest_path)
     manifest["date_resolution"] = date_resolution
-    atomicwrite_json(context.manifest_path, manifest)
+    atomic_write_json(context.manifest_path, manifest)
 
     universe_dir = context.run_dir / "01_universe"
     raw_dir = context.run_dir / "02_raw"
@@ -365,7 +365,7 @@ def run_shadow_presync(
     latest_payload["ready_for_daily_shadow"] = ready_for_daily_shadow
     latest_payload["overall_status"] = overall_status
     latest_payload["presync_summary_path"] = str(context.summary_path)
-    atomicwrite_json(context.latest_pointer_path, latest_payload)
+    atomic_write_json(context.latest_pointer_path, latest_payload)
     return {
         "run_id": context.run_id,
         "run_dir": str(context.run_dir),
