@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 import pandas as pd
 
+from qsys.config import cfg
+
 INDEX_CODE_MAP = {
     'sse': '000001.SH',
     'hs300': '000300.SH',
@@ -13,7 +15,9 @@ INDEX_CODE_MAP = {
 }
 
 
-def load_index_daily(index_name: str = 'hs300', root: str = '/home/liuming/.openclaw/workspace/SysQ/data/raw/index') -> pd.DataFrame:
+def load_index_daily(index_name: str = 'hs300', root: str | None = None) -> pd.DataFrame:
+    if root is None:
+        root = str(cfg.project_root / 'data' / 'raw' / 'index')
     code = INDEX_CODE_MAP[index_name]
     path = Path(root) / f'{code}.csv'
     df = pd.read_csv(path)

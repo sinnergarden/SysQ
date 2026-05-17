@@ -21,3 +21,7 @@ logs/
 config/settings.yaml
 !qsys/data
 .claude/
+backfill_checkpoint.json*
+.trae/
+.tmp/
+home/
