@@ -136,6 +136,8 @@ adapter._refresh_universe_instruments("csi300")
 全部通过 → `overall_status = "ready"`，退出码 0
 有失败 → `overall_status = "degraded"`，退出码 2
 
+Telegram 通知中会将检查拆为两组展示：**Data checks**（前 5 项）和 **Core fields**（6 字段 null 率）。
+
 ### Step 7: 写 Audit 记录
 
 结构化 JSON 写入 `data/audit/sync_csi800_{YYYYMMDD}.json`。
@@ -168,7 +170,7 @@ Readiness: 6/6 passed
 - 所有 6 项 readiness 检查通过
 - `overall_status = "ready"`
 - Audit 记录写入 `data/audit/`
-- Telegram channel 收到 ready 通知
+- Telegram 通知为可选集成（需配置 `QSYS_TELEGRAM_BOT_TOKEN`），通知失败不阻断流程
 
 ## 6. 常见故障
 

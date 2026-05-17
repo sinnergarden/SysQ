@@ -18,9 +18,9 @@ sync_csi800_daily.py
   └── readiness 检查（6 核心字段 null 率）      ← 特征审计在此
 ```
 
-### qlib 转换（特征工程）
+### qlib 转换（核心行情字段）
 
-raw 数据 → qlib bin 的转换由 `QlibAdapter` 处理：
+raw 数据 → qlib bin 的转换由 `QlibAdapter` 处理，每日同步 materialize 的是核心行情字段：
 
 ```python
 adapter = QlibAdapter()
@@ -29,9 +29,9 @@ adapter.convert_incremental(since="2026-05-15")   # 快速增量
 adapter.convert_fix(since="2026-05-15")            # 增量失败时 fallback
 ```
 
-转换结果写入 `data/qlib_bin/features/`，每只股票一个目录，包含：
-- `$open`, `$high`, `$low`, `$close`, `$volume`, `$factor` 等核心行情字段
-- 派生表达式字段（由 feature registry 定义）
+写入 `data/qlib_bin/features/` 的核心字段：
+- `$open`, `$high`, `$low`, `$close`, `$volume`, `$factor` — 行情基础
+- 衍生特征在 registry / qlib expression / runtime builder 层定义，不在 daily sync 中 materialize
 
 ### readiness 检查（特征审计）
 

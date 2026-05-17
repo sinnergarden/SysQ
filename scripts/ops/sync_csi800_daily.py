@@ -254,19 +254,33 @@ def _notify_telegram(report: dict) -> None:
     pre_check = steps.get("pre_check", {})
     raw_fetch = steps.get("raw_fetch", {})
     qlib_convert = steps.get("qlib_convert", {})
-    readiness = steps.get("readiness_check", {})
 
     constituent_count = universe.get("constituent_count", "?")
     up_to_date = pre_check.get("already_up_to_date", 0)
     fetched = raw_fetch.get("codes_fetched", raw_fetch.get("would_fetch", 0))
     qlib_elapsed = qlib_convert.get("elapsed_s", "?")
 
-    # Count readiness checks passed vs total
+    # Count readiness checks excluding _summary
     readiness_detail = report.get("readiness", {})
-    passed = sum(1 for k, v in readiness_detail.items()
-                 if isinstance(v, dict) and v.get("passed") is True)
-    total = sum(1 for k, v in readiness_detail.items()
-                if isinstance(v, dict) and "passed" in v)
+    data_checks_passed = sum(
+        1 for k, v in readiness_detail.items()
+        if k != "_summary" and k != "field_null_rates"
+        and isinstance(v, dict) and v.get("passed") is True
+    )
+    data_checks_total = sum(
+        1 for k, v in readiness_detail.items()
+        if k != "_summary" and k != "field_null_rates"
+        and isinstance(v, dict) and "passed" in v
+    )
+    # Count core field checks inside field_null_rates
+    field_rates = readiness_detail.get("field_null_rates", {})
+    if isinstance(field_rates, dict) and "passed" not in field_rates:
+        field_passed = sum(1 for v in field_rates.values()
+                           if isinstance(v, dict) and v.get("passed") is True)
+        field_total = sum(1 for v in field_rates.values()
+                          if isinstance(v, dict) and "passed" in v)
+    else:
+        field_passed = field_total = 0
 
     lines = [
         f"Qsys CSI800 Daily Sync — {target_date}",
@@ -276,15 +290,21 @@ def _notify_telegram(report: dict) -> None:
     if isinstance(qlib_elapsed, (int, float)):
         qlib_mode = qlib_convert.get("mode", "?")
         lines.append(f"Qlib convert ({qlib_mode}): {qlib_elapsed}s")
-    if total > 0:
-        lines.append(f"Readiness: {passed}/{total} passed")
+    if data_checks_total > 0:
+        lines.append(f"Data checks: {data_checks_passed}/{data_checks_total} passed")
+    if field_total > 0:
+        lines.append(f"Core fields: {field_passed}/{field_total} passed")
+
     text = "\n".join(lines)
 
-    result = send_telegram_message(text)
-    if result.get("status") == "success":
-        log.info("Telegram notification sent")
-    else:
-        log.warning(f"Telegram notification failed: {result.get('error')}")
+    try:
+        result = send_telegram_message(text)
+        if result.get("status") == "success":
+            log.info("Telegram notification sent")
+        else:
+            log.warning(f"Telegram notification failed: {result.get('error')}")
+    except Exception as exc:
+        log.warning(f"Telegram notification failed (exception): {exc}")
 
 
 def main() -> None:
