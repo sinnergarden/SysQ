@@ -1,38 +1,9 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
-
-
-def _json_default(value: Any) -> Any:
-    if isinstance(value, Path):
-        return str(value)
-    if isinstance(value, (pd.Timestamp,)):
-        return value.isoformat()
-    return value
-
-
-def write_json(path: str | Path, payload: dict[str, Any]) -> str:
-    path_obj = Path(path)
-    path_obj.parent.mkdir(parents=True, exist_ok=True)
-    path_obj.write_text(json.dumps(payload, indent=2, ensure_ascii=False, default=_json_default), encoding="utf-8")
-    return str(path_obj)
-
-
-def write_csv(path: str | Path, rows: list[dict[str, Any]], columns: list[str] | None = None) -> str:
-    path_obj = Path(path)
-    path_obj.parent.mkdir(parents=True, exist_ok=True)
-    frame = pd.DataFrame(rows)
-    if columns:
-        for column in columns:
-            if column not in frame.columns:
-                frame[column] = None
-        frame = frame[columns]
-    frame.to_csv(path_obj, index=False)
-    return str(path_obj)
 
 
 def training_contract_payload(
