@@ -24,10 +24,13 @@ class ResearchDataView(IDataView):
 
         # Coalesce duplicate columns from Tushare merge artifacts
         for target, sources in [('close', ['close_x']), ('volume', ['vol'])]:
-            if target in df.columns:
-                for src in sources:
-                    if src in df.columns:
-                        df[target] = df[target].combine_first(df[src])
+            for src in sources:
+                if src not in df.columns:
+                    continue
+                if target not in df.columns:
+                    df[target] = df[src]
+                else:
+                    df[target] = df[target].combine_first(df[src])
 
         # Filter by date
         mask = (df['trade_date'] >= start_date)

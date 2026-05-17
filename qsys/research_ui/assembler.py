@@ -702,11 +702,13 @@ class ResearchCockpitRepository:
         if start_date is None:
             if raw_daily is not None and not raw_daily.empty and "trade_date" in raw_daily.columns:
                 start_date = str(raw_daily["trade_date"].astype(str).min())
+                start_date = self._normalize_trade_date_value(start_date)
             else:
                 start_date = (pd.Timestamp(trade_date) - pd.Timedelta(days=90)).strftime("%Y-%m-%d")
         if end_date is None:
             if raw_daily is not None and not raw_daily.empty and "trade_date" in raw_daily.columns:
                 end_date = str(raw_daily["trade_date"].astype(str).max())
+                end_date = self._normalize_trade_date_value(end_date)
             else:
                 end_date = trade_date
         frame = self.research_view.get_feature([instrument_id], fields, start_date, end_date)
