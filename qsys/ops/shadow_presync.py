@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import csv
-import json
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+from qsys.utils.json_io import atomic_write_json, load_json, write_csv, write_json
 
 from qsys.data.adapter import QlibAdapter
 from qsys.ops.instrument_coverage import (
@@ -17,28 +17,11 @@ from qsys.ops.instrument_coverage import (
 from qsys.ops.manifest import finalize_run, format_run_id, initialize_run, update_stage_status
 from qsys.ops.qlib_sync import run_targeted_qlib_sync
 from qsys.ops.raw_sync import RAW_PLAN_COLUMNS, load_success_symbols_from_plan, run_targeted_raw_update
-from qsys.ops.state import atomic_write_json, load_json
 from qsys.ops.trade_date import resolve_daily_trade_date
 from qsys.ops.universe_sync import BOOTSTRAP_SUPPORTED_UNIVERSES, build_universe_snapshot
 
-
 DEFAULT_UNIVERSE = "csi300"
 SUPPORTED_UNIVERSES = set(BOOTSTRAP_SUPPORTED_UNIVERSES)
-
-
-def _write_json(path: Path, payload: dict[str, Any]) -> Path:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    return path
-
-
-def _write_csv(path: Path, rows: list[dict[str, Any]], fieldnames: list[str]) -> Path:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(rows)
-    return path
 
 
 def _set_stage(context, *, stage_name: str, status: str, message: str, artifact_pointers: dict[str, Any] | None = None, started_at: str | None = None) -> None:

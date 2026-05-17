@@ -80,6 +80,7 @@ class ConfigManager:
         config = self._config or {}
         value = config.get("tushare_feature_config")
         if isinstance(value, dict):
+            self._verify_tushare_config(value)
             return value
         return {
             "collector": {
@@ -174,6 +175,24 @@ class ConfigManager:
                 ]
             }
         }
+
+    @staticmethod
+    def _verify_tushare_config(value: dict) -> None:
+        """Warn if YAML tushare_feature_config is missing expected collector keys."""
+        COLLECTOR_EXPECTED = {
+            "expected_extra_cols", "numeric_extra_cols", "non_numeric_cols",
+            "non_negative_cols", "interfaces", "margin_cols",
+            "financial_cols", "moneyflow_fields", "derived_fields",
+        }
+        collector = value.get("collector", {})
+        missing = COLLECTOR_EXPECTED - set(collector.keys())
+        if missing:
+            import logging
+            logging.warning(
+                "settings.yaml tushare_feature_config.collector missing keys: %s "
+                "(falling back to per-call defaults in collector.py)",
+                sorted(missing),
+            )
 
 # Global instance
 cfg = ConfigManager()

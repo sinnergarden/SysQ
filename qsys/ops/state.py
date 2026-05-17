@@ -59,3 +59,7 @@ def summarize_overall_status(stage_statuses: list[str]) -> str:
 
 def write_latest_pointer(path: str | Path, payload: dict[str, Any]) -> Path:
     return atomic_write_json(path, payload)
+
+
+# Re-export canonical I/O for backward compat
+from qsys.utils.json_io import atomic_write_json, load_json  # noqa: F401, E402
