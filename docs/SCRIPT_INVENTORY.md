@@ -17,9 +17,8 @@ Legacy aliases `scripts/run_plan.py` and `scripts/run_reconcile.py` have been re
 | Group | Scripts | Why kept |
 |--------|---------|----------|
 | Daily ops | `run_daily_trading.py`, `run_post_close.py`, `run_signal_quality.py`, `run_intent_staging_example.py`, `run_minimal_kernel.py` | Current production and staging flow |
-| Data pipeline | `scripts/ops/sync_csi800_daily.py` | CSI800 daily incremental sync (main entry, systemd timer) |
-| Legacy data pipeline | `run_update.py`, `update_data_all.py`, `create_instrument_csi300.py`, `dump_bin.py` | Mostly superseded by sync_csi800_daily.py; kept for manual diagnostics |
-| Ops scripts | `scripts/ops/fetch_csi800_full.py`, `scripts/ops/backfill_csi800_history.py` | Full re-fetch helpers; see `deploy/systemd/` for timer setup |
+| Data pipeline | `run_update.py`, `update_data_all.py`, `create_instrument_csi300.py`, `dump_bin.py` | Active data refresh and qlib bin maintenance |
+| Ops scripts | `scripts/ops/sync_csi800_daily.py`, `scripts/ops/fetch_csi800_full.py` | CSI800 daily incremental sync and full re-fetch; see `deploy/systemd/` for timer setup |
 | Training / research | `run_train.py`, `run_backtest.py`, `run_strict_eval.py`, `run_compare.py`, `run_feature_build.py`, `run_feature_experiment.py`, `run_feature_ablation.py`, `run_feature_backtest_report.py`, `run_feature_readiness_audit.py` | Current model and feature workflow |
 | Debug / manual utilities | `debug_data_quality.py`, `debug_model_performance.py`, `check_amount.py`, `rebuild_qlib_bin.py`, `setup_openclaw_qsys_cron.sh` | Still useful for manual diagnostics or maintenance; not on the daily ops critical path |
 

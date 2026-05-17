@@ -10,8 +10,8 @@
 
 ## 2. 日常操作顺序
 
-0. **CSI800 数据同步**（自动）：每日 21:30 由 systemd timer 触发 `sync_csi800_daily.py --apply`，拉取最新日线数据 → 转换 Qlib → 刷新工具文件 → readiness 检查 → 写 audit → Telegram 通知。同步完成后会收到 channel 通知，包含状态摘要和检查结果。
-1. 先做数据健康检查（sync 的 readiness check 已覆盖）。
+0. **CSI800 数据同步**（自动）：每日 21:30 由 systemd timer 触发 `sync_csi800_daily.py`，拉取最新日线数据 → 转换 Qlib → 更新工具文件 → 写 audit。日志在 `~/openclaw/logs/sync_csi800_daily.log`。
+1. 先做数据健康检查。
 2. 跑盘前：生成 signal basket、plan、order intents、report、manifest。
 3. 盘中执行订单，不复制账户主库到 `daily/`。
 4. 跑盘后：回写 snapshot、做 reconciliation、写报告与 manifest。
@@ -64,8 +64,8 @@ python3 scripts/rollup_daily_artifacts.py --execution_date 2026-04-03
 
 ## 5. 导航
 
-- 数据链路 SOP（CSI800 日频同步全流程）：`docs/ops/DATA_PIPELINE_SOP.md`
-- CSI800 日频同步脚本：`scripts/ops/sync_csi800_daily.py`（systemd: `qsys-csi800-daily-sync.{service,timer}`）
+- 数据链路：`docs/ops/DATA_PIPELINE_SOP.md`
+- CSI800 日频同步：`scripts/ops/sync_csi800_daily.py`（systemd: `qsys-csi800-daily-sync.{service,timer}`）
 - 盘前：`docs/ops/PRE_OPEN_SOP.md`
 - 盘后：`docs/ops/POST_CLOSE_SOP.md`
 - 目录契约：`docs/DATA_LAYOUT.md`
