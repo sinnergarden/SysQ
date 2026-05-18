@@ -57,7 +57,11 @@ def _resolve_target_date(end_date: str | None) -> str:
         if cal is not None and not cal.empty and "is_open" in cal.columns and "cal_date" in cal.columns:
             open_days = sorted(cal[cal["is_open"] == 1]["cal_date"].astype(str).tolist())
             today_str = datetime.now().strftime("%Y%m%d")
-            past = [d for d in open_days if d < today_str]
+            now = datetime.now()
+            # Before 16:00 the market hasn't closed yet — can't use today's data
+            # After 16:00 today's data should be available
+            use_today = today_str in open_days and now.hour >= 16
+            past = [d for d in open_days if (d <= today_str if use_today else d < today_str)]
             if past:
                 return past[-1]
     except Exception as e:

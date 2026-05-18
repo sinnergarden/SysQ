@@ -289,12 +289,25 @@ class QlibAdapter:
         requested = []
         native = []
         derived = []
+        metadata = []
         derived_candidates = {
             feature
             for group in list_feature_groups().values()
             for feature in group.get("features", [])
         }
         derived_candidates.update(["inventory_yoy", "ar_yoy"])
+        metadata_candidates = {
+            "industry",
+            "market",
+            "symbol",
+            "name",
+            "area",
+            "list_date",
+            "market_cap_bucket",
+            "liquidity_bucket",
+            "size",
+            "beta",
+        }
 
         for field in fields:
             if not isinstance(field, str):
@@ -305,9 +318,11 @@ class QlibAdapter:
             requested.append(name)
             if name in derived_candidates:
                 derived.append(name)
+            elif name in metadata_candidates:
+                metadata.append(name)
             else:
                 native.append(name)
-        return requested, native, derived
+        return requested, native, derived, metadata
 
     @staticmethod
     def _semantic_support_fields():
@@ -427,11 +442,92 @@ class QlibAdapter:
         feat.index = feat.index.rename(["datetime", "instrument"])
         return feat[list(derived_fields)]
 
+    @staticmethod
+    def _bucketize_series(values: pd.Series) -> pd.Series:
+        clean = pd.to_numeric(values, errors="coerce")
+        out = pd.Series(pd.NA, index=values.index, dtype="object")
+        valid = clean.dropna()
+        if valid.empty:
+            return out
+        bucket_count = min(5, valid.nunique())
+        if bucket_count <= 1:
+            out.loc[valid.index] = "bucket_1"
+            return out
+        labels = [f"bucket_{i}" for i in range(1, bucket_count + 1)]
+        try:
+            bucketed = pd.qcut(valid, q=bucket_count, labels=labels, duplicates="drop")
+            out.loc[valid.index] = bucketed.astype(str)
+        except Exception:
+            ranked = valid.rank(method="first")
+            bucketed = pd.qcut(ranked, q=bucket_count, labels=labels, duplicates="drop")
+            out.loc[valid.index] = bucketed.astype(str)
+        return out
+
+    def _load_metadata_frame(self) -> pd.DataFrame:
+        try:
+            store = StockDataStore()
+            meta = store.get_stock_list()
+        except Exception:
+            return pd.DataFrame(columns=["instrument", "symbol", "name", "area", "industry", "market", "list_date"])
+        if meta is None or meta.empty:
+            return pd.DataFrame(columns=["instrument", "symbol", "name", "area", "industry", "market", "list_date"])
+        meta = meta.rename(columns={"ts_code": "instrument"}).copy()
+        for col in ["instrument", "symbol", "name", "area", "industry", "market", "list_date"]:
+            if col not in meta.columns:
+                meta[col] = pd.NA
+        return meta[["instrument", "symbol", "name", "area", "industry", "market", "list_date"]].drop_duplicates("instrument")
+
+    def _build_metadata_features(self, base_df: pd.DataFrame, metadata_fields: list[str]) -> pd.DataFrame:
+        if base_df is None or base_df.empty:
+            return pd.DataFrame(columns=metadata_fields)
+        frame = base_df.reset_index()[["datetime", "instrument"]].copy()
+        meta = self._load_metadata_frame()
+        if not meta.empty:
+            frame = frame.merge(meta, on="instrument", how="left")
+        if "size" in metadata_fields:
+            size_source = None
+            for col in ["$circ_mv", "$total_mv", "circ_mv", "total_mv"]:
+                if col in base_df.columns:
+                    size_source = pd.to_numeric(base_df[col], errors="coerce")
+                    break
+            frame["size"] = np.log(size_source.where(size_source > 0)) if size_source is not None else np.nan
+        if "market_cap_bucket" in metadata_fields:
+            source = None
+            for col in ["$circ_mv", "$total_mv", "circ_mv", "total_mv"]:
+                if col in base_df.columns:
+                    source = pd.to_numeric(base_df[col], errors="coerce")
+                    break
+            if source is not None:
+                frame["_market_cap_source"] = source.to_numpy()
+                frame["market_cap_bucket"] = frame.groupby("datetime")["_market_cap_source"].transform(self._bucketize_series)
+                frame = frame.drop(columns=["_market_cap_source"])
+            else:
+                frame["market_cap_bucket"] = pd.Series(pd.NA, index=frame.index, dtype="object")
+        if "liquidity_bucket" in metadata_fields:
+            source = None
+            for col in ["$amount", "$volume", "amount", "volume"]:
+                if col in base_df.columns:
+                    source = pd.to_numeric(base_df[col], errors="coerce")
+                    break
+            if source is not None:
+                frame["_liquidity_source"] = source.to_numpy()
+                frame["liquidity_bucket"] = frame.groupby("datetime")["_liquidity_source"].transform(self._bucketize_series)
+                frame = frame.drop(columns=["_liquidity_source"])
+            else:
+                frame["liquidity_bucket"] = pd.Series(pd.NA, index=frame.index, dtype="object")
+        if "beta" in metadata_fields and "beta" not in frame.columns:
+            frame["beta"] = np.nan
+        frame = frame.set_index(["datetime", "instrument"]).sort_index()
+        for field in metadata_fields:
+            if field not in frame.columns:
+                frame[field] = np.nan
+        return frame[metadata_fields]
+
     def get_features(self, instruments, fields, start_time=None, end_time=None, freq="day", inst_processors=None):
         inst = self.normalize_instruments(instruments)
         field_list = self._normalize_field_list(fields)
-        requested_fields, native_fields, derived_fields = self._split_feature_fields(field_list)
-        if not derived_fields:
+        requested_fields, native_fields, derived_fields, metadata_fields = self._split_feature_fields(field_list)
+        if not derived_fields and not metadata_fields:
             return DatasetD.dataset(
                 inst,
                 field_list,
@@ -442,8 +538,15 @@ class QlibAdapter:
             )
 
         support_fields = [f for f in self._semantic_support_fields() if f not in native_fields]
-        native_request = native_fields + support_fields
-        base_start_time = self._semantic_lookback_start(start_time, end_time)
+        metadata_support_fields = []
+        if metadata_fields:
+            for field in ["$close", "$amount", "$volume", "$circ_mv", "$total_mv"]:
+                if field not in native_fields and field not in support_fields:
+                    metadata_support_fields.append(field)
+        native_request = native_fields + support_fields + metadata_support_fields
+        if not native_request:
+            native_request = ["$close"]
+        base_start_time = self._semantic_lookback_start(start_time, end_time) if derived_fields else start_time
         native_df = DatasetD.dataset(
             inst,
             native_request,
@@ -452,7 +555,7 @@ class QlibAdapter:
             freq=freq,
             inst_processors=inst_processors or []
         )
-        semantic_df = self._build_semantic_features(native_df, derived_fields, start_time=start_time, end_time=end_time)
+        semantic_df = self._build_semantic_features(native_df, derived_fields, start_time=start_time, end_time=end_time) if derived_fields else pd.DataFrame()
 
         native_current = native_df
         if start_time is not None or end_time is not None:
@@ -465,12 +568,18 @@ class QlibAdapter:
                     mask &= dt_index <= pd.Timestamp(end_time)
                 native_current = native_current[mask.to_numpy()]
 
+        metadata_df = self._build_metadata_features(native_current, metadata_fields) if metadata_fields else pd.DataFrame()
+
         if native_current is None or native_current.empty:
             combined = semantic_df.copy()
+            if combined is None or combined.empty:
+                combined = metadata_df.copy()
         else:
             combined = native_current.copy()
             if semantic_df is not None and not semantic_df.empty:
                 combined = combined.join(semantic_df, how="left")
+            if metadata_df is not None and not metadata_df.empty:
+                combined = combined.join(metadata_df, how="left")
 
         for field in requested_fields:
             if field not in combined.columns:
