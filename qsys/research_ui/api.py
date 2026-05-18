@@ -228,6 +228,20 @@ def create_app(project_root: str | Path = ".") -> FastAPI:
             raise HTTPException(status_code=404, detail=f"No group_returns payload found for run_id={run_id}")
         return _envelope(items=items, meta={"resource": "backtest_group_returns", "run_id": run_id}, run_id=run_id)
 
+    @app.get("/api/backtest-runs/{run_id}/sections")
+    def get_backtest_sections(
+        run_id: str,
+    ) -> dict:
+        repo = _fresh_repo_backtests()
+        try:
+            payload = repo.get_backtest_sections(run_id)
+            return _envelope(
+                data=payload,
+                meta={"resource": "backtest_sections", "run_id": run_id},
+            )
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
     @app.get("/api/backtest-runs/{run_id}/orders")
     def get_backtest_orders(
         run_id: str,

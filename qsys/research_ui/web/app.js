@@ -37,6 +37,8 @@ const state = {
     summary: null,
     daily: [],
     groupReturns: [],
+    sections: [],
+    sectionArtifacts: {},
     selectedDate: '',
     selectedInstrument: '',
     ordersByDate: new Map(),
@@ -900,32 +902,15 @@ function renderParameterSummary(summary) {
   const params = summary.parameter_summary || {};
   const rows = [
     ['Version', params.version_label || summary.display_label || '-'],
-    ['Internal ID', params.internal_run_id || summary.run_id || '-'],
     ['Model', summary.model_name || '-'],
     ['Feature Set', params.feature_set || summary.feature_set || '-'],
-    ['Model Type', params.model_type || '-'],
-    ['Label Type', params.label_type || '-'],
-    ['Strategy Type', params.strategy_type || '-'],
-    ['Feature Count', params.feature_count ?? '-'],
     ['Universe', params.universe || summary.universe || '-'],
     ['Top K', params.top_k ?? summary.top_k ?? '-'],
-    ['Rebalance Mode', params.rebalance_mode || '-'],
-    ['Rebalance Freq', params.rebalance_freq || '-'],
-    ['Inference Freq', params.inference_freq || '-'],
-    ['Retrain Freq', params.retrain_freq || '-'],
+    ['Label Type', params.label_type || '-'],
+    ['Strategy Type', params.strategy_type || '-'],
+    ['Rebalance', [params.rebalance_mode || '-', params.rebalance_freq || ''].filter(Boolean).join(' ')],
     ['Signal Date', params.signal_date || summary.train_range?.start || '-'],
     ['Execution Date', params.execution_date || summary.test_range?.end || '-'],
-    ['Training Mode', params.training_mode || '-'],
-    ['Train End Requested', params.train_end_requested || '-'],
-    ['Train End Effective', params.train_end_effective || '-'],
-    ['Infer Date', params.infer_date || '-'],
-    ['Last Train Sample', params.last_train_sample_date || '-'],
-    ['Max Label Date', params.max_label_date_used || '-'],
-    ['Label Mature', params.is_label_mature_at_infer_time ?? '-'],
-    ['Shadow Rejects', params.shadow_reject_count ?? '-'],
-    ['Suspicious Trades', params.suspicious_trade_count ?? '-'],
-    ['Price Mode', params.price_mode || summary.price_mode || '-'],
-    ['Model Path', params.model_path || '-'],
   ];
   root.innerHTML = rows.map(([key, value]) => `
     <div class="kv-item">
@@ -1028,6 +1013,240 @@ function renderBacktestGroupReturns() {
     tableKey: 'backtest-group-returns',
     emptyMessage: 'group_returns not_available',
   });
+}
+
+function renderBacktestSections() {
+  const runId = state.context.runId || byId('backtest-run-select').value;
+  if (!runId) {
+    renderChartError('backtest-monthly-chart', 'No run selected');
+    renderChartError('backtest-windows-chart', 'No run selected');
+    renderChartError('backtest-signal-windows-chart', 'No run selected');
+    renderChartError('backtest-return-dist-chart', 'No run selected');
+    renderChartError('backtest-ic-dist-chart', 'No run selected');
+    return;
+  }
+  getJson(`/api/backtest-runs/${runId}/sections`, { useCache: false })
+    .then((payload) => {
+      const data = unwrapData(payload) || {};
+      const artifacts = data.artifacts || {};
+      const sections = data.sections || [];
+      state.backtest.sections = sections;
+      state.backtest.sectionArtifacts = artifacts;
+      renderBacktestWeeklyChart(artifacts);
+      renderBacktestWindowsChart(artifacts);
+      renderBacktestCostGrid(sections, artifacts);
+      renderBacktestSignalWindowsChart(artifacts);
+      renderBacktestReturnDistChart(artifacts);
+      renderBacktestICDistChart(artifacts);
+    })
+    .catch(() => {
+      renderChartError('backtest-monthly-chart', 'Sections endpoint not available for this run');
+      renderChartError('backtest-windows-chart', 'Sections endpoint not available');
+      renderChartError('backtest-signal-windows-chart', 'Sections endpoint not available');
+      renderChartError('backtest-return-dist-chart', 'Sections endpoint not available');
+      renderChartError('backtest-ic-dist-chart', 'Sections endpoint not available');
+    });
+}
+
+function renderBacktestWeeklyChart(artifacts) {
+  // Prefer weekly returns, fall back to monthly
+  let data = artifacts.weekly_returns;
+  let labelKey = 'week';
+  let chartTitle = 'Weekly Returns (%)';
+  if (!data || !data.length) {
+    data = artifacts.monthly_returns;
+    labelKey = 'month';
+    chartTitle = 'Monthly Returns (%)';
+  }
+  if (!data || !data.length) {
+    renderChartError('backtest-monthly-chart', 'Returns not available');
+    return;
+  }
+  const labels = data.map((item) => item[labelKey]);
+  const returns = data.map((item) => Number(item.return) * 100);
+  const colors = returns.map((v) => v >= 0 ? CHART_COLORS.strategy : CHART_COLORS.danger);
+  const layout = plotlyBaseLayout({
+    title: chartTitle,
+    height: 280,
+    yAxisTitle: 'Return %',
+  });
+  layout.yaxis.zeroline = true;
+  layout.yaxis.zerolinecolor = 'rgba(31,41,51,0.5)';
+  renderPlotlyChart('backtest-monthly-chart', [{
+    type: 'bar',
+    x: labels,
+    y: returns,
+    marker: { color: colors },
+    hovertemplate: '%{x}<br>Return: %{y:.2f}%<extra></extra>',
+  }], layout);
+}
+
+function getBacktestWindowRows(artifacts) {
+  if (Array.isArray(artifacts?.rolling_metrics) && artifacts.rolling_metrics.length) return artifacts.rolling_metrics;
+  if (Array.isArray(artifacts?.rolling_windows) && artifacts.rolling_windows.length) return artifacts.rolling_windows;
+  return [];
+}
+
+function renderBacktestWindowsChart(artifacts) {
+  const windowsData = getBacktestWindowRows(artifacts);
+  if (!windowsData || !windowsData.length) {
+    renderChartError('backtest-windows-chart', 'Rolling windows not available');
+    return;
+  }
+  const labels = windowsData.map((item) => item.window_id || item.test_start || '');
+  const returns = windowsData.map((item) => Number(item.total_return) * 100);
+  const colors = returns.map((v) => v >= 0 ? CHART_COLORS.strategy : CHART_COLORS.danger);
+  const layout = plotlyBaseLayout({
+    title: 'Per-Window Total Return (%)',
+    height: 280,
+    yAxisTitle: 'Return %',
+  });
+  layout.yaxis.zeroline = true;
+  layout.yaxis.zerolinecolor = 'rgba(31,41,51,0.5)';
+  renderPlotlyChart('backtest-windows-chart', [{
+    type: 'bar',
+    x: labels,
+    y: returns,
+    marker: { color: colors },
+    hovertemplate: '%{x}<br>Return: %{y:.2f}%<extra></extra>',
+  }], layout);
+}
+
+function renderBacktestCostGrid(sections, artifacts = {}) {
+  const root = byId('backtest-cost-grid');
+  if (!root) return;
+  const costSection = sections.find((s) => s.name === 'Cost Analysis');
+  let rows = [];
+  if (costSection && costSection.metrics) {
+    const metrics = costSection.metrics;
+    rows = [
+      ['Total Fees', metrics.total_fees || '-'],
+      ['Total Turnover', metrics.total_turnover || '-'],
+      ['Fee Ratio', metrics.fee_ratio || '-'],
+      ['Fees % of Initial', metrics.fees_as_pct_of_initial || '-'],
+      ['Avg Daily Fee', metrics.avg_daily_fee || '-'],
+    ];
+  } else if (artifacts.rolling_stability) {
+    const stability = artifacts.rolling_stability || {};
+    rows = [
+      ['Avg Turnover', formatPercent(stability.turnover_mean, 2)],
+      ['Turnover Std', formatPercent(stability.turnover_std, 2)],
+      ['Positive Return Weeks', formatPercent(stability.positive_return_ratio, 1)],
+      ['Positive RankIC Weeks', formatPercent(stability.positive_rankic_ratio, 1)],
+      ['Return Std', formatPercent(stability.return_std, 2)],
+    ];
+  }
+  if (!rows.length) {
+    root.innerHTML = '<div class="empty">Cost analysis not available</div>';
+    return;
+  }
+  root.innerHTML = rows.map(([key, value]) => `
+    <div class="kv-item">
+      <span>${escapeHtml(key)}</span>
+      <strong>${escapeHtml(String(value))}</strong>
+    </div>
+  `).join('');
+}
+
+function renderBacktestSignalWindowsChart(artifacts) {
+  const signalData = artifacts.signal_metrics;
+  if (!signalData || !signalData.aggregate) {
+    renderChartError('backtest-signal-windows-chart', 'Signal metrics not available');
+    return;
+  }
+  const agg = signalData.aggregate;
+  const traces = [];
+  const palette = [CHART_COLORS.accent, CHART_COLORS.neutral, CHART_COLORS.strategy];
+  let idx = 0;
+  for (const key of ['IC', 'RankIC', 'long_short_spread']) {
+    const data = agg[key];
+    if (!data || !data.values) continue;
+    traces.push({
+      type: 'scatter',
+      mode: 'lines+markers',
+      name: key,
+      x: data.values.map((_, i) => String(i + 1)),
+      y: data.values,
+      line: { color: palette[idx % palette.length], width: 2 },
+      marker: { color: palette[idx % palette.length], size: 5 },
+      hovertemplate: `${key}<br>Window %{x}<br>%{y:.6f}<extra></extra>`,
+    });
+    idx++;
+  }
+  if (!traces.length) {
+    renderChartError('backtest-signal-windows-chart', 'No per-window signal data');
+    return;
+  }
+  const layout = plotlyBaseLayout({
+    title: 'IC / RankIC per Window',
+    height: 280,
+    yAxisTitle: 'Value',
+  });
+  layout.xaxis = { type: 'category', title: { text: 'Window' } };
+  layout.yaxis.zeroline = true;
+  layout.legend = { orientation: 'h', y: 1.08 };
+  renderPlotlyChart('backtest-signal-windows-chart', traces, layout);
+}
+
+function renderBacktestReturnDistChart(artifacts) {
+  const windowsData = getBacktestWindowRows(artifacts);
+  if (!windowsData || !windowsData.length) {
+    renderChartError('backtest-return-dist-chart', 'Rolling windows not available');
+    return;
+  }
+  const returns = windowsData.map((item) => Number(item.total_return) * 100).filter((v) => v !== null && !isNaN(v));
+  if (!returns.length) {
+    renderChartError('backtest-return-dist-chart', 'No return data');
+    return;
+  }
+  const layout = plotlyBaseLayout({
+    title: 'Return Distribution (% , per window)',
+    height: 260,
+    yAxisTitle: 'Count',
+  });
+  layout.xaxis = { title: { text: 'Return %' } };
+  renderPlotlyChart('backtest-return-dist-chart', [{
+    type: 'histogram',
+    x: returns,
+    nbinsx: 20,
+    marker: { color: CHART_COLORS.strategy, line: { color: '#fff', width: 1 } },
+    hovertemplate: 'Return %{x:.2f}%<br>Count: %{y}<extra></extra>',
+  }], layout);
+}
+
+function renderBacktestICDistChart(artifacts) {
+  const signalData = artifacts.signal_metrics;
+  if (!signalData || !signalData.aggregate) {
+    renderChartError('backtest-ic-dist-chart', 'Signal metrics not available');
+    return;
+  }
+  const traces = [];
+  for (const key of ['IC', 'RankIC']) {
+    const data = signalData.aggregate[key];
+    if (!data || !data.values) continue;
+    traces.push({
+      type: 'histogram',
+      name: key,
+      x: data.values,
+      nbinsx: 15,
+      opacity: 0.7,
+      marker: { color: key === 'IC' ? CHART_COLORS.accent : CHART_COLORS.neutral },
+      hovertemplate: `${key}<br>%{x:.6f}<br>Count: %{y}<extra></extra>`,
+    });
+  }
+  if (!traces.length) {
+    renderChartError('backtest-ic-dist-chart', 'No IC data');
+    return;
+  }
+  const layout = plotlyBaseLayout({
+    title: 'IC / RankIC Distribution',
+    height: 260,
+    yAxisTitle: 'Count',
+  });
+  layout.xaxis = { title: { text: 'IC Value' } };
+  layout.barmode = 'overlay';
+  layout.legend = { orientation: 'h', y: 1.08 };
+  renderPlotlyChart('backtest-ic-dist-chart', traces, layout);
 }
 
 function renderBacktestCharts() {
@@ -1190,6 +1409,7 @@ function renderBacktestContributors(orders) {
 
 function renderBacktestContextMeta(orders) {
   const root = byId('backtest-context-meta');
+  const stability = state.backtest.sectionArtifacts?.rolling_stability || null;
   const buyCount = (orders || []).filter((row) => normalizeTradeSide(row.side) !== 'sell').length;
   const sellCount = (orders || []).filter((row) => normalizeTradeSide(row.side) === 'sell').length;
   const tradedValue = (orders || []).reduce((sum, row) => {
@@ -1197,11 +1417,20 @@ function renderBacktestContextMeta(orders) {
     const price = toNumber(row.deal_price || row.price) || 0;
     return sum + Math.abs(quantity * price);
   }, 0);
-  root.innerHTML = [
+  const cards = [
     { label: 'Orders', value: String((orders || []).length) },
     { label: 'Buy / Sell', value: `${buyCount} / ${sellCount}` },
     { label: 'Gross Traded', value: formatNumber(tradedValue, 0) },
-  ].map((item) => `
+  ];
+  if ((!orders || !orders.length) && stability) {
+    cards.splice(0, cards.length,
+      { label: 'Positive Return', value: formatPercent(stability.positive_return_ratio, 1) },
+      { label: 'Positive RankIC', value: formatPercent(stability.positive_rankic_ratio, 1) },
+      { label: 'Best Week', value: `${stability.best_window?.window_id || '-'} · ${formatPercent(stability.best_window?.total_return, 2)}` },
+      { label: 'Worst Week', value: `${stability.worst_window?.window_id || '-'} · ${formatPercent(stability.worst_window?.total_return, 2)}` },
+    );
+  }
+  root.innerHTML = cards.map((item) => `
     <div class="kv-item">
       <span>${escapeHtml(item.label)}</span>
       <strong>${escapeHtml(item.value)}</strong>
@@ -1361,12 +1590,15 @@ async function loadBacktest() {
     state.backtest.summary = summary;
     state.backtest.daily = dailyItems;
     state.backtest.groupReturns = groupReturns;
+    state.backtest.sections = [];
+    state.backtest.sectionArtifacts = {};
     state.backtest.ordersByDate = new Map();
     renderParameterSummary(summary);
     renderBacktestRunContext();
     renderBacktestSignalMetrics(summary);
     summarizeBacktestMetrics(summary, dailyItems);
     renderBacktestDailyTable();
+    renderBacktestSections();
 
     const selectedDate = dailyItems.some((item) => item.trade_date === state.context.tradeDate)
       ? state.context.tradeDate
@@ -1384,9 +1616,13 @@ async function loadBacktest() {
     byId('backtest-signal-metrics').innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
     renderChartError('backtest-group-returns-chart', error.message);
     byId('backtest-group-returns-table').innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
+    renderChartError('backtest-monthly-chart', error.message);
+    renderChartError('backtest-windows-chart', error.message);
+    renderChartError('backtest-signal-windows-chart', error.message);
+    renderChartError('backtest-return-dist-chart', error.message);
+    renderChartError('backtest-ic-dist-chart', error.message);
   }
 }
-
 function filterFeatureRows(features, searchValue) {
   const needle = String(searchValue || '').trim().toLowerCase();
   return Object.entries(features || {})

@@ -56,6 +56,7 @@ class ResearchCockpitRepository:
         self._backtest_group_returns_cache: dict[str, list[dict[str, Any]]] = {}
         self._backtest_report_paths_cache: list[Path] | None = None
         self._backtest_report_index: dict[str, Path] = {}
+        self._synthetic_backtest_index: dict[str, dict[str, Any]] = {}
         self._json_cache: dict[Path, dict[str, Any]] = {}
         self._model_meta_cache: dict[Path, dict[str, Any]] = {}
         self._universe_cache: dict[str, set[str]] = {}
@@ -360,6 +361,43 @@ class ResearchCockpitRepository:
         self._backtest_report_paths_cache = candidates
         return candidates
 
+    def _iter_live_rolling_run_sources(self) -> list[dict[str, Any]]:
+        rolling_root = self.experiments_root / "mainline_rolling_runs"
+        if not rolling_root.exists():
+            return []
+        sources: list[dict[str, Any]] = []
+        for run_dir in sorted(rolling_root.glob("*/*"), reverse=True):
+            if not run_dir.is_dir():
+                continue
+            metrics_path = run_dir / "rolling_metrics.csv"
+            windows_path = run_dir / "rolling_windows.csv"
+            if not metrics_path.exists() or not windows_path.exists():
+                continue
+            cohort = run_dir.parent.name
+            object_name = run_dir.name
+            run_id = f"live_rolling__{cohort}__{object_name}"
+            source = {
+                "run_id": run_id,
+                "cohort": cohort,
+                "object_name": object_name,
+                "run_dir": run_dir,
+                "metrics_path": metrics_path,
+                "windows_path": windows_path,
+                "summary_path": run_dir / "rolling_summary.json",
+            }
+            self._synthetic_backtest_index[run_id] = source
+            sources.append(source)
+        return sources
+
+    def _get_synthetic_backtest_source(self, run_id: str) -> dict[str, Any] | None:
+        synthetic_source = self._synthetic_backtest_index.get(run_id)
+        if synthetic_source is not None:
+            return synthetic_source
+        if run_id.startswith("live_rolling__"):
+            self._iter_live_rolling_run_sources()
+            return self._synthetic_backtest_index.get(run_id)
+        return None
+
     def list_backtest_runs(self, limit: int = 50) -> list[BacktestRunSummary]:
         cached = self._backtest_runs_cache.get(limit)
         if cached is not None:
@@ -369,6 +407,15 @@ class ResearchCockpitRepository:
             summary = self._build_backtest_summary(path)
             self._backtest_summary_cache[summary.run_id] = summary
             self._backtest_report_index[summary.run_id] = path
+            source_key = str((summary.parameter_summary or {}).get("source_key") or summary.feature_set or summary.run_id)
+            universe_key = str(summary.universe or "")
+            dedup_key = f"{source_key}__{universe_key}"
+            existing = grouped_runs.get(dedup_key)
+            if existing is None or self._backtest_version_rank(summary) > self._backtest_version_rank(existing):
+                grouped_runs[dedup_key] = summary
+        for source in self._iter_live_rolling_run_sources():
+            summary = self._build_live_rolling_backtest_summary(source)
+            self._backtest_summary_cache[summary.run_id] = summary
             source_key = str((summary.parameter_summary or {}).get("source_key") or summary.feature_set or summary.run_id)
             existing = grouped_runs.get(source_key)
             if existing is None or self._backtest_version_rank(summary) > self._backtest_version_rank(existing):
@@ -383,6 +430,11 @@ class ResearchCockpitRepository:
         cached = self._backtest_summary_cache.get(run_id)
         if cached is not None:
             return cached
+        synthetic_source = self._get_synthetic_backtest_source(run_id)
+        if synthetic_source is not None:
+            summary = self._build_live_rolling_backtest_summary(synthetic_source)
+            self._backtest_summary_cache[run_id] = summary
+            return summary
         report_path = self._resolve_backtest_report(run_id)
         summary = self._build_backtest_summary(report_path)
         self._backtest_summary_cache[run_id] = summary
@@ -393,6 +445,11 @@ class ResearchCockpitRepository:
         cached = self._backtest_daily_cache.get(run_id)
         if cached is not None:
             return cached
+        synthetic_source = self._get_synthetic_backtest_source(run_id)
+        if synthetic_source is not None:
+            points = self._build_live_rolling_daily_points(synthetic_source)
+            self._backtest_daily_cache[run_id] = points
+            return points
         report_path = self._resolve_backtest_report(run_id)
         payload = self._load_json(report_path)
         daily_path = (payload.get("artifacts") or {}).get("daily_result")
@@ -404,13 +461,13 @@ class ResearchCockpitRepository:
         frame = pd.read_csv(csv_path)
         if frame.empty:
             return []
-        points: list[BacktestDailyPoint] = []
-        if "total_assets" in frame.columns:
-            equity = pd.to_numeric(frame["total_assets"], errors="coerce")
-            cummax = equity.cummax()
-            drawdown = (equity / cummax) - 1.0
+        # Support both total_assets and equity column names
+        equity_col = "total_assets" if "total_assets" in frame.columns else "equity"
+        if equity_col in frame.columns:
+            eq_vals = pd.to_numeric(frame[equity_col], errors="coerce")
+            cummax = eq_vals.cummax()
             frame = frame.copy()
-            frame["drawdown"] = drawdown
+            frame["drawdown"] = (eq_vals / cummax) - 1.0
         benchmark_points = self._load_benchmark_points(
             start_date=str(frame.iloc[0].get("date") or frame.iloc[0].get("trade_date") or ""),
             end_date=str(frame.iloc[-1].get("date") or frame.iloc[-1].get("trade_date") or ""),
@@ -427,9 +484,10 @@ class ResearchCockpitRepository:
         benchmark2_map = {item["trade_date"]: item for item in benchmark2_points}
         benchmark_base = self._to_float(benchmark_points[0].get("close")) if benchmark_points else None
         benchmark2_base = self._to_float(benchmark2_points[0].get("close")) if benchmark2_points else None
-        equity_base = self._to_float(frame.iloc[0].get("total_assets")) if not frame.empty else None
+        equity_base = self._to_float(frame.iloc[0].get(equity_col)) if not frame.empty else None
         previous_benchmark_close = benchmark_base
         previous_benchmark2_close = benchmark2_base
+        points: list[BacktestDailyPoint] = []
         for _, row in frame.iterrows():
             trade_date = str(row.get("date") or row.get("trade_date") or "")
             benchmark_row = benchmark_map.get(trade_date, {})
@@ -452,14 +510,17 @@ class ResearchCockpitRepository:
                 previous_benchmark_close = benchmark_close
             if benchmark2_close is not None:
                 previous_benchmark2_close = benchmark2_close
+            # Fall back to CSV-column benchmark if index data isn't available
+            csv_benchmark = self._to_float(row.get("benchmark_equity"))
+            csv_drawdown = self._to_float(row.get("drawdown"))
             points.append(
                 BacktestDailyPoint(
                     trade_date=trade_date,
-                    equity=self._to_float(row.get("total_assets")),
+                    equity=self._to_float(row.get(equity_col)),
                     zero_cost_equity=self._to_float(row.get("zero_cost_total_assets")),
                     daily_return=self._to_float(row.get("daily_return")),
-                    drawdown=self._to_float(row.get("drawdown")),
-                    benchmark_equity=benchmark_equity,
+                    drawdown=csv_drawdown if csv_drawdown is not None else self._to_float(row.get("drawdown")),
+                    benchmark_equity=benchmark_equity if benchmark_equity is not None else csv_benchmark,
                     benchmark_daily_return=benchmark_daily_return,
                     benchmark2_equity=benchmark2_equity,
                     benchmark2_daily_return=benchmark2_daily_return,
@@ -476,6 +537,10 @@ class ResearchCockpitRepository:
         cached = self._backtest_group_returns_cache.get(run_id)
         if cached is not None:
             return cached
+        synthetic_source = self._get_synthetic_backtest_source(run_id)
+        if synthetic_source is not None:
+            self._backtest_group_returns_cache[run_id] = []
+            return []
         report_path = self._resolve_backtest_report(run_id)
         payload = self._load_json(report_path)
         group_path = (payload.get("artifacts") or {}).get("group_returns")
@@ -502,6 +567,8 @@ class ResearchCockpitRepository:
         instrument_id: str | None = None,
         limit: int = 2000,
     ) -> list[dict[str, Any]]:
+        if self._get_synthetic_backtest_source(run_id) is not None:
+            return []
         csv_path = self._resolve_backtest_trades_path(run_id)
         if not csv_path.exists():
             return []
@@ -819,6 +886,8 @@ class ResearchCockpitRepository:
         indexed = self._backtest_report_index.get(run_id)
         if indexed is not None:
             return indexed
+        if self._get_synthetic_backtest_source(run_id) is not None:
+            raise FileNotFoundError(f"Synthetic rolling run has no published backtest report: {run_id}")
         path = self.reports_root / f"backtest_{run_id}.json"
         if path.exists():
             self._backtest_report_index[run_id] = path
@@ -1008,6 +1077,100 @@ class ResearchCockpitRepository:
             manifest_ref=report_logical,
         )
 
+    def _build_live_rolling_backtest_summary(self, source: dict[str, Any]) -> BacktestRunSummary:
+        metrics_frame = self._read_csv_safe(source["metrics_path"])
+        summary_payload = self._load_json(source["summary_path"]) if source["summary_path"].exists() else {}
+        object_name = str(source["object_name"])
+        cohort = str(source["cohort"])
+        signal_metrics = self._build_live_rolling_signal_metrics(metrics_frame)
+        total_return_mean = self._series_numeric_stat(metrics_frame, "total_return", "mean")
+        max_drawdown_worst = self._series_numeric_stat(metrics_frame, "max_drawdown", "min")
+        turnover_mean = self._series_numeric_stat(metrics_frame, "turnover", "mean")
+        first_test_start = self._frame_first_value(metrics_frame, "test_start")
+        last_test_end = self._frame_last_value(metrics_frame, "test_end")
+        completed = int(len(metrics_frame))
+        planned = self._read_csv_safe(source["windows_path"]).shape[0]
+        source_label = cohort.replace("_", " ")
+        parameter_summary = {
+            "version_key": f"live_rolling:{cohort}:{object_name}",
+            "version_label": object_name,
+            "source_key": f"live_rolling:{cohort}:{object_name}",
+            "source_label": source_label,
+            "feature_set": object_name,
+            "mainline_object_name": metrics_frame.iloc[0]["mainline_object_name"] if not metrics_frame.empty and "mainline_object_name" in metrics_frame.columns else object_name,
+            "bundle_id": metrics_frame.iloc[0]["bundle_id"] if not metrics_frame.empty and "bundle_id" in metrics_frame.columns else summary_payload.get("bundle_id"),
+            "legacy_feature_set_alias": metrics_frame.iloc[0]["legacy_feature_set_alias"] if not metrics_frame.empty and "legacy_feature_set_alias" in metrics_frame.columns else summary_payload.get("legacy_feature_set_alias"),
+            "signal_date": first_test_start,
+            "execution_date": last_test_end,
+            "price_mode": "fq",
+            "universe": (summary_payload.get("defaults") or {}).get("universe") or "csi300",
+            "top_k": (summary_payload.get("defaults") or {}).get("top_k") or 5,
+            "strategy_type": (summary_payload.get("defaults") or {}).get("strategy_type") or "rank_topk",
+            "label_type": (summary_payload.get("lineage") or {}).get("label_type"),
+            "retrain_freq": "weekly_rolling",
+            "rebalance_freq": (summary_payload.get("defaults") or {}).get("step_days"),
+            "inference_freq": (summary_payload.get("defaults") or {}).get("step_days"),
+            "window_count_completed": completed,
+            "window_count_planned": planned,
+            "progress_pct": round(completed / planned, 4) if planned else None,
+            "run_dir": str(source["run_dir"].relative_to(self.project_root)),
+            "internal_run_id": source["run_id"],
+            "notes": [
+                "version=live_mainline_rolling_v1",
+                f"rolling_metrics={source['metrics_path'].relative_to(self.project_root)}",
+                f"rolling_windows={source['windows_path'].relative_to(self.project_root)}",
+            ],
+        }
+        artifacts = [
+            RunArtifactRef(
+                artifact_id="rolling_metrics",
+                kind="other",
+                logical_path=str(source["metrics_path"].relative_to(self.project_root)),
+                title="rolling_metrics",
+                media_type="text/csv",
+            ),
+            RunArtifactRef(
+                artifact_id="rolling_windows",
+                kind="other",
+                logical_path=str(source["windows_path"].relative_to(self.project_root)),
+                title="rolling_windows",
+                media_type="text/csv",
+            ),
+        ]
+        if source["summary_path"].exists():
+            artifacts.append(
+                RunArtifactRef(
+                    artifact_id="rolling_summary",
+                    kind="report",
+                    logical_path=str(source["summary_path"].relative_to(self.project_root)),
+                    title="rolling_summary",
+                )
+            )
+        return BacktestRunSummary(
+            run_id=source["run_id"],
+            run_type="backtest",
+            model_name=str(summary_payload.get("model_path") or object_name),
+            feature_set=object_name,
+            universe=str(parameter_summary["universe"]),
+            train_range={"start": self._frame_first_value(metrics_frame, "train_start"), "end": self._frame_last_value(metrics_frame, "train_end")},
+            test_range={"start": first_test_start, "end": last_test_end},
+            top_k=self._to_int(parameter_summary["top_k"]),
+            price_mode="fq",
+            display_label=f"{object_name} · {source_label}",
+            parameter_summary=parameter_summary,
+            metrics={
+                "total_return": self._fmt_pct(total_return_mean),
+                "sharpe": "-",
+                "max_drawdown": self._fmt_pct(max_drawdown_worst),
+                "trade_count": completed,
+                "days": completed,
+            },
+            signal_metrics=signal_metrics,
+            group_returns_summary={"status": "not_available"},
+            artifacts=artifacts,
+            manifest_ref=str(source["run_dir"].relative_to(self.project_root)),
+        )
+
     def _extract_backtest_metrics(self, payload: dict[str, Any]) -> dict[str, Any]:
         sections = payload.get("sections") or []
         for section in sections:
@@ -1033,9 +1196,12 @@ class ResearchCockpitRepository:
         if not group_returns_path:
             return {"status": "not_available"}
         resolved_path = self._resolve_project_artifact_path(group_returns_path)
-        if not resolved_path.exists():
+        if not resolved_path.exists() or resolved_path.stat().st_size == 0:
             return {"status": "not_available"}
-        frame = pd.read_csv(resolved_path)
+        try:
+            frame = pd.read_csv(resolved_path)
+        except (pd.errors.EmptyDataError, pd.errors.ParserError):
+            return {"status": "not_available"}
         if frame.empty:
             return {"status": "not_available"}
         group_nav = frame.sort_values(["group", "date"]).groupby("group", observed=False).tail(1)
@@ -1053,6 +1219,159 @@ class ResearchCockpitRepository:
             "group_count": int(frame["group"].nunique()) if "group" in frame.columns else 0,
             "days": int(frame["date"].nunique()) if "date" in frame.columns else 0,
         }
+
+    def get_backtest_sections(self, run_id: str) -> dict[str, Any]:
+        synthetic_source = self._get_synthetic_backtest_source(run_id)
+        if synthetic_source is not None:
+            metrics_frame = self._read_csv_safe(synthetic_source["metrics_path"])
+            windows_frame = self._read_csv_safe(synthetic_source["windows_path"])
+            return {
+                "sections": self._build_live_rolling_sections(metrics_frame),
+                "artifacts": {
+                    "rolling_windows": windows_frame.to_dict(orient="records"),
+                    "rolling_metrics": metrics_frame.to_dict(orient="records"),
+                    "signal_metrics": self._build_live_rolling_signal_metrics(metrics_frame),
+                    "rolling_stability": self._build_live_rolling_stability(metrics_frame),
+                },
+            }
+        report_path = self._resolve_backtest_report(run_id)
+        payload = self._load_json(report_path)
+        sections = payload.get("sections", [])
+        artifacts = {}
+        for key in ["rolling_windows", "rolling_metrics", "monthly_returns", "weekly_returns", "signal_metrics", "trade_detail", "trades"]:
+            ap = (payload.get("artifacts") or {}).get(key)
+            if not ap or not isinstance(ap, str):
+                continue
+            ap_path = self._resolve_project_artifact_path(ap)
+            if ap_path.suffix == ".csv":
+                try:
+                    df = pd.read_csv(ap_path)
+                    artifacts[key] = df.to_dict(orient="records")
+                except Exception:
+                    pass
+            elif ap_path.suffix == ".json":
+                try:
+                    artifacts[key] = json.loads(ap_path.read_text(encoding="utf-8"))
+                except Exception:
+                    pass
+        return {"sections": sections, "artifacts": artifacts}
+
+    def _build_live_rolling_sections(self, metrics_frame: pd.DataFrame) -> list[dict[str, Any]]:
+        positive_returns = self._series_positive_ratio(metrics_frame, "total_return")
+        positive_rankic = self._series_positive_ratio(metrics_frame, "RankIC")
+        return [
+            {
+                "name": "Performance",
+                "status": "success",
+                "message": "live rolling aggregation from rolling_metrics.csv",
+                "metrics": {
+                    "window_count": str(int(len(metrics_frame))),
+                    "positive_windows": str(int(self._series_positive_count(metrics_frame, "total_return"))),
+                    "window_win_rate": self._fmt_pct(positive_returns),
+                    "mean_window_return": self._fmt_pct(self._series_numeric_stat(metrics_frame, "total_return", "mean")),
+                    "median_window_return": self._fmt_pct(self._series_numeric_stat(metrics_frame, "total_return", "median")),
+                    "best_window_return": self._fmt_pct(self._series_numeric_stat(metrics_frame, "total_return", "max")),
+                    "worst_window_return": self._fmt_pct(self._series_numeric_stat(metrics_frame, "total_return", "min")),
+                },
+                "details": {},
+            },
+            {
+                "name": "Signal Metrics",
+                "status": "success",
+                "message": "aggregated from per-window IC metrics",
+                "metrics": {
+                    "IC_mean": self._fmt_num(self._series_numeric_stat(metrics_frame, "IC", "mean"), 6),
+                    "IC_std": self._fmt_num(self._series_numeric_stat(metrics_frame, "IC", "std"), 6),
+                    "IC_positive_ratio": self._fmt_pct(self._series_positive_ratio(metrics_frame, "IC")),
+                    "RankIC_mean": self._fmt_num(self._series_numeric_stat(metrics_frame, "RankIC", "mean"), 6),
+                    "RankIC_std": self._fmt_num(self._series_numeric_stat(metrics_frame, "RankIC", "std"), 6),
+                    "RankIC_positive_ratio": self._fmt_pct(positive_rankic),
+                    "long_short_spread_mean": self._fmt_num(self._series_numeric_stat(metrics_frame, "long_short_spread", "mean"), 6),
+                    "long_short_spread_std": self._fmt_num(self._series_numeric_stat(metrics_frame, "long_short_spread", "std"), 6),
+                    "long_short_spread_positive_ratio": self._fmt_pct(self._series_positive_ratio(metrics_frame, "long_short_spread")),
+                },
+                "details": {},
+            },
+        ]
+
+    def _build_live_rolling_signal_metrics(self, metrics_frame: pd.DataFrame) -> dict[str, Any]:
+        return {
+            "status": "available",
+            "IC": self._series_numeric_stat(metrics_frame, "IC", "mean"),
+            "RankIC": self._series_numeric_stat(metrics_frame, "RankIC", "mean"),
+            "ICIR": self._series_information_ratio(metrics_frame, "IC"),
+            "RankICIR": self._series_information_ratio(metrics_frame, "RankIC"),
+            "long_short_spread": self._series_numeric_stat(metrics_frame, "long_short_spread", "mean"),
+            "aggregate": {
+                "IC": {"values": self._series_values(metrics_frame, "IC")},
+                "RankIC": {"values": self._series_values(metrics_frame, "RankIC")},
+                "long_short_spread": {"values": self._series_values(metrics_frame, "long_short_spread")},
+                "turnover": {"values": self._series_values(metrics_frame, "turnover")},
+                "total_return": {"values": self._series_values(metrics_frame, "total_return")},
+            },
+        }
+
+    def _build_live_rolling_stability(self, metrics_frame: pd.DataFrame) -> dict[str, Any]:
+        if metrics_frame.empty:
+            return {"status": "not_available"}
+        best_idx = pd.to_numeric(metrics_frame.get("total_return"), errors="coerce").idxmax()
+        worst_idx = pd.to_numeric(metrics_frame.get("total_return"), errors="coerce").idxmin()
+        best_row = metrics_frame.loc[best_idx].to_dict() if best_idx in metrics_frame.index else {}
+        worst_row = metrics_frame.loc[worst_idx].to_dict() if worst_idx in metrics_frame.index else {}
+        return {
+            "status": "available",
+            "positive_return_ratio": self._series_positive_ratio(metrics_frame, "total_return"),
+            "positive_rankic_ratio": self._series_positive_ratio(metrics_frame, "RankIC"),
+            "positive_ic_ratio": self._series_positive_ratio(metrics_frame, "IC"),
+            "return_std": self._series_numeric_stat(metrics_frame, "total_return", "std"),
+            "rankic_std": self._series_numeric_stat(metrics_frame, "RankIC", "std"),
+            "turnover_mean": self._series_numeric_stat(metrics_frame, "turnover", "mean"),
+            "turnover_std": self._series_numeric_stat(metrics_frame, "turnover", "std"),
+            "best_window": {
+                "window_id": best_row.get("window_id"),
+                "test_end": best_row.get("test_end"),
+                "total_return": self._to_float(best_row.get("total_return")),
+            },
+            "worst_window": {
+                "window_id": worst_row.get("window_id"),
+                "test_end": worst_row.get("test_end"),
+                "total_return": self._to_float(worst_row.get("total_return")),
+            },
+        }
+
+    def _build_live_rolling_daily_points(self, source: dict[str, Any]) -> list[BacktestDailyPoint]:
+        frame = self._read_csv_safe(source["metrics_path"])
+        if frame.empty:
+            return []
+        frame = frame.sort_values([col for col in ["test_end", "window_id"] if col in frame.columns]).reset_index(drop=True)
+        equity = 1_000_000.0
+        points: list[BacktestDailyPoint] = []
+        drawdowns: list[float] = []
+        equities: list[float] = []
+        for _, row in frame.iterrows():
+            window_return = self._to_float(row.get("total_return")) or 0.0
+            equity = equity * (1.0 + window_return)
+            equities.append(equity)
+            peak = max(equities)
+            drawdowns.append((equity / peak) - 1.0 if peak else 0.0)
+            points.append(
+                BacktestDailyPoint(
+                    trade_date=str(row.get("test_end") or row.get("test_start") or ""),
+                    equity=equity,
+                    zero_cost_equity=equity,
+                    daily_return=window_return,
+                    drawdown=drawdowns[-1],
+                    benchmark_equity=None,
+                    benchmark_daily_return=None,
+                    benchmark2_equity=None,
+                    benchmark2_daily_return=None,
+                    turnover=self._to_float(row.get("turnover")),
+                    ic=self._to_float(row.get("IC")),
+                    rank_ic=self._to_float(row.get("RankIC")),
+                    trade_count=None,
+                )
+            )
+        return points
 
     def _artifact_kind(self, name: str) -> str:
         mapping = {
@@ -1388,6 +1707,85 @@ class ResearchCockpitRepository:
         if hasattr(value, "item"):
             return value.item()
         return value
+
+    def _read_csv_safe(self, path: str | Path) -> pd.DataFrame:
+        try:
+            return pd.read_csv(path)
+        except (FileNotFoundError, pd.errors.EmptyDataError, pd.errors.ParserError):
+            return pd.DataFrame()
+
+    def _series_numeric_stat(self, frame: pd.DataFrame, column: str, op: str) -> float | None:
+        if frame.empty or column not in frame.columns:
+            return None
+        valid = pd.to_numeric(frame[column], errors="coerce").dropna()
+        if valid.empty:
+            return None
+        if op == "mean":
+            result = valid.mean()
+        elif op == "median":
+            result = valid.median()
+        elif op == "std":
+            result = valid.std(ddof=0)
+        elif op == "min":
+            result = valid.min()
+        elif op == "max":
+            result = valid.max()
+        else:
+            raise ValueError(f"Unsupported stat op: {op}")
+        return round(float(result), 8)
+
+    def _series_information_ratio(self, frame: pd.DataFrame, column: str) -> float | None:
+        mean_value = self._series_numeric_stat(frame, column, "mean")
+        std_value = self._series_numeric_stat(frame, column, "std")
+        if mean_value is None or std_value in (None, 0):
+            return None
+        return round(float(mean_value / std_value), 8)
+
+    def _series_positive_ratio(self, frame: pd.DataFrame, column: str) -> float | None:
+        if frame.empty or column not in frame.columns:
+            return None
+        valid = pd.to_numeric(frame[column], errors="coerce").dropna()
+        if valid.empty:
+            return None
+        return round(float((valid > 0).mean()), 8)
+
+    def _series_positive_count(self, frame: pd.DataFrame, column: str) -> int:
+        if frame.empty or column not in frame.columns:
+            return 0
+        valid = pd.to_numeric(frame[column], errors="coerce").dropna()
+        if valid.empty:
+            return 0
+        return int((valid > 0).sum())
+
+    def _series_values(self, frame: pd.DataFrame, column: str) -> list[float]:
+        if frame.empty or column not in frame.columns:
+            return []
+        valid = pd.to_numeric(frame[column], errors="coerce")
+        return [float(item) for item in valid.dropna().tolist()]
+
+    def _frame_first_value(self, frame: pd.DataFrame, column: str) -> str | None:
+        if frame.empty or column not in frame.columns:
+            return None
+        value = frame.iloc[0].get(column)
+        return None if pd.isna(value) else str(value)
+
+    def _frame_last_value(self, frame: pd.DataFrame, column: str) -> str | None:
+        if frame.empty or column not in frame.columns:
+            return None
+        value = frame.iloc[-1].get(column)
+        return None if pd.isna(value) else str(value)
+
+    def _fmt_pct(self, value: Any) -> str:
+        numeric = self._to_float(value)
+        if numeric is None:
+            return "-"
+        return f"{numeric * 100:.2f}%"
+
+    def _fmt_num(self, value: Any, digits: int = 4) -> str:
+        numeric = self._to_float(value)
+        if numeric is None:
+            return "-"
+        return f"{numeric:.{digits}f}"
 
     def _to_float(self, value: Any) -> float | None:
         if value is None or value == "":
