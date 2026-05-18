@@ -37,6 +37,20 @@ MAINLINE_OBJECTS: dict[str, MainlineObjectSpec] = {
         model_name="qlib_lgbm_semantic_all_features_absnorm",
         description="Mainline absnorm research object mapped to the historical semantic_all_features_absnorm feature set.",
     ),
+    "feature_254_xs5": MainlineObjectSpec(
+        mainline_object_name="feature_254_xs5",
+        bundle_id="bundle_feature_254_xs5",
+        legacy_feature_set_alias="semantic_no_regime_xs5",
+        model_name="qlib_lgbm_semantic_no_regime_xs5",
+        description="No-regime semantic research object with 5d cross-sectional zscore label.",
+    ),
+    "feature_254_smooth135": MainlineObjectSpec(
+        mainline_object_name="feature_254_smooth135",
+        bundle_id="bundle_feature_254_smooth135",
+        legacy_feature_set_alias="semantic_no_regime_smooth135",
+        model_name="qlib_lgbm_semantic_no_regime_smooth135",
+        description="No-regime semantic research object with 1/3/5d cross-sectional smooth label.",
+    ),
 }
 
 LEGACY_FEATURE_SET_ALIAS_TO_MAINLINE_OBJECT = {
@@ -63,18 +77,24 @@ MAINLINE_OBJECT_TO_FEATURE_CONFIG_LOADER = {
     "feature_173": FeatureLibrary.get_alpha158_extended_config,
     "feature_254": FeatureLibrary.get_semantic_all_features_config,
     "feature_254_absnorm": FeatureLibrary.get_semantic_all_features_absnorm_config,
+    "feature_254_xs5": FeatureLibrary.get_semantic_no_regime_config,
+    "feature_254_smooth135": FeatureLibrary.get_semantic_no_regime_config,
 }
 
 MAINLINE_OBJECT_TO_VARIANT_IDS = {
     "feature_173": ["feature_173@raw"],
     "feature_254": ["feature_254@raw"],
     "feature_254_absnorm": ["feature_254_absnorm@raw"],
+    "feature_254_xs5": ["feature_254_xs5@raw"],
+    "feature_254_smooth135": ["feature_254_smooth135@raw"],
 }
 
 MAINLINE_OBJECT_TO_FEATURE_SET_NAME = {
     "feature_173": "extended",
     "feature_254": "semantic_all_features",
     "feature_254_absnorm": "semantic_all_features_absnorm",
+    "feature_254_xs5": "semantic_no_regime_xs5",
+    "feature_254_smooth135": "semantic_no_regime_smooth135",
 }
 
 

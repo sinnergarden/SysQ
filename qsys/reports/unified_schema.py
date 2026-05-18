@@ -54,13 +54,20 @@ def write_json(path: str | Path, data: Any) -> str:
     return str(path)
 
 
-def write_csv(path: str | Path, data: Any) -> str:
+def write_csv(path: str | Path, data: Any, columns: list[str] | None = None) -> str:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     if isinstance(data, pd.DataFrame):
-        data.to_csv(path, index=False)
+        frame = data.copy()
     elif isinstance(data, list):
-        pd.DataFrame(data).to_csv(path, index=False)
+        frame = pd.DataFrame(data)
     else:
         path.write_text(str(data), encoding="utf-8")
+        return str(path)
+    if columns is not None:
+        for column in columns:
+            if column not in frame.columns:
+                frame[column] = pd.NA
+        frame = frame[columns]
+    frame.to_csv(path, index=False)
     return str(path)

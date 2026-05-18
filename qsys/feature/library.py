@@ -226,6 +226,27 @@ class FeatureLibrary:
                     merged.append(field)
         return merged
 
+    @classmethod
+    def get_semantic_no_regime_config(cls):
+        excluded = {
+            "market_breadth",
+            "limit_up_breadth",
+            "index_volatility_5",
+            "index_volatility_10",
+            "index_volatility_20",
+            "small_vs_large_strength",
+            "growth_vs_value_proxy",
+            "market_trend_strength",
+            "industry_ret_1d",
+            "industry_ret_3d",
+            "industry_ret_5d",
+            "industry_breadth",
+            "stock_minus_industry_ret",
+            "stock_minus_industry_ret_3d",
+            "stock_minus_industry_ret_5d",
+        }
+        return [field for field in cls.get_semantic_all_features_config() if field not in excluded]
+
 class phase123(DataHandlerLP):
     def __init__(
         self,

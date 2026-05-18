@@ -15,6 +15,8 @@ DEFAULT_MAINLINE_OBJECT_NAMES = [
     "feature_173",
     "feature_254",
     "feature_254_absnorm",
+    "feature_254_xs5",
+    "feature_254_smooth135",
 ]
 DEFAULT_TEST_WINDOW_DAYS = 63
 DEFAULT_STEP_DAYS = 21
