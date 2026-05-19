@@ -14,9 +14,11 @@ SUPPORTED_FEATURE_SETS = {
     "phase123_absnorm",
     "semantic_all_features",
     "semantic_all_features_absnorm",
+    "semantic_no_regime_xs5",
+    "semantic_no_regime_smooth135",
 }
 SUPPORTED_MODEL_TYPES = {"qlib_lgbm", "qlib_xgb", "qlib_tabular_nn"}
-SUPPORTED_LABEL_TYPES = {"forward_return", "relative_return", "binary_event"}
+SUPPORTED_LABEL_TYPES = {"forward_return", "relative_return", "binary_event", "xs_forward_return", "xs_smooth_135"}
 SUPPORTED_STRATEGY_TYPES = {"rank_topk", "rank_topk_with_cash_gate", "rank_plus_binary_gate"}
 SUPPORTED_REBALANCE_MODES = {"full_rebalance", "hold_if_no_trigger"}
 SUPPORTED_FREQUENCIES = {"daily", "weekly"}

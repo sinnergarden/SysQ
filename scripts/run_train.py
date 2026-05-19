@@ -61,6 +61,8 @@ SUPPORTED_FEATURE_SET_CHOICES = [
     'phase123_absnorm',
     'semantic_all_features',
     'semantic_all_features_absnorm',
+    'semantic_no_regime_xs5',
+    'semantic_no_regime_smooth135',
 ]
 
 
@@ -85,6 +87,8 @@ def _resolve_legacy_feature_config(feature_set: str) -> tuple[list[str], str]:
         return FeatureLibrary.get_semantic_all_features_config(), 'semantic_all_features'
     if feature_set == 'semantic_all_features_absnorm':
         return FeatureLibrary.get_semantic_all_features_absnorm_config(), 'semantic_all_features_absnorm'
+    if feature_set in {'semantic_no_regime_xs5', 'semantic_no_regime_smooth135'}:
+        return FeatureLibrary.get_semantic_no_regime_config(), feature_set
     return FeatureLibrary.get_alpha158_config(), 'alpha158'
 
 
@@ -107,6 +111,10 @@ def _model_name_for_input(model: str, feature_set: str | None, input_mode: str, 
         return f"{model}_semantic_all_features"
     if feature_set == 'semantic_all_features_absnorm':
         return f"{model}_semantic_all_features_absnorm"
+    if feature_set == 'semantic_no_regime_xs5':
+        return f"{model}_semantic_no_regime_xs5"
+    if feature_set == 'semantic_no_regime_smooth135':
+        return f"{model}_semantic_no_regime_smooth135"
     return f"{model}_extended"
 
 
