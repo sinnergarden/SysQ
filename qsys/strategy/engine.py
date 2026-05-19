@@ -135,10 +135,19 @@ class StrategyEngine:
             # Softmax or simple sum normalization?
             # Simple sum for now, assuming scores > 0 or Shifted.
             # If scores can be negative (LGBM regression often is), we might need softmax.
-            
+
             # Using Softmax for safety
             exps = np.exp(top_scores)
             return exps / exps.sum()
+
+        elif self.method == "rank_weighted":
+            # Linear rank-based decay weight
+            n = len(top_scores)
+            if n == 0:
+                return pd.Series()
+            ranks = np.arange(1, n + 1)[::-1]  # highest rank gets highest weight
+            w = ranks / ranks.sum()
+            return pd.Series(w, index=top_scores.index)
             
         else:
             raise ValueError(f"Unknown weighting method: {self.method}")

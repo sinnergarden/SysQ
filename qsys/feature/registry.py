@@ -110,3 +110,52 @@ FEATURE_GROUPS = {
 
 def list_feature_groups() -> dict:
     return FEATURE_GROUPS
+
+
+# ── Named feature set resolution ──
+
+_FEATURE_SET_METHODS: dict[str, str] = {
+    "semantic_all_features": "get_semantic_all_features_config",
+    "semantic_all_features_absnorm": "get_semantic_all_features_absnorm_config",
+    "semantic_no_regime_clean_v1": "get_semantic_no_regime_config",
+}
+
+
+def get_feature_fields(name: str) -> list[str]:
+    """Return the flattened feature list for a named feature set.
+
+    Known sets:
+        "semantic_all_features"          — alpha158 + semantic groups
+        "semantic_all_features_absnorm"  — same with absolute-value normalisation
+        "semantic_no_regime_clean_v1"    — alpha v1 regime-free variant
+
+    Delegates to ``FeatureLibrary`` class methods; falls back to
+    ``FEATURE_GROUPS`` if *name* is a group key.
+    """
+    # Check registry groups first (e.g. "microstructure", "liquidity")
+    if name in FEATURE_GROUPS:
+        return list(FEATURE_GROUPS[name].get("features", []))
+
+    # Resolve named sets via FeatureLibrary (lazy import to avoid cycles)
+    method_name = _FEATURE_SET_METHODS.get(name)
+    if method_name is not None:
+        from qsys.feature.library import FeatureLibrary  # noqa: PLC0415
+
+        method = getattr(FeatureLibrary, method_name, None)
+        if method is None:
+            raise KeyError(
+                f"FeatureLibrary has no method '{method_name}' "
+                f"(resolved from feature set '{name}')"
+            )
+        result = method()
+        if not isinstance(result, list):
+            raise TypeError(
+                f"FeatureLibrary.{method_name}() returned {type(result).__name__}, "
+                f"expected list[str]"
+            )
+        return result
+
+    raise KeyError(
+        f"Unknown feature set: '{name}'. "
+        f"Known: {list(_FEATURE_SET_METHODS)} + {list(FEATURE_GROUPS)}"
+    )
