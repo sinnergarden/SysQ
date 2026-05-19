@@ -366,7 +366,29 @@ button:hover {
   gap: 18px;
 }
 
-.backtest-grid,
+.backtest-grid {
+  display: flex;
+  align-items: flex-start;
+  gap: 18px;
+}
+
+.backtest-grid > .backtest-main {
+  flex: 1.7;
+  min-width: 0;
+  display: grid;
+  gap: 14px;
+}
+
+.backtest-grid > .side-stack {
+  flex: 0.9;
+  min-width: 320px;
+  display: grid;
+  gap: 14px;
+  align-content: start;
+  position: sticky;
+  top: 80px;
+}
+
 .case-grid,
 .replay-grid {
   grid-template-columns: minmax(0, 1.7fr) minmax(320px, 0.9fr);
@@ -401,6 +423,7 @@ button:hover {
 }
 
 .panel-hero {
+  align-self: start;
   background:
     linear-gradient(180deg, rgba(13, 110, 110, 0.06), rgba(255, 252, 245, 0.9) 26%),
     var(--paper);
@@ -886,6 +909,17 @@ tr:last-child td {
   .global-filter-bar,
   .kv-grid {
     grid-template-columns: 1fr;
+  }
+
+  .backtest-grid {
+    flex-direction: column;
+  }
+
+  .backtest-grid > .backtest-main,
+  .backtest-grid > .side-stack {
+    flex: 1;
+    min-width: 0;
+    position: static;
   }
 
   .toolbar {

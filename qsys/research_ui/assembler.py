@@ -576,7 +576,7 @@ class ResearchCockpitRepository:
         if frame.empty:
             return []
         if "date" in frame.columns and trade_date:
-            frame = frame[frame["date"].astype(str) == str(trade_date)]
+            frame = frame[frame["date"].astype(str).str[:10] == str(trade_date)]
         if "symbol" in frame.columns and instrument_id:
             frame = frame[frame["symbol"].astype(str) == str(instrument_id)]
         frame = frame.head(limit)

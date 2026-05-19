@@ -18,6 +18,7 @@ const state = {
   cache: new Map(),
   tableState: new Map(),
   tableRegistry: new Map(),
+  _syncingZoom: false,
   latestBacktestRunId: null,
   backtestRuns: [],
   featureRegistry: [],
@@ -367,7 +368,7 @@ function dashToPlotlyDash(dash) {
   return dash.includes('2') ? 'dot' : 'dash';
 }
 
-function renderSeriesChart(containerId, { dates = [], series = [], title = '', includeZero = false, yAxisTitle = '', height = 320, selectedDate = '', onClick = null } = {}) {
+function renderSeriesChart(containerId, { dates = [], series = [], title = '', includeZero = false, yAxisTitle = '', height = 320, selectedDate = '', onClick = null, onRelayout = null } = {}) {
   const traces = series
     .map((item) => ({
       ...item,
@@ -394,12 +395,14 @@ function renderSeriesChart(containerId, { dates = [], series = [], title = '', i
   }
   const layout = plotlyBaseLayout({ title, height, yAxisTitle, selectedDate });
   if (includeZero) layout.yaxis.zeroline = true;
-  renderPlotlyChart(containerId, traces, layout, {
+  const handlers = {
     onClick: (event) => {
       const tradeDate = toDateLabel(event?.points?.[0]?.x);
       if (tradeDate && onClick) onClick(tradeDate);
     },
-  });
+  };
+  if (onRelayout) handlers.onRelayout = onRelayout;
+  renderPlotlyChart(containerId, traces, layout, handlers);
 }
 
 function renderVolumeChart(containerId, bars, { selectedDate = '' } = {}) {
@@ -900,7 +903,7 @@ function renderParameterSummary(summary) {
   }
   label.textContent = summary.display_label || summary.run_id || '';
   const params = summary.parameter_summary || {};
-  const rows = [
+  const rawRows = [
     ['Version', params.version_label || summary.display_label || '-'],
     ['Model', summary.model_name || '-'],
     ['Feature Set', params.feature_set || summary.feature_set || '-'],
@@ -912,6 +915,10 @@ function renderParameterSummary(summary) {
     ['Signal Date', params.signal_date || summary.train_range?.start || '-'],
     ['Execution Date', params.execution_date || summary.test_range?.end || '-'],
   ];
+  const rows = rawRows.filter(([key, value]) => {
+    const v = String(value).trim();
+    return v !== '-' && v !== '' && v !== 'None' && v !== 'null' && v !== 'undefined';
+  });
   root.innerHTML = rows.map(([key, value]) => `
     <div class="kv-item">
       <span>${escapeHtml(key)}</span>
@@ -1032,7 +1039,7 @@ function renderBacktestSections() {
       const sections = data.sections || [];
       state.backtest.sections = sections;
       state.backtest.sectionArtifacts = artifacts;
-      renderBacktestWeeklyChart(artifacts);
+      renderBacktestMonthlyHeatmap(artifacts);
       renderBacktestWindowsChart(artifacts);
       renderBacktestCostGrid(sections, artifacts);
       renderBacktestSignalWindowsChart(artifacts);
@@ -1048,36 +1055,99 @@ function renderBacktestSections() {
     });
 }
 
-function renderBacktestWeeklyChart(artifacts) {
-  // Prefer weekly returns, fall back to monthly
-  let data = artifacts.weekly_returns;
-  let labelKey = 'week';
-  let chartTitle = 'Weekly Returns (%)';
+function renderBacktestMonthlyHeatmap(artifacts) {
+  // Monthly return heatmap (years × months)
+  let data = artifacts.monthly_returns;
   if (!data || !data.length) {
-    data = artifacts.monthly_returns;
-    labelKey = 'month';
-    chartTitle = 'Monthly Returns (%)';
+    data = artifacts.weekly_returns;
+    if (data && data.length) {
+      // Aggregate weekly -> monthly
+      const monthMap = {};
+      data.forEach((item) => {
+        const week = item.week || '';
+        const month = week.slice(0, 7);
+        if (month && month.length === 7) {
+          if (!monthMap[month]) monthMap[month] = [];
+          monthMap[month].push(Number(item.return));
+        }
+      });
+      data = Object.entries(monthMap).map(([month, returns]) => ({
+        month,
+        return: returns.reduce((s, v) => s + v, 0) / returns.length,
+      }));
+    }
   }
   if (!data || !data.length) {
     renderChartError('backtest-monthly-chart', 'Returns not available');
     return;
   }
-  const labels = data.map((item) => item[labelKey]);
-  const returns = data.map((item) => Number(item.return) * 100);
-  const colors = returns.map((v) => v >= 0 ? CHART_COLORS.strategy : CHART_COLORS.danger);
+  // Parse months into year/month grid
+  const months = Array.from(new Set(data.map((item) => item.month.slice(0, 7)))).sort();
+  const years = Array.from(new Set(months.map((m) => m.slice(0, 4)))).sort();
+  const monthLabels = ['01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11', '12'];
+  const lookup = {};
+  months.forEach((m) => { lookup[m] = true; });
+  const yearRange = [];
+  for (let y = parseInt(years[0], 10); y <= parseInt(years[years.length - 1], 10); y++) {
+    yearRange.push(String(y));
+  }
+  const z = yearRange.map((year) =>
+    monthLabels.map((mon) => {
+      const key = `${year}-${mon}`;
+      if (!lookup[key]) return null;
+      const entry = data.find((d) => d.month === key);
+      return entry ? Number(entry.return) * 100 : null;
+    })
+  );
+  const colorscale = [
+    [0, '#7f1d1d'],
+    [0.35, '#e57373'],
+    [0.48, '#e8ddd0'],
+    [0.52, '#e8ddd0'],
+    [0.65, '#81c784'],
+    [1, '#1b5e20'],
+  ];
+  const maxAbs = Math.max(Math.abs(Math.min(...z.flat().filter((v) => v !== null))), Math.abs(Math.max(...z.flat().filter((v) => v !== null))));
+  const zBound = Math.max(5, Math.ceil(maxAbs / 5) * 5);
+  const hoverText = yearRange.map((year, yi) =>
+    monthLabels.map((mon, xi) => {
+      const val = z[yi][xi];
+      return `${year}-${mon}<br>Return: ${val !== null ? val.toFixed(2) + '%' : 'N/A'}`;
+    })
+  );
   const layout = plotlyBaseLayout({
-    title: chartTitle,
-    height: 280,
-    yAxisTitle: 'Return %',
+    title: 'Monthly Return Heatmap (%)',
+    height: Math.max(200, yearRange.length * 50 + 80),
   });
-  layout.yaxis.zeroline = true;
-  layout.yaxis.zerolinecolor = 'rgba(31,41,51,0.5)';
+  layout.xaxis = {
+    type: 'category',
+    tickvals: monthLabels,
+    ticktext: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
+    gridcolor: 'transparent',
+    side: 'top',
+  };
+  layout.yaxis = {
+    type: 'category',
+    tickvals: yearRange,
+    autorange: 'reversed',
+    gridcolor: 'transparent',
+  };
+  layout.margin = { l: 40, r: 16, t: 44, b: 16 };
+  layout.dragmode = false;
+  delete layout.hovermode;
   renderPlotlyChart('backtest-monthly-chart', [{
-    type: 'bar',
-    x: labels,
-    y: returns,
-    marker: { color: colors },
-    hovertemplate: '%{x}<br>Return: %{y:.2f}%<extra></extra>',
+    type: 'heatmap',
+    z,
+    x: monthLabels,
+    y: yearRange,
+    text: hoverText,
+    hovertemplate: '%{text}<extra></extra>',
+    colorscale,
+    zmin: -zBound,
+    zmax: zBound,
+    xgap: 3,
+    ygap: 3,
+    connectgaps: false,
   }], layout);
 }
 
@@ -1101,6 +1171,7 @@ function renderBacktestWindowsChart(artifacts) {
     height: 280,
     yAxisTitle: 'Return %',
   });
+  layout.xaxis = { type: 'category' };
   layout.yaxis.zeroline = true;
   layout.yaxis.zerolinecolor = 'rgba(31,41,51,0.5)';
   renderPlotlyChart('backtest-windows-chart', [{
@@ -1120,12 +1191,13 @@ function renderBacktestCostGrid(sections, artifacts = {}) {
   if (costSection && costSection.metrics) {
     const metrics = costSection.metrics;
     rows = [
-      ['Total Fees', metrics.total_fees || '-'],
-      ['Total Turnover', metrics.total_turnover || '-'],
-      ['Fee Ratio', metrics.fee_ratio || '-'],
-      ['Fees % of Initial', metrics.fees_as_pct_of_initial || '-'],
-      ['Avg Daily Fee', metrics.avg_daily_fee || '-'],
+      ['Total Fees', metrics.total_fees != null ? formatNumber(Number(metrics.total_fees), 2) : '-'],
+      ['Annualized Turnover', metrics.annualized_turnover != null ? String(metrics.annualized_turnover) : '-'],
     ];
+    if (metrics.total_turnover != null) rows.push(['Total Turnover', formatNumber(metrics.total_turnover, 2)]);
+    if (metrics.fee_ratio != null) rows.push(['Fee Ratio', formatPercent(metrics.fee_ratio, 3)]);
+    if (metrics.fees_as_pct_of_initial != null) rows.push(['Fees % of Initial', formatPercent(metrics.fees_as_pct_of_initial, 2)]);
+    if (metrics.avg_daily_fee != null) rows.push(['Avg Daily Fee', formatNumber(metrics.avg_daily_fee, 2)]);
   } else if (artifacts.rolling_stability) {
     const stability = artifacts.rolling_stability || {};
     rows = [
@@ -1194,11 +1266,12 @@ function renderBacktestReturnDistChart(artifacts) {
     renderChartError('backtest-return-dist-chart', 'Rolling windows not available');
     return;
   }
-  const returns = windowsData.map((item) => Number(item.total_return) * 100).filter((v) => v !== null && !isNaN(v));
-  if (!returns.length) {
+  const rawReturns = windowsData.map((item) => Number(item.total_return) * 100).filter((v) => v !== null && !isNaN(v));
+  if (!rawReturns.length) {
     renderChartError('backtest-return-dist-chart', 'No return data');
     return;
   }
+  const returns = rawReturns.map((v) => Math.round(v * 10) / 10);
   const layout = plotlyBaseLayout({
     title: 'Return Distribution (% , per window)',
     height: 260,
@@ -1208,9 +1281,9 @@ function renderBacktestReturnDistChart(artifacts) {
   renderPlotlyChart('backtest-return-dist-chart', [{
     type: 'histogram',
     x: returns,
-    nbinsx: 20,
-    marker: { color: CHART_COLORS.strategy, line: { color: '#fff', width: 1 } },
-    hovertemplate: 'Return %{x:.2f}%<br>Count: %{y}<extra></extra>',
+    nbinsx: 50,
+    marker: { color: CHART_COLORS.strategy, line: { color: '#fff', width: 0.5 } },
+    hovertemplate: 'Return %{x:.1f}%<br>Count: %{y}<extra></extra>',
   }], layout);
 }
 
@@ -1224,14 +1297,15 @@ function renderBacktestICDistChart(artifacts) {
   for (const key of ['IC', 'RankIC']) {
     const data = signalData.aggregate[key];
     if (!data || !data.values) continue;
+    const icPct = data.values.map((v) => Math.round(Number(v) * 1000) / 10);
     traces.push({
       type: 'histogram',
       name: key,
-      x: data.values,
-      nbinsx: 15,
+      x: icPct,
+      nbinsx: 50,
       opacity: 0.7,
-      marker: { color: key === 'IC' ? CHART_COLORS.accent : CHART_COLORS.neutral },
-      hovertemplate: `${key}<br>%{x:.6f}<br>Count: %{y}<extra></extra>`,
+      marker: { color: key === 'IC' ? CHART_COLORS.accent : CHART_COLORS.neutral, line: { width: 0.3 } },
+      hovertemplate: `${key}<br>%{x:.1f}%<br>Count: %{y}<extra></extra>`,
     });
   }
   if (!traces.length) {
@@ -1249,6 +1323,23 @@ function renderBacktestICDistChart(artifacts) {
   renderPlotlyChart('backtest-ic-dist-chart', traces, layout);
 }
 
+function syncChartZoom(sourceId, targetId, eventData) {
+  if (state._syncingZoom) return;
+  if (!eventData || !eventData['xaxis.range']) return;
+  state._syncingZoom = true;
+  const range = eventData['xaxis.range'];
+  try {
+    window.Plotly.relayout(targetId, { 'xaxis.range': range });
+  } catch (_e) { /* ignore */ }
+  state._syncingZoom = false;
+}
+
+function makeChartRelayoutHandler(sourceId, targetId) {
+  return function (eventData) {
+    syncChartZoom(sourceId, targetId, eventData);
+  };
+}
+
 function renderBacktestCharts() {
   const dailyItems = state.backtest.daily;
   if (!dailyItems.length) {
@@ -1259,12 +1350,15 @@ function renderBacktestCharts() {
   }
   const dates = dailyItems.map((item) => item.trade_date);
   const selectedDate = state.backtest.selectedDate;
-  renderSeriesChart('backtest-equity-chart', {
+  const equityChartId = 'backtest-equity-chart';
+  const diagChartId = 'backtest-diagnostics-chart';
+  renderSeriesChart(equityChartId, {
     dates,
     title: 'Strategy / Zero-cost / CSI300 / SSE',
     height: 480,
     selectedDate,
     onClick: (tradeDate) => selectBacktestDate(tradeDate),
+    onRelayout: makeChartRelayoutHandler(equityChartId, diagChartId),
     series: [
       { name: 'Strategy', values: dailyItems.map((item) => item.equity), color: CHART_COLORS.strategy },
       { name: 'Zero-cost', values: dailyItems.map((item) => item.zero_cost_equity), color: CHART_COLORS.accent, dash: '3 4' },
@@ -1273,13 +1367,14 @@ function renderBacktestCharts() {
     ],
     yAxisTitle: 'Equity',
   });
-  renderSeriesChart('backtest-diagnostics-chart', {
+  renderSeriesChart(diagChartId, {
     dates,
     includeZero: true,
     title: 'Drawdown / IC / RankIC',
     height: 300,
     selectedDate,
     onClick: (tradeDate) => selectBacktestDate(tradeDate),
+    onRelayout: makeChartRelayoutHandler(diagChartId, equityChartId),
     series: [
       { name: 'Drawdown', values: dailyItems.map((item) => item.drawdown), color: CHART_COLORS.danger },
       { name: 'IC', values: dailyItems.map((item) => item.ic), color: CHART_COLORS.accent },
@@ -1835,9 +1930,9 @@ async function loadCase() {
     }));
     const tradeMarkers = [...backtestTrades.map((item) => ({
       trade_date: item.date,
-      value: toNumber(item.deal_price),
+      value: toNumber(item.price),
       side: item.side,
-      quantity: item.filled_amount,
+      quantity: item.amount,
       source: 'fill',
     })), ...replayOrderMarkers];
 
@@ -2187,11 +2282,11 @@ async function loadFeatureHealth() {
 function buildReplaySummaryCards(replay) {
   const summary = replay.summary || {};
   byId('replay-summary-row').innerHTML = [
-    { label: 'Intent Count', value: String(summary.intent_count || replay.final_orders.length || 0), note: 'reported by order intents' },
-    { label: 'Previous Positions', value: String(replay.previous_positions.length || 0), note: 'account carry-over' },
-    { label: 'Candidates', value: String(replay.scored_candidates.length || 0), note: 'ranking payload' },
-    { label: 'Selected Targets', value: String(replay.selected_targets.length || 0), note: 'filtered output' },
-    { label: 'Final Orders', value: String(replay.final_orders.length || 0), note: 'execution list' },
+    { label: 'Intent Count', value: String(summary.intent_count || (replay.final_orders || []).length || 0), note: 'reported by order intents' },
+    { label: 'Previous Positions', value: String((replay.previous_positions || []).length), note: 'account carry-over' },
+    { label: 'Candidates', value: String((replay.scored_candidates || []).length), note: 'ranking payload' },
+    { label: 'Selected Targets', value: String((replay.selected_targets || []).length), note: 'filtered output' },
+    { label: 'Final Orders', value: String((replay.final_orders || []).length), note: 'execution list' },
     { label: 'Account', value: replay.account_name || state.context.account || '-', note: replay.execution_date || replay.trade_date || '-' },
   ].map((item) => `
     <article class="panel stat-card">
@@ -2213,22 +2308,22 @@ function buildReplayPipeline(replay) {
     },
     {
       stage: 'Ranking',
-      value: replay.scored_candidates.length || 0,
+      value: (replay.scored_candidates || []).length,
       note: 'candidate rows with scores',
     },
     {
       stage: 'Filtered',
-      value: replay.selected_targets.length || replay.final_orders.length || 0,
-      note: replay.selected_targets.length ? 'selected targets' : 'fallback to final orders count',
+      value: (replay.selected_targets || []).length || (replay.final_orders || []).length || 0,
+      note: (replay.selected_targets || []).length ? 'selected targets' : 'fallback to final orders count',
     },
     {
       stage: 'Portfolio',
-      value: replay.previous_positions.length || 0,
+      value: (replay.previous_positions || []).length,
       note: 'previous positions linked on right',
     },
     {
       stage: 'Orders',
-      value: replay.final_orders.length || 0,
+      value: (replay.final_orders || []).length,
       note: 'final output for execution',
     },
   ].map((item) => `
@@ -2397,9 +2492,12 @@ async function loadReplay() {
     state.replayData.payload = replay;
     buildReplaySummaryCards(replay);
     buildReplayPipeline(replay);
-    const selectedInstrument = replay.final_orders.some((row) => row.instrument_id === state.context.instrumentId)
+    const finalOrders = replay.final_orders || [];
+    const scoredCandidates = replay.scored_candidates || [];
+    const previousPositions = replay.previous_positions || [];
+    const selectedInstrument = finalOrders.some((row) => row.instrument_id === state.context.instrumentId)
       ? state.context.instrumentId
-      : replay.final_orders[0]?.instrument_id || replay.scored_candidates[0]?.instrument_id || replay.previous_positions[0]?.instrument_id || '';
+      : finalOrders[0]?.instrument_id || scoredCandidates[0]?.instrument_id || previousPositions[0]?.instrument_id || '';
     state.replayData.selectedInstrument = selectedInstrument;
     renderReplayTables();
     renderReplaySelection();
