@@ -18,6 +18,7 @@ const state = {
   cache: new Map(),
   tableState: new Map(),
   tableRegistry: new Map(),
+  _syncingZoom: false,
   latestBacktestRunId: null,
   backtestRuns: [],
   featureRegistry: [],
@@ -37,6 +38,8 @@ const state = {
     summary: null,
     daily: [],
     groupReturns: [],
+    sections: [],
+    sectionArtifacts: {},
     selectedDate: '',
     selectedInstrument: '',
     ordersByDate: new Map(),
@@ -365,7 +368,7 @@ function dashToPlotlyDash(dash) {
   return dash.includes('2') ? 'dot' : 'dash';
 }
 
-function renderSeriesChart(containerId, { dates = [], series = [], title = '', includeZero = false, yAxisTitle = '', height = 320, selectedDate = '', onClick = null } = {}) {
+function renderSeriesChart(containerId, { dates = [], series = [], title = '', includeZero = false, yAxisTitle = '', height = 320, selectedDate = '', onClick = null, onRelayout = null } = {}) {
   const traces = series
     .map((item) => ({
       ...item,
@@ -392,12 +395,14 @@ function renderSeriesChart(containerId, { dates = [], series = [], title = '', i
   }
   const layout = plotlyBaseLayout({ title, height, yAxisTitle, selectedDate });
   if (includeZero) layout.yaxis.zeroline = true;
-  renderPlotlyChart(containerId, traces, layout, {
+  const handlers = {
     onClick: (event) => {
       const tradeDate = toDateLabel(event?.points?.[0]?.x);
       if (tradeDate && onClick) onClick(tradeDate);
     },
-  });
+  };
+  if (onRelayout) handlers.onRelayout = onRelayout;
+  renderPlotlyChart(containerId, traces, layout, handlers);
 }
 
 function renderVolumeChart(containerId, bars, { selectedDate = '' } = {}) {
@@ -898,35 +903,22 @@ function renderParameterSummary(summary) {
   }
   label.textContent = summary.display_label || summary.run_id || '';
   const params = summary.parameter_summary || {};
-  const rows = [
+  const rawRows = [
     ['Version', params.version_label || summary.display_label || '-'],
-    ['Internal ID', params.internal_run_id || summary.run_id || '-'],
     ['Model', summary.model_name || '-'],
     ['Feature Set', params.feature_set || summary.feature_set || '-'],
-    ['Model Type', params.model_type || '-'],
-    ['Label Type', params.label_type || '-'],
-    ['Strategy Type', params.strategy_type || '-'],
-    ['Feature Count', params.feature_count ?? '-'],
     ['Universe', params.universe || summary.universe || '-'],
     ['Top K', params.top_k ?? summary.top_k ?? '-'],
-    ['Rebalance Mode', params.rebalance_mode || '-'],
-    ['Rebalance Freq', params.rebalance_freq || '-'],
-    ['Inference Freq', params.inference_freq || '-'],
-    ['Retrain Freq', params.retrain_freq || '-'],
+    ['Label Type', params.label_type || '-'],
+    ['Strategy Type', params.strategy_type || '-'],
+    ['Rebalance', [params.rebalance_mode || '-', params.rebalance_freq || ''].filter(Boolean).join(' ')],
     ['Signal Date', params.signal_date || summary.train_range?.start || '-'],
     ['Execution Date', params.execution_date || summary.test_range?.end || '-'],
-    ['Training Mode', params.training_mode || '-'],
-    ['Train End Requested', params.train_end_requested || '-'],
-    ['Train End Effective', params.train_end_effective || '-'],
-    ['Infer Date', params.infer_date || '-'],
-    ['Last Train Sample', params.last_train_sample_date || '-'],
-    ['Max Label Date', params.max_label_date_used || '-'],
-    ['Label Mature', params.is_label_mature_at_infer_time ?? '-'],
-    ['Shadow Rejects', params.shadow_reject_count ?? '-'],
-    ['Suspicious Trades', params.suspicious_trade_count ?? '-'],
-    ['Price Mode', params.price_mode || summary.price_mode || '-'],
-    ['Model Path', params.model_path || '-'],
   ];
+  const rows = rawRows.filter(([key, value]) => {
+    const v = String(value).trim();
+    return v !== '-' && v !== '' && v !== 'None' && v !== 'null' && v !== 'undefined';
+  });
   root.innerHTML = rows.map(([key, value]) => `
     <div class="kv-item">
       <span>${escapeHtml(key)}</span>
@@ -1030,6 +1022,324 @@ function renderBacktestGroupReturns() {
   });
 }
 
+function renderBacktestSections() {
+  const runId = state.context.runId || byId('backtest-run-select').value;
+  if (!runId) {
+    renderChartError('backtest-monthly-chart', 'No run selected');
+    renderChartError('backtest-windows-chart', 'No run selected');
+    renderChartError('backtest-signal-windows-chart', 'No run selected');
+    renderChartError('backtest-return-dist-chart', 'No run selected');
+    renderChartError('backtest-ic-dist-chart', 'No run selected');
+    return;
+  }
+  getJson(`/api/backtest-runs/${runId}/sections`, { useCache: false })
+    .then((payload) => {
+      const data = unwrapData(payload) || {};
+      const artifacts = data.artifacts || {};
+      const sections = data.sections || [];
+      state.backtest.sections = sections;
+      state.backtest.sectionArtifacts = artifacts;
+      renderBacktestMonthlyHeatmap(artifacts);
+      renderBacktestWindowsChart(artifacts);
+      renderBacktestCostGrid(sections, artifacts);
+      renderBacktestSignalWindowsChart(artifacts);
+      renderBacktestReturnDistChart(artifacts);
+      renderBacktestICDistChart(artifacts);
+    })
+    .catch(() => {
+      renderChartError('backtest-monthly-chart', 'Sections endpoint not available for this run');
+      renderChartError('backtest-windows-chart', 'Sections endpoint not available');
+      renderChartError('backtest-signal-windows-chart', 'Sections endpoint not available');
+      renderChartError('backtest-return-dist-chart', 'Sections endpoint not available');
+      renderChartError('backtest-ic-dist-chart', 'Sections endpoint not available');
+    });
+}
+
+function renderBacktestMonthlyHeatmap(artifacts) {
+  // Monthly return heatmap (years × months)
+  let data = artifacts.monthly_returns;
+  if (!data || !data.length) {
+    data = artifacts.weekly_returns;
+    if (data && data.length) {
+      // Aggregate weekly -> monthly
+      const monthMap = {};
+      data.forEach((item) => {
+        const week = item.week || '';
+        const month = week.slice(0, 7);
+        if (month && month.length === 7) {
+          if (!monthMap[month]) monthMap[month] = [];
+          monthMap[month].push(Number(item.return));
+        }
+      });
+      data = Object.entries(monthMap).map(([month, returns]) => ({
+        month,
+        return: returns.reduce((s, v) => s + v, 0) / returns.length,
+      }));
+    }
+  }
+  if (!data || !data.length) {
+    renderChartError('backtest-monthly-chart', 'Returns not available');
+    return;
+  }
+  // Parse months into year/month grid
+  const months = Array.from(new Set(data.map((item) => item.month.slice(0, 7)))).sort();
+  const years = Array.from(new Set(months.map((m) => m.slice(0, 4)))).sort();
+  const monthLabels = ['01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11', '12'];
+  const lookup = {};
+  months.forEach((m) => { lookup[m] = true; });
+  const yearRange = [];
+  for (let y = parseInt(years[0], 10); y <= parseInt(years[years.length - 1], 10); y++) {
+    yearRange.push(String(y));
+  }
+  const z = yearRange.map((year) =>
+    monthLabels.map((mon) => {
+      const key = `${year}-${mon}`;
+      if (!lookup[key]) return null;
+      const entry = data.find((d) => d.month === key);
+      return entry ? Number(entry.return) * 100 : null;
+    })
+  );
+  const colorscale = [
+    [0, '#7f1d1d'],
+    [0.35, '#e57373'],
+    [0.48, '#e8ddd0'],
+    [0.52, '#e8ddd0'],
+    [0.65, '#81c784'],
+    [1, '#1b5e20'],
+  ];
+  const maxAbs = Math.max(Math.abs(Math.min(...z.flat().filter((v) => v !== null))), Math.abs(Math.max(...z.flat().filter((v) => v !== null))));
+  const zBound = Math.max(5, Math.ceil(maxAbs / 5) * 5);
+  const hoverText = yearRange.map((year, yi) =>
+    monthLabels.map((mon, xi) => {
+      const val = z[yi][xi];
+      return `${year}-${mon}<br>Return: ${val !== null ? val.toFixed(2) + '%' : 'N/A'}`;
+    })
+  );
+  const layout = plotlyBaseLayout({
+    title: 'Monthly Return Heatmap (%)',
+    height: Math.max(200, yearRange.length * 50 + 80),
+  });
+  layout.xaxis = {
+    type: 'category',
+    tickvals: monthLabels,
+    ticktext: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
+    gridcolor: 'transparent',
+    side: 'top',
+  };
+  layout.yaxis = {
+    type: 'category',
+    tickvals: yearRange,
+    autorange: 'reversed',
+    gridcolor: 'transparent',
+  };
+  layout.margin = { l: 40, r: 16, t: 44, b: 16 };
+  layout.dragmode = false;
+  delete layout.hovermode;
+  renderPlotlyChart('backtest-monthly-chart', [{
+    type: 'heatmap',
+    z,
+    x: monthLabels,
+    y: yearRange,
+    text: hoverText,
+    hovertemplate: '%{text}<extra></extra>',
+    colorscale,
+    zmin: -zBound,
+    zmax: zBound,
+    xgap: 3,
+    ygap: 3,
+    connectgaps: false,
+  }], layout);
+}
+
+function getBacktestWindowRows(artifacts) {
+  if (Array.isArray(artifacts?.rolling_metrics) && artifacts.rolling_metrics.length) return artifacts.rolling_metrics;
+  if (Array.isArray(artifacts?.rolling_windows) && artifacts.rolling_windows.length) return artifacts.rolling_windows;
+  return [];
+}
+
+function renderBacktestWindowsChart(artifacts) {
+  const windowsData = getBacktestWindowRows(artifacts);
+  if (!windowsData || !windowsData.length) {
+    renderChartError('backtest-windows-chart', 'Rolling windows not available');
+    return;
+  }
+  const labels = windowsData.map((item) => item.window_id || item.test_start || '');
+  const returns = windowsData.map((item) => Number(item.total_return) * 100);
+  const colors = returns.map((v) => v >= 0 ? CHART_COLORS.strategy : CHART_COLORS.danger);
+  const layout = plotlyBaseLayout({
+    title: 'Per-Window Total Return (%)',
+    height: 280,
+    yAxisTitle: 'Return %',
+  });
+  layout.xaxis = { type: 'category' };
+  layout.yaxis.zeroline = true;
+  layout.yaxis.zerolinecolor = 'rgba(31,41,51,0.5)';
+  renderPlotlyChart('backtest-windows-chart', [{
+    type: 'bar',
+    x: labels,
+    y: returns,
+    marker: { color: colors },
+    hovertemplate: '%{x}<br>Return: %{y:.2f}%<extra></extra>',
+  }], layout);
+}
+
+function renderBacktestCostGrid(sections, artifacts = {}) {
+  const root = byId('backtest-cost-grid');
+  if (!root) return;
+  const costSection = sections.find((s) => s.name === 'Cost Analysis');
+  let rows = [];
+  if (costSection && costSection.metrics) {
+    const metrics = costSection.metrics;
+    rows = [
+      ['Total Fees', metrics.total_fees != null ? formatNumber(Number(metrics.total_fees), 2) : '-'],
+      ['Annualized Turnover', metrics.annualized_turnover != null ? String(metrics.annualized_turnover) : '-'],
+    ];
+    if (metrics.total_turnover != null) rows.push(['Total Turnover', formatNumber(metrics.total_turnover, 2)]);
+    if (metrics.fee_ratio != null) rows.push(['Fee Ratio', formatPercent(metrics.fee_ratio, 3)]);
+    if (metrics.fees_as_pct_of_initial != null) rows.push(['Fees % of Initial', formatPercent(metrics.fees_as_pct_of_initial, 2)]);
+    if (metrics.avg_daily_fee != null) rows.push(['Avg Daily Fee', formatNumber(metrics.avg_daily_fee, 2)]);
+  } else if (artifacts.rolling_stability) {
+    const stability = artifacts.rolling_stability || {};
+    rows = [
+      ['Avg Turnover', formatPercent(stability.turnover_mean, 2)],
+      ['Turnover Std', formatPercent(stability.turnover_std, 2)],
+      ['Positive Return Weeks', formatPercent(stability.positive_return_ratio, 1)],
+      ['Positive RankIC Weeks', formatPercent(stability.positive_rankic_ratio, 1)],
+      ['Return Std', formatPercent(stability.return_std, 2)],
+    ];
+  }
+  if (!rows.length) {
+    root.innerHTML = '<div class="empty">Cost analysis not available</div>';
+    return;
+  }
+  root.innerHTML = rows.map(([key, value]) => `
+    <div class="kv-item">
+      <span>${escapeHtml(key)}</span>
+      <strong>${escapeHtml(String(value))}</strong>
+    </div>
+  `).join('');
+}
+
+function renderBacktestSignalWindowsChart(artifacts) {
+  const signalData = artifacts.signal_metrics;
+  if (!signalData || !signalData.aggregate) {
+    renderChartError('backtest-signal-windows-chart', 'Signal metrics not available');
+    return;
+  }
+  const agg = signalData.aggregate;
+  const traces = [];
+  const palette = [CHART_COLORS.accent, CHART_COLORS.neutral, CHART_COLORS.strategy];
+  let idx = 0;
+  for (const key of ['IC', 'RankIC', 'long_short_spread']) {
+    const data = agg[key];
+    if (!data || !data.values) continue;
+    traces.push({
+      type: 'scatter',
+      mode: 'lines+markers',
+      name: key,
+      x: data.values.map((_, i) => String(i + 1)),
+      y: data.values,
+      line: { color: palette[idx % palette.length], width: 2 },
+      marker: { color: palette[idx % palette.length], size: 5 },
+      hovertemplate: `${key}<br>Window %{x}<br>%{y:.6f}<extra></extra>`,
+    });
+    idx++;
+  }
+  if (!traces.length) {
+    renderChartError('backtest-signal-windows-chart', 'No per-window signal data');
+    return;
+  }
+  const layout = plotlyBaseLayout({
+    title: 'IC / RankIC per Window',
+    height: 280,
+    yAxisTitle: 'Value',
+  });
+  layout.xaxis = { type: 'category', title: { text: 'Window' } };
+  layout.yaxis.zeroline = true;
+  layout.legend = { orientation: 'h', y: 1.08 };
+  renderPlotlyChart('backtest-signal-windows-chart', traces, layout);
+}
+
+function renderBacktestReturnDistChart(artifacts) {
+  const windowsData = getBacktestWindowRows(artifacts);
+  if (!windowsData || !windowsData.length) {
+    renderChartError('backtest-return-dist-chart', 'Rolling windows not available');
+    return;
+  }
+  const rawReturns = windowsData.map((item) => Number(item.total_return) * 100).filter((v) => v !== null && !isNaN(v));
+  if (!rawReturns.length) {
+    renderChartError('backtest-return-dist-chart', 'No return data');
+    return;
+  }
+  const returns = rawReturns.map((v) => Math.round(v * 10) / 10);
+  const layout = plotlyBaseLayout({
+    title: 'Return Distribution (% , per window)',
+    height: 260,
+    yAxisTitle: 'Count',
+  });
+  layout.xaxis = { title: { text: 'Return %' } };
+  renderPlotlyChart('backtest-return-dist-chart', [{
+    type: 'histogram',
+    x: returns,
+    nbinsx: 50,
+    marker: { color: CHART_COLORS.strategy, line: { color: '#fff', width: 0.5 } },
+    hovertemplate: 'Return %{x:.1f}%<br>Count: %{y}<extra></extra>',
+  }], layout);
+}
+
+function renderBacktestICDistChart(artifacts) {
+  const signalData = artifacts.signal_metrics;
+  if (!signalData || !signalData.aggregate) {
+    renderChartError('backtest-ic-dist-chart', 'Signal metrics not available');
+    return;
+  }
+  const traces = [];
+  for (const key of ['IC', 'RankIC']) {
+    const data = signalData.aggregate[key];
+    if (!data || !data.values) continue;
+    const icPct = data.values.map((v) => Math.round(Number(v) * 1000) / 10);
+    traces.push({
+      type: 'histogram',
+      name: key,
+      x: icPct,
+      nbinsx: 50,
+      opacity: 0.7,
+      marker: { color: key === 'IC' ? CHART_COLORS.accent : CHART_COLORS.neutral, line: { width: 0.3 } },
+      hovertemplate: `${key}<br>%{x:.1f}%<br>Count: %{y}<extra></extra>`,
+    });
+  }
+  if (!traces.length) {
+    renderChartError('backtest-ic-dist-chart', 'No IC data');
+    return;
+  }
+  const layout = plotlyBaseLayout({
+    title: 'IC / RankIC Distribution',
+    height: 260,
+    yAxisTitle: 'Count',
+  });
+  layout.xaxis = { title: { text: 'IC Value' } };
+  layout.barmode = 'overlay';
+  layout.legend = { orientation: 'h', y: 1.08 };
+  renderPlotlyChart('backtest-ic-dist-chart', traces, layout);
+}
+
+function syncChartZoom(sourceId, targetId, eventData) {
+  if (state._syncingZoom) return;
+  if (!eventData || !eventData['xaxis.range']) return;
+  state._syncingZoom = true;
+  const range = eventData['xaxis.range'];
+  try {
+    window.Plotly.relayout(targetId, { 'xaxis.range': range });
+  } catch (_e) { /* ignore */ }
+  state._syncingZoom = false;
+}
+
+function makeChartRelayoutHandler(sourceId, targetId) {
+  return function (eventData) {
+    syncChartZoom(sourceId, targetId, eventData);
+  };
+}
+
 function renderBacktestCharts() {
   const dailyItems = state.backtest.daily;
   if (!dailyItems.length) {
@@ -1040,12 +1350,15 @@ function renderBacktestCharts() {
   }
   const dates = dailyItems.map((item) => item.trade_date);
   const selectedDate = state.backtest.selectedDate;
-  renderSeriesChart('backtest-equity-chart', {
+  const equityChartId = 'backtest-equity-chart';
+  const diagChartId = 'backtest-diagnostics-chart';
+  renderSeriesChart(equityChartId, {
     dates,
     title: 'Strategy / Zero-cost / CSI300 / SSE',
     height: 480,
     selectedDate,
     onClick: (tradeDate) => selectBacktestDate(tradeDate),
+    onRelayout: makeChartRelayoutHandler(equityChartId, diagChartId),
     series: [
       { name: 'Strategy', values: dailyItems.map((item) => item.equity), color: CHART_COLORS.strategy },
       { name: 'Zero-cost', values: dailyItems.map((item) => item.zero_cost_equity), color: CHART_COLORS.accent, dash: '3 4' },
@@ -1054,13 +1367,14 @@ function renderBacktestCharts() {
     ],
     yAxisTitle: 'Equity',
   });
-  renderSeriesChart('backtest-diagnostics-chart', {
+  renderSeriesChart(diagChartId, {
     dates,
     includeZero: true,
     title: 'Drawdown / IC / RankIC',
     height: 300,
     selectedDate,
     onClick: (tradeDate) => selectBacktestDate(tradeDate),
+    onRelayout: makeChartRelayoutHandler(diagChartId, equityChartId),
     series: [
       { name: 'Drawdown', values: dailyItems.map((item) => item.drawdown), color: CHART_COLORS.danger },
       { name: 'IC', values: dailyItems.map((item) => item.ic), color: CHART_COLORS.accent },
@@ -1190,6 +1504,7 @@ function renderBacktestContributors(orders) {
 
 function renderBacktestContextMeta(orders) {
   const root = byId('backtest-context-meta');
+  const stability = state.backtest.sectionArtifacts?.rolling_stability || null;
   const buyCount = (orders || []).filter((row) => normalizeTradeSide(row.side) !== 'sell').length;
   const sellCount = (orders || []).filter((row) => normalizeTradeSide(row.side) === 'sell').length;
   const tradedValue = (orders || []).reduce((sum, row) => {
@@ -1197,11 +1512,20 @@ function renderBacktestContextMeta(orders) {
     const price = toNumber(row.deal_price || row.price) || 0;
     return sum + Math.abs(quantity * price);
   }, 0);
-  root.innerHTML = [
+  const cards = [
     { label: 'Orders', value: String((orders || []).length) },
     { label: 'Buy / Sell', value: `${buyCount} / ${sellCount}` },
     { label: 'Gross Traded', value: formatNumber(tradedValue, 0) },
-  ].map((item) => `
+  ];
+  if ((!orders || !orders.length) && stability) {
+    cards.splice(0, cards.length,
+      { label: 'Positive Return', value: formatPercent(stability.positive_return_ratio, 1) },
+      { label: 'Positive RankIC', value: formatPercent(stability.positive_rankic_ratio, 1) },
+      { label: 'Best Week', value: `${stability.best_window?.window_id || '-'} · ${formatPercent(stability.best_window?.total_return, 2)}` },
+      { label: 'Worst Week', value: `${stability.worst_window?.window_id || '-'} · ${formatPercent(stability.worst_window?.total_return, 2)}` },
+    );
+  }
+  root.innerHTML = cards.map((item) => `
     <div class="kv-item">
       <span>${escapeHtml(item.label)}</span>
       <strong>${escapeHtml(item.value)}</strong>
@@ -1361,12 +1685,15 @@ async function loadBacktest() {
     state.backtest.summary = summary;
     state.backtest.daily = dailyItems;
     state.backtest.groupReturns = groupReturns;
+    state.backtest.sections = [];
+    state.backtest.sectionArtifacts = {};
     state.backtest.ordersByDate = new Map();
     renderParameterSummary(summary);
     renderBacktestRunContext();
     renderBacktestSignalMetrics(summary);
     summarizeBacktestMetrics(summary, dailyItems);
     renderBacktestDailyTable();
+    renderBacktestSections();
 
     const selectedDate = dailyItems.some((item) => item.trade_date === state.context.tradeDate)
       ? state.context.tradeDate
@@ -1384,9 +1711,13 @@ async function loadBacktest() {
     byId('backtest-signal-metrics').innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
     renderChartError('backtest-group-returns-chart', error.message);
     byId('backtest-group-returns-table').innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
+    renderChartError('backtest-monthly-chart', error.message);
+    renderChartError('backtest-windows-chart', error.message);
+    renderChartError('backtest-signal-windows-chart', error.message);
+    renderChartError('backtest-return-dist-chart', error.message);
+    renderChartError('backtest-ic-dist-chart', error.message);
   }
 }
-
 function filterFeatureRows(features, searchValue) {
   const needle = String(searchValue || '').trim().toLowerCase();
   return Object.entries(features || {})
@@ -1599,9 +1930,9 @@ async function loadCase() {
     }));
     const tradeMarkers = [...backtestTrades.map((item) => ({
       trade_date: item.date,
-      value: toNumber(item.deal_price),
+      value: toNumber(item.price),
       side: item.side,
-      quantity: item.filled_amount,
+      quantity: item.amount,
       source: 'fill',
     })), ...replayOrderMarkers];
 
@@ -1951,11 +2282,11 @@ async function loadFeatureHealth() {
 function buildReplaySummaryCards(replay) {
   const summary = replay.summary || {};
   byId('replay-summary-row').innerHTML = [
-    { label: 'Intent Count', value: String(summary.intent_count || replay.final_orders.length || 0), note: 'reported by order intents' },
-    { label: 'Previous Positions', value: String(replay.previous_positions.length || 0), note: 'account carry-over' },
-    { label: 'Candidates', value: String(replay.scored_candidates.length || 0), note: 'ranking payload' },
-    { label: 'Selected Targets', value: String(replay.selected_targets.length || 0), note: 'filtered output' },
-    { label: 'Final Orders', value: String(replay.final_orders.length || 0), note: 'execution list' },
+    { label: 'Intent Count', value: String(summary.intent_count || (replay.final_orders || []).length || 0), note: 'reported by order intents' },
+    { label: 'Previous Positions', value: String((replay.previous_positions || []).length), note: 'account carry-over' },
+    { label: 'Candidates', value: String((replay.scored_candidates || []).length), note: 'ranking payload' },
+    { label: 'Selected Targets', value: String((replay.selected_targets || []).length), note: 'filtered output' },
+    { label: 'Final Orders', value: String((replay.final_orders || []).length), note: 'execution list' },
     { label: 'Account', value: replay.account_name || state.context.account || '-', note: replay.execution_date || replay.trade_date || '-' },
   ].map((item) => `
     <article class="panel stat-card">
@@ -1977,22 +2308,22 @@ function buildReplayPipeline(replay) {
     },
     {
       stage: 'Ranking',
-      value: replay.scored_candidates.length || 0,
+      value: (replay.scored_candidates || []).length,
       note: 'candidate rows with scores',
     },
     {
       stage: 'Filtered',
-      value: replay.selected_targets.length || replay.final_orders.length || 0,
-      note: replay.selected_targets.length ? 'selected targets' : 'fallback to final orders count',
+      value: (replay.selected_targets || []).length || (replay.final_orders || []).length || 0,
+      note: (replay.selected_targets || []).length ? 'selected targets' : 'fallback to final orders count',
     },
     {
       stage: 'Portfolio',
-      value: replay.previous_positions.length || 0,
+      value: (replay.previous_positions || []).length,
       note: 'previous positions linked on right',
     },
     {
       stage: 'Orders',
-      value: replay.final_orders.length || 0,
+      value: (replay.final_orders || []).length,
       note: 'final output for execution',
     },
   ].map((item) => `
@@ -2161,9 +2492,12 @@ async function loadReplay() {
     state.replayData.payload = replay;
     buildReplaySummaryCards(replay);
     buildReplayPipeline(replay);
-    const selectedInstrument = replay.final_orders.some((row) => row.instrument_id === state.context.instrumentId)
+    const finalOrders = replay.final_orders || [];
+    const scoredCandidates = replay.scored_candidates || [];
+    const previousPositions = replay.previous_positions || [];
+    const selectedInstrument = finalOrders.some((row) => row.instrument_id === state.context.instrumentId)
       ? state.context.instrumentId
-      : replay.final_orders[0]?.instrument_id || replay.scored_candidates[0]?.instrument_id || replay.previous_positions[0]?.instrument_id || '';
+      : finalOrders[0]?.instrument_id || scoredCandidates[0]?.instrument_id || previousPositions[0]?.instrument_id || '';
     state.replayData.selectedInstrument = selectedInstrument;
     renderReplayTables();
     renderReplaySelection();

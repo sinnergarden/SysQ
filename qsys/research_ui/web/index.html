@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Qsys Research UI Cockpit</title>
-  <link rel="stylesheet" href="/ui/styles.css?v=20260517g" />
+  <link rel="stylesheet" href="/ui/styles.css?v=20260519d" />
   <script defer src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
 </head>
 <body>
@@ -78,6 +78,7 @@
 
       <section class="view active" id="view-backtest">
         <div class="view-grid backtest-grid">
+          <div class="backtest-main">
           <section class="panel panel-hero">
             <div class="panel-head compact-head">
               <div>
@@ -88,6 +89,118 @@
             </div>
             <div id="backtest-equity-chart" class="chart plotly-chart chart-hero"></div>
           </section>
+
+          <section class="panel">
+            <div class="panel-head compact-head">
+              <div>
+                <p class="eyebrow">Diagnostics</p>
+                <h3>Drawdown / IC / RankIC</h3>
+              </div>
+            </div>
+            <div id="backtest-diagnostics-chart" class="chart plotly-chart chart-mid"></div>
+          </section>
+
+          <section class="panel panel-table-main">
+            <div class="panel-head compact-head">
+              <div>
+                <p class="eyebrow">Daily Drill-down</p>
+                <h3>Research Timeline</h3>
+              </div>
+            </div>
+            <div id="backtest-daily-table" class="table-wrap"></div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head compact-head">
+              <div>
+                <p class="eyebrow">Signal Groups</p>
+                <h3>Group 1-5 NAV</h3>
+              </div>
+            </div>
+            <div id="backtest-group-returns-chart" class="chart plotly-chart chart-mid"></div>
+            <div id="backtest-group-returns-table" class="table-wrap"></div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head compact-head">
+              <div>
+                <p class="eyebrow">Monthly Distribution</p>
+                <h3>Monthly Returns</h3>
+              </div>
+            </div>
+            <div id="backtest-monthly-chart" class="chart plotly-chart chart-mid"></div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head compact-head">
+              <div>
+                <p class="eyebrow">Rolling Windows</p>
+                <h3>Per-Window Return</h3>
+              </div>
+            </div>
+            <div id="backtest-windows-chart" class="chart plotly-chart chart-mid"></div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head compact-head">
+              <div>
+                <p class="eyebrow">Cost Breakdown</p>
+                <h3>Fee Analysis</h3>
+              </div>
+            </div>
+            <div id="backtest-cost-grid" class="kv-grid"></div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head compact-head">
+              <div>
+                <p class="eyebrow">Signal Over Windows</p>
+                <h3>IC / RankIC per Window</h3>
+              </div>
+            </div>
+            <div id="backtest-signal-windows-chart" class="chart plotly-chart chart-mid"></div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head compact-head">
+              <div>
+                <p class="eyebrow">Return Distribution</p>
+                <h3>Per-Window Return Histogram</h3>
+              </div>
+            </div>
+            <div id="backtest-return-dist-chart" class="chart plotly-chart chart-mid"></div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head compact-head">
+              <div>
+                <p class="eyebrow">IC Distribution</p>
+                <h3>IC / RankIC Histogram</h3>
+              </div>
+            </div>
+            <div id="backtest-ic-dist-chart" class="chart plotly-chart chart-mid"></div>
+          </section>
+
+          <section class="panel panel-context-detail">
+            <div class="panel-head compact-head">
+              <div>
+                <p class="eyebrow">Selected Date</p>
+                <h3>Orders / Contributors</h3>
+              </div>
+            </div>
+            <div id="backtest-context-meta" class="summary-grid summary-grid-mini"></div>
+            <div class="subpanel-grid">
+              <div>
+                <div class="section-label">Trade-Day Orders</div>
+                <div id="backtest-orders-table" class="table-wrap"></div>
+              </div>
+              <div>
+                <div class="section-label">Top Contributors</div>
+                <div id="backtest-contributors" class="stack-list"></div>
+              </div>
+            </div>
+          </section>
+        </div><!-- END backtest-main -->
 
           <section class="side-stack">
             <div class="summary-grid summary-grid-tight">
@@ -128,57 +241,6 @@
               <div id="backtest-selected-summary" class="stack-list"></div>
               <div id="backtest-context-links" class="button-row"></div>
             </section>
-          </section>
-
-          <section class="panel">
-            <div class="panel-head compact-head">
-              <div>
-                <p class="eyebrow">Diagnostics</p>
-                <h3>Drawdown / IC / RankIC</h3>
-              </div>
-            </div>
-            <div id="backtest-diagnostics-chart" class="chart plotly-chart chart-mid"></div>
-          </section>
-
-          <section class="panel panel-table-main">
-            <div class="panel-head compact-head">
-              <div>
-                <p class="eyebrow">Daily Drill-down</p>
-                <h3>Research Timeline</h3>
-              </div>
-            </div>
-            <div id="backtest-daily-table" class="table-wrap"></div>
-          </section>
-
-          <section class="panel">
-            <div class="panel-head compact-head">
-              <div>
-                <p class="eyebrow">Signal Groups</p>
-                <h3>Group 1-5 NAV</h3>
-              </div>
-            </div>
-            <div id="backtest-group-returns-chart" class="chart plotly-chart chart-mid"></div>
-            <div id="backtest-group-returns-table" class="table-wrap"></div>
-          </section>
-
-          <section class="panel panel-context-detail">
-            <div class="panel-head compact-head">
-              <div>
-                <p class="eyebrow">Selected Date</p>
-                <h3>Orders / Contributors</h3>
-              </div>
-            </div>
-            <div id="backtest-context-meta" class="summary-grid summary-grid-mini"></div>
-            <div class="subpanel-grid">
-              <div>
-                <div class="section-label">Trade-Day Orders</div>
-                <div id="backtest-orders-table" class="table-wrap"></div>
-              </div>
-              <div>
-                <div class="section-label">Top Contributors</div>
-                <div id="backtest-contributors" class="stack-list"></div>
-              </div>
-            </div>
           </section>
         </div>
       </section>
@@ -403,6 +465,6 @@
     </main>
   </div>
 
-  <script defer src="/ui/app.js?v=20260517g"></script>
+  <script defer src="/ui/app.js?v=20260519d"></script>
 </body>
 </html>
