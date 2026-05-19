@@ -151,10 +151,11 @@ def train_model(X_train, y_train, tag, n_est=None):
                       callbacks=[lgb.early_stopping(20), lgb.log_evaluation(0)])
     pred = pd.Series(model.predict(Xz.values), index=Xz.index)
     valid = pred.notna() & y_train.notna()
+    ric = None
     if valid.sum() > 0:
         ric = float(pred[valid].corr(y_train[valid], method="spearman"))
         print(f"    [{tag}] Train RankIC={ric:.5f}, trees={model.best_iteration}")
-    return model, center, scale
+    return model, center, scale, ric
 
 
 def predict_model(model, center, scale, X):
@@ -340,7 +341,7 @@ def main():
     X_pred = predict_data[clean_features].astype(np.float32).fillna(0.0)
 
     for tag in ["5d", "20d"]:
-        predict_data[f"pred_{tag}"] = predict_model(*models[tag], X_pred).values
+        predict_data[f"pred_{tag}"] = predict_model(*models[tag][:3], X_pred).values
 
     z5 = cs_zscore(pd.Series(predict_data["pred_5d"].values))
     z20 = cs_zscore(pd.Series(predict_data["pred_20d"].values))
@@ -413,16 +414,31 @@ def main():
     held_symbols = set()
     buy_symbols = [inst for inst, _ in sorted_tw if inst not in held_symbols]
 
+    ric_5d = models.get("5d", (None, None, None, None))[3]
+    ric_20d = models.get("20d", (None, None, None, None))[3]
+    tree_5d = models["5d"][0].best_iteration if "5d" in models else "?"
+    tree_20d = models["20d"][0].best_iteration if "20d" in models else "?"
+    total_time = time.time() - t_start
+
+    model_5d_line = f"Model 5d : trees={tree_5d}"
+    if ric_5d is not None:
+        model_5d_line += f" | RankIC={ric_5d:.4f}"
+    model_20d_line = f"Model 20d: trees={tree_20d}"
+    if ric_20d is not None:
+        model_20d_line += f" | RankIC={ric_20d:.4f}"
+
     msg_lines = [
         f"🤖 <b>Alpha V1 Pre-open Signal</b>",
         f"Signal: {signal_date} | Execute: {execution_date}",
-        f"Universe: {UNIVERSE} | Top: {TOP_N}",
-        f"Cash: ¥{target_cash:,.0f}",
+        f"Universe: {UNIVERSE} | Top: {TOP_N} | Cash: ¥{target_cash:,.0f}",
+        f"⏱ {total_time:.0f}s",
         f"",
-        f"<b>Prediction Summary</b>",
-        f"Scored: {len(scores)} stocks",
-        f"Selected: {len(tw)} positions",
-        f"Model 5d RankIC: {models.get('5d', (None,))[0] and models['5d'][0].best_iteration or 'N/A'}",
+        f"<b>Training</b>",
+        model_5d_line,
+        model_20d_line,
+        f"",
+        f"<b>Prediction</b>",
+        f"Scored: {len(scores)} stocks | Selected: {len(tw)} positions",
         f"",
         f"<b>Holdings</b>",
     ]

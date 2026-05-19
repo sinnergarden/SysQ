@@ -39,11 +39,19 @@ if [ -z "$REAL_SYNC" ]; then
 fi
 
 if [ -z "$REAL_SYNC" ]; then
-    echo "ERROR: --real_sync file not found for $TODAY"
-    echo "Set REAL_SYNC_PATH env var or place file at a conventional location:"
-    echo "  /home/liuming/.openclaw/workspace/orders/miniqmt_readback_${TODAY}.json"
-    echo "  /home/liuming/.openclaw/workspace/orders/real_sync_${TODAY}.csv"
-    exit 1
+    echo "Post-close: no real_sync file for $TODAY (shadow mode)"
+    # Try shadow plan summary path
+    SHADOW_SUMMARY="/home/liuming/.openclaw/workspace/SysQ/experiments/alpha_v1_backtest_csi800/shadow_plan_${TODAY}.json"
+    if [ -f "$SHADOW_SUMMARY" ]; then
+        echo "Shadow plan exists at $SHADOW_SUMMARY"
+    fi
+    # Send shadow-mode notification
+    NOTIFY_SCRIPT="$(cd "$(dirname "$0")" && pwd)/notify_telegram.sh"
+    bash "$NOTIFY_SCRIPT" "📋 <b>Post-close $TODAY</b>
+
+No real orders today (shadow mode, ¥500k).
+Shadow Alpha V1 plan will run at 08:00 tomorrow." 2>/dev/null || true
+    exit 0
 fi
 
 $PYTHON scripts/run_post_close.py \
