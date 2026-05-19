@@ -57,7 +57,11 @@ def _resolve_target_date(end_date: str | None) -> str:
         if cal is not None and not cal.empty and "is_open" in cal.columns and "cal_date" in cal.columns:
             open_days = sorted(cal[cal["is_open"] == 1]["cal_date"].astype(str).tolist())
             today_str = datetime.now().strftime("%Y%m%d")
-            past = [d for d in open_days if d < today_str]
+            now = datetime.now()
+            # Before 16:00 the market hasn't closed yet — can't use today's data
+            # After 16:00 today's data should be available
+            use_today = today_str in open_days and now.hour >= 16
+            past = [d for d in open_days if (d <= today_str if use_today else d < today_str)]
             if past:
                 return past[-1]
     except Exception as e:
@@ -248,6 +252,7 @@ def _notify_telegram(report: dict) -> None:
 
     target_date = report.get("target_date_display", report.get("target_date", "?"))
     status = report.get("overall_status", "unknown")
+    status_icon = "✅" if status == "ready" else "⚠️" if status == "degraded" else "❌"
 
     steps = report.get("steps", {})
     universe = steps.get("get_universe", {})
@@ -257,10 +262,26 @@ def _notify_telegram(report: dict) -> None:
 
     constituent_count = universe.get("constituent_count", "?")
     up_to_date = pre_check.get("already_up_to_date", 0)
+    need_fetch = pre_check.get("need_fetch", 0)
     fetched = raw_fetch.get("codes_fetched", raw_fetch.get("would_fetch", 0))
     qlib_elapsed = qlib_convert.get("elapsed_s", "?")
+    raw_elapsed = raw_fetch.get("elapsed_s")
+    init_elapsed = steps.get("init_qlib", {}).get("elapsed_s")
 
-    # Count readiness checks excluding _summary
+    # Compute overall runtime
+    ended = report.get("ended_at")
+    runtime_str = ""
+    if ended and "started_at" in report:
+        try:
+            from datetime import datetime
+            t_start = datetime.fromisoformat(report["started_at"])
+            t_end = datetime.fromisoformat(ended)
+            runtime_sec = (t_end - t_start).total_seconds()
+            runtime_str = f"⏱ {runtime_sec:.0f}s"
+        except Exception:
+            pass
+
+    # Readiness details
     readiness_detail = report.get("readiness", {})
     data_checks_passed = sum(
         1 for k, v in readiness_detail.items()
@@ -282,18 +303,48 @@ def _notify_telegram(report: dict) -> None:
     else:
         field_passed = field_total = 0
 
+    # Raw fetch error detail
+    raw_error = raw_fetch.get("error")
+    qlib_error = qlib_convert.get("error")
+
     lines = [
-        f"Qsys CSI800 Daily Sync — {target_date}",
-        f"Status: {status}",
-        f"Constituents: {constituent_count} | Up-to-date: {up_to_date} | Fetched: {fetched}",
+        f"{status_icon} <b>CSI800 Daily Sync — {target_date}</b>",
+        f"Status: {status} {runtime_str}",
+        f"",
+        f"<b>Data Pipeline</b>",
+        f"Constituents: {constituent_count} stocks",
+        f"Pre-check: {up_to_date} up-to-date, {need_fetch} to fetch",
     ]
+    if fetched:
+        fetch_status = raw_fetch.get("status", "")
+        fetch_detail = f"Fetched: {fetched} codes"
+        if raw_elapsed:
+            fetch_detail += f" ({raw_elapsed}s)"
+        if raw_error:
+            fetch_detail += f"\n⚠️ Raw fetch error: {raw_error}"
+        lines.append(fetch_detail)
     if isinstance(qlib_elapsed, (int, float)):
         qlib_mode = qlib_convert.get("mode", "?")
-        lines.append(f"Qlib convert ({qlib_mode}): {qlib_elapsed}s")
+        qlib_line = f"Qlib convert ({qlib_mode}): {qlib_elapsed}s"
+        if qlib_error:
+            qlib_line += f"\n⚠️ Qlib error: {qlib_error}"
+        lines.append(qlib_line)
+
+    lines.append("")
+    lines.append(f"<b>Health Check</b>")
     if data_checks_total > 0:
-        lines.append(f"Data checks: {data_checks_passed}/{data_checks_total} passed")
+        lines.append(f"Data checks: {data_checks_passed}/{data_checks_total} ✅")
     if field_total > 0:
         lines.append(f"Core fields: {field_passed}/{field_total} passed")
+
+    # Readiness summary text
+    r_summary = readiness_detail.get("_summary")
+    if r_summary:
+        n_ok = r_summary.get("n_ok", 0)
+        n_total = r_summary.get("n_total", 0)
+        if n_total > 0:
+            ok_pct = n_ok / n_total * 100
+            lines.append(f"Overall: {n_ok}/{n_total} checks passed ({ok_pct:.0f}%)")
 
     text = "\n".join(lines)
 
