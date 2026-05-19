@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import csv
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -8,6 +10,7 @@ import pandas as pd
 from qsys.utils.json_io import write_json
 
 from qsys.data.adapter import QlibAdapter
+from qsys.strategy.alpha_v1 import ALPHA_V1_CANDIDATE
 from qsys.strategy.engine import StrategyEngine
 from qsys.trader.account import Account, Position
 from qsys.trader.diff import OrderGenerator
@@ -195,13 +198,22 @@ def _fetch_market_snapshot(trade_date: str, instruments: list[str]) -> tuple[dic
     return current_prices, market_status
 
 
-def _build_target_weights(predictions: pd.DataFrame, current_prices: dict[str, float]) -> tuple[dict[str, float], pd.DataFrame]:
+def _build_target_weights(predictions: pd.DataFrame, current_prices: dict[str, float],
+                           top_k: int | None = None,
+                           weight_method: str | None = None,
+                           risk_max_position: float | None = None,
+                           strategy_variant: str | None = None) -> tuple[dict[str, float], pd.DataFrame]:
     filtered = predictions[predictions["instrument"].isin(current_prices)].copy()
     if filtered.empty:
         raise ShadowRebalanceError("no predictions remain after joining market prices")
     scores = filtered.set_index("instrument")["score"]
-    strategy = StrategyEngine(top_k=DEFAULT_TOP_K, method="equal_weight")
+    strategy = StrategyEngine(
+        top_k=top_k or DEFAULT_TOP_K,
+        method=weight_method or "equal_weight",
+        risk_max_position=risk_max_position or 0.3,
+    )
     weights = strategy.generate_target_weights(scores)
+    variant = strategy_variant or DEFAULT_STRATEGY_VARIANT
     rows = []
     for instrument, target_weight in sorted(weights.items()):
         score = float(scores.loc[instrument])
@@ -214,7 +226,7 @@ def _build_target_weights(predictions: pd.DataFrame, current_prices: dict[str, f
                 "target_weight": float(target_weight),
                 "model_name": str(sample.get("model_name", "")),
                 "mainline_object_name": str(sample.get("mainline_object_name", "")),
-                "strategy_variant": DEFAULT_STRATEGY_VARIANT,
+                "strategy_variant": variant,
             }
         )
     return weights, pd.DataFrame(rows, columns=TARGET_WEIGHT_COLUMNS)
@@ -320,7 +332,9 @@ def _append_ledger(path: Path, rows: list[dict[str, Any]]) -> None:
             writer.writerow(row)
 
 
-def run_shadow_rebalance(*, base_dir: str | Path, run_id: str, trade_date: str, predictions_path: str | Path, output_dir: str | Path) -> ShadowRebalanceArtifacts:
+def run_shadow_rebalance(*, base_dir: str | Path, run_id: str, trade_date: str, predictions_path: str | Path, output_dir: str | Path,
+                          top_k: int | None = None, strategy_variant: str | None = None,
+                          weight_method: str | None = None, risk_max_position: float | None = None) -> ShadowRebalanceArtifacts:
     base_dir = Path(base_dir)
     output_dir = Path(output_dir)
     shadow_dir = base_dir / "shadow"
@@ -330,7 +344,11 @@ def run_shadow_rebalance(*, base_dir: str | Path, run_id: str, trade_date: str, 
     account, prior_account, _ = _load_shadow_account(shadow_dir)
     instruments = sorted(set(predictions["instrument"].astype(str)) | set(account.positions.keys()))
     current_prices, market_status = _fetch_market_snapshot(trade_date, instruments)
-    target_weights, target_frame = _build_target_weights(predictions, current_prices)
+    target_weights, target_frame = _build_target_weights(
+        predictions, current_prices,
+        top_k=top_k, weight_method=weight_method,
+        risk_max_position=risk_max_position, strategy_variant=strategy_variant,
+    )
     orders, order_intents, rebalance_audit, cash_before, market_value_before, total_value_before = _build_order_intents(account, predictions, target_weights, current_prices, trade_date)
 
     matcher = MatchEngine(slippage=0.0)
@@ -349,7 +367,9 @@ def run_shadow_rebalance(*, base_dir: str | Path, run_id: str, trade_date: str, 
     cash_after = float(account.cash)
     total_value_after = float(cash_after + market_value_after)
 
-    strategy_variant = DEFAULT_STRATEGY_VARIANT
+    if strategy_variant is None:
+        strategy_variant = DEFAULT_STRATEGY_VARIANT
+    effective_top_k = top_k if top_k is not None else DEFAULT_TOP_K
     target_path = output_dir / "target_weights.csv"
     order_intents_path = output_dir / "order_intents.csv"
     account_after_path = output_dir / "account_after.json"
@@ -404,7 +424,7 @@ def run_shadow_rebalance(*, base_dir: str | Path, run_id: str, trade_date: str, 
         "run_id": run_id,
         "status": "success",
         "strategy_variant": strategy_variant,
-        "top_k": DEFAULT_TOP_K,
+        "top_k": effective_top_k,
         "turnover_buffer": DEFAULT_TURNOVER_BUFFER,
         "price_mode": DEFAULT_PRICE_MODE,
         "rebalance_mode": DEFAULT_REBALANCE_MODE,
@@ -435,7 +455,7 @@ def run_shadow_rebalance(*, base_dir: str | Path, run_id: str, trade_date: str, 
         run_id=run_id,
         status="success",
         strategy_variant=strategy_variant,
-        top_k=DEFAULT_TOP_K,
+        top_k=effective_top_k,
         turnover_buffer=DEFAULT_TURNOVER_BUFFER,
         price_mode=DEFAULT_PRICE_MODE,
         rebalance_mode=DEFAULT_REBALANCE_MODE,
@@ -491,4 +511,29 @@ def write_failed_execution_summary(*, output_dir: str | Path, trade_date: str, r
             "notes": ["shadow_rebalance_failed"],
             **(extra or {}),
         },
+    )
+
+
+# ── Alpha V1 Candidate Shadow Observation ──
+
+ALPHA_V1_SHADOW_VARIANT = f"alpha_v1_candidate_top{ALPHA_V1_CANDIDATE.portfolio.top_n}_rank_weighted"
+
+
+def run_alpha_v1_shadow_rebalance(*, base_dir: str | Path, run_id: str, trade_date: str,
+                                   predictions_path: str | Path, output_dir: str | Path) -> ShadowRebalanceArtifacts:
+    """Run shadow rebalance using alpha_v1_candidate spec parameters.
+
+    Uses ALPHA_V1_CANDIDATE config for:
+      - top_n=20, rank_weighted, 7% single-stock cap
+    """
+    return run_shadow_rebalance(
+        base_dir=base_dir,
+        run_id=run_id,
+        trade_date=trade_date,
+        predictions_path=predictions_path,
+        output_dir=output_dir,
+        top_k=ALPHA_V1_CANDIDATE.portfolio.top_n,
+        strategy_variant=ALPHA_V1_SHADOW_VARIANT,
+        weight_method="rank_weighted",
+        risk_max_position=ALPHA_V1_CANDIDATE.portfolio.single_stock_cap,
     )

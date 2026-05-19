@@ -1,0 +1,60 @@
+# Alpha V1 — CSI800 回测配置
+# 覆盖层次: spec.py 默认值 < YAML < CLI --override
+
+strategy:
+  version: "alpha_v1_candidate_202605"
+  strategy_id: "alpha_v1"
+  display_name: "alpha_v1_candidate_blend20_weekly_top20_buffer"
+  target_cash: 10000000.0
+
+training:
+  train_days: 504
+  test_days: 5
+  step_days: 5
+  n_estimators: 200
+  lgb_params:
+    objective: "regression"
+    metric: "mse"
+    colsample_bytree: 0.8879
+    learning_rate: 0.0421
+    subsample: 0.8789
+    lambda_l1: 205.6999
+    lambda_l2: 580.9768
+    max_depth: 8
+    num_leaves: 210
+    num_threads: 8
+    verbosity: -1
+    seed: 42
+
+portfolio:
+  top_n: 20
+  single_stock_cap: 0.07
+  buffer_hold: 60
+  buffer_buy: 40
+  rebalance_freq: "weekly"
+
+cost:
+  commission: 0.0003
+  stamp_duty: 0.001
+  slippage: 0.001
+  min_commission: 5.0
+
+blend:
+  blend_5d: 0.8
+  blend_20d: 0.2
+
+health:
+  rankic_warn: 0.01
+  rankic_crit: 0.0
+  excess_20d_warn: -0.05
+  excess_60d_crit: -0.08
+  dd_warn: -0.15
+  dd_crit: -0.20
+  feature_missing_warn: 0.05
+  failed_trade_warn: 0.10
+
+execution:
+  universe: "csi800"
+  price_mode: "open"
+  feature_set: "semantic_all_features"
+  output_dir: "experiments/alpha_v1_candidate_csi800"
