@@ -532,7 +532,11 @@ def main():
         "mode": "backtest", "universe": universe, "strategy": config.strategy_id,
         "strategy_version": config.version, "top_k": config.portfolio.top_n,
         "price_mode": price_mode, "date_range": {"start": start, "end": end, "data_end": data_end},
-        "feature_set": feature_set, "clean_feature_count": len(clean_features), "git_sha": _capture_git_sha(),
+        "feature_set": feature_set,
+        "configured_feature_set": feature_set,
+        "feature_filter": "alpha_v1_clean",
+        "clean_feature_count": len(clean_features),
+        "git_sha": _capture_git_sha(),
         "n_windows": len(windows), "windows_completed": n_windows_completed,
     }
     with open(output_dir / "manifest.json", "w") as f:
