@@ -2,8 +2,11 @@
 """
 Alpha V1 Production Candidate — Rolling Weekly Backtest
 ======================================================
-Strategy: qsys_alpha_v1_blend20_weekly_top20_buffer
-Usage:   python scripts/run_alpha_v1_backtest.py [--universe csi300|csi800]
+Strategy: qsys_alpha_v1_candidate_blend20_weekly_top20_buffer
+         --start DATE          Training data start (default: 2022-01-01)
+         --end DATE            Backtest end date (default: run to data end)
+         --data-end DATE       Data fetch end date (default: equals --end)
+         --price-mode MODE     "open" (fail-fast if $open missing) or "close_fallback"
 
 Logic:
   - clean_5d 主信号 + clean_20d 中周期稳定信号
@@ -22,6 +25,7 @@ import sqlite3
 import sys
 import time
 import warnings
+from datetime import datetime
 from pathlib import Path
 
 import lightgbm as lgb
@@ -77,8 +81,16 @@ HEALTH_THRESHOLDS = {
     "feature_missing_warn": 0.05, "failed_trade_warn": 0.10,
 }
 
-OUTPUT_DIR = Path("experiments/alpha_v1_backtest_csi300")
+OUTPUT_DIR = Path("experiments/alpha_v1_candidate_csi300")
 UI_REPORTS_DIR = Path("experiments/reports")
+
+# ── CLI-overridable config (set via argparse, defaults match original values) ──
+# TODO: Extract all config into AlphaV1Config dataclass at qsys/strategy/alpha_v1/spec.py (post-PR #71)
+STRATEGY_VERSION = "alpha_v1_candidate_202605"
+PRICE_MODE = "open"          # "open" (fail-fast) or "close_fallback"
+CLI_START = "2022-01-01"
+CLI_END = None
+CLI_DATA_END = None
 
 # ── Helpers (reused from Phase 4) ──
 
@@ -165,34 +177,50 @@ def predict_model(model, center, scale, X):
 
 
 # ── Data Loading ──
+# TODO: Extract into AlphaV1Backtest._load_data() at qsys/research/alpha_v1_backtest.py (post-PR #71)
 
-def load_data():
+def load_data(start_time=None, end_time=None, data_end=None, price_mode="open"):
     """Load all data upfront. Returns full DataFrame + clean_features list."""
     print("[Data] Loading...")
     t0 = time.time()
+    if start_time is None: start_time = CLI_START
+    if end_time is None: end_time = CLI_END
+    if data_end is None:
+        data_end = CLI_DATA_END
+        if data_end is None:
+            data_end = end_time
+        if data_end is None:
+            data_end = datetime.now().strftime("%Y-%m-%d")
     adapter = QlibAdapter(); adapter.init_qlib()
     all_features = FeatureLibrary.get_semantic_all_features_config()
-    fetch_end = "2026-05-22"
+    fetch_end = data_end
 
     raw = adapter.get_features(UNIVERSE, all_features + ["$close"],
-                               start_time="2022-01-01", end_time=fetch_end)
+                               start_time=start_time, end_time=fetch_end)
     frame = raw.reset_index().rename(columns={"datetime": "trade_date"})
     frame = frame.loc[:, ~frame.columns.duplicated()]
 
-    # $open
+    # $open — TODO: Extract price_mode logic into AlphaV1ExecutionConfig (post-PR #71)
     try:
         insts = D.instruments(UNIVERSE)
-        open_raw = D.features(insts, ["$open"], start_time="2022-01-01", end_time=fetch_end)
+        open_raw = D.features(insts, ["$open"], start_time=start_time, end_time=fetch_end)
         open_df = open_raw.reset_index().rename(columns={"datetime": "trade_date"})
         open_df = open_df[["trade_date", "instrument", "$open"]].dropna(subset=["$open"])
         open_df = open_df.drop_duplicates(subset=["trade_date", "instrument"])
         frame = frame.merge(open_df, on=["trade_date", "instrument"], how="left")
         if "$open" in frame.columns:
-            print(f"  $open loaded (non-null: {frame['$open'].notna().sum()})")
+            n_nonnull = frame["$open"].notna().sum()
+            print(f"  $open loaded (non-null: {n_nonnull})")
+            if n_nonnull == 0:
+                raise ValueError("$open is entirely null")
         else:
             raise ValueError("$open column missing")
     except Exception as e:
-        print(f"  WARN: $open failed ({e}), using $close")
+        if price_mode == "open":
+            print(f"  ERROR: $open unavailable and --price-mode=open. "
+                  f"Use --price-mode close_fallback to allow $close fallback.")
+            raise RuntimeError(f"$open fetch failed in price_mode='open': {e}") from e
+        print(f"  WARN: $open failed ({e}), using $close (price_mode=close_fallback)")
         frame["$open"] = frame["$close"]
 
     # VWAP
@@ -256,6 +284,7 @@ def build_trading_day_windows(all_dates, train_days=TRAIN_DAYS, test_days=TEST_D
 
 
 # ── Portfolio Construction (Alpha V1 Rules) ──
+# TODO: Extract into AlphaV1PortfolioBuilder at qsys/strategy/alpha_v1/portfolio.py (post-PR #71)
 
 def build_alpha_v1_portfolio(scores, account, prices, ind_s):
     """
@@ -321,6 +350,7 @@ def build_alpha_v1_portfolio(scores, account, prices, ind_s):
 
 
 # ── Continuous Rolling Backtest Loop ──
+# TODO: Extract into AlphaV1Backtest.run() at qsys/research/alpha_v1_backtest.py (post-PR #71)
 
 def run_continuous_backtest(frame, windows, clean_features, account, order_gen, matcher,
                              zc_account=None, zc_matcher=None):
@@ -668,6 +698,7 @@ def compute_window_metrics(daily_rows, trade_rows, test_data):
 
 
 # ── Output Writers ──
+# TODO: Extract report generation into AlphaV1BacktestResult / separate reporter (post-PR #71)
 
 def save_outputs(daily_df, trade_df, rolling_metrics, health_report, window_results):
     """Save all operational output files."""
@@ -722,11 +753,11 @@ def _compute_benchmark_equity(equity_series, universe, init_cap):
     return pd.Series(init_cap, index=equity_series.index, name="benchmark_equity")
 
 
-def save_ui_report(daily_df, rolling_metrics, perf, total_time, signal_rows=None, quintile_log=None):
+def save_ui_report(daily_df, rolling_metrics, perf, total_time, signal_rows=None, quintile_log=None, feature_count=0):
     """Generate UI-visible BacktestReport in experiments/reports/."""
     UI_REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
-    run_id = f"alpha_v1_{UNIVERSE}_blend20_weekly_top20_buffer"
+    run_id = f"alpha_v1_candidate_{UNIVERSE}_blend20_weekly_top20_buffer"
     report_path = UI_REPORTS_DIR / f"backtest_{run_id}.json"
     daily_path = UI_REPORTS_DIR.parent / f"backtest_result_{run_id}.csv"
     windows_path = UI_REPORTS_DIR.parent / f"rolling_windows_{run_id}.csv"
@@ -775,37 +806,75 @@ def save_ui_report(daily_df, rolling_metrics, perf, total_time, signal_rows=None
     report_df = daily_df.copy()
     report_df = report_df.rename(columns={"equity": "total_assets"})
 
+    # Build full audit manifest (stored in report.plan_summary)
+    experiment_spec = {
+        "strategy_id": "alpha_v1",
+        "strategy_version": STRATEGY_VERSION,
+        "rolling": {
+            "window_count": len(rolling_metrics),
+            "test_window_days": TEST_DAYS,
+            "step_days": STEP_DAYS,
+            "windows_completed": len(rolling_metrics),
+            "windows_failed": 0,
+            "retrain_per_window": True,
+            "label_type": "blended_5d_20d",
+        },
+        "initial_cash": TARGET_CASH,
+        "universe": UNIVERSE,
+        "top_k": TOP_N,
+        "strategy": "alpha_v1_candidate_blend20_weekly_top20_buffer",
+        "date_range": {
+            "start": CLI_START,
+            "end": CLI_END,
+            "data_end": CLI_DATA_END,
+        },
+        "price_mode": PRICE_MODE,
+        "live_like": PRICE_MODE == "open",
+        "warnings": ["price_mode=close_fallback: $close used for execution"] if PRICE_MODE == "close_fallback" else [],
+        "blend_ratio": {"5d": BLEND_5D, "20d": BLEND_20D},
+        "feature_set": f"clean_{feature_count}",
+        "label": {
+            "type": "cross_sectional_zscore",
+            "horizons": [5, 20],
+            "clip": 3.0,
+        },
+        "cost_model": CBP,
+        "portfolio": {
+            "top_n": TOP_N,
+            "buffer_hold": BUFFER_HOLD,
+            "buffer_buy": BUFFER_BUY,
+            "single_stock_cap": SINGLE_STOCK_CAP,
+            "rebalance_freq": REBALANCE_FREQ,
+        },
+        "training": {
+            "train_days": TRAIN_DAYS,
+            "test_days": TEST_DAYS,
+            "step_days": STEP_DAYS,
+            "n_estimators": N_ESTIMATORS,
+            "lgb_params": LGB_PARAMS,
+        },
+        "health_thresholds": HEALTH_THRESHOLDS,
+    }
     report = BacktestReport.from_backtest_result(
         result_df=report_df,
-        model_path=str(Path(".").resolve() / "data" / "models" / "alpha_v1"),
+        model_path=str(Path(".").resolve() / "data" / "models" / "alpha_v1_candidate"),
         start_date=str(daily_df["date"].iloc[0]) if not daily_df.empty else "",
         end_date=str(daily_df["date"].iloc[-1]) if not daily_df.empty else "",
         top_k=TOP_N,
         universe=UNIVERSE,
         duration_seconds=total_time,
         daily_result_path=str(daily_path),
-        experiment_spec={
-            "rolling": {
-                "window_count": len(rolling_metrics),
-                "test_window_days": TEST_DAYS,
-                "step_days": STEP_DAYS,
-                "windows_completed": len(rolling_metrics),
-                "windows_failed": 0,
-                "retrain_per_window": True,
-                "label_type": "blended_5d_20d",
-            },
-            "initial_cash": TARGET_CASH,
-            "universe": UNIVERSE,
-            "top_k": TOP_N,
-            "strategy": "alpha_v1_blend20_weekly_top20_buffer",
-        },
+        experiment_spec=experiment_spec,
     )
     report.run_id = run_id
+    report.plan_summary = experiment_spec
     report.model_info.update({
-        "model_name": "alpha_v1_ensemble",
-        "feature_set": "clean_132",
+        "model_name": "alpha_v1_candidate_ensemble",
+        "feature_set": f"clean_{feature_count}",
         "label_type": "blended_5d_20d",
         "blend_ratio": f"{BLEND_5D}:{BLEND_20D}",
+        "strategy": "alpha_v1_candidate_blend20_weekly_top20_buffer",
+        "strategy_version": STRATEGY_VERSION,
     })
 
     sections = []
@@ -926,23 +995,39 @@ def save_ui_report(daily_df, rolling_metrics, perf, total_time, signal_rows=None
 
 def main():
     t_start = time.time()
-    parser = argparse.ArgumentParser(description="Alpha V1 Rolling Backtest")
+    parser = argparse.ArgumentParser(description="Alpha V1 Production Candidate — Rolling Weekly Backtest")
     parser.add_argument("--universe", default="csi300", choices=["csi300", "csi800"],
                         help="Trading universe (default: csi300)")
+    parser.add_argument("--start", default="2022-01-01",
+                        help="Training data start date (default: 2022-01-01)")
+    parser.add_argument("--end", default=None,
+                        help="Backtest end date (exclusive, default: run to data_end)")
+    parser.add_argument("--data-end", default=None,
+                        help="Data fetch end date (default: equals --end)")
+    parser.add_argument("--price-mode", default="open", choices=["open", "close_fallback"],
+                        help="Execution price: 'open' (fail-fast if $open missing) "
+                             "or 'close_fallback' ($close used when $open missing, with warning)")
     args = parser.parse_args()
 
     # Override module-level universe and output dir
     global UNIVERSE, OUTPUT_DIR
     UNIVERSE = args.universe
-    OUTPUT_DIR = Path(f"experiments/alpha_v1_backtest_{UNIVERSE}")
+    OUTPUT_DIR = Path(f"experiments/alpha_v1_candidate_{UNIVERSE}")
+
+    # Propagate CLI overrides to module-level config
+    global PRICE_MODE, CLI_START, CLI_END, CLI_DATA_END
+    PRICE_MODE = args.price_mode
+    CLI_START = args.start
+    CLI_END = args.end
+    CLI_DATA_END = args.data_end
 
     print("=" * 70)
     print(f"QSYS Alpha V1 — Production Candidate Rolling Backtest ({UNIVERSE})")
-    print("Strategy: qsys_alpha_v1_blend20_weekly_top20_buffer")
+    print("Strategy: qsys_alpha_v1_candidate_blend20_weekly_top20_buffer")
     print("=" * 70)
 
     # 1. Load data
-    frame, clean_features = load_data()
+    frame, clean_features = load_data(start_time=CLI_START, end_time=CLI_END, data_end=CLI_DATA_END, price_mode=PRICE_MODE)
     frame = compute_trade_flags(frame)
 
     # Compute daily close-to-close returns for quintile portfolio tracking
@@ -952,6 +1037,10 @@ def main():
     all_dates = sorted(frame["trade_date"].unique())
     all_dates_dt = [pd.Timestamp(d) for d in all_dates]
     windows = build_trading_day_windows(all_dates_dt)
+
+    # Filter windows to only run to CLI_END
+    if CLI_END is not None:
+        windows = [w for w in windows if w["test_end"] <= CLI_END]
     print(f"\n[Windows] {len(windows)} total ({windows[0]['test_start']} ~ {windows[-1]['test_end']})")
 
     # Train model parameters
@@ -1038,7 +1127,7 @@ def main():
     print(f"\n{'='*70}")
     print("Generating UI Report...")
     print(f"{'='*70}")
-    run_id = save_ui_report(daily_df, rm_df, perf, total_time, signal_rows, quintile_log)
+    run_id = save_ui_report(daily_df, rm_df, perf, total_time, signal_rows, quintile_log, feature_count=len(clean_features))
 
     # 9. Console summary
     print(f"\n{'='*70}")
@@ -1065,9 +1154,11 @@ def main():
     for a in health.get("alerts", []):
         print(f"    [{a['severity']}] {a['metric']} = {a['value']} (threshold: {a['threshold']})")
 
-    # Check for data issues (t+1 open wasn't available)
-    print(f"\n  ⚠ Note: $open not in D.features, using $close as fallback execution price")
-    print(f"  ⚠ Strategy is robust to this (slippage sweep verifies)")
+    # Check for data issues (t+1 open wasn't available in close_fallback mode)
+    if PRICE_MODE == "close_fallback":
+        print(f"\n  ⚠ Note: ran with --price-mode=close_fallback ($close used where $open unavailable)")
+    else:
+        print(f"\n  ✓ Price mode: open (executed at $open, fail-fast if missing)")
 
     print(f"\n  Total time: {total_time:.0f}s")
     print(f"  UI Report: experiments/reports/backtest_{run_id}.json")
