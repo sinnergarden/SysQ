@@ -21,7 +21,7 @@ import pandas as pd
 
 from qlib.data import D
 from qsys.data.adapter import QlibAdapter
-from qsys.feature.library import FeatureLibrary
+from qsys.feature.registry import get_feature_fields
 from qsys.reports.backtest import BacktestReport
 from qsys.reports.base import ReportSection, ReportStatus, save_report
 from qsys.trader.account import Account
@@ -44,14 +44,14 @@ from qsys.strategy.alpha_v1 import (
 
 # ── Data Loading (Qlib-specific, kept in script) ──
 
-def load_data(universe, start, end, data_end, price_mode):
+def load_data(universe, start, end, data_end, price_mode, feature_set="semantic_all_features"):
     """Load all data upfront. Returns (DataFrame, clean_features)."""
     print("[Data] Loading...")
     t0 = time.time()
 
     adapter = QlibAdapter()
     adapter.init_qlib()
-    all_features = FeatureLibrary.get_semantic_all_features_config()
+    all_features = get_feature_fields(feature_set)
 
     fetch_end = data_end or end or datetime.now().strftime("%Y-%m-%d")
 
@@ -376,6 +376,7 @@ def main():
     start = exec_cfg.get("start", args.start)
     end = exec_cfg.get("end", args.end)
     data_end = exec_cfg.get("data_end", args.data_end)
+    feature_set = exec_cfg.get("feature_set", "semantic_all_features")
     output_dir = Path(exec_cfg.get("output_dir", f"experiments/alpha_v1_candidate_{universe}"))
     ui_reports_dir = Path("experiments/reports")
 
@@ -389,7 +390,7 @@ def main():
     print("=" * 70)
 
     # 1. Load data
-    frame, clean_features = load_data(universe, start, end, data_end, price_mode)
+    frame, clean_features = load_data(universe, start, end, data_end, price_mode, feature_set=feature_set)
     frame = compute_trade_flags(frame)
     frame["daily_ret"] = frame.groupby("instrument")["$close"].pct_change()
 
@@ -439,10 +440,16 @@ def main():
         or any(w["test_start"] <= d.strftime("%Y-%m-%d") <= w["test_end"] for w in windows)
     )
 
+    # Build date → window_id lookup (so BacktestEngine attaches window_id to every row)
+    window_lookup = {}
+    for w in windows:
+        for d in pd.date_range(w["test_start"], w["test_end"], freq="D"):
+            window_lookup[d.strftime("%Y-%m-%d")] = w["window_id"]
+
     engine = BacktestEngine(account, matcher, zc_account=zc_account, zc_matcher=zc_matcher)
     result = engine.run(
         frame, signal_lookup, rebal_dates, build_rank_weight_portfolio,
-        dates=test_dates,
+        dates=test_dates, window_lookup=window_lookup,
         top_n=config.portfolio.top_n,
         buffer_hold=config.portfolio.buffer_hold,
         buffer_buy=config.portfolio.buffer_buy,
@@ -458,21 +465,18 @@ def main():
     daily_df = result.daily
     trade_df = result.trades
 
-    # Rolling metrics by grouping daily into windows
+    # Rolling metrics by window_id (attached by BacktestEngine via window_lookup)
     rm_rows = []
-    if not daily_df.empty:
-        # Re-derive window IDs from date ranges matching window test periods
-        for w in windows:
-            mask = (daily_df["date"] >= w["test_start"]) & (daily_df["date"] <= w["test_end"])
-            grp = daily_df[mask]
+    if not daily_df.empty and "window_id" in daily_df.columns:
+        for wid, grp in daily_df.groupby("window_id"):
             if len(grp) > 1:
                 eq = grp["equity"].values
                 tr = eq[-1] / eq[0] - 1.0
-                n_trades = len(trade_df[trade_df["date"].between(w["test_start"], w["test_end"])]) if not trade_df.empty else 0
+                n_trades = len(trade_df[trade_df["window_id"] == wid]) if not trade_df.empty and "window_id" in trade_df.columns else 0
                 rm_rows.append({
-                    "window_id": w["window_id"],
-                    "test_start": w["test_start"],
-                    "test_end": w["test_end"],
+                    "window_id": wid,
+                    "test_start": str(grp["date"].iloc[0]),
+                    "test_end": str(grp["date"].iloc[-1]),
                     "total_return": tr,
                     "n_trades": n_trades,
                 })
@@ -528,7 +532,7 @@ def main():
         "mode": "backtest", "universe": universe, "strategy": config.strategy_id,
         "strategy_version": config.version, "top_k": config.portfolio.top_n,
         "price_mode": price_mode, "date_range": {"start": start, "end": end, "data_end": data_end},
-        "feature_set": f"clean_{len(clean_features)}", "git_sha": _capture_git_sha(),
+        "feature_set": feature_set, "clean_feature_count": len(clean_features), "git_sha": _capture_git_sha(),
         "n_windows": len(windows), "windows_completed": n_windows_completed,
     }
     with open(output_dir / "manifest.json", "w") as f:

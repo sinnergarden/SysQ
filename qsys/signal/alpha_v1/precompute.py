@@ -4,7 +4,8 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from qsys.signal.alpha_v1.labels import cs_zscore, make_zs_label
+from qsys.signal.alpha_v1.inference import compute_signal
+from qsys.signal.alpha_v1.labels import make_zs_label
 from qsys.signal.alpha_v1.training import predict_model, train_model
 
 
@@ -96,14 +97,22 @@ def precompute_alpha_v1_signals(
         for tag in ["5d", "20d"]:
             test_data[f"pred_{tag}"] = predict_model(*models[tag], X_test).values
 
+        # Use compute_signal per date (blend, rank, score)
         for d in test_data["trade_date"].unique():
             dm = test_data["trade_date"] == d
             sub = test_data[dm]
-            z5 = cs_zscore(pd.Series(sub["pred_5d"].values))
-            z20 = cs_zscore(pd.Series(sub["pred_20d"].values))
-            test_data.loc[dm, "blended_score"] = (
-                config.blend.blend_5d * z5.values + config.blend.blend_20d * z20.values
+            date_key = (
+                d.strftime("%Y-%m-%d") if hasattr(d, "strftime") else str(d)[:10]
             )
+            signal_frame = compute_signal(
+                pd.Series(sub["pred_5d"].values, index=sub.index),
+                pd.Series(sub["pred_20d"].values, index=sub.index),
+                sub["instrument"].values,
+                date_key,
+                blend_5d=config.blend.blend_5d,
+                blend_20d=config.blend.blend_20d,
+            )
+            test_data.loc[dm, "blended_score"] = signal_frame["score"].values
 
         keep_cols = ["trade_date", "instrument", "pred_5d", "pred_20d", "blended_score"]
         preds_df = test_data[keep_cols].dropna(subset=["blended_score"])

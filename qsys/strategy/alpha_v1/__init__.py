@@ -11,7 +11,7 @@ from qsys.strategy.alpha_v1.spec import (
     get_clean_features,
     get_feature_groups,
 )
-from qsys.strategy.alpha_v1.strategy import precompute_alpha_v1_signals
+from qsys.signal.alpha_v1.precompute import precompute_alpha_v1_signals
 
 __all__ = [
     "ALPHA_V1_CANDIDATE",

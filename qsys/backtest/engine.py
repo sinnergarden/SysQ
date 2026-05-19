@@ -111,6 +111,7 @@ class BacktestEngine:
         portfolio_fn: Callable,
         *,
         dates: list | None = None,
+        window_lookup: dict[str, str] | None = None,
         top_n: int = 20,
         buffer_hold: int = 60,
         buffer_buy: int = 40,
@@ -136,6 +137,8 @@ class BacktestEngine:
             from ``frame`` sorted.  Pass a pre-filtered list (e.g. only
             dates within test-window ranges) to avoid iterating periods
             where no signal exists.
+        window_lookup : dict, optional
+            {date_str: window_id} — attached to every daily/trade row.
         top_n, buffer_hold, buffer_buy, single_stock_cap
             Portfolio construction parameters, forwarded to portfolio_fn.
 
@@ -154,6 +157,7 @@ class BacktestEngine:
                 continue
 
             date_str = date.strftime("%Y-%m-%d") if hasattr(date, "strftime") else str(date)
+            wid = window_lookup.get(date_str, "") if window_lookup else ""
 
             # ── Execute pending orders ──
             if pending:
@@ -177,6 +181,7 @@ class BacktestEngine:
                         trade_rows.append(
                             {
                                 "date": date_str,
+                                "window_id": wid,
                                 "symbol": o["symbol"],
                                 "side": o["side"],
                                 "amount": r["filled_amount"],
@@ -212,6 +217,7 @@ class BacktestEngine:
             daily_rows.append(
                 {
                     "date": date_str,
+                    "window_id": wid,
                     "equity": equity,
                     "cash": self.account.cash,
                     "mv": self.account.get_market_value(cp),
