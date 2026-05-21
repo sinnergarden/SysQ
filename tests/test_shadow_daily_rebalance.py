@@ -5,8 +5,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import numpy as np
 import pandas as pd
 
+from qsys.backtest.portfolio import build_rank_weight_portfolio
 from qsys.ops import build_latest_shadow_model_payload, write_latest_shadow_model
 from qsys.ops.shadow_rebalance import (
     ORDER_INTENT_COLUMNS,
@@ -17,6 +19,7 @@ from qsys.ops.shadow_rebalance import (
     ShadowRebalanceError,
 )
 from qsys.ops.state import load_json
+from qsys.trader.account import Account, Position
 from scripts.ops.run_shadow_daily import run_shadow_daily
 
 
@@ -319,8 +322,8 @@ class TestShadowDailyRebalance(unittest.TestCase):
             self.assertEqual(execution_summary["status"], "success")
             self.assertEqual(execution_summary["order_count"], 0)
             self.assertTrue(execution_summary["no_trade_reason_counts"])
-            self.assertIn("already_at_target", execution_summary["no_trade_reason_counts"])
-            self.assertIn("already_at_target", set(rebalance_audit["reason"]))
+            self.assertIn("diff_below_lot_size", execution_summary["no_trade_reason_counts"])
+            self.assertIn("diff_below_lot_size", set(rebalance_audit["reason"]))
             self.assertEqual(ledger_text.strip(), "run_id,trade_date,instrument,side,quantity,price,amount,fee,status,reason")
 
     def test_rebalance_failure_marks_daily_failed(self):
@@ -343,3 +346,74 @@ class TestShadowDailyRebalance(unittest.TestCase):
             self.assertEqual(summary["decision_status"], "failed")
             self.assertEqual(execution_summary["status"], "failed")
             self.assertEqual(execution_summary["error"], "mock rebalance boom")
+
+
+class TestShadowPortfolioReuse(unittest.TestCase):
+    """Lightweight contract tests: shadow reuses the backtest's portfolio builder."""
+
+    def setUp(self):
+        self.instruments = [f"STOCK_{i:04d}" for i in range(50)]
+
+    def _make_scores(self, seed: int = 0) -> pd.Series:
+        rng = np.random.default_rng(seed)
+        return pd.Series(rng.uniform(-1, 1, len(self.instruments)), index=self.instruments)
+
+    def _make_account(self, held_instruments: list[str] | None = None) -> Account:
+        account = Account(init_cash=1_000_000.0)
+        for inst in (held_instruments or []):
+            account.positions[inst] = Position(symbol=inst, total_amount=1000, sellable_amount=1000, avg_cost=10.0)
+        return account
+
+    def test_weights_sum_to_one(self):
+        """Selected portfolio weights must sum to ~1.0."""
+        scores = self._make_scores(seed=42)
+        account = self._make_account()
+        w = build_rank_weight_portfolio(scores, account, top_n=20, buffer_hold=60, buffer_buy=40, single_stock_cap=0.07)
+        self.assertTrue(len(w) > 0)
+        self.assertAlmostEqual(sum(w.values()), 1.0, places=6)
+
+    def test_hold_buffer_keeps_existing_positions(self):
+        """Existing positions within buffer_hold rank should be kept."""
+        scores = self._make_scores(seed=42)
+        # Force some held stocks to ranks 1, 5, 15, 30, 50 (within buffer_hold=60)
+        held = list(scores.sort_values(ascending=False).index[[0, 4, 14, 29, 49]])
+        account = self._make_account(held_instruments=held)
+        w = build_rank_weight_portfolio(scores, account, top_n=20, buffer_hold=60, buffer_buy=40, single_stock_cap=0.07)
+        for inst in held:
+            self.assertIn(inst, w, f"held stock {inst} should be kept via buffer_hold")
+
+    def test_new_buys_respect_buffer_buy(self):
+        """New positions (not currently held) should be within buffer_buy rank."""
+        scores = self._make_scores(seed=42)
+        account = self._make_account()  # empty account
+        w = build_rank_weight_portfolio(scores, account, top_n=20, buffer_hold=60, buffer_buy=40, single_stock_cap=0.07)
+        ranks = pd.Series(range(1, len(scores) + 1), index=scores.sort_values(ascending=False).index)
+        for inst in w:
+            self.assertLessEqual(ranks[inst], 40, f"new buy {inst} rank {ranks[inst]} exceeds buffer_buy=40")
+
+    def test_target_weights_columns(self):
+        """_build_target_weights output includes all mandated columns."""
+        from qsys.ops.shadow_rebalance import _build_target_weights
+        scores = self._make_scores(seed=42)
+        account = self._make_account(held_instruments=list(scores.index[:3]))
+        current_prices = {inst: round(10.0 + i * 0.5, 2) for i, inst in enumerate(self.instruments)}
+
+        pred_rows = []
+        for inst in self.instruments:
+            pred_rows.append({"trade_date": "2026-05-20", "instrument": inst, "score": scores[inst],
+                              "model_name": "test", "mainline_object_name": "test"})
+        predictions = pd.DataFrame(pred_rows)
+
+        _, target_frame = _build_target_weights(
+            predictions, current_prices, account,
+            portfolio_fn=build_rank_weight_portfolio,
+            top_n=20, buffer_hold=60, buffer_buy=40, single_stock_cap=0.07,
+            strategy_id="alpha_v1", strategy_version="test",
+        )
+        self.assertEqual(target_frame.columns.tolist(), TARGET_WEIGHT_COLUMNS)
+        self.assertTrue(all(target_frame["rank"] >= 1))
+        self.assertTrue(all(target_frame["target_weight"] > 0))
+        self.assertTrue(all(target_frame["strategy_id"] == "alpha_v1"))
+        self.assertTrue(all(target_frame["strategy_version"] == "test"))
+        self.assertTrue(all(target_frame["portfolio_method"] == "rank_weight_buffer"))
+        self.assertAlmostEqual(target_frame["target_weight"].sum(), 1.0, places=6)
