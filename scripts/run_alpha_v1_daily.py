@@ -39,7 +39,9 @@ from qlib.data import D
 from qsys.data.adapter import QlibAdapter
 from qsys.feature.library import FeatureLibrary
 from qsys.ops.shadow_rebalance import run_alpha_v1_shadow_rebalance
+from qsys.ops.shadow_rebalance import ShadowRebalanceArtifacts
 from qsys.ops.telegram import send_telegram_message
+from qsys.strategy.alpha_v1.spec import ALPHA_V1_CANDIDATE
 
 
 # ── 模型加载（复用 run_alpha_v1_shadow_observation.py 逻辑）──────────────
@@ -48,6 +50,53 @@ MODEL_DIR = Path("experiments/alpha_v1_models/latest")
 UNIVERSE = "csi300"
 PREDICTIONS_DIR = Path("experiments/alpha_v1_shadow_predictions")
 
+
+# ── Stock name lookup ─────────────────────────────────────────────────
+
+_STOCK_NAMES: dict[str, str] = {}
+
+def _get_stock_name(ts_code: str) -> str:
+    if not _STOCK_NAMES:
+        _load_stock_names()
+    return _STOCK_NAMES.get(ts_code, ts_code)
+
+def _load_stock_names() -> None:
+    path = PROJECT_ROOT / "data" / "stock_names.csv"
+    if path.exists():
+        df = pd.read_csv(path)
+        for _, row in df.iterrows():
+            _STOCK_NAMES[str(row["ts_code"])] = str(row["name"])
+
+
+# ── Rebalance frequency check ──────────────────────────────────────────
+
+def _should_rebalance(trade_date: str) -> bool:
+    """Check if rebalancing should run based on ALPHA_V1_CANDIDATE.portfolio.rebalance_freq."""
+    freq = ALPHA_V1_CANDIDATE.portfolio.rebalance_freq
+    if freq != "weekly":
+        return True  # daily or unknown → always rebalance
+
+    trade_dt = datetime.strptime(trade_date, "%Y-%m-%d").date()
+    current_iso = trade_dt.isocalendar()
+
+    account_path = PROJECT_ROOT / "shadow" / "account.json"
+    if account_path.exists():
+        try:
+            account = json.loads(account_path.read_text())
+            last_trade_date = account.get("trade_date", "")
+            if last_trade_date:
+                last_dt = datetime.strptime(last_trade_date, "%Y-%m-%d").date()
+                last_iso = last_dt.isocalendar()
+                # Same ISO year + week → already rebalanced this week
+                if last_iso[0] == current_iso[0] and last_iso[1] == current_iso[1]:
+                    return False
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    return True
+
+
+# ── Core pipeline functions ────────────────────────────────────────────
 
 def cs_zscore(s: pd.Series) -> pd.Series:
     std = s.std(ddof=0)
@@ -159,87 +208,167 @@ def _now_str() -> str:
     return datetime.now().strftime("%H:%M:%S")
 
 
+def _fmt(amount: float) -> str:
+    """Format amount in human-readable Chinese units."""
+    if amount >= 1_0000_0000:
+        return f"¥{amount/1_0000_0000:.2f}亿"
+    if amount >= 1_0000:
+        return f"¥{amount/1_0000:.0f}万"
+    return f"¥{amount:_.0f}"
+
+
+def _find_summary_file(trade_date: str) -> Path | None:
+    """Search common paths for reconciliation summary.json."""
+    for p in [
+        PROJECT_ROOT / "daily" / trade_date / "post_close" / "summary.json",
+        PROJECT_ROOT / "daily" / trade_date / "post_close" / "reports" / "summary.json",
+        PROJECT_ROOT / "runs" / f"postclose_{trade_date}" / "summary.json",
+    ]:
+        if p.exists():
+            return p
+    return None
+
+
 def _build_preopen_message(trade_date: str, artifacts, pred_count: int,
-                            top_picks: list[tuple[str, float]]) -> str:
+                            top_picks: list[tuple[str, float]],
+                            rebalance_skipped: bool = False) -> str:
     """构建 preopen Telegram 通知文本。"""
     lines = [
         f"<b>✅ Alpha V1 Pre-open {trade_date}</b>",
         f"Time: {_now_str()}",
         "",
-        f"<b>Inference</b>",
-        f"Universe: {UNIVERSE} | Predictions: {pred_count}",
-        "",
-        "<b>Top Picks</b>",
+        f"<b>📈 推荐股票</b>",
     ]
-    for inst, score in top_picks[:5]:
-        lines.append(f"  {inst}  score={score:.4f}")
+    for i, (inst, score) in enumerate(top_picks[:5], 1):
+        name = _get_stock_name(inst)
+        lines.append(f"  {i}. {inst} {name}  score={score:.4f}")
+
+    if rebalance_skipped:
+        lines += [
+            "",
+            "<b>⏭ 本周已调仓，跳过重复交易</b>",
+            f"策略: {ALPHA_V1_CANDIDATE.display_name} | 频率: {ALPHA_V1_CANDIDATE.portfolio.rebalance_freq}",
+            f"Universe: {UNIVERSE} | 预测: {pred_count}只",
+        ]
+        return "\n".join(lines)
+
+    # Actual rebalance — show trade details
+    lines += [
+        "",
+        "<b>📋 交易股票</b>",
+    ]
+
+    intents_path = getattr(artifacts, "order_intents_path", None)
+    if intents_path and Path(intents_path).exists():
+        try:
+            orders_df = pd.read_csv(intents_path)
+            buys = orders_df[orders_df["side"] == "buy"]
+            sells = orders_df[orders_df["side"] == "sell"]
+
+            if not buys.empty:
+                lines.append(f"  买入 ({len(buys)}):")
+                for _, row in buys.iterrows():
+                    name = _get_stock_name(row["instrument"])
+                    diff_val = float(row.get("diff_value", 0))
+                    lines.append(f"    {row['instrument']} {name}  +{_fmt(diff_val)}")
+            if not sells.empty:
+                lines.append(f"  卖出 ({len(sells)}):")
+                for _, row in sells.iterrows():
+                    name = _get_stock_name(row["instrument"])
+                    diff_val = float(row.get("diff_value", 0))
+                    lines.append(f"    {row['instrument']} {name}  -{_fmt(abs(diff_val))}")
+        except Exception:
+            lines.append(f"  Orders: {artifacts.order_count} ({artifacts.buy_count} buy / {artifacts.sell_count} sell)")
+    else:
+        lines.append(f"  Orders: {artifacts.order_count} ({artifacts.buy_count} buy / {artifacts.sell_count} sell)")
 
     lines += [
         "",
-        "<b>Rebalance</b>",
-        f"Orders: {artifacts.order_count}  "
-        f"(<b>{artifacts.buy_count}</b> buy / <b>{artifacts.sell_count}</b> sell"
-        f" / {artifacts.skipped_count} skipped)",
-        f"Turnover: ¥{artifacts.turnover:_.0f}" if artifacts.turnover else "Turnover: ¥0",
-        "",
-        "<b>Account</b>",
-        f"Total value: ¥{artifacts.total_value_after:_.0f}" if artifacts.total_value_after else "Total value: ¥0",
-        f"Cash: ¥{artifacts.cash_after:_.0f}" if artifacts.cash_after else "Cash: ¥0",
+        "<b>💰 账户</b>",
     ]
+    if artifacts.total_value_after:
+        lines.append(f"  Total: {_fmt(artifacts.total_value_after)}  Cash: {_fmt(artifacts.cash_after or 0)}")
+    else:
+        lines.append(f"  Total: ¥0  Cash: ¥0")
+    if artifacts.turnover:
+        lines.append(f"  Turnover: {_fmt(artifacts.turnover)}")
+    lines.append(f"  Universe: {UNIVERSE} | 预测: {pred_count}只 | 策略: {ALPHA_V1_CANDIDATE.display_name}")
+
     return "\n".join(lines)
 
 
-def _build_postclose_message(trade_date: str, summary_path: Path) -> str:
+def _build_postclose_message(trade_date: str) -> str:
     """构建 postclose Telegram 通知文本。"""
+    _get_stock_name("")  # warm cache
+
     lines = [
         f"<b>📊 Alpha V1 Post-close {trade_date}</b>",
         f"Time: {_now_str()}",
+        "",
     ]
 
-    if not summary_path.exists():
-        lines.append("")
-        lines.append("⚠ Reconciliation 数据不存在")
-        return "\n".join(lines)
+    summary_path = _find_summary_file(trade_date)
+    if summary_path:
+        try:
+            data = json.loads(summary_path.read_text())
+        except (json.JSONDecodeError, OSError):
+            data = None
+    else:
+        data = None
 
-    try:
-        data = json.loads(summary_path.read_text())
-    except (json.JSONDecodeError, OSError):
-        lines.append("")
-        lines.append("⚠ 无法解析 reconciliation 数据")
-        return "\n".join(lines)
+    if data:
+        reconcil = data.get("reconciliation", {})
+        if reconcil:
+            lines.append("<b>Reconciliation</b>")
+            for metric in ("total_assets", "cash"):
+                row = reconcil.get(metric, {})
+                real = row.get("real", "N/A")
+                shadow = row.get("shadow", "N/A")
+                if isinstance(real, float):
+                    lines.append(f"  {metric}: {_fmt(real)} → shadow {_fmt(shadow)}")
+                else:
+                    lines.append(f"  {metric}: real={real}  shadow={shadow}")
 
-    reconcil = data.get("reconciliation", {})
-    if reconcil:
-        lines += [
-            "",
-            "<b>Reconciliation</b>",
-        ]
-        for metric in ("total_assets", "cash", "position_count"):
-            row = reconcil.get(metric, {})
-            real = row.get("real", "N/A")
-            shadow = row.get("shadow", "N/A")
-            diff = row.get("diff", "N/A")
-            if isinstance(real, float):
-                lines.append(f"  {metric}: real=¥{real:_.0f}  shadow=¥{shadow:_.0f}  diff={diff:+.0f}" if metric != "position_count"
-                             else f"  {metric}: real={int(real)}  shadow={int(shadow)}  diff={diff:+}")
-            else:
-                lines.append(f"  {metric}: real={real}  shadow={shadow}")
+        snapshots = data.get("account_snapshots", {})
+        if snapshots:
+            lines.append("")
+            lines.append("<b>Account</b>")
+            for name, snap in snapshots.items():
+                if snap:
+                    cash = snap.get("cash", 0)
+                    total = snap.get("total_assets", 0)
+                    pos = snap.get("position_count", 0)
+                    lines.append(f"  {name}: {_fmt(total)}  cash={_fmt(cash)}  positions={pos}")
 
-    snapshots = data.get("account_snapshots", {})
-    if snapshots:
-        lines.append("")
-        lines.append("<b>Account</b>")
-        for name, snap in snapshots.items():
-            if snap:
-                cash = snap.get("cash", 0)
-                total = snap.get("total_assets", 0)
-                pos = snap.get("position_count", 0)
-                lines.append(f"  {name}: ¥{total:_.0f}  cash=¥{cash:_.0f}  positions={pos}")
-
-    gaps = data.get("position_gap_count", 0)
-    if gaps is not None:
-        lines.append("")
-        lines.append(f"Position gaps: {gaps}")
+        gaps = data.get("position_gap_count", 0)
+        if gaps:
+            lines.append("")
+            lines.append(f"Position gaps: {gaps}")
+    else:
+        # Fallback: shadow execution summary
+        shadow_path = PROJECT_ROOT / "experiments" / "alpha_v1_daily" / trade_date / "execution_summary.json"
+        if shadow_path.exists():
+            try:
+                shadow = json.loads(shadow_path.read_text())
+                lines.append("<b>Shadow Account（影子账户，无券商数据）</b>")
+                before = shadow.get("total_value_before", 0)
+                after = shadow.get("total_value_after", 0)
+                pnl = after - before
+                pnl_str = f"+{_fmt(pnl)}" if pnl >= 0 else _fmt(pnl)
+                lines.append(f"  PnL: {pnl_str}")
+                lines.append(f"  Total: {_fmt(after)}  Cash: {_fmt(shadow.get('cash_after', 0))}")
+                lines.append(f"  Turnover: {_fmt(shadow.get('turnover', 0))}")
+                bc = shadow.get("buy_count", 0)
+                sc = shadow.get("sell_count", 0)
+                if bc or sc:
+                    lines.append(f"  Orders: {bc}买入 / {sc}卖出")
+                lines.append("")
+                lines.append("<i>⚠ 无券商 reconciliation 数据（--real_sync 未指定）</i>")
+            except (json.JSONDecodeError, OSError) as e:
+                lines.append(f"⚠ 无法解析 shadow execution 数据: {e}")
+        else:
+            lines.append("⚠ Reconciliation 数据不存在")
+            lines.append("请运行 run_post_close.py 或检查 shadow 账户")
 
     return "\n".join(lines)
 
@@ -296,30 +425,63 @@ def run_preopen(trade_date: str) -> None:
     for inst, score in top_picks:
         print(f"    #{top_picks.index((inst, score)) + 1} {inst}  score={score:.4f}")
 
-    # 4. Run rebalance
-    print(f"\n[4/4] Running shadow rebalance...")
-    output_dir = Path("experiments") / "alpha_v1_daily" / trade_date
+    # 4. Check rebalance schedule
+    print(f"\n[4/4] Checking rebalance schedule...")
+    output_dir = PROJECT_ROOT / "experiments" / "alpha_v1_daily" / trade_date
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    try:
-        artifacts = run_alpha_v1_shadow_rebalance(
-            base_dir=".",
-            run_id=f"alpha_v1_preopen_{trade_date}",
+    rebalance_skipped = False
+    if not _should_rebalance(trade_date):
+        print(f"  ⏭ Skipping: {ALPHA_V1_CANDIDATE.portfolio.rebalance_freq} policy, already ran this week")
+        rebalance_skipped = True
+        artifacts = ShadowRebalanceArtifacts(
             trade_date=trade_date,
-            predictions_path=str(pred_path),
-            output_dir=str(output_dir),
+            run_id=f"alpha_v1_preopen_{trade_date}",
+            status="skipped",
+            strategy_id="alpha_v1",
+            strategy_version=ALPHA_V1_CANDIDATE.version,
+            portfolio_method="rank_weight_buffer",
+            top_n=ALPHA_V1_CANDIDATE.portfolio.top_n,
+            buffer_hold=ALPHA_V1_CANDIDATE.portfolio.buffer_hold,
+            buffer_buy=ALPHA_V1_CANDIDATE.portfolio.buffer_buy,
+            single_stock_cap=ALPHA_V1_CANDIDATE.portfolio.single_stock_cap,
+            turnover_buffer=0.0,
+            price_mode="shadow_mark_price",
+            rebalance_mode=ALPHA_V1_CANDIDATE.portfolio.rebalance_freq,
+            target_weights_path="",
+            order_intents_path=str(pred_path),
+            execution_summary_path="",
+            account_after_path="",
+            positions_after_path="",
+            shadow_account_path="",
+            shadow_positions_path="",
+            shadow_ledger_path="",
+            rebalance_audit_path="",
+            order_count=0, buy_count=0, sell_count=0, skipped_count=0,
+            filled_count=0, rejected_count=0, turnover=0.0,
+            cash_after=0.0, total_value_after=0.0,
         )
-        print(f"  ✅ orders={artifacts.order_count}, "
-              f"value=¥{artifacts.total_value_after:_.0f}, "
-              f"cash=¥{artifacts.cash_after:_.0f}, "
-              f"turnover=¥{artifacts.turnover:_.0f}")
-    except Exception as e:
-        print(f"  ❌ rebalance 失败: {e}")
-        _send_notification(f"<b>❌ Alpha V1 Pre-open {trade_date}</b>\nRebalance 失败: {e}")
-        return
+    else:
+        print(f"  Running shadow rebalance...")
+        try:
+            artifacts = run_alpha_v1_shadow_rebalance(
+                base_dir=".",
+                run_id=f"alpha_v1_preopen_{trade_date}",
+                trade_date=trade_date,
+                predictions_path=str(pred_path),
+                output_dir=str(output_dir),
+            )
+            print(f"  ✅ orders={artifacts.order_count}, "
+                  f"value=¥{artifacts.total_value_after:_.0f}, "
+                  f"cash=¥{artifacts.cash_after:_.0f}, "
+                  f"turnover=¥{artifacts.turnover:_.0f}")
+        except Exception as e:
+            print(f"  ❌ rebalance 失败: {e}")
+            _send_notification(f"<b>❌ Alpha V1 Pre-open {trade_date}</b>\nRebalance 失败: {e}")
+            return
 
     # 5. Telegram notify
-    msg = _build_preopen_message(trade_date, artifacts, len(pred_df), top_picks)
+    msg = _build_preopen_message(trade_date, artifacts, len(pred_df), top_picks, rebalance_skipped)
     _send_notification(msg)
 
     elapsed = time.time() - t0
@@ -327,39 +489,13 @@ def run_preopen(trade_date: str) -> None:
 
 
 def run_postclose(trade_date: str) -> None:
-    """Postclose: 读 reconciliation → Telegram notify."""
+    """Postclose: read reconciliation → Telegram notify."""
     t0 = time.time()
     print(f"\n{'=' * 60}")
     print(f"Alpha V1 Post-close — {trade_date}")
     print(f"{'=' * 60}")
 
-    # 找 summary.json
-    candidates = [
-        Path("daily") / trade_date / "post_close" / "summary.json",
-        Path("daily") / trade_date / "post_close" / "reports" / "summary.json",
-        Path("runs") / f"postclose_{trade_date}" / "summary.json",
-    ]
-    if "RUN_DIR" in globals():
-        candidates.insert(0, Path(globals()["RUN_DIR"]) / "summary.json")
-
-    summary_path = None
-    for p in candidates:
-        if p.exists():
-            summary_path = p
-            print(f"  找到 reconciliation: {p}")
-            break
-
-    if summary_path is None:
-        print("  ⚠ 未找到 reconciliation 数据")
-        msg = (
-            f"<b>📊 Alpha V1 Post-close {trade_date}</b>\n"
-            f"Time: {_now_str()}\n\n⚠ Reconciliation 数据不存在\n"
-            f"请先运行 run_post_close.py"
-        )
-        _send_notification(msg)
-        return
-
-    msg = _build_postclose_message(trade_date, summary_path)
+    msg = _build_postclose_message(trade_date)
     _send_notification(msg)
 
     elapsed = time.time() - t0
