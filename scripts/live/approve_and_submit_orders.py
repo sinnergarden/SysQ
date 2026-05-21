@@ -21,6 +21,7 @@ This is the second script in the Phase 1 live chain. It:
 from __future__ import annotations
 
 import argparse
+import csv
 import sys
 from pathlib import Path
 
@@ -89,14 +90,32 @@ def main() -> None:
         log.error("Order intents file not found: %s", csv_path)
         sys.exit(1)
 
+    # Count raw CSV rows for conversion-loss detection
+    raw_intent_count = 0
+    with csv_path.open(newline="", encoding="utf-8") as fh:
+        raw_intent_count = sum(1 for _ in csv.DictReader(fh))
+
     requests = from_order_intents_csv(
         csv_path,
         trade_date=args.trade_date,
         run_id=args.run_id,
     )
 
+    if raw_intent_count > 0 and len(requests) < raw_intent_count:
+        log.error(
+            "%d of %d order intents were dropped during conversion "
+            "(missing prices or invalid data). Fail closed.",
+            raw_intent_count - len(requests),
+            raw_intent_count,
+        )
+        sys.exit(1)
+
     if not requests:
-        log.info("No tradeable intents — nothing to submit.")
+        if raw_intent_count == 0:
+            log.info("CSV is empty — nothing to submit.")
+        else:
+            log.error("All %d intents were dropped during conversion. Fail closed.", raw_intent_count)
+            sys.exit(1)
         return
 
     log.info("Loaded %d order intents from %s", len(requests), csv_path)

@@ -467,13 +467,25 @@ class TradeLedger:
             return None
         return dict(row)
 
-    def get_intent_by_intent_id(self, intent_id: str) -> dict[str, Any] | None:
-        """Look up an execution request by intent_id (non-unique, returns first match)."""
+    def get_intent_by_intent_id(
+        self,
+        intent_id: str,
+        run_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Look up an execution request by intent_id.
+
+        If *run_id* is provided, scope the query to a specific run to avoid
+        cross-run ambiguity when multiple runs share the same intent_id.
+        Returns None if not found.
+        """
+        query = "SELECT * FROM execution_requests WHERE intent_id = ?"
+        params: list[Any] = [intent_id]
+        if run_id is not None:
+            query += " AND run_id = ?"
+            params.append(run_id)
+        query += " LIMIT 1"
         with self.connect() as connection:
-            row = connection.execute(
-                "SELECT * FROM execution_requests WHERE intent_id = ? LIMIT 1",
-                (intent_id,),
-            ).fetchone()
+            row = connection.execute(query, tuple(params)).fetchone()
         if row is None:
             return None
         return dict(row)

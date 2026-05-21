@@ -7,6 +7,7 @@ from typing import Any
 import pandas as pd
 
 from qsys.execution.models import BrokerOrderRequest
+from qsys.utils.logger import log
 
 
 def to_broker_order_requests(
@@ -44,10 +45,18 @@ def to_broker_order_requests(
         intent_id = str(row.get("intent_id") or f"{run_id}:{symbol}:{side}:{i:03d}")
 
         if not symbol or side not in ("buy", "sell") or qty <= 0:
+            log.warning(
+                "Dropping intent row %d: invalid fields — symbol=%r side=%r qty=%d",
+                i, symbol, side, qty,
+            )
             continue
 
         # Phase 1: limit-only. Fail closed if no price is available.
         if limit_price is None or limit_price <= 0:
+            log.warning(
+                "Dropping intent row %d: no valid price (Phase 1 limit-only) symbol=%s side=%s",
+                i, symbol, side,
+            )
             continue
 
         requests.append(
@@ -79,6 +88,7 @@ def from_order_intents_csv(csv_path: str | Path, *, trade_date: str, run_id: str
     if df.empty:
         return []
     rows = df.to_dict(orient="records")
+    raw_count = len(rows)
     mapped: list[dict[str, Any]] = []
     for row in rows:
         mapped.append(
@@ -91,7 +101,13 @@ def from_order_intents_csv(csv_path: str | Path, *, trade_date: str, run_id: str
                 "reason": str(row.get("reason", "rebalance_to_target_weight")),
             }
         )
-    return to_broker_order_requests(intent_rows=mapped, trade_date=trade_date, run_id=run_id)
+    result = to_broker_order_requests(intent_rows=mapped, trade_date=trade_date, run_id=run_id)
+    if len(result) < raw_count:
+        log.warning(
+            "from_order_intents_csv: %d CSV rows → %d BrokerOrderRequests (%d dropped)",
+            raw_count, len(result), raw_count - len(result),
+        )
+    return result
 
 
 def from_plan_dataframe(plan_df: pd.DataFrame, *, trade_date: str, run_id: str) -> list[BrokerOrderRequest]:
@@ -110,6 +126,7 @@ def from_intents_json(json_path: str | Path, *, trade_date: str, run_id: str) ->
     with path.open("r", encoding="utf-8") as fh:
         payload = json.load(fh)
     raw = payload.get("intents") or []
+    raw_count = len(raw)
     rows: list[dict[str, Any]] = []
     for item in raw:
         rows.append(
@@ -123,4 +140,10 @@ def from_intents_json(json_path: str | Path, *, trade_date: str, run_id: str) ->
                 "reason": str(item.get("note", "")),
             }
         )
-    return to_broker_order_requests(intent_rows=rows, trade_date=trade_date, run_id=run_id)
+    result = to_broker_order_requests(intent_rows=rows, trade_date=trade_date, run_id=run_id)
+    if len(result) < raw_count:
+        log.warning(
+            "from_intents_json: %d intents → %d BrokerOrderRequests (%d dropped)",
+            raw_count, len(result), raw_count - len(result),
+        )
+    return result

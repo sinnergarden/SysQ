@@ -235,10 +235,12 @@ class ExecutionService:
             if not report.intent_id and not report.broker_order_id:
                 continue
 
-            # Find the intent either by intent_id or broker_order_id
-            intent = self.ledger.get_intent_by_intent_id(report.intent_id) if report.intent_id else None
-            if intent is None and report.broker_order_id:
+            # Find intent — prefer broker_order_id (unique) over intent_id (non-unique)
+            intent = None
+            if report.broker_order_id:
                 intent = self.ledger.get_intents_by_broker_order_id(report.broker_order_id)
+            if intent is None and report.intent_id:
+                intent = self.ledger.get_intent_by_intent_id(report.intent_id, run_id=run_id)
 
             if intent is None:
                 # Report without a matching local intent — skip
