@@ -38,27 +38,24 @@ if [ -z "$REAL_SYNC" ]; then
     done
 fi
 
-if [ -z "$REAL_SYNC" ]; then
-    echo "ERROR: --real_sync file not found for $TODAY"
-    echo "Set REAL_SYNC_PATH env var or place file at a conventional location:"
-    echo "  /home/liuming/.openclaw/workspace/orders/miniqmt_readback_${TODAY}.json"
-    echo "  /home/liuming/.openclaw/workspace/orders/real_sync_${TODAY}.csv"
-    exit 1
+if [ -n "$REAL_SYNC" ]; then
+    $PYTHON scripts/run_post_close.py \
+      --date "$TODAY" \
+      --real_sync "$REAL_SYNC" \
+      --no_report \
+      "$@"
+    EXIT_CODE=$?
+else
+    echo "WARNING: --real_sync not found for $TODAY, skipping broker reconciliation"
+    EXIT_CODE=0
 fi
 
-$PYTHON scripts/run_post_close.py \
-  --date "$TODAY" \
-  --real_sync "$REAL_SYNC" \
-  --no_report \
-  "$@"
-EXIT_CODE=$?
-
-# Notify via Telegram (non-blocking)
-NOTIFY_SCRIPT="$(cd "$(dirname "$0")" && pwd)/notify_telegram.sh"
+# Alpha V1 post-close notification (rich PnL summary)
 if [ $EXIT_CODE -eq 0 ]; then
-    bash "$NOTIFY_SCRIPT" "Post-close $TODAY completed" 2>/dev/null || true
-else
-    bash "$NOTIFY_SCRIPT" "Post-close $TODAY FAILED (exit $EXIT_CODE)" 2>/dev/null || true
+    $PYTHON scripts/run_alpha_v1_daily.py \
+      --trade-date "$TODAY" \
+      --mode postclose \
+      2>/dev/null || true
 fi
 
 exit $EXIT_CODE

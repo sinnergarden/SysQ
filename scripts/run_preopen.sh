@@ -20,11 +20,15 @@ $PYTHON scripts/run_daily_trading.py \
   "$@"
 EXIT_CODE=$?
 
-# Notify via Telegram (non-blocking)
 NOTIFY_SCRIPT="$(cd "$(dirname "$0")" && pwd)/notify_telegram.sh"
 if [ $EXIT_CODE -eq 0 ]; then
-    bash "$NOTIFY_SCRIPT" "Pre-open $SIGNAL_DATE -> $(date +%Y-%m-%d) completed" 2>/dev/null || true
+    # 成功：alpha_v1 inference + plan + rich notification
+    $PYTHON scripts/run_alpha_v1_daily.py \
+      --trade-date "$(date +%Y-%m-%d)" \
+      --mode preopen \
+      2>/dev/null || true
 else
+    # 失败：简单通知
     bash "$NOTIFY_SCRIPT" "Pre-open $SIGNAL_DATE -> $(date +%Y-%m-%d) FAILED (exit $EXIT_CODE)" 2>/dev/null || true
 fi
 
