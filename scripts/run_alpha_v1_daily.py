@@ -46,9 +46,9 @@ from qsys.strategy.alpha_v1.spec import ALPHA_V1_CANDIDATE
 
 # ── 模型加载（复用 run_alpha_v1_shadow_observation.py 逻辑）──────────────
 
-MODEL_DIR = Path("experiments/alpha_v1_models/latest")
+MODEL_DIR = PROJECT_ROOT / "experiments/alpha_v1_models/latest"
 UNIVERSE = "csi300"
-PREDICTIONS_DIR = Path("experiments/alpha_v1_shadow_predictions")
+PREDICTIONS_DIR = PROJECT_ROOT / "experiments/alpha_v1_shadow_predictions"
 
 
 # ── Stock name lookup ─────────────────────────────────────────────────
@@ -145,6 +145,8 @@ def fetch_single_date_data(trade_date: str):
 
     raw = adapter.get_features(UNIVERSE, all_features + ["$close"],
                                 start_time=trade_date, end_time=trade_date)
+    if raw.empty:
+        return pd.DataFrame(), clean_features
     frame = raw.reset_index().rename(columns={"datetime": "trade_date"})
     frame = frame.loc[:, ~frame.columns.duplicated()]
     return frame, clean_features
