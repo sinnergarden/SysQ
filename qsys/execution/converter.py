@@ -42,6 +42,9 @@ def to_broker_order_requests(
             except (TypeError, ValueError):
                 limit_price = None
 
+        row_price_source = str(row.get("price_source", price_source) or "")
+        row_snapshot_time = str(row.get("price_snapshot_time", price_snapshot_time) or "")
+
         intent_id = str(row.get("intent_id") or f"{run_id}:{symbol}:{side}:{i:03d}")
 
         if not symbol or side not in ("buy", "sell") or qty <= 0:
@@ -51,10 +54,22 @@ def to_broker_order_requests(
             )
             continue
 
-        # Phase 1: limit-only. Fail closed if no price is available.
+        # Phase 1: strict validation — all fields required
         if limit_price is None or limit_price <= 0:
             log.warning(
                 "Dropping intent row %d: no valid price (Phase 1 limit-only) symbol=%s side=%s",
+                i, symbol, side,
+            )
+            continue
+        if not row_price_source:
+            log.warning(
+                "Dropping intent row %d: missing price_source symbol=%s side=%s",
+                i, symbol, side,
+            )
+            continue
+        if not row_snapshot_time:
+            log.warning(
+                "Dropping intent row %d: missing price_snapshot_time symbol=%s side=%s",
                 i, symbol, side,
             )
             continue
@@ -67,8 +82,8 @@ def to_broker_order_requests(
                 order_type="limit",
                 quantity=qty,
                 limit_price=limit_price,
-                price_source=row.get("price_source", price_source),
-                price_snapshot_time=row.get("price_snapshot_time", price_snapshot_time),
+                price_source=row_price_source,
+                price_snapshot_time=row_snapshot_time,
                 target_weight=row.get("target_weight"),
                 reason=row.get("reason", "live_execution"),
             )
@@ -97,6 +112,8 @@ def from_order_intents_csv(csv_path: str | Path, *, trade_date: str, run_id: str
                 "side": str(row.get("side", "")).lower(),
                 "requested_qty": int(row.get("requested_qty", 0)),
                 "price": row.get("price"),
+                "price_source": str(row.get("price_source", "") or ""),
+                "price_snapshot_time": str(row.get("price_snapshot_time", "") or ""),
                 "target_weight": float(row.get("target_weight", 0.0)),
                 "reason": str(row.get("reason", "rebalance_to_target_weight")),
             }
@@ -135,6 +152,8 @@ def from_intents_json(json_path: str | Path, *, trade_date: str, run_id: str) ->
                 "side": str(item.get("side", "")).lower(),
                 "amount": int(item.get("amount", 0)),
                 "price": item.get("price"),
+                "price_source": str(item.get("price_source", "") or ""),
+                "price_snapshot_time": str(item.get("price_snapshot_time", "") or ""),
                 "intent_id": str(item.get("intent_id", "")),
                 "target_weight": item.get("weight"),
                 "reason": str(item.get("note", "")),

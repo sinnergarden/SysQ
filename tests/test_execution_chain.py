@@ -72,8 +72,8 @@ class TestValidateTransition:
 class TestConverter:
     def test_to_broker_order_requests(self):
         rows = [
-            {"symbol": "600000.SH", "side": "buy", "amount": 100, "price": 10.5, "intent_id": "id1"},
-            {"symbol": "600001.SH", "side": "sell", "amount": 200, "price": 20.0, "intent_id": "id2"},
+            {"symbol": "600000.SH", "side": "buy", "amount": 100, "price": 10.5, "intent_id": "id1", "price_source": "close", "price_snapshot_time": "2026-04-25T15:00:00"},
+            {"symbol": "600001.SH", "side": "sell", "amount": 200, "price": 20.0, "intent_id": "id2", "price_source": "close", "price_snapshot_time": "2026-04-25T15:00:00"},
         ]
         result = to_broker_order_requests(intent_rows=rows, trade_date="2026-04-25", run_id="test_run")
         assert len(result) == 2
@@ -81,6 +81,8 @@ class TestConverter:
         assert result[0].side == "buy"
         assert result[0].quantity == 100
         assert result[0].limit_price == 10.5
+        assert result[0].price_source == "close"
+        assert result[0].price_snapshot_time == "2026-04-25T15:00:00"
         assert result[1].side == "sell"
         assert result[1].quantity == 200
         assert result[1].limit_price == 20.0
@@ -94,13 +96,35 @@ class TestConverter:
         result = to_broker_order_requests(intent_rows=rows, trade_date="2026-04-25", run_id="test_run")
         assert len(result) == 0
 
+    def test_to_broker_order_requests_requires_price_fields(self):
+        # Missing price_source from row and from default
+        rows = [
+            {"symbol": "600000.SH", "side": "buy", "amount": 100, "price": 10.5, "intent_id": "id1", "price_snapshot_time": "2026-04-25T15:00:00"},
+        ]
+        result = to_broker_order_requests(intent_rows=rows, trade_date="2026-04-25", run_id="test_run")
+        assert len(result) == 0
+
+        # Missing price_snapshot_time from row and from default
+        rows = [
+            {"symbol": "600000.SH", "side": "buy", "amount": 100, "price": 10.5, "intent_id": "id2", "price_source": "close"},
+        ]
+        result = to_broker_order_requests(intent_rows=rows, trade_date="2026-04-25", run_id="test_run")
+        assert len(result) == 0
+
+        # Both present — should pass
+        rows = [
+            {"symbol": "600000.SH", "side": "buy", "amount": 100, "price": 10.5, "intent_id": "id3", "price_source": "close", "price_snapshot_time": "2026-04-25T15:00:00"},
+        ]
+        result = to_broker_order_requests(intent_rows=rows, trade_date="2026-04-25", run_id="test_run")
+        assert len(result) == 1
+
     def test_from_order_intents_csv(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             csv_path = Path(tmpdir) / "order_intents.csv"
             pd.DataFrame(
                 [
-                    {"instrument": "600000.SH", "side": "buy", "requested_qty": 100, "price": 10.5, "target_weight": 0.05, "reason": "rebalance"},
-                    {"instrument": "600001.SH", "side": "sell", "requested_qty": 200, "price": 20.0, "target_weight": 0.0, "reason": "rebalance"},
+                    {"instrument": "600000.SH", "side": "buy", "requested_qty": 100, "price": 10.5, "target_weight": 0.05, "reason": "rebalance", "price_source": "close", "price_snapshot_time": "2026-04-25T15:00:00"},
+                    {"instrument": "600001.SH", "side": "sell", "requested_qty": 200, "price": 20.0, "target_weight": 0.0, "reason": "rebalance", "price_source": "close", "price_snapshot_time": "2026-04-25T15:00:00"},
                 ]
             ).to_csv(csv_path, index=False)
 
@@ -125,8 +149,8 @@ class TestConverter:
     def test_from_plan_dataframe(self):
         df = pd.DataFrame(
             [
-                {"symbol": "600000.SH", "side": "buy", "amount": 100, "price": 10.5},
-                {"symbol": "600001.SH", "side": "sell", "amount": 200, "price": 12.0},
+                {"symbol": "600000.SH", "side": "buy", "amount": 100, "price": 10.5, "price_source": "close", "price_snapshot_time": "2026-04-25T15:00:00"},
+                {"symbol": "600001.SH", "side": "sell", "amount": 200, "price": 12.0, "price_source": "close", "price_snapshot_time": "2026-04-25T15:00:00"},
             ]
         )
         result = from_plan_dataframe(df, trade_date="2026-04-25", run_id="test_run")
@@ -143,8 +167,8 @@ class TestConverter:
             json_path = Path(tmpdir) / "intents.json"
             payload = {
                 "intents": [
-                    {"symbol": "600000.SH", "side": "buy", "amount": 100, "price": 10.5, "intent_id": "i1"},
-                    {"symbol": "600001.SH", "side": "sell", "amount": 200, "price": 20.0, "intent_id": "i2"},
+                    {"symbol": "600000.SH", "side": "buy", "amount": 100, "price": 10.5, "intent_id": "i1", "price_source": "close", "price_snapshot_time": "2026-04-25T15:00:00"},
+                    {"symbol": "600001.SH", "side": "sell", "amount": 200, "price": 20.0, "intent_id": "i2", "price_source": "close", "price_snapshot_time": "2026-04-25T15:00:00"},
                 ]
             }
             json_path.write_text(json.dumps(payload), encoding="utf-8")
@@ -156,8 +180,32 @@ class TestConverter:
 
 # ── Pre-trade risk ──────────────────────────────────────────────────────
 
+class FakeSnapshot:
+    """Minimal ExecutionSnapshot stand-in for pre-trade risk tests."""
+
+    def __init__(self):
+        self._suspended: set[str] = set()
+        self._limit_up: dict[str, float] = {}
+        self._limit_down: dict[str, float] = {}
+        self._positions: dict[str, object] = {}
+
+    def add_position(self, symbol: str, total: int, sellable: int) -> None:
+        self._positions[symbol] = type("Pos", (), {"total_amount": total, "sellable_amount": sellable})()
+
+    def is_suspended(self, symbol: str) -> bool:
+        return symbol in self._suspended
+
+    def is_limit_up(self, symbol: str, price: float) -> bool:
+        return symbol in self._limit_up and price >= self._limit_up[symbol]
+
+    def is_limit_down(self, symbol: str, price: float) -> bool:
+        return symbol in self._limit_down and price <= self._limit_down[symbol]
+
+    def get_position(self, symbol: str):
+        return self._positions.get(symbol)
+
 class TestPreTradeRisk:
-    def make_request(self, symbol, side, qty, limit_price=None):
+    def make_request(self, symbol, side, qty, limit_price=None, price_source="close", price_snapshot_time="2026-04-25T15:00:00"):
         return BrokerOrderRequest(
             intent_id=f"{side}:{symbol}",
             symbol=symbol,
@@ -165,6 +213,8 @@ class TestPreTradeRisk:
             order_type="limit",
             quantity=qty,
             limit_price=limit_price,
+            price_source=price_source,
+            price_snapshot_time=price_snapshot_time,
         )
 
     def test_all_passed(self):
@@ -223,6 +273,96 @@ class TestPreTradeRisk:
         assert s["passed_count"] == 1
         assert s["failed_count"] == 1
         assert s["failed_orders"][0]["symbol"] == "BLACK.SH"
+
+    # ── ExecutionSnapshot-based risk checks ──────────────────────────
+
+    def test_lot_size_check(self):
+        """Quantity must be a multiple of 100."""
+        reqs = [self.make_request("600000.SH", "buy", 50, 10.0)]
+        result = check_pre_trade_risk(reqs, available_cash=5000.0)
+        assert not result.all_passed
+        assert len(result.failed) == 1
+        assert "multiple of 100" in result.failed[0][1]
+
+    def test_lot_size_check_passes_for_valid(self):
+        """Quantity of 100 (1 lot) should pass lot size check."""
+        reqs = [self.make_request("600000.SH", "buy", 100, 10.0)]
+        result = check_pre_trade_risk(reqs, available_cash=5000.0)
+        assert result.all_passed
+
+    def test_suspended_rejected(self):
+        snapshot = FakeSnapshot()
+        snapshot._suspended.add("600000.SH")
+        reqs = [self.make_request("600000.SH", "buy", 100, 10.0)]
+        result = check_pre_trade_risk(reqs, available_cash=5000.0, snapshot=snapshot)
+        assert not result.all_passed
+        assert len(result.failed) == 1
+        assert "suspended" in result.failed[0][1]
+
+    def test_limit_up_blocks_buy(self):
+        snapshot = FakeSnapshot()
+        snapshot._limit_up["600000.SH"] = 11.0  # limit_up price
+        reqs = [self.make_request("600000.SH", "buy", 100, 11.0)]
+        result = check_pre_trade_risk(reqs, available_cash=5000.0, snapshot=snapshot)
+        assert not result.all_passed
+        assert len(result.failed) == 1
+        assert "limit_up" in result.failed[0][1]
+
+    def test_limit_up_below_threshold_passes(self):
+        snapshot = FakeSnapshot()
+        snapshot._limit_up["600000.SH"] = 11.0  # limit_up price
+        reqs = [self.make_request("600000.SH", "buy", 100, 10.5)]  # below limit_up
+        result = check_pre_trade_risk(reqs, available_cash=5000.0, snapshot=snapshot)
+        assert result.all_passed
+
+    def test_limit_down_blocks_sell(self):
+        snapshot = FakeSnapshot()
+        snapshot._limit_down["600000.SH"] = 9.0  # limit_down price
+        reqs = [self.make_request("600000.SH", "sell", 100, 9.0)]
+        result = check_pre_trade_risk(reqs, available_cash=5000.0, snapshot=snapshot)
+        assert not result.all_passed
+        assert len(result.failed) == 1
+        assert "limit_down" in result.failed[0][1]
+
+    def test_limit_down_above_threshold_passes(self):
+        snapshot = FakeSnapshot()
+        snapshot._limit_down["600000.SH"] = 9.0  # limit_down price
+        snapshot.add_position("600000.SH", total=500, sellable=500)
+        reqs = [self.make_request("600000.SH", "sell", 100, 9.5)]  # above limit_down
+        result = check_pre_trade_risk(reqs, available_cash=5000.0, snapshot=snapshot)
+        assert result.all_passed
+
+    def test_sell_exceeds_sellable(self):
+        snapshot = FakeSnapshot()
+        snapshot.add_position("600000.SH", total=500, sellable=200)
+        reqs = [self.make_request("600000.SH", "sell", 300, 10.0)]  # 300 > 200 sellable
+        result = check_pre_trade_risk(reqs, available_cash=5000.0, snapshot=snapshot)
+        assert not result.all_passed
+        assert len(result.failed) == 1
+        assert "sellable" in result.failed[0][1]
+
+    def test_sell_within_sellable_passes(self):
+        snapshot = FakeSnapshot()
+        snapshot.add_position("600000.SH", total=500, sellable=200)
+        reqs = [self.make_request("600000.SH", "sell", 200, 10.0)]  # 200 == sellable
+        result = check_pre_trade_risk(reqs, available_cash=5000.0, snapshot=snapshot)
+        assert result.all_passed
+
+    def test_sell_without_position_fails(self):
+        """Sell order for symbol not in snapshot positions should fail closed."""
+        snapshot = FakeSnapshot()  # no positions added
+        reqs = [self.make_request("600000.SH", "sell", 100, 10.0)]
+        result = check_pre_trade_risk(reqs, available_cash=5000.0, snapshot=snapshot)
+        assert not result.all_passed
+        assert len(result.failed) == 1
+        assert "no position found" in result.failed[0][1]
+
+    def test_snapshot_checks_skip_when_snapshot_none(self):
+        """Without snapshot, limit_up/down/suspended/sellable checks are skipped."""
+        reqs = [self.make_request("SUSPENDED.SH", "buy", 100, 10.0)]
+        # No snapshot passed — should pass (no snapshot checks)
+        result = check_pre_trade_risk(reqs, available_cash=5000.0)
+        assert result.all_passed
 
 
 # ── TradeLedger state machine ───────────────────────────────────────────
@@ -343,7 +483,7 @@ class TestExecutionService:
     def service(self, adapter, ledger):
         return ExecutionService(adapter, ledger, strategy_id="alpha_v1")
 
-    def make_request(self, symbol, side, qty, limit_price=None):
+    def make_request(self, symbol, side, qty, limit_price=None, price_source="close", price_snapshot_time="2026-04-25T15:00:00"):
         return BrokerOrderRequest(
             intent_id=f"{side}:{symbol}:{qty}",
             symbol=symbol,
@@ -351,6 +491,8 @@ class TestExecutionService:
             order_type="limit",
             quantity=qty,
             limit_price=limit_price,
+            price_source=price_source,
+            price_snapshot_time=price_snapshot_time,
         )
 
     def test_prepare_and_submit_success(self, service, ledger):

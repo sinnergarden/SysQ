@@ -44,8 +44,10 @@ def validate_transition(current: str, next_status: str) -> None:
 class BrokerOrderRequest:
     """Standardized broker-agnostic order request.
 
-    Phase 1 only supports explicit **limit** orders (``order_type="limit"``).
-    The caller must provide *limit_price* or a *price_source* / *price_snapshot_time*.
+    Phase 1 enforces strict validation:
+    - ``order_type`` must be ``"limit"`` (market orders not supported)
+    - ``limit_price``, ``price_source``, and ``price_snapshot_time`` are all required
+    - ``quantity`` must be a multiple of 100 (lot-size aligned)
 
     *intent_id* links back to the strategy's original order intent for traceability.
     """
@@ -56,8 +58,8 @@ class BrokerOrderRequest:
     order_type: str  # "limit" (Phase 1 only — market orders are not supported)
     quantity: int  # must be lot-size aligned (multiple of 100)
     limit_price: float | None = None  # required for limit orders
-    price_source: str = ""  # e.g. "close@2026-04-25", "quote_last", "vwap"
-    price_snapshot_time: str = ""  # ISO time when the price was captured
+    price_source: str = ""  # required (e.g. "close@2026-04-25", "quote_last")
+    price_snapshot_time: str = ""  # required (ISO time when the price was captured)
     time_in_force: str = "DAY"
     target_weight: float | None = None
     reason: str = ""

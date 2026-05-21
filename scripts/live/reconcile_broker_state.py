@@ -16,6 +16,8 @@ This is the fourth script in the Phase 1 live chain. It:
 from __future__ import annotations
 
 import argparse
+import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 from qsys.broker.miniqmt import MiniQMTAdapter
@@ -58,6 +60,26 @@ def main() -> None:
 
     print(f"\n  Note: {result.get('note', '')}")
     print()
+
+    # Write artifact
+    artifact = {
+        "run_id": args.run_id,
+        "trade_date": args.trade_date or "",
+        "strategy_id": args.strategy_id,
+        "account_name": getattr(adapter, "account_name", ""),
+        "status": result.get("status", "unknown"),
+        "broker_cash": result.get("broker_cash"),
+        "broker_position_count": result.get("broker_position_count"),
+        "local_intent_count": result.get("local_intent_count"),
+        "local_status_counts": result.get("local_status_counts"),
+        "error": result.get("error"),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    artifact_dir = Path("data/artifacts")
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    artifact_path = artifact_dir / f"reconcile_{args.run_id}.json"
+    artifact_path.write_text(json.dumps(artifact, indent=2, ensure_ascii=False), encoding="utf-8")
+    log.info("Wrote reconcile artifact: %s", artifact_path)
 
 
 if __name__ == "__main__":
