@@ -118,10 +118,18 @@ def check_pre_trade_risk(
                     )
                     continue
 
-            # Sellable amount check for sell orders
+            # Sell-side position checks
             if req.side == "sell":
                 pos = snapshot.get_position(req.symbol)
-                if pos is not None and req.quantity > pos.sellable_amount:
+                if pos is None:
+                    failed.append(
+                        (
+                            req,
+                            f"no position found for sell order {req.symbol}",
+                        )
+                    )
+                    continue
+                if req.quantity > pos.sellable_amount:
                     failed.append(
                         (
                             req,

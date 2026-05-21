@@ -327,6 +327,7 @@ class TestPreTradeRisk:
     def test_limit_down_above_threshold_passes(self):
         snapshot = FakeSnapshot()
         snapshot._limit_down["600000.SH"] = 9.0  # limit_down price
+        snapshot.add_position("600000.SH", total=500, sellable=500)
         reqs = [self.make_request("600000.SH", "sell", 100, 9.5)]  # above limit_down
         result = check_pre_trade_risk(reqs, available_cash=5000.0, snapshot=snapshot)
         assert result.all_passed
@@ -346,6 +347,15 @@ class TestPreTradeRisk:
         reqs = [self.make_request("600000.SH", "sell", 200, 10.0)]  # 200 == sellable
         result = check_pre_trade_risk(reqs, available_cash=5000.0, snapshot=snapshot)
         assert result.all_passed
+
+    def test_sell_without_position_fails(self):
+        """Sell order for symbol not in snapshot positions should fail closed."""
+        snapshot = FakeSnapshot()  # no positions added
+        reqs = [self.make_request("600000.SH", "sell", 100, 10.0)]
+        result = check_pre_trade_risk(reqs, available_cash=5000.0, snapshot=snapshot)
+        assert not result.all_passed
+        assert len(result.failed) == 1
+        assert "no position found" in result.failed[0][1]
 
     def test_snapshot_checks_skip_when_snapshot_none(self):
         """Without snapshot, limit_up/down/suspended/sellable checks are skipped."""
