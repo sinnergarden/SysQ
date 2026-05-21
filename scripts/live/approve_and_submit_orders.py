@@ -22,7 +22,9 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 from qsys.broker.miniqmt import MiniQMTAdapter
@@ -164,6 +166,28 @@ def main() -> None:
         print(f"\n  Acknowledgements:")
         for ack in result["acks"]:
             print(f"    {ack['intent_id']:40s} → broker_order_id={ack['broker_order_id']:30s} status={ack['status']}")
+    # Write artifact
+    artifact = {
+        "run_id": args.run_id,
+        "trade_date": args.trade_date,
+        "strategy_id": args.strategy_id,
+        "account_name": adapter.account_name,
+        "status": result["status"],
+        "submitted_count": result.get("submitted_count", 0),
+        "rejected_count": result.get("rejected_count", 0),
+        "errors": result.get("errors", []),
+        "acks": [
+            {"intent_id": a["intent_id"], "broker_order_id": a["broker_order_id"], "status": a["status"]}
+            for a in result.get("acks", [])
+        ],
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    artifact_dir = Path("data/artifacts")
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    artifact_path = artifact_dir / f"submit_{args.run_id}.json"
+    artifact_path.write_text(json.dumps(artifact, indent=2, ensure_ascii=False), encoding="utf-8")
+    log.info("Wrote submit artifact: %s", artifact_path)
+
     print(f"\nNext: python scripts/live/poll_broker_orders.py --run-id {args.run_id}")
     print()
 

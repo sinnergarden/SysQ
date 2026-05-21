@@ -16,7 +16,9 @@ This is the third script in the Phase 1 live chain. It:
 from __future__ import annotations
 
 import argparse
+import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 from qsys.broker.miniqmt import MiniQMTAdapter
@@ -64,6 +66,26 @@ def main() -> None:
         sys.exit(1)
 
     print()
+
+    # Write artifact
+    artifact = {
+        "run_id": args.run_id,
+        "trade_date": args.trade_date or "",
+        "strategy_id": args.strategy_id,
+        "account_name": getattr(adapter, "account_name", ""),
+        "status": result["status"],
+        "transitions_count": len(result.get("transitions", [])),
+        "fill_count": result.get("fill_count", 0),
+        "errors": result.get("errors", []),
+        "transitions": result.get("transitions", []),
+        "status_counts": ledger.count_run_intents_by_status(run_id=args.run_id),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    artifact_dir = Path("data/artifacts")
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    artifact_path = artifact_dir / f"poll_{args.run_id}.json"
+    artifact_path.write_text(json.dumps(artifact, indent=2, ensure_ascii=False), encoding="utf-8")
+    log.info("Wrote poll artifact: %s", artifact_path)
 
 
 if __name__ == "__main__":

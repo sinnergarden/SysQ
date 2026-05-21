@@ -1,8 +1,11 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from qsys.execution.models import BrokerOrderRequest, OS_REJECTED
+
+if TYPE_CHECKING:
+    from qsys.data.snapshot import ExecutionSnapshot
 
 
 class PreTradeRiskError(ValueError):
@@ -50,12 +53,18 @@ def check_pre_trade_risk(
     blacklist: set[str] | None = None,
     max_price_deviation_pct: float = 20.0,
     reference_prices: dict[str, float] | None = None,
+    snapshot: ExecutionSnapshot | None = None,
 ) -> PreTradeRiskResult:
     """Check pre-trade risk constraints on a list of order requests.
 
     Checks performed:
     - Symbol blacklist (ST, suspended, etc.)
-    - Buy orders: sufficient available cash
+    - Lot size: quantity must be a multiple of 100
+    - Buy orders: sufficient available cash (cumulative)
+    - Sell orders: quantity does not exceed sellable amount (if snapshot provided)
+    - Suspended symbols (if snapshot provided)
+    - Buy price at or above limit_up (if snapshot provided)
+    - Sell price at or below limit_down (if snapshot provided)
     - Price deviation from reference (if reference_prices provided)
     """
     blacklist = blacklist or set()
@@ -70,6 +79,57 @@ def check_pre_trade_risk(
         if req.symbol in blacklist:
             failed.append((req, f"symbol {req.symbol} is blacklisted"))
             continue
+
+        # Lot size check: must be multiple of 100
+        if req.quantity % 100 != 0:
+            failed.append(
+                (req, f"quantity {req.quantity} is not a multiple of 100 (lot size)")
+            )
+            continue
+
+        # Snapshot-based checks
+        if snapshot is not None:
+            # Suspended check
+            if snapshot.is_suspended(req.symbol):
+                failed.append((req, f"symbol {req.symbol} is suspended"))
+                continue
+
+            # Limit-up check for buy orders
+            if req.side == "buy" and req.limit_price is not None:
+                if snapshot.is_limit_up(req.symbol, req.limit_price):
+                    failed.append(
+                        (
+                            req,
+                            f"buy price {req.limit_price:.2f} is at or above limit_up "
+                            f"for {req.symbol}",
+                        )
+                    )
+                    continue
+
+            # Limit-down check for sell orders
+            if req.side == "sell" and req.limit_price is not None:
+                if snapshot.is_limit_down(req.symbol, req.limit_price):
+                    failed.append(
+                        (
+                            req,
+                            f"sell price {req.limit_price:.2f} is at or below limit_down "
+                            f"for {req.symbol}",
+                        )
+                    )
+                    continue
+
+            # Sellable amount check for sell orders
+            if req.side == "sell":
+                pos = snapshot.get_position(req.symbol)
+                if pos is not None and req.quantity > pos.sellable_amount:
+                    failed.append(
+                        (
+                            req,
+                            f"sell quantity {req.quantity} exceeds sellable amount "
+                            f"{pos.sellable_amount} for {req.symbol}",
+                        )
+                    )
+                    continue
 
         # Price deviation check
         ref_price = reference_prices.get(req.symbol)
