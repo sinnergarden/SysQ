@@ -666,3 +666,427 @@ class MiniQMTServerHTTPIntegrationTestCase(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ── Mapper tests ───────────────────────────────────────────────────────
+
+class TestMapper(unittest.TestCase):
+    """Pure-function tests for ``miniqmt_server.broker.mapper``.
+    These have no dependency on xtquant and run on any platform.
+    """
+
+    def test_map_order_status_all_codes(self) -> None:
+        from miniqmt_server.broker.mapper import map_order_status
+
+        cases: list[tuple[int, str]] = [
+            (0, "submitted"),
+            (1, "partial"),
+            (2, "filled"),
+            (3, "canceled"),
+            (4, "rejected"),
+            (5, "submitted"),
+            (6, "submitted"),
+            (99, "submitted"),  # unknown → default
+        ]
+        for code, expected in cases:
+            with self.subTest(code=code):
+                self.assertEqual(map_order_status(code), expected)
+
+    def test_map_account_normalized(self) -> None:
+        from miniqmt_server.broker.mapper import map_account
+
+        raw = {
+            "account_id": "acc001",
+            "total_assets": 200000.0,
+            "available_cash": 80000.0,
+            "market_value": 120000.0,
+            "frozen_cash": 5000.0,
+            "daily_pnl": 1500.0,
+        }
+        result = map_account(raw)
+        self.assertEqual(result["account_id"], "acc001")
+        self.assertEqual(result["total_assets"], 200000.0)
+        self.assertEqual(result["available_cash"], 80000.0)
+        self.assertEqual(result["market_value"], 120000.0)
+        self.assertEqual(result["frozen_cash"], 5000.0)
+        self.assertEqual(result["daily_pnl"], 1500.0)
+        self.assertIn("updated_at", result)
+
+    def test_map_account_fallback(self) -> None:
+        from miniqmt_server.broker.mapper import _fallback_account
+
+        result = _fallback_account("fallback_acc")
+        self.assertEqual(result["account_id"], "fallback_acc")
+        self.assertEqual(result["total_assets"], 0.0)
+        self.assertEqual(result["available_cash"], 0.0)
+
+    def test_map_account_empty_input(self) -> None:
+        from miniqmt_server.broker.mapper import map_account
+
+        result = map_account({})
+        self.assertEqual(result["account_id"], "")
+        self.assertEqual(result["total_assets"], 0.0)
+        self.assertEqual(result["available_cash"], 0.0)
+
+    def test_map_position_standard(self) -> None:
+        from miniqmt_server.broker.mapper import map_position
+
+        raw = {
+            "stock_code": "600000.SH",
+            "volume": 500,
+            "can_use_volume": 300,
+            "cost_price": 10.0,
+            "last_price": 11.0,
+            "market_value": 5500.0,
+            "floating_pnl": 500.0,
+        }
+        result = map_position(raw)
+        self.assertEqual(result["symbol"], "600000.SH")
+        self.assertEqual(result["volume"], 500)
+        self.assertEqual(result["available_volume"], 300)
+        self.assertEqual(result["cost_price"], 10.0)
+        self.assertEqual(result["market_price"], 11.0)
+        self.assertEqual(result["market_value"], 5500.0)
+        self.assertEqual(result["pnl"], 500.0)
+
+    def test_map_position_missing_fields(self) -> None:
+        from miniqmt_server.broker.mapper import map_position
+
+        result = map_position({"stock_code": "600000.SH"})
+        self.assertEqual(result["symbol"], "600000.SH")
+        self.assertEqual(result["volume"], 0)
+        self.assertEqual(result["available_volume"], 0)
+        self.assertEqual(result["market_value"], 0.0)
+        self.assertEqual(result["pnl"], 0.0)
+
+    def test_map_position_derives_market_value(self) -> None:
+        from miniqmt_server.broker.mapper import map_position
+
+        raw = {"stock_code": "600000.SH", "volume": 200, "last_price": 15.0}
+        result = map_position(raw)
+        self.assertEqual(result["market_value"], 3000.0)  # 200 * 15
+
+    def test_map_order_standard(self) -> None:
+        from miniqmt_server.broker.mapper import map_order
+
+        raw = {
+            "order_id": "xt1001",
+            "stock_code": "600000.SH",
+            "side": "BUY",
+            "total_quantity": 200,
+            "price": 10.5,
+            "order_status": 0,
+            "traded_quantity": 0,
+        }
+        result = map_order(raw)
+        self.assertEqual(result["broker_order_id"], "xt1001")
+        self.assertEqual(result["symbol"], "600000.SH")
+        self.assertEqual(result["side"], "BUY")
+        self.assertEqual(result["quantity"], 200)
+        self.assertEqual(result["limit_price"], 10.5)
+        self.assertEqual(result["status"], "submitted")
+        self.assertEqual(result["filled_quantity"], 0)
+
+    def test_map_order_partial_fill(self) -> None:
+        from miniqmt_server.broker.mapper import map_order
+
+        raw = {
+            "order_id": "xt1002",
+            "stock_code": "600000.SH",
+            "side": "BUY",
+            "total_quantity": 200,
+            "price": 10.5,
+            "order_status": 1,
+            "traded_quantity": 100,
+        }
+        result = map_order(raw)
+        self.assertEqual(result["status"], "partial")
+        self.assertEqual(result["filled_quantity"], 100)
+        self.assertEqual(result["remaining_quantity"], 100)
+
+    def test_map_order_filled(self) -> None:
+        from miniqmt_server.broker.mapper import map_order
+
+        raw = {"order_id": "xt1003", "stock_code": "600000.SH", "side": "SELL", "order_status": 2}
+        result = map_order(raw)
+        self.assertEqual(result["status"], "filled")
+        self.assertEqual(result["side"], "SELL")
+
+    def test_map_trade_standard(self) -> None:
+        from miniqmt_server.broker.mapper import map_trade
+
+        raw = {
+            "trade_id": "t1001",
+            "order_id": "xt1001",
+            "stock_code": "600000.SH",
+            "side": "BUY",
+            "trade_quantity": 100,
+            "trade_price": 10.5,
+            "trade_amount": 1050.0,
+        }
+        result = map_trade(raw)
+        self.assertEqual(result["trade_id"], "t1001")
+        self.assertEqual(result["broker_order_id"], "xt1001")
+        self.assertEqual(result["symbol"], "600000.SH")
+        self.assertEqual(result["side"], "BUY")
+        self.assertEqual(result["quantity"], 100)
+        self.assertEqual(result["price"], 10.5)
+        self.assertEqual(result["amount"], 1050.0)
+
+    def test_map_trade_side_conversion(self) -> None:
+        from miniqmt_server.broker.mapper import map_trade
+
+        result = map_trade({"side": "sell", "trade_id": "t1"})
+        self.assertEqual(result["side"], "SELL")
+
+    def test_map_trade_derives_amount(self) -> None:
+        from miniqmt_server.broker.mapper import map_trade
+
+        raw = {"trade_id": "t1", "trade_quantity": 200, "trade_price": 10.0}
+        result = map_trade(raw)
+        self.assertEqual(result["amount"], 2000.0)  # 200 * 10
+
+
+# ── MiniQMTBrokerAdapter tests (no xtquant) ────────────────────────────
+
+class TestMiniQMTBrokerAdapter(unittest.TestCase):
+    """Tests for MiniQMTBrokerAdapter in degraded mode (no xtquant).
+    All operations should fail closed without pretending to succeed.
+    """
+
+    def setUp(self) -> None:
+        from miniqmt_server.broker.miniqmt import MiniQMTBrokerAdapter
+        from miniqmt_server.config import MiniQMTBrokerConfig
+        self.temp_dir = TemporaryDirectory()
+        data_dir = Path(self.temp_dir.name) / "data"
+        config = ServerConfig(
+            host="127.0.0.1",
+            port=0,
+            broker_mode="miniqmt",
+            data_dir=data_dir,
+            miniqmt=MiniQMTBrokerConfig(
+                account_id="test_miniqmt",
+                submit_enabled=False,
+                qmt_path="",
+                session_id=0,
+            ),
+        )
+        self.app = MiniQMTServerApp(config)
+        self.adapter = self.app.broker
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    def _get(self, path: str) -> dict:
+        status_code, payload = self.app.handle("GET", path)
+        self.assertEqual(status_code, 200)
+        return payload
+
+    def _post(self, path: str, payload: dict) -> tuple[int, dict]:
+        body = json.dumps(payload).encode("utf-8")
+        status_code, response_payload = self.app.handle("POST", path, body)
+        return status_code, response_payload
+
+    def test_health_degraded_no_xtquant(self) -> None:
+        health = self._get("/health")
+        self.assertEqual(health["status"], "degraded")
+        self.assertEqual(health["broker_mode"], "miniqmt")
+        self.assertFalse(health["miniqmt_connected"])
+        self.assertFalse(health["submit_enabled"])
+        self.assertIn("error", health)
+        self.assertEqual(health["error"]["code"], "xtquant_unavailable")
+
+    def test_get_account_fall_back_empty(self) -> None:
+        account = self._get("/account")
+        self.assertEqual(account["account_id"], "test_miniqmt")
+        self.assertEqual(account["total_assets"], 0.0)
+        self.assertEqual(account["available_cash"], 0.0)
+
+    def test_get_positions_fall_back_empty(self) -> None:
+        positions = self._get("/positions")
+        self.assertEqual(positions["count"], 0)
+        self.assertEqual(positions["positions"], [])
+
+    def test_submit_dry_run_does_not_submit(self) -> None:
+        payload = {
+            "request_id": "miniqmt-dry-run",
+            "strategy_id": "strategy_a",
+            "trade_date": "2026-04-06",
+            "account_id": "test_miniqmt",
+            "dry_run": True,
+            "orders": [
+                {
+                    "intent_id": "intent-dry-run",
+                    "symbol": "600000.SH",
+                    "side": "BUY",
+                    "quantity": 100,
+                    "order_type": "LIMIT",
+                    "limit_price": 12.34,
+                    "time_in_force": "DAY",
+                    "reason": "dry run test",
+                }
+            ],
+        }
+        status, result = self._post("/orders/submit", payload)
+        self.assertEqual(status, 200)
+        self.assertEqual(result["status"], "dry_run")
+        self.assertEqual(result["broker_order_ids"], [])
+
+    def test_submit_disabled_returns_rejected(self) -> None:
+        payload = {
+            "request_id": "miniqmt-disabled",
+            "strategy_id": "strategy_a",
+            "trade_date": "2026-04-06",
+            "account_id": "test_miniqmt",
+            "dry_run": False,
+            "orders": [
+                {
+                    "intent_id": "intent-disabled",
+                    "symbol": "600000.SH",
+                    "side": "BUY",
+                    "quantity": 100,
+                    "order_type": "LIMIT",
+                    "limit_price": 12.34,
+                    "time_in_force": "DAY",
+                    "reason": "submit disabled test",
+                }
+            ],
+        }
+        status, result = self._post("/orders/submit", payload)
+        self.assertEqual(status, 200)
+        self.assertEqual(result["status"], "rejected")
+        self.assertEqual(result["broker_order_ids"], [])
+        self.assertIn("submit_disabled", str(result["errors"]))
+
+    def test_submit_xtquant_unavailable_returns_rejected(self) -> None:
+        from miniqmt_server.config import MiniQMTBrokerConfig
+        adapter_config = ServerConfig(
+            host="127.0.0.1",
+            port=0,
+            broker_mode="miniqmt",
+            data_dir=Path(self.temp_dir.name) / "data2",
+            miniqmt=MiniQMTBrokerConfig(
+                account_id="test_miniqmt",
+                submit_enabled=True,  # enabled but xtquant not available
+                qmt_path="",
+                session_id=0,
+            ),
+        )
+        from miniqmt_server.app import MiniQMTServerApp
+        app = MiniQMTServerApp(adapter_config)
+
+        payload = {
+            "request_id": "miniqmt-no-xtquant",
+            "strategy_id": "strategy_a",
+            "trade_date": "2026-04-06",
+            "account_id": "test_miniqmt",
+            "dry_run": False,
+            "orders": [
+                {
+                    "intent_id": "intent-no-xtquant",
+                    "symbol": "600000.SH",
+                    "side": "BUY",
+                    "quantity": 100,
+                    "order_type": "LIMIT",
+                    "limit_price": 12.34,
+                    "time_in_force": "DAY",
+                    "reason": "no xtquant test",
+                }
+            ],
+        }
+        body = json.dumps(payload).encode("utf-8")
+        status, result = app.handle("POST", "/orders/submit", body)
+        self.assertEqual(status, 200)
+        self.assertEqual(result["status"], "rejected")
+        self.assertEqual(result["broker_order_ids"], [])
+        self.assertIn("xtquant_unavailable", str(result["errors"]))
+
+    def test_list_orders_return_storage_records(self) -> None:
+        """Even without xtquant, orders stored locally are returned."""
+        # First submit a dry-run order (won't persist), then simulate a stored
+        # order by writing directly to storage.
+
+        # Record an order directly
+        from miniqmt_server.models import OrderRecord
+        from miniqmt_server.storage import JsonlStorage
+        storage = JsonlStorage(Path(self.temp_dir.name) / "data")
+        record = OrderRecord(
+            broker_order_id="stored-001",
+            client_order_id="client-001",
+            request_id="req-001",
+            strategy_id="strategy_a",
+            trade_date="2026-04-06",
+            account_id="test_miniqmt",
+            intent_id="intent-stored-001",
+            symbol="600000.SH",
+            side="BUY",
+            quantity=100,
+            order_type="LIMIT",
+            limit_price=10.0,
+            time_in_force="DAY",
+            status="submitted",
+            reason="storage test",
+            submitted_at="2026-04-06T09:00:00Z",
+            updated_at="2026-04-06T09:00:00Z",
+        )
+        storage.record_order(record)
+
+        orders = self._get("/orders")
+        self.assertEqual(orders["count"], 1)
+        self.assertEqual(orders["orders"][0]["broker_order_id"], "stored-001")
+
+    def test_cancel_fail_closed(self) -> None:
+        status, result = self._post(
+            "/orders/cancel",
+            {
+                "request_id": "cancel-no-xtquant",
+                "account_id": "test_miniqmt",
+                "broker_order_ids": ["nonexistent"],
+                "reason": "cancel test",
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(result["status"], "rejected")
+        self.assertEqual(result["canceled_count"], 0)
+
+    def test_validate_works_without_xtquant(self) -> None:
+        payload = {
+            "request_id": "miniqmt-validate",
+            "strategy_id": "strategy_a",
+            "trade_date": "2026-04-06",
+            "account_id": "test_miniqmt",
+            "dry_run": True,
+            "orders": [
+                {
+                    "intent_id": "intent-valid",
+                    "symbol": "600000.SH",
+                    "side": "BUY",
+                    "quantity": 100,
+                    "order_type": "LIMIT",
+                    "limit_price": 12.34,
+                    "time_in_force": "DAY",
+                    "reason": "validate test",
+                }
+            ],
+        }
+        status, result = self._post("/orders/validate", payload)
+        self.assertEqual(status, 200)
+        self.assertEqual(result["status"], "accepted")
+        self.assertEqual(result["accepted_count"], 1)
+
+    def test_load_config_with_miniqmt_section(self) -> None:
+        config = load_config("miniqmt_server/config.example.yaml")
+        self.assertEqual(config.broker_mode, "mock")
+        self.assertFalse(config.miniqmt.submit_enabled)
+        self.assertEqual(config.miniqmt.account_id, "miniqmt_account")
+
+    def test_not_implemented_returns_501_for_old_stub(self) -> None:
+        """Legacy stub methods should no longer raise NotImplementedError."""
+        # MiniQMTBrokerAdapter now implements all methods — none should throw 501
+        from miniqmt_server.broker.miniqmt import MiniQMTBrokerAdapter
+        self.assertFalse(hasattr(self.adapter, "_xtquant_available") and self.adapter._xtquant_available)
+        # All GET endpoints should return 200 (not 501)
+        for path in ["/health", "/account", "/positions", "/orders", "/trades", "/snapshots/latest"]:
+            status, _ = self.app.handle("GET", path)
+            self.assertEqual(status, 200, msg=f"GET {path} returned {status} instead of 200")
+

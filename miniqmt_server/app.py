@@ -25,7 +25,7 @@ class MiniQMTServerApp:
         if config.broker_mode == "mock":
             self.broker = MockBrokerAdapter(config, self.storage)
         elif config.broker_mode == "miniqmt":
-            self.broker = MiniQMTBrokerAdapter()
+            self.broker = MiniQMTBrokerAdapter(config, self.storage)
         else:
             raise ValueError(f"unsupported broker mode: {config.broker_mode}")
 
