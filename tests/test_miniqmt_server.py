@@ -702,9 +702,12 @@ class TestMapper(unittest.TestCase):
             "market_value": 120000.0,
             "frozen_cash": 5000.0,
             "daily_pnl": 1500.0,
+            "cash": 85000.0,
         }
         result = map_account(raw)
         self.assertEqual(result["account_id"], "acc001")
+        self.assertEqual(result["account_name"], "acc001")
+        self.assertEqual(result["cash"], 85000.0)
         self.assertEqual(result["total_assets"], 200000.0)
         self.assertEqual(result["available_cash"], 80000.0)
         self.assertEqual(result["market_value"], 120000.0)
@@ -717,6 +720,8 @@ class TestMapper(unittest.TestCase):
 
         result = _fallback_account("fallback_acc")
         self.assertEqual(result["account_id"], "fallback_acc")
+        self.assertEqual(result["account_name"], "fallback_acc")
+        self.assertEqual(result["cash"], 0.0)
         self.assertEqual(result["total_assets"], 0.0)
         self.assertEqual(result["available_cash"], 0.0)
 
@@ -725,6 +730,8 @@ class TestMapper(unittest.TestCase):
 
         result = map_account({})
         self.assertEqual(result["account_id"], "")
+        self.assertEqual(result["account_name"], "")
+        self.assertEqual(result["cash"], 0.0)
         self.assertEqual(result["total_assets"], 0.0)
         self.assertEqual(result["available_cash"], 0.0)
 
@@ -748,6 +755,11 @@ class TestMapper(unittest.TestCase):
         self.assertEqual(result["market_price"], 11.0)
         self.assertEqual(result["market_value"], 5500.0)
         self.assertEqual(result["pnl"], 500.0)
+        # Canonical fields consumed by PositionSnapshot.from_dict()
+        self.assertEqual(result["total_amount"], 500)
+        self.assertEqual(result["sellable_amount"], 300)
+        self.assertEqual(result["avg_cost"], 10.0)
+        self.assertEqual(result["last_price"], 11.0)
 
     def test_map_position_missing_fields(self) -> None:
         from miniqmt_server.broker.mapper import map_position
@@ -758,6 +770,11 @@ class TestMapper(unittest.TestCase):
         self.assertEqual(result["available_volume"], 0)
         self.assertEqual(result["market_value"], 0.0)
         self.assertEqual(result["pnl"], 0.0)
+        # Canonical fields when missing
+        self.assertEqual(result["total_amount"], 0)
+        self.assertEqual(result["sellable_amount"], 0)
+        self.assertEqual(result["avg_cost"], 0.0)
+        self.assertEqual(result["last_price"], 0.0)
 
     def test_map_position_derives_market_value(self) -> None:
         from miniqmt_server.broker.mapper import map_position
@@ -765,6 +782,48 @@ class TestMapper(unittest.TestCase):
         raw = {"stock_code": "600000.SH", "volume": 200, "last_price": 15.0}
         result = map_position(raw)
         self.assertEqual(result["market_value"], 3000.0)  # 200 * 15
+        self.assertEqual(result["total_amount"], 200)
+        self.assertEqual(result["sellable_amount"], 200)  # falls back to volume
+        self.assertEqual(result["last_price"], 15.0)
+
+    def test_map_position_parsed_by_position_snapshot(self) -> None:
+        """map_position output must be parseable by PositionSnapshot.from_dict()."""
+        from miniqmt_server.broker.mapper import map_position
+        from qsys.broker.miniqmt import PositionSnapshot
+
+        raw = {
+            "stock_code": "600000.SH",
+            "volume": 500,
+            "can_use_volume": 300,
+            "cost_price": 10.0,
+            "last_price": 11.0,
+            "market_value": 5500.0,
+            "floating_pnl": 500.0,
+        }
+        mapped = map_position(raw)
+        snapshot = PositionSnapshot.from_dict(mapped)
+
+        self.assertEqual(snapshot.symbol, "600000.SH")
+        self.assertEqual(snapshot.total_amount, 500)
+        self.assertEqual(snapshot.sellable_amount, 300)
+        self.assertEqual(snapshot.avg_cost, 10.0)
+        self.assertEqual(snapshot.market_value, 5500.0)
+        self.assertEqual(snapshot.last_price, 11.0)
+
+    def test_map_position_parsed_by_snapshot_minimal(self) -> None:
+        """Minimal map_position output (no optional fields) must still parse."""
+        from miniqmt_server.broker.mapper import map_position
+        from qsys.broker.miniqmt import PositionSnapshot
+
+        mapped = map_position({"stock_code": "600000.SH"})
+        snapshot = PositionSnapshot.from_dict(mapped)
+
+        self.assertEqual(snapshot.symbol, "600000.SH")
+        self.assertEqual(snapshot.total_amount, 0)
+        self.assertEqual(snapshot.sellable_amount, 0)
+        self.assertEqual(snapshot.avg_cost, 0.0)
+        self.assertEqual(snapshot.market_value, 0.0)
+        self.assertEqual(snapshot.last_price, 0.0)
 
     def test_map_order_standard(self) -> None:
         from miniqmt_server.broker.mapper import map_order
