@@ -1,10 +1,24 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any
 import json
+
+import requests
+
+from qsys.execution.models import (
+    BrokerOrderAck,
+    BrokerOrderRequest,
+    ExecutionReport,
+    Fill,
+    OS_CANCELLED,
+    OS_FILLED,
+    OS_PARTIAL,
+    OS_SUBMITTED,
+)
 
 
 class BrokerOrderStatus(str, Enum):
@@ -244,16 +258,21 @@ class MiniQMTBridgeResult:
 
 
 class MiniQMTAdapter:
-    """Thin bridge contract for a future Windows-side MiniQMT implementation.
+    """Bridge to a MiniQMT HTTP server.
 
-    The current class is intentionally safe by default: it validates payloads,
-    supports dry-run conversion, and exposes read-side method names, but it does
-    not submit live orders unless a concrete subclass overrides the methods.
+    Keeps the original dry-run / validation methods for backward compatibility
+    and adds HTTP client methods (``submit_broker_requests``, ``fetch_*``)
+    that communicate with the ``miniqmt_server`` REST API.
+
+    Set *base_url* to point at a running miniqmt server (e.g.
+    ``http://localhost:8080``) to enable live broker interaction.
     """
 
-    def __init__(self, *, account_name: str = "real", mode: str = "dry_run"):
+    def __init__(self, *, account_name: str = "real", mode: str = "dry_run", base_url: str | None = None):
         self.account_name = account_name
         self.mode = mode
+        self.base_url = base_url.rstrip("/") if base_url else None
+        self._http_session = requests.Session() if base_url else None
 
     def load_order_intents(self, path: str | Path) -> list[MiniQMTOrderIntent]:
         with open(path, "r", encoding="utf-8") as handle:
@@ -342,3 +361,220 @@ class MiniQMTAdapter:
             rejected_orders=rejected,
             notes=notes,
         )
+
+    # ── HTTP client methods (Phase 1) ─────────────────────────────────────
+
+    def _check_http_ready(self) -> None:
+        if not self.base_url or not self._http_session:
+            raise RuntimeError(
+                "MiniQMTAdapter HTTP client is not configured. "
+                "Pass base_url= to the constructor (e.g. base_url='http://localhost:8080')."
+            )
+
+    def submit_broker_requests(
+        self,
+        requests: list[BrokerOrderRequest],
+        *,
+        strategy_id: str = "",
+        trade_date: str = "",
+        request_id: str = "",
+        dry_run: bool = False,
+    ) -> list[BrokerOrderAck]:
+        """Submit orders to the MiniQMT server via ``POST /orders/submit``.
+
+        Returns one ``BrokerOrderAck`` per submitted intent.
+        """
+        self._check_http_ready()
+        if not trade_date:
+            trade_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        if not request_id:
+            request_id = f"exec:{trade_date}:{strategy_id or 'unknown'}:{datetime.now(timezone.utc).strftime('%H%M%S')}"
+
+        # Convert BrokerOrderRequest -> server-side OrderIntent format
+        orders_payload = []
+        for req in requests:
+            orders_payload.append(
+                {
+                    "intent_id": req.intent_id,
+                    "symbol": req.symbol,
+                    "side": req.side.upper(),
+                    "quantity": req.quantity,
+                    "order_type": req.order_type.upper(),
+                    "limit_price": req.limit_price,
+                    "time_in_force": req.time_in_force.upper(),
+                    "reason": req.reason or "live_execution",
+                    "target_weight": req.target_weight,
+                    "notes": "",
+                }
+            )
+
+        body = {
+            "request_id": request_id,
+            "strategy_id": strategy_id,
+            "trade_date": trade_date,
+            "account_id": self.account_name,
+            "dry_run": dry_run,
+            "orders": orders_payload,
+        }
+
+        response = self._http_session.post(
+            f"{self.base_url}/orders/submit",
+            json=body,
+            timeout=30,
+        )
+        response.raise_for_status()
+        payload = response.json()
+
+        acks: list[BrokerOrderAck] = []
+        # The server returns accepted + rejected lists under "accepted" and "rejected"
+        for item in payload.get("accepted") or []:
+            acks.append(
+                BrokerOrderAck(
+                    intent_id=item.get("intent_id", ""),
+                    broker_order_id=item.get("broker_order_id", ""),
+                    status="accepted",
+                    extra=item,
+                )
+            )
+        for item in payload.get("rejected") or []:
+            reasons = "; ".join(r.get("message", "") for r in (item.get("reasons") or []))
+            acks.append(
+                BrokerOrderAck(
+                    intent_id=item.get("intent_id", ""),
+                    broker_order_id="",
+                    status="rejected",
+                    message=reasons or "rejected_by_broker",
+                    extra=item,
+                )
+            )
+        return acks
+
+    def cancel_broker_orders(
+        self,
+        broker_order_ids: list[str],
+        *,
+        request_id: str = "",
+        reason: str = "",
+    ) -> dict[str, Any]:
+        """Cancel orders via ``POST /orders/cancel``."""
+        self._check_http_ready()
+        if not request_id:
+            request_id = f"cancel:{'-'.join(broker_order_ids[:3])}"
+        body = {
+            "request_id": request_id,
+            "account_id": self.account_name,
+            "broker_order_ids": broker_order_ids,
+            "reason": reason,
+        }
+        response = self._http_session.post(
+            f"{self.base_url}/orders/cancel",
+            json=body,
+            timeout=30,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def fetch_account_snapshot(self) -> AccountSnapshot:
+        """Fetch account snapshot via ``GET /account``."""
+        self._check_http_ready()
+        response = self._http_session.get(f"{self.base_url}/account", timeout=15)
+        response.raise_for_status()
+        payload = response.json()
+        return AccountSnapshot.from_dict(
+            {
+                "cash": payload.get("available_cash", payload.get("cash", 0.0)),
+                "available_cash": payload.get("available_cash", 0.0),
+                "frozen_cash": payload.get("frozen_cash", 0.0),
+                "market_value": payload.get("market_value", 0.0),
+                "total_assets": payload.get("total_assets", 0.0),
+                "account_name": payload.get("account_name", self.account_name),
+            },
+            account_name=self.account_name,
+        )
+
+    def fetch_positions(self) -> list[PositionSnapshot]:
+        """Fetch positions via ``GET /positions``."""
+        self._check_http_ready()
+        response = self._http_session.get(f"{self.base_url}/positions", timeout=15)
+        response.raise_for_status()
+        payload = response.json()
+        raw = payload.get("positions") or []
+        return [PositionSnapshot.from_dict(item) for item in raw]
+
+    def fetch_orders(
+        self,
+        filters: dict[str, str] | None = None,
+    ) -> list[ExecutionReport]:
+        """Fetch orders via ``GET /orders`` with optional query filters."""
+        self._check_http_ready()
+        response = self._http_session.get(
+            f"{self.base_url}/orders",
+            params=filters or {},
+            timeout=15,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        raw = payload.get("orders") or []
+        reports: list[ExecutionReport] = []
+        for item in raw:
+            status = item.get("status", "unknown")
+            # Map server status to our OS_* constants
+            status_map = {
+                "submitted": OS_SUBMITTED,
+                "pending": OS_SUBMITTED,
+                "partial": OS_PARTIAL,
+                "partial_fill": OS_PARTIAL,
+                "filled": OS_FILLED,
+                "canceled": OS_CANCELLED,
+                "cancelled": OS_CANCELLED,
+                "rejected": OS_REJECTED,
+            }
+            normalised = status_map.get(status, status)
+            filled_qty = int(item.get("filled_quantity", 0))
+            total_qty = int(item.get("quantity", 0))
+            reports.append(
+                ExecutionReport(
+                    broker_order_id=str(item.get("broker_order_id", "")),
+                    intent_id=str(item.get("intent_id", "")),
+                    symbol=str(item.get("symbol", "")),
+                    side=str(item.get("side", "")).lower(),
+                    status=normalised,
+                    filled_quantity=filled_qty,
+                    filled_price=float(item.get("limit_price") or 0.0),
+                    remaining_quantity=max(total_qty - filled_qty, 0),
+                    message=str(item.get("reason", "")),
+                    extra=item,
+                )
+            )
+        return reports
+
+    def fetch_trades(
+        self,
+        filters: dict[str, str] | None = None,
+    ) -> list[Fill]:
+        """Fetch fills via ``GET /trades`` with optional query filters."""
+        self._check_http_ready()
+        response = self._http_session.get(
+            f"{self.base_url}/trades",
+            params=filters or {},
+            timeout=15,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        raw = payload.get("trades") or []
+        fills: list[Fill] = []
+        for item in raw:
+            fills.append(
+                Fill(
+                    broker_trade_id=str(item.get("trade_id", "")),
+                    broker_order_id=str(item.get("broker_order_id", "")),
+                    intent_id=str(item.get("intent_id", "")),
+                    symbol=str(item.get("symbol", "")),
+                    side=str(item.get("side", "")).lower(),
+                    quantity=int(item.get("quantity", 0)),
+                    price=float(item.get("price", 0.0)),
+                    filled_at=str(item.get("executed_at", "")),
+                    extra=item,
+                )
+            )
+        return fills

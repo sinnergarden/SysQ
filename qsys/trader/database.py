@@ -12,7 +12,11 @@ def utc_now() -> str:
 
 
 class TradeLedger:
-    """Minimal SQLite ledger for daily production runs."""
+    """Minimal SQLite ledger for daily production runs.
+
+    Maintains order lifecycle state via the ``execution_requests`` table.
+    Every intent passes through: pending -> submitted -> (partial | filled | cancelled | rejected).
+    """
 
     def __init__(self, db_path: str | Path = "data/trade.db") -> None:
         self.db_path = Path(db_path)
@@ -108,6 +112,73 @@ class TradeLedger:
                     updated_at TEXT NOT NULL,
                     details_json TEXT DEFAULT '{}'
                 )
+                """
+            )
+            # Migration: old schema (intent_id PK) → new schema (idempotency_key PK)
+            cursor.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='execution_requests'"
+            )
+            table_exists = cursor.fetchone() is not None
+            old_schema = False
+            if table_exists:
+                cursor.execute("PRAGMA table_info(execution_requests)")
+                cols = {r[1] for r in cursor.fetchall()}
+                old_schema = "idempotency_key" not in cols
+
+            if old_schema:
+                cursor.execute("ALTER TABLE execution_requests RENAME TO execution_requests_old")
+
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS execution_requests (
+                    idempotency_key TEXT PRIMARY KEY,
+                    intent_id TEXT NOT NULL,
+                    run_id TEXT NOT NULL,
+                    trading_date TEXT NOT NULL,
+                    strategy_id TEXT NOT NULL DEFAULT '',
+                    account_name TEXT NOT NULL DEFAULT '',
+                    signal_date TEXT NOT NULL DEFAULT '',
+                    execution_date TEXT NOT NULL DEFAULT '',
+                    broker_order_id TEXT DEFAULT '',
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    request_payload TEXT DEFAULT '{}',
+                    ack_payload TEXT DEFAULT '{}',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    error TEXT DEFAULT ''
+                )
+                """
+            )
+
+            if old_schema:
+                cursor.execute(
+                    """
+                    INSERT OR IGNORE INTO execution_requests (
+                        idempotency_key, intent_id, run_id, trading_date,
+                        strategy_id, account_name, signal_date, execution_date,
+                        broker_order_id, status, request_payload, ack_payload,
+                        created_at, updated_at, error
+                    )
+                    SELECT
+                        '::::' || run_id || ':' || intent_id,
+                        intent_id, run_id, trading_date,
+                        '', '', trading_date, trading_date,
+                        broker_order_id, status, request_payload, ack_payload,
+                        created_at, updated_at, error
+                    FROM execution_requests_old
+                    """
+                )
+                cursor.execute("DROP TABLE IF EXISTS execution_requests_old")
+            cursor.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_exec_requests_run
+                    ON execution_requests(run_id, trading_date)
+                """
+            )
+            cursor.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_exec_requests_broker
+                    ON execution_requests(broker_order_id)
                 """
             )
             connection.commit()
@@ -334,6 +405,176 @@ class TradeLedger:
                 ),
             )
             connection.commit()
+
+    # ── execution_requests state machine ─────────────────────────────────
+
+    def record_pending_intent(
+        self,
+        *,
+        intent_id: str,
+        run_id: str,
+        trading_date: str,
+        strategy_id: str = "",
+        account_name: str = "",
+        signal_date: str = "",
+        execution_date: str = "",
+        request_payload: dict[str, Any] | None = None,
+    ) -> str:
+        """Insert or ignore a pending intent.
+
+        Idempotent: if the same *idempotency_key* already exists this is a no-op.
+        Returns the idempotency_key for subsequent lookups.
+        """
+        from qsys.execution.models import OS_PENDING
+
+        idem_key = f"{strategy_id}:{account_name}:{signal_date or trading_date}:{execution_date or trading_date}:{run_id}:{intent_id}"
+        now = utc_now()
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO execution_requests (
+                    idempotency_key, intent_id, run_id, trading_date,
+                    strategy_id, account_name, signal_date, execution_date,
+                    status, request_payload, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    idem_key,
+                    intent_id,
+                    run_id,
+                    trading_date,
+                    strategy_id,
+                    account_name,
+                    signal_date or trading_date,
+                    execution_date or trading_date,
+                    OS_PENDING,
+                    json.dumps(request_payload or {}, ensure_ascii=False),
+                    now,
+                    now,
+                ),
+            )
+            connection.commit()
+        return idem_key
+
+    def get_intent(self, idempotency_key: str) -> dict[str, Any] | None:
+        """Return the execution request row for *idempotency_key*, or None."""
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM execution_requests WHERE idempotency_key = ?",
+                (idempotency_key,),
+            ).fetchone()
+        if row is None:
+            return None
+        return dict(row)
+
+    def get_intent_by_intent_id(
+        self,
+        intent_id: str,
+        run_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Look up an execution request by intent_id.
+
+        If *run_id* is provided, scope the query to a specific run to avoid
+        cross-run ambiguity when multiple runs share the same intent_id.
+        Returns None if not found.
+        """
+        query = "SELECT * FROM execution_requests WHERE intent_id = ?"
+        params: list[Any] = [intent_id]
+        if run_id is not None:
+            query += " AND run_id = ?"
+            params.append(run_id)
+        query += " LIMIT 1"
+        with self.connect() as connection:
+            row = connection.execute(query, tuple(params)).fetchone()
+        if row is None:
+            return None
+        return dict(row)
+
+    def get_run_intents(self, *, run_id: str) -> list[dict[str, Any]]:
+        """Return all execution requests for a given run."""
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM execution_requests WHERE run_id = ? ORDER BY created_at",
+                (run_id,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_intents_by_broker_order_id(self, broker_order_id: str) -> dict[str, Any] | None:
+        """Look up an execution request by broker_order_id."""
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM execution_requests WHERE broker_order_id = ?",
+                (broker_order_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return dict(row)
+
+    def update_intent_status(
+        self,
+        *,
+        idempotency_key: str,
+        status: str,
+        broker_order_id: str | None = None,
+        ack_payload: dict[str, Any] | None = None,
+        error: str = "",
+    ) -> None:
+        """Advance the state of an execution request with transition validation.
+
+        Raises ValueError for invalid transitions (e.g. filled -> pending).
+        """
+        from qsys.execution.models import validate_transition
+
+        current = self.get_intent(idempotency_key)
+        if current is None:
+            raise ValueError(f"idempotency_key {idempotency_key!r} not found; call record_pending_intent first")
+        validate_transition(current["status"], status)
+
+        now = utc_now()
+        with self.connect() as connection:
+            connection.execute(
+                """
+                UPDATE execution_requests
+                SET status = ?,
+                    broker_order_id = CASE WHEN ? != '' THEN ? ELSE broker_order_id END,
+                    ack_payload = CASE WHEN ? != '{}' THEN ? ELSE ack_payload END,
+                    error = CASE WHEN ? != '' THEN ? ELSE error END,
+                    updated_at = ?
+                WHERE idempotency_key = ?
+                """,
+                (
+                    status,
+                    broker_order_id or "",
+                    broker_order_id or "",
+                    json.dumps(ack_payload or {}, ensure_ascii=False),
+                    json.dumps(ack_payload or {}, ensure_ascii=False),
+                    error,
+                    error,
+                    now,
+                    idempotency_key,
+                ),
+            )
+            connection.commit()
+
+    def count_run_intents_by_status(self, *, run_id: str) -> dict[str, int]:
+        """Return a count of intents per status for a run."""
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT status, COUNT(*) AS cnt FROM execution_requests WHERE run_id = ? GROUP BY status",
+                (run_id,),
+            ).fetchall()
+        return {r["status"]: r["cnt"] for r in rows}
+
+    def has_submitted_intents(self, *, run_id: str) -> bool:
+        """Check if any intents for this run have moved past pending."""
+        from qsys.execution.models import OS_PENDING
+
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT COUNT(*) AS cnt FROM execution_requests WHERE run_id = ? AND status != ?",
+                (run_id, OS_PENDING),
+            ).fetchone()
+        return int(row["cnt"]) > 0 if row else False
 
     def upsert_daily_metrics(
         self,
