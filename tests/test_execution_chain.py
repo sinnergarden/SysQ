@@ -25,6 +25,7 @@ from qsys.execution.models import (
     OS_PENDING,
     OS_REJECTED,
     OS_SUBMITTED,
+    OS_SUBMIT_UNKNOWN,
     FINAL_STATUSES,
     validate_transition,
 )
@@ -72,17 +73,17 @@ class TestConverter:
     def test_to_broker_order_requests(self):
         rows = [
             {"symbol": "600000.SH", "side": "buy", "amount": 100, "price": 10.5, "intent_id": "id1"},
-            {"symbol": "600001.SH", "side": "sell", "amount": 200, "price": None, "intent_id": "id2"},
+            {"symbol": "600001.SH", "side": "sell", "amount": 200, "price": 20.0, "intent_id": "id2"},
         ]
         result = to_broker_order_requests(intent_rows=rows, trade_date="2026-04-25", run_id="test_run")
         assert len(result) == 2
         assert result[0].symbol == "600000.SH"
         assert result[0].side == "buy"
         assert result[0].quantity == 100
-        assert result[0].price == 10.5
+        assert result[0].limit_price == 10.5
         assert result[1].side == "sell"
         assert result[1].quantity == 200
-        assert result[1].price is None
+        assert result[1].limit_price == 20.0
 
     def test_to_broker_order_requests_filters_invalid(self):
         rows = [
@@ -98,8 +99,8 @@ class TestConverter:
             csv_path = Path(tmpdir) / "order_intents.csv"
             pd.DataFrame(
                 [
-                    {"instrument": "600000.SH", "side": "buy", "requested_qty": 100, "target_weight": 0.05, "reason": "rebalance"},
-                    {"instrument": "600001.SH", "side": "sell", "requested_qty": 200, "target_weight": 0.0, "reason": "rebalance"},
+                    {"instrument": "600000.SH", "side": "buy", "requested_qty": 100, "price": 10.5, "target_weight": 0.05, "reason": "rebalance"},
+                    {"instrument": "600001.SH", "side": "sell", "requested_qty": 200, "price": 20.0, "target_weight": 0.0, "reason": "rebalance"},
                 ]
             ).to_csv(csv_path, index=False)
 
@@ -130,6 +131,7 @@ class TestConverter:
         )
         result = from_plan_dataframe(df, trade_date="2026-04-25", run_id="test_run")
         assert len(result) == 2
+        assert result[0].limit_price == 10.5
         assert result[0].quantity == 100
 
     def test_from_plan_dataframe_empty(self):
@@ -142,7 +144,7 @@ class TestConverter:
             payload = {
                 "intents": [
                     {"symbol": "600000.SH", "side": "buy", "amount": 100, "price": 10.5, "intent_id": "i1"},
-                    {"symbol": "600001.SH", "side": "sell", "amount": 200, "price": None, "intent_id": "i2"},
+                    {"symbol": "600001.SH", "side": "sell", "amount": 200, "price": 20.0, "intent_id": "i2"},
                 ]
             }
             json_path.write_text(json.dumps(payload), encoding="utf-8")
@@ -155,14 +157,14 @@ class TestConverter:
 # ── Pre-trade risk ──────────────────────────────────────────────────────
 
 class TestPreTradeRisk:
-    def make_request(self, symbol, side, qty, price=None):
+    def make_request(self, symbol, side, qty, limit_price=None):
         return BrokerOrderRequest(
             intent_id=f"{side}:{symbol}",
             symbol=symbol,
             side=side,
-            order_type="market" if price is None else "limit",
+            order_type="limit",
             quantity=qty,
-            price=price,
+            limit_price=limit_price,
         )
 
     def test_all_passed(self):
@@ -233,12 +235,12 @@ class TestTradeLedgerExecutionRequests:
             yield TradeLedger(db_path=Path(tmpdir) / "test.db")
 
     def test_record_and_retrieve_pending(self, ledger):
-        ledger.record_pending_intent(
+        idem_key = ledger.record_pending_intent(
             intent_id="test_intent_1",
             run_id="run_001",
             trading_date="2026-04-25",
         )
-        row = ledger.get_intent("test_intent_1")
+        row = ledger.get_intent(idem_key)
         assert row is not None
         assert row["status"] == OS_PENDING
 
@@ -248,33 +250,33 @@ class TestTradeLedgerExecutionRequests:
         # Should not raise — INSERT OR IGNORE
 
     def test_valid_state_transition(self, ledger):
-        ledger.record_pending_intent(intent_id="i1", run_id="r1", trading_date="2026-04-25")
-        ledger.update_intent_status(intent_id="i1", status=OS_SUBMITTED, broker_order_id="bo1")
-        row = ledger.get_intent("i1")
+        idem_key = ledger.record_pending_intent(intent_id="i1", run_id="r1", trading_date="2026-04-25")
+        ledger.update_intent_status(idempotency_key=idem_key, status=OS_SUBMITTED, broker_order_id="bo1")
+        row = ledger.get_intent(idem_key)
         assert row["status"] == OS_SUBMITTED
         assert row["broker_order_id"] == "bo1"
 
     def test_invalid_transition_raises(self, ledger):
-        ledger.record_pending_intent(intent_id="i1", run_id="r1", trading_date="2026-04-25")
-        ledger.update_intent_status(intent_id="i1", status=OS_SUBMITTED, broker_order_id="bo1")
+        idem_key = ledger.record_pending_intent(intent_id="i1", run_id="r1", trading_date="2026-04-25")
+        ledger.update_intent_status(idempotency_key=idem_key, status=OS_SUBMITTED, broker_order_id="bo1")
         # Can't go from filled back to pending
-        ledger.update_intent_status(intent_id="i1", status=OS_FILLED, broker_order_id="bo1")
+        ledger.update_intent_status(idempotency_key=idem_key, status=OS_FILLED, broker_order_id="bo1")
         with pytest.raises(ValueError, match="Invalid order status transition"):
-            ledger.update_intent_status(intent_id="i1", status=OS_PENDING)
+            ledger.update_intent_status(idempotency_key=idem_key, status=OS_PENDING)
 
     def test_full_lifecycle(self, ledger):
         iid = "lifecycle_test"
-        ledger.record_pending_intent(intent_id=iid, run_id="r1", trading_date="2026-04-25")
-        assert ledger.get_intent(iid)["status"] == OS_PENDING
+        idem_key = ledger.record_pending_intent(intent_id=iid, run_id="r1", trading_date="2026-04-25")
+        assert ledger.get_intent(idem_key)["status"] == OS_PENDING
 
-        ledger.update_intent_status(intent_id=iid, status=OS_SUBMITTED, broker_order_id="bo1")
-        assert ledger.get_intent(iid)["status"] == OS_SUBMITTED
+        ledger.update_intent_status(idempotency_key=idem_key, status=OS_SUBMITTED, broker_order_id="bo1")
+        assert ledger.get_intent(idem_key)["status"] == OS_SUBMITTED
 
-        ledger.update_intent_status(intent_id=iid, status=OS_PARTIAL, broker_order_id="bo1")
-        assert ledger.get_intent(iid)["status"] == OS_PARTIAL
+        ledger.update_intent_status(idempotency_key=idem_key, status=OS_PARTIAL, broker_order_id="bo1")
+        assert ledger.get_intent(idem_key)["status"] == OS_PARTIAL
 
-        ledger.update_intent_status(intent_id=iid, status=OS_FILLED, broker_order_id="bo1")
-        assert ledger.get_intent(iid)["status"] == OS_FILLED
+        ledger.update_intent_status(idempotency_key=idem_key, status=OS_FILLED, broker_order_id="bo1")
+        assert ledger.get_intent(idem_key)["status"] == OS_FILLED
 
     def test_get_run_intents(self, ledger):
         ledger.record_pending_intent(intent_id="i1", run_id="r1", trading_date="2026-04-25")
@@ -286,25 +288,25 @@ class TestTradeLedgerExecutionRequests:
         assert len(run2) == 1
 
     def test_count_run_intents_by_status(self, ledger):
-        ledger.record_pending_intent(intent_id="i1", run_id="r1", trading_date="2026-04-25")
+        idem_key1 = ledger.record_pending_intent(intent_id="i1", run_id="r1", trading_date="2026-04-25")
         ledger.record_pending_intent(intent_id="i2", run_id="r1", trading_date="2026-04-25")
-        ledger.update_intent_status(intent_id="i1", status=OS_SUBMITTED, broker_order_id="bo1")
+        ledger.update_intent_status(idempotency_key=idem_key1, status=OS_SUBMITTED, broker_order_id="bo1")
         counts = ledger.count_run_intents_by_status(run_id="r1")
         assert counts.get(OS_SUBMITTED) == 1
         assert counts.get(OS_PENDING) == 1
 
     def test_has_submitted_intents(self, ledger):
-        ledger.record_pending_intent(intent_id="i1", run_id="r1", trading_date="2026-04-25")
+        idem_key = ledger.record_pending_intent(intent_id="i1", run_id="r1", trading_date="2026-04-25")
         assert not ledger.has_submitted_intents(run_id="r1")
-        ledger.update_intent_status(intent_id="i1", status=OS_SUBMITTED, broker_order_id="bo1")
+        ledger.update_intent_status(idempotency_key=idem_key, status=OS_SUBMITTED, broker_order_id="bo1")
         assert ledger.has_submitted_intents(run_id="r1")
 
     def test_get_nonexistent_intent(self, ledger):
-        assert ledger.get_intent("no_such_intent") is None
+        assert ledger.get_intent("no_such_key") is None
 
     def test_get_intents_by_broker_order_id(self, ledger):
-        ledger.record_pending_intent(intent_id="i1", run_id="r1", trading_date="2026-04-25")
-        ledger.update_intent_status(intent_id="i1", status=OS_SUBMITTED, broker_order_id="bo1")
+        idem_key = ledger.record_pending_intent(intent_id="i1", run_id="r1", trading_date="2026-04-25")
+        ledger.update_intent_status(idempotency_key=idem_key, status=OS_SUBMITTED, broker_order_id="bo1")
         row = ledger.get_intents_by_broker_order_id("bo1")
         assert row is not None
         assert row["intent_id"] == "i1"
@@ -341,14 +343,14 @@ class TestExecutionService:
     def service(self, adapter, ledger):
         return ExecutionService(adapter, ledger, strategy_id="alpha_v1")
 
-    def make_request(self, symbol, side, qty, price=None):
+    def make_request(self, symbol, side, qty, limit_price=None):
         return BrokerOrderRequest(
             intent_id=f"{side}:{symbol}:{qty}",
             symbol=symbol,
             side=side,
-            order_type="market" if price is None else "limit",
+            order_type="limit",
             quantity=qty,
-            price=price,
+            limit_price=limit_price,
         )
 
     def test_prepare_and_submit_success(self, service, ledger):
@@ -363,7 +365,7 @@ class TestExecutionService:
         assert result["submitted_count"] == 1
 
         # Check ledger
-        row = ledger.get_intent("buy:600000.SH:100")
+        row = ledger.get_intent_by_intent_id("buy:600000.SH:100")
         assert row is not None
         assert row["status"] == OS_SUBMITTED
 
@@ -395,7 +397,7 @@ class TestExecutionService:
         assert service.adapter.submit_broker_requests.call_count == 1
 
         # Blacklisted should be rejected in ledger
-        rejected = ledger.get_intent("buy:BLACK.SH:100")
+        rejected = ledger.get_intent_by_intent_id("buy:BLACK.SH:100")
         assert rejected is not None
         assert rejected["status"] == OS_REJECTED
 
@@ -405,10 +407,10 @@ class TestExecutionService:
         with pytest.raises(RuntimeError, match="broker unreachable"):
             service.prepare_and_submit(requests=reqs, trade_date="2026-04-25", run_id="run_003", risk_check=False)
 
-        # Intents should be marked rejected due to submit failure
-        row = ledger.get_intent("buy:600000.SH:100")
+        # Intents should be marked submit_unknown (not rejected) due to ambiguous submit failure
+        row = ledger.get_intent_by_intent_id("buy:600000.SH:100")
         assert row is not None
-        assert row["status"] == OS_REJECTED
+        assert row["status"] == OS_SUBMIT_UNKNOWN
 
     def test_empty_requests(self, service):
         result = service.prepare_and_submit(requests=[], trade_date="2026-04-25", run_id="run_empty", risk_check=False)

@@ -400,7 +400,7 @@ class MiniQMTAdapter:
                     "side": req.side.upper(),
                     "quantity": req.quantity,
                     "order_type": req.order_type.upper(),
-                    "limit_price": req.price,
+                    "limit_price": req.limit_price,
                     "time_in_force": req.time_in_force.upper(),
                     "reason": req.reason or "live_execution",
                     "target_weight": req.target_weight,

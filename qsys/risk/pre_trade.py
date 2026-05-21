@@ -73,14 +73,14 @@ def check_pre_trade_risk(
 
         # Price deviation check
         ref_price = reference_prices.get(req.symbol)
-        if ref_price and req.price and req.order_type == "limit":
-            deviation = abs(req.price - ref_price) / ref_price * 100
+        if ref_price and req.limit_price and req.order_type == "limit":
+            deviation = abs(req.limit_price - ref_price) / ref_price * 100
             if deviation > max_price_deviation_pct:
                 failed.append(
                     (
                         req,
                         f"price deviation {deviation:.1f}% exceeds limit {max_price_deviation_pct}% "
-                        f"(ref={ref_price:.2f}, order={req.price:.2f})",
+                        f"(ref={ref_price:.2f}, order={req.limit_price:.2f})",
                     )
                 )
                 continue
@@ -88,7 +88,7 @@ def check_pre_trade_risk(
         # Cash check for buy orders
         if req.side == "buy":
             rqty = req.quantity
-            rprice = req.price or ref_price or 0.0
+            rprice = req.limit_price or ref_price or 0.0
             required_cash = rqty * rprice
             if required_cash > projected_cash:
                 failed.append(

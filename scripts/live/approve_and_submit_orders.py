@@ -48,7 +48,8 @@ def prompt_approval(requests, risk_result) -> bool:
 
     print(f"\nOrders to submit ({len(requests)}):")
     for req in requests:
-        print(f"  {req.side.upper():4s} {req.symbol:12s} qty={req.quantity:>6d}  price={req.price or 'MARKET':>10s}  [{req.intent_id}]")
+        price_str = f"{req.limit_price:.2f}" if req.limit_price is not None else "N/A"
+        print(f"  {req.side.upper():4s} {req.symbol:12s} qty={req.quantity:>6d}  price={price_str:>10s}  [{req.intent_id}]")
     print()
 
     while True:
@@ -100,17 +101,23 @@ def main() -> None:
 
     log.info("Loaded %d order intents from %s", len(requests), csv_path)
 
+    # Determine cash for risk checks (single source, used for both preview and submit)
+    cash_for_risk = args.available_cash
+    if not args.no_risk and not args.dry_run:
+        try:
+            account = adapter.fetch_account_snapshot()
+            cash_for_risk = account.available_cash
+        except Exception:
+            if args.available_cash <= 0:
+                log.error("Cannot determine available cash and no --available-cash provided. Fail closed.")
+                sys.exit(1)
+            cash_for_risk = args.available_cash
+
     # Pre-trade risk check (preview before approval)
     risk_result = None
     if not args.no_risk and not args.dry_run:
         from qsys.risk.pre_trade import check_pre_trade_risk
-        # Fetch live snapshot for cash
-        try:
-            account = adapter.fetch_account_snapshot()
-            cash = account.available_cash
-        except Exception:
-            cash = args.available_cash
-        risk_result = check_pre_trade_risk(requests, available_cash=cash)
+        risk_result = check_pre_trade_risk(requests, available_cash=cash_for_risk)
 
     # Manual approval gate
     if not args.auto_approve and not args.dry_run:
@@ -125,7 +132,7 @@ def main() -> None:
         run_id=args.run_id,
         dry_run=args.dry_run,
         risk_check=not args.no_risk,
-        available_cash=args.available_cash,
+        available_cash=cash_for_risk,
     )
 
     print(f"\n=== Submit Result ===")

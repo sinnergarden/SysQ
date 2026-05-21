@@ -5,15 +5,14 @@ from typing import TYPE_CHECKING, Any
 
 from qsys.execution.converter import from_order_intents_csv, from_plan_dataframe
 from qsys.execution.models import (
-    BrokerOrderAck,
     BrokerOrderRequest,
-    Fill,
     FINAL_STATUSES,
     OS_FILLED,
     OS_PARTIAL,
     OS_PENDING,
     OS_REJECTED,
     OS_SUBMITTED,
+    OS_SUBMIT_UNKNOWN,
 )
 from qsys.risk.pre_trade import PreTradeRiskResult, check_pre_trade_risk
 from qsys.utils.logger import log
@@ -43,12 +42,18 @@ class ExecutionService:
         ledger: TradeLedger,
         *,
         strategy_id: str = "",
+        account_name: str = "real",
         pre_trade_risk_kw: dict[str, Any] | None = None,
     ) -> None:
         self.adapter = adapter
         self.ledger = ledger
         self.strategy_id = strategy_id
+        self.account_name = account_name
         self.pre_trade_risk_kw = pre_trade_risk_kw or {}
+
+    def _idempotency_key(self, intent_id: str, run_id: str, trade_date: str) -> str:
+        """Build composite idempotency_key from execution context."""
+        return f"{self.strategy_id}:{self.account_name}:{trade_date}:{trade_date}:{run_id}:{intent_id}"
 
     # ── Submit ───────────────────────────────────────────────────────────
 
@@ -83,19 +88,25 @@ class ExecutionService:
         )
 
         # Step 1: Record all intents as pending
+        idem_keys: dict[str, str] = {}
         for req in requests:
-            self.ledger.record_pending_intent(
+            idem_key = self.ledger.record_pending_intent(
                 intent_id=req.intent_id,
                 run_id=run_id,
                 trading_date=trade_date,
+                strategy_id=self.strategy_id,
+                account_name=self.account_name,
+                signal_date=trade_date,
+                execution_date=trade_date,
                 request_payload={
                     "symbol": req.symbol,
                     "side": req.side,
                     "quantity": req.quantity,
-                    "price": req.price,
+                    "limit_price": req.limit_price,
                     "order_type": req.order_type,
                 },
             )
+            idem_keys[req.intent_id] = idem_key
 
         # Step 2: Pre-trade risk
         if risk_check:
@@ -108,7 +119,7 @@ class ExecutionService:
             )
             for req, reason in risk_result.failed:
                 self.ledger.update_intent_status(
-                    intent_id=req.intent_id,
+                    idempotency_key=idem_keys[req.intent_id],
                     status=OS_REJECTED,
                     error=reason,
                 )
@@ -127,7 +138,7 @@ class ExecutionService:
         # Step 3: Idempotency — skip intents that are already submitted
         to_submit: list[BrokerOrderRequest] = []
         for req in requests:
-            existing = self.ledger.get_intent(req.intent_id)
+            existing = self.ledger.get_intent(idem_keys[req.intent_id])
             if existing and existing["status"] != OS_PENDING:
                 log.info(
                     "Skipping already-submitted intent %s (status=%s)",
@@ -156,11 +167,11 @@ class ExecutionService:
             )
         except Exception as exc:
             log.error("Broker submit failed for run=%s: %s", run_id, exc)
-            # Mark all pending intents as rejected
+            # Mark as submit_unknown — broker may or may not have received them
             for req in to_submit:
                 self.ledger.update_intent_status(
-                    intent_id=req.intent_id,
-                    status=OS_REJECTED,
+                    idempotency_key=idem_keys[req.intent_id],
+                    status=OS_SUBMIT_UNKNOWN,
                     error=f"submit_failed: {exc}",
                 )
             raise
@@ -177,7 +188,7 @@ class ExecutionService:
                 rejected += 1
 
             self.ledger.update_intent_status(
-                intent_id=ack.intent_id,
+                idempotency_key=idem_keys.get(ack.intent_id, ""),
                 status=target_status,
                 broker_order_id=ack.broker_order_id,
                 ack_payload=ack.extra,
@@ -214,17 +225,18 @@ class ExecutionService:
             reports = self.adapter.fetch_orders(filters=filters)
         except Exception as exc:
             log.error("Poll failed: %s", exc)
-            return {"status": "poll_failed", "error": str(exc), "transitions": [], "fill_count": 0}
+            return {"status": "poll_failed", "error": str(exc), "transitions": [], "fill_count": 0, "errors": []}
 
         transitions: list[dict[str, Any]] = []
+        errors: list[dict[str, Any]] = []
         fill_count = 0
 
         for report in reports:
             if not report.intent_id and not report.broker_order_id:
                 continue
 
-            # Find the intent either by broker_order_id or intent_id
-            intent = self.ledger.get_intent(report.intent_id) if report.intent_id else None
+            # Find the intent either by intent_id or broker_order_id
+            intent = self.ledger.get_intent_by_intent_id(report.intent_id) if report.intent_id else None
             if intent is None and report.broker_order_id:
                 intent = self.ledger.get_intents_by_broker_order_id(report.broker_order_id)
 
@@ -239,7 +251,7 @@ class ExecutionService:
             if report.status != current_status:
                 try:
                     self.ledger.update_intent_status(
-                        intent_id=intent["intent_id"],
+                        idempotency_key=intent["idempotency_key"],
                         status=report.status,
                         broker_order_id=report.broker_order_id or intent.get("broker_order_id", ""),
                     )
@@ -251,9 +263,23 @@ class ExecutionService:
                             "to": report.status,
                         }
                     )
-                except ValueError:
-                    # Invalid transition from the ledger's perspective — ignore
-                    pass
+                except ValueError as exc:
+                    log.error(
+                        "Invalid status transition for %s: %s -> %s (%s)",
+                        intent.get("intent_id", "?"),
+                        current_status,
+                        report.status,
+                        exc,
+                    )
+                    errors.append(
+                        {
+                            "intent_id": intent.get("intent_id", ""),
+                            "broker_order_id": report.broker_order_id or intent.get("broker_order_id", ""),
+                            "from": current_status,
+                            "to": report.status,
+                            "error": str(exc),
+                        }
+                    )
 
             if report.status in (OS_PARTIAL, OS_FILLED) and report.broker_order_id:
                 fill_count += self._record_fills_for_order(
@@ -263,9 +289,10 @@ class ExecutionService:
                 )
 
         return {
-            "status": "polled",
+            "status": "poll_inconsistent" if errors else "polled",
             "transitions": transitions,
             "fill_count": fill_count,
+            "errors": errors,
         }
 
     def _record_fills_for_order(

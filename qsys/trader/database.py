@@ -114,12 +114,31 @@ class TradeLedger:
                 )
                 """
             )
+            # Migration: old schema (intent_id PK) → new schema (idempotency_key PK)
+            cursor.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='execution_requests'"
+            )
+            table_exists = cursor.fetchone() is not None
+            old_schema = False
+            if table_exists:
+                cursor.execute("PRAGMA table_info(execution_requests)")
+                cols = {r[1] for r in cursor.fetchall()}
+                old_schema = "idempotency_key" not in cols
+
+            if old_schema:
+                cursor.execute("ALTER TABLE execution_requests RENAME TO execution_requests_old")
+
             cursor.execute(
                 """
                 CREATE TABLE IF NOT EXISTS execution_requests (
-                    intent_id TEXT PRIMARY KEY,
+                    idempotency_key TEXT PRIMARY KEY,
+                    intent_id TEXT NOT NULL,
                     run_id TEXT NOT NULL,
                     trading_date TEXT NOT NULL,
+                    strategy_id TEXT NOT NULL DEFAULT '',
+                    account_name TEXT NOT NULL DEFAULT '',
+                    signal_date TEXT NOT NULL DEFAULT '',
+                    execution_date TEXT NOT NULL DEFAULT '',
                     broker_order_id TEXT DEFAULT '',
                     status TEXT NOT NULL DEFAULT 'pending',
                     request_payload TEXT DEFAULT '{}',
@@ -130,6 +149,26 @@ class TradeLedger:
                 )
                 """
             )
+
+            if old_schema:
+                cursor.execute(
+                    """
+                    INSERT OR IGNORE INTO execution_requests (
+                        idempotency_key, intent_id, run_id, trading_date,
+                        strategy_id, account_name, signal_date, execution_date,
+                        broker_order_id, status, request_payload, ack_payload,
+                        created_at, updated_at, error
+                    )
+                    SELECT
+                        '::::' || run_id || ':' || intent_id,
+                        intent_id, run_id, trading_date,
+                        '', '', trading_date, trading_date,
+                        broker_order_id, status, request_payload, ack_payload,
+                        created_at, updated_at, error
+                    FROM execution_requests_old
+                    """
+                )
+                cursor.execute("DROP TABLE IF EXISTS execution_requests_old")
             cursor.execute(
                 """
                 CREATE INDEX IF NOT EXISTS idx_exec_requests_run
@@ -375,27 +414,39 @@ class TradeLedger:
         intent_id: str,
         run_id: str,
         trading_date: str,
+        strategy_id: str = "",
+        account_name: str = "",
+        signal_date: str = "",
+        execution_date: str = "",
         request_payload: dict[str, Any] | None = None,
-    ) -> None:
+    ) -> str:
         """Insert or ignore a pending intent.
 
-        Idempotent: if *intent_id* already exists this is a no-op.
+        Idempotent: if the same *idempotency_key* already exists this is a no-op.
+        Returns the idempotency_key for subsequent lookups.
         """
         from qsys.execution.models import OS_PENDING
 
+        idem_key = f"{strategy_id}:{account_name}:{signal_date or trading_date}:{execution_date or trading_date}:{run_id}:{intent_id}"
         now = utc_now()
         with self.connect() as connection:
             connection.execute(
                 """
                 INSERT OR IGNORE INTO execution_requests (
-                    intent_id, run_id, trading_date, status,
-                    request_payload, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    idempotency_key, intent_id, run_id, trading_date,
+                    strategy_id, account_name, signal_date, execution_date,
+                    status, request_payload, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
+                    idem_key,
                     intent_id,
                     run_id,
                     trading_date,
+                    strategy_id,
+                    account_name,
+                    signal_date or trading_date,
+                    execution_date or trading_date,
                     OS_PENDING,
                     json.dumps(request_payload or {}, ensure_ascii=False),
                     now,
@@ -403,12 +454,24 @@ class TradeLedger:
                 ),
             )
             connection.commit()
+        return idem_key
 
-    def get_intent(self, intent_id: str) -> dict[str, Any] | None:
-        """Return the execution request row for *intent_id*, or None."""
+    def get_intent(self, idempotency_key: str) -> dict[str, Any] | None:
+        """Return the execution request row for *idempotency_key*, or None."""
         with self.connect() as connection:
             row = connection.execute(
-                "SELECT * FROM execution_requests WHERE intent_id = ?",
+                "SELECT * FROM execution_requests WHERE idempotency_key = ?",
+                (idempotency_key,),
+            ).fetchone()
+        if row is None:
+            return None
+        return dict(row)
+
+    def get_intent_by_intent_id(self, intent_id: str) -> dict[str, Any] | None:
+        """Look up an execution request by intent_id (non-unique, returns first match)."""
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM execution_requests WHERE intent_id = ? LIMIT 1",
                 (intent_id,),
             ).fetchone()
         if row is None:
@@ -438,7 +501,7 @@ class TradeLedger:
     def update_intent_status(
         self,
         *,
-        intent_id: str,
+        idempotency_key: str,
         status: str,
         broker_order_id: str | None = None,
         ack_payload: dict[str, Any] | None = None,
@@ -450,9 +513,9 @@ class TradeLedger:
         """
         from qsys.execution.models import validate_transition
 
-        current = self.get_intent(intent_id)
+        current = self.get_intent(idempotency_key)
         if current is None:
-            raise ValueError(f"intent_id {intent_id!r} not found; call record_pending_intent first")
+            raise ValueError(f"idempotency_key {idempotency_key!r} not found; call record_pending_intent first")
         validate_transition(current["status"], status)
 
         now = utc_now()
@@ -465,7 +528,7 @@ class TradeLedger:
                     ack_payload = CASE WHEN ? != '{}' THEN ? ELSE ack_payload END,
                     error = CASE WHEN ? != '' THEN ? ELSE error END,
                     updated_at = ?
-                WHERE intent_id = ?
+                WHERE idempotency_key = ?
                 """,
                 (
                     status,
@@ -476,7 +539,7 @@ class TradeLedger:
                     error,
                     error,
                     now,
-                    intent_id,
+                    idempotency_key,
                 ),
             )
             connection.commit()

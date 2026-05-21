@@ -14,30 +14,40 @@ def to_broker_order_requests(
     intent_rows: list[dict[str, Any]],
     trade_date: str,
     run_id: str,
-    default_order_type: str = "market",
+    price_source: str = "",
+    price_snapshot_time: str = "",
 ) -> list[BrokerOrderRequest]:
     """Convert a list of intent dicts to ``BrokerOrderRequest``.
 
-    Each intent dict should have at least *symbol*, *side*, *amount* (or
-    *requested_qty* or *quantity*), and optionally *price* / *intent_id*.
+    Phase 1 only supports **limit** orders. Every order must have a price;
+    rows without a valid price are skipped with a warning (the caller is
+    responsible for logging).
 
-    This is the central conversion function; the CSV/JSON helpers below
-    parse artifacts into this dict form and then delegate here.
+    Each intent dict should have:
+    - *symbol*, *side*, *amount* (or *requested_qty* or *quantity*)
+    - *price* (required for limit orders)
+    - optionally *intent_id*, *target_weight*, *reason*
     """
     requests: list[BrokerOrderRequest] = []
     for i, row in enumerate(intent_rows):
         symbol = str(row.get("instrument") or row.get("symbol") or "")
         side = str(row.get("side") or "").lower()
         qty = int(row.get("requested_qty") or row.get("amount") or row.get("quantity", 0))
-        price = row.get("price") or row.get("est_value")
-        if price is not None:
+        price_raw = row.get("price") or row.get("limit_price") or row.get("est_value")
+        limit_price: float | None = None
+        if price_raw is not None:
             try:
-                price = float(price)
+                limit_price = float(price_raw)
             except (TypeError, ValueError):
-                price = None
+                limit_price = None
+
         intent_id = str(row.get("intent_id") or f"{run_id}:{symbol}:{side}:{i:03d}")
 
         if not symbol or side not in ("buy", "sell") or qty <= 0:
+            continue
+
+        # Phase 1: limit-only. Fail closed if no price is available.
+        if limit_price is None or limit_price <= 0:
             continue
 
         requests.append(
@@ -45,9 +55,11 @@ def to_broker_order_requests(
                 intent_id=intent_id,
                 symbol=symbol,
                 side=side,
-                order_type=default_order_type,
+                order_type="limit",
                 quantity=qty,
-                price=price,
+                limit_price=limit_price,
+                price_source=row.get("price_source", price_source),
+                price_snapshot_time=row.get("price_snapshot_time", price_snapshot_time),
                 target_weight=row.get("target_weight"),
                 reason=row.get("reason", "live_execution"),
             )
@@ -66,7 +78,6 @@ def from_order_intents_csv(csv_path: str | Path, *, trade_date: str, run_id: str
         return []
     if df.empty:
         return []
-    # Map CSV columns to intent-row dict form
     rows = df.to_dict(orient="records")
     mapped: list[dict[str, Any]] = []
     for row in rows:
@@ -75,6 +86,7 @@ def from_order_intents_csv(csv_path: str | Path, *, trade_date: str, run_id: str
                 "instrument": str(row.get("instrument", "")),
                 "side": str(row.get("side", "")).lower(),
                 "requested_qty": int(row.get("requested_qty", 0)),
+                "price": row.get("price"),
                 "target_weight": float(row.get("target_weight", 0.0)),
                 "reason": str(row.get("reason", "rebalance_to_target_weight")),
             }
