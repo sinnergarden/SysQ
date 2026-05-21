@@ -30,3 +30,10 @@ broker:
         pnl: 500.0
         pnl_pct: 0.05
         update_time: 2026-04-06T09:25:00Z
+  # Uncomment for MiniQMT mode (Windows with xtquant):
+  # mode: miniqmt
+  # miniqmt:
+  #   account_id: your_qmt_account_id
+  #   submit_enabled: false
+  #   qmt_path: C:/QMT/data
+  #   session_id: 0

@@ -44,6 +44,14 @@ class MockBrokerConfig:
 
 
 @dataclass
+class MiniQMTBrokerConfig:
+    account_id: str = "miniqmt_account"
+    submit_enabled: bool = False
+    qmt_path: str = ""
+    session_id: int = 0
+
+
+@dataclass
 class ServerConfig:
     host: str = "127.0.0.1"
     port: int = 8811
@@ -51,6 +59,7 @@ class ServerConfig:
     broker_mode: str = "mock"
     data_dir: Path = Path("miniqmt_server/data")
     mock: MockBrokerConfig = field(default_factory=MockBrokerConfig)
+    miniqmt: MiniQMTBrokerConfig = field(default_factory=MiniQMTBrokerConfig)
 
 
 def _read_yaml(path: Path) -> dict[str, Any]:
@@ -68,6 +77,7 @@ def load_config(path: str | Path | None = None) -> ServerConfig:
     server_payload = payload.get("server") or {}
     broker_payload = payload.get("broker") or {}
     mock_payload = broker_payload.get("mock") or {}
+    miniqmt_payload = broker_payload.get("miniqmt") or {}
 
     data_dir_value = server_payload.get("data_dir") or "miniqmt_server/data"
     data_dir = Path(data_dir_value)
@@ -91,6 +101,13 @@ def load_config(path: str | Path | None = None) -> ServerConfig:
     if not mock_config.account.get("account_id"):
         mock_config.account["account_id"] = mock_config.account_id
 
+    miniqmt_config = MiniQMTBrokerConfig(
+        account_id=str(miniqmt_payload.get("account_id") or "miniqmt_account"),
+        submit_enabled=bool(miniqmt_payload.get("submit_enabled", False)),
+        qmt_path=str(miniqmt_payload.get("qmt_path") or ""),
+        session_id=int(miniqmt_payload.get("session_id") or 0),
+    )
+
     return ServerConfig(
         host=str(server_payload.get("host") or "127.0.0.1"),
         port=int(server_payload.get("port") or 8811),
@@ -98,4 +115,5 @@ def load_config(path: str | Path | None = None) -> ServerConfig:
         broker_mode=str(broker_payload.get("mode") or "mock"),
         data_dir=data_dir,
         mock=mock_config,
+        miniqmt=miniqmt_config,
     )
