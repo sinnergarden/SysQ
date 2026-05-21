@@ -84,8 +84,8 @@ def _fake_rebalance(*, base_dir, run_id, trade_date, predictions_path, output_di
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "target_weights.csv").write_text(
-        "trade_date,instrument,score,target_weight,model_name,mainline_object_name,strategy_variant\n"
-        f"{trade_date},SH600000,0.9,1.0,qlib_lgbm_extended,feature_173,top5_equal_weight\n",
+        "trade_date,instrument,score,rank,target_weight,strategy_id,strategy_version,portfolio_method,model_name,mainline_object_name\n"
+        f"{trade_date},SH600000,0.9,1,1.0,alpha_v1,alpha_v1_candidate_202605,rank_weight_buffer,qlib_lgbm_extended,feature_173\n",
         encoding="utf-8",
     )
     (output_dir / "order_intents.csv").write_text(
@@ -109,7 +109,9 @@ def _fake_rebalance(*, base_dir, run_id, trade_date, predictions_path, output_di
             "trade_date": trade_date,
             "run_id": run_id,
             "status": "success",
-            "strategy_variant": "top5_equal_weight",
+            "strategy_id": "alpha_v1",
+            "strategy_version": "alpha_v1_candidate_202605",
+            "portfolio_method": "rank_weight_buffer",
             "price_mode": "shadow_mark_price",
             "order_count": 1,
             "filled_count": 1,
