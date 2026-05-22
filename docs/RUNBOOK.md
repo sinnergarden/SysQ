@@ -38,6 +38,8 @@
 
 ## 4. 入口命令
 
+### 主线（Mainline）运营
+
 盘前：
 
 ```bash
@@ -62,6 +64,29 @@ rollup：
 python3 scripts/rollup_daily_artifacts.py --execution_date 2026-04-03
 ```
 
+### Alpha V1 每日运营
+
+```bash
+# 盘前：inference → 生成交易计划 → Telegram 通知
+python3 scripts/run_alpha_v1_daily.py --trade-date 2026-05-18 --mode preopen
+
+# 盘后：开盘价执行 → 收盘价 MTM → Telegram 通知
+python3 scripts/run_alpha_v1_daily.py --trade-date 2026-05-18 --mode postclose
+
+# 周级别训练（周末运行）
+python3 scripts/run_alpha_v1_daily.py --trade-date 2026-05-23 --mode train
+```
+
+**调试选项**：
+
+| 选项 | 作用 |
+|------|------|
+| `--debug-run` | 不修改 shadow 账户，输出到独立目录 |
+| `--no-notify` | 跳过 Telegram 通知 |
+| `--notify-only` | 仅从已有产物重建通知，不执行 |
+| `--force-rerun --reason "原因"` | 覆盖已有执行记录，强制重跑 |
+| `--output-dir PATH` | 调试模式下输出目录覆盖 |
+
 ## 5. 导航
 
 - 数据链路 SOP（CSI800 日频同步全流程）：`docs/ops/DATA_PIPELINE_SOP.md`
@@ -70,7 +95,73 @@ python3 scripts/rollup_daily_artifacts.py --execution_date 2026-04-03
 - 盘后：`docs/ops/POST_CLOSE_SOP.md`
 - 目录契约：`docs/DATA_LAYOUT.md`
 
-## 6. 排障顺序
+## 6. Alpha V1 详解
+
+### 产物结构
+
+```
+experiments/alpha_v1_daily/{trade_date}/
+├── run_meta.json          # 运行记录（mode、reference_date、debug_run、reason）
+├── plan/
+│   ├── plan_meta.json     # 计划元信息（status: built/skipped、reference_date）
+│   ├── target_weights.csv # 目标权重
+│   ├── order_intents.csv  # 订单意图（instrument、side、diff_value、requested_qty）
+│   └── rebalance_audit.csv# 调仓审计日志
+├── execution/
+│   ├── COMMITTED          # 标记文件，表示本次执行已完成（幂等屏障）
+│   ├── account_after.json # 执行后账户状态
+│   ├── positions_after.csv# 执行后持仓
+│   └── execution_summary.json  # 执行摘要
+├── mtm/
+│   ├── mtm_snapshot.json  # MTM 快照（收盘价估值）
+│   └── stale_check.json   # 数据陈旧检查结果
+├── archive/               # --force-rerun 时旧产物存档
+└── staging/               # 执行暂存区，commit 后才写入 execution/
+```
+
+### 幂等（Idempotency）
+
+- **盘后执行（postclose）是幂等的**：一旦 `execution/COMMITTED` 标记存在，再次运行不会重复执行，只重新计算 MTM + 发通知
+- **如需覆盖**：`--force-rerun --reason "原因"` 需要 `execution/account_before.json` 和 `positions_before.csv` 存在；缺少时直接阻断（不降级为只发通知）
+- 注意：幂等 ≠ 不执行。第一次运行正常执行，第二次起跳过（执行记录已存在）
+
+### 调试指南
+
+| 场景 | 做法 |
+|------|------|
+| 只改通知文案，验证效果 | `--notify-only`（不执行，从已有产物重建通知）|
+| 测试完整流程但不改 shadow | `--debug-run`（不写 account.json/positions.csv/ledger.csv）|
+| 某天执行失败要重跑 | `--force-rerun --reason "修复了XXbug"`（需存在 before snapshot，否则阻断）|
+| 本地开发不想刷屏 | `--no-notify` |
+
+### 执行流程（postclose 事务性）
+
+```
+staging/ → 校验（开盘价、COMMITTED） → MatchEngine 执行 → commit → shadow/
+```
+
+commit 操作是原子的（可崩溃恢复）：
+1. 创建 COMMITTING 标记（开始标志）
+2. 追加 ledger.csv（run_id 去重）
+3. 复制 staging 产物到 execution/（含 before snapshot）
+4. 更新 shadow/account.json 和 positions.csv
+5. 重命名 COMMITTING → COMMITTED（完成标志）
+
+**崩溃保护**：如果启动时发现 COMMITTING 但无 COMMITTED → 阻断执行，提示人工检查。
+
+### 数据陈旧保护
+
+- postclose 时检查收盘价：对照当前持仓 ∪ 计划订单所有股票代码与前一日 MTM 快照对比
+- 如果 >85% 的股票收盘价与前一日完全相同 → `StaleDataError` 阻断执行
+- 首次建仓或持仓与计划均无上一交易日 MTM 覆盖 → `skipped_low_overlap`（通知中显示 ⏭）
+- 检查结果写入 `mtm/stale_check.json`
+
+### 布署
+
+- systemd timer 每日自动执行（盘前 21:30 数据同步后触发）
+- Telegram 通知发送到指定 channel（通过 `.env` 配置）
+
+## 7. 排障顺序
 
 - 查单日问题：先看 `daily/{date}/...`
 - 查跨日趋势：再看 `data/derived/`

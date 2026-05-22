@@ -9,7 +9,7 @@
 | Universe | CSI 300 / CSI 800 |
 | Horizon | Weekly rebalance |
 | Max Positions | 20 |
-| Initial Cash | ¥500,000 (shadow) |
+| Initial Cash | ¥1,000,000 (shadow) |
 
 ---
 
@@ -50,12 +50,42 @@ blended_score = 0.8 × zscore(pred_5d) + 0.2 × zscore(pred_20d)
 3. Fill remaining slots from unheld stocks with rank ≤ 40 (buffer buy)
 4. Target portfolio size: **20 stocks**
 
-### Weighting
+### Weighting — Rank Linear Decay with Cap
 
-- Linear rank decay: `w_i = (N - rank_i + 1) / sum(1..N)`
-- Single stock cap: **7%** of NAV
-- Excess from capped positions redistributed proportionally
-- Weights normalized to sum to 1.0
+**公式：**
+```
+选中 N 只 → 降序排列 rank 1..N
+原始权重: w_raw(rank_i) = (N - i + 1) / sum(1..N)
+                    = (N - i + 1) / (N * (N + 1) / 2)
+单股上限: single_stock_cap = 7%
+实际权重: w_i = min(w_raw_i, single_stock_cap)
+最终权重: w_i_norm = w_i / sum(w_1..w_N)
+```
+
+**举例（N=20, sum(1..20)=210, 总资产=¥1,000,000）：**
+
+| Rank | 原始比例 | 原始金额 | Cap后 | 最终比例 | 最终金额 |
+|------|---------|---------|-------|---------|---------|
+| 1    | 20/210=9.52% | ¥95,238 | Capped 7% | 7.61% | **¥76,087** |
+| 2    | 19/210=9.05% | ¥90,476 | Capped 7% | 7.61% | **¥76,087** |
+| 3    | 18/210=8.57% | ¥85,714 | Capped 7% | 7.61% | **¥76,087** |
+| 4    | 17/210=8.10% | ¥80,952 | Capped 7% | 7.61% | **¥76,087** |
+| 5    | 16/210=7.62% | ¥76,190 | Capped 7% | 7.61% | **¥76,087** |
+| 6    | 15/210=7.14% | ¥71,429 | Capped 7% | 7.61% | **¥76,087** |
+| 7    | 14/210=6.67% | ¥66,667 | — | 7.25% | ¥72,464 |
+| 8    | 13/210=6.19% | ¥61,905 | — | 6.73% | ¥67,288 |
+| 9    | 12/210=5.71% | ¥57,143 | — | 6.21% | ¥62,112 |
+| 10   | 11/210=5.24% | ¥52,381 | — | 5.70% | ¥56,936 |
+| ...  | ... | ... | ... | ... |
+| 20   | 1/210=0.48%  | ¥4,762  | — | 0.52% | **¥5,176** |
+
+**为什么尾部看起来衰减厉害？**
+1. 前 6 名被 7% 硬顶压缩 → 它们的超额权重（约 10.6%）被重新分配给尾部
+2. 但 rank 20 的原始占比只有 1/210 = 0.48%，即使 renormalize 也仅到 0.52%
+3. 这是线性等间距加权（相邻 rank 之间间隔相同），不是 score 比例加权
+4. 如果想拉高尾部：可提高 single_stock_cap、或用 sqrt 衰减（衰减曲线更平滑）
+
+**代码入口：** `qsys/backtest/portfolio.py::build_rank_weight_portfolio()`
 
 ### Execution
 
@@ -137,20 +167,20 @@ blended_score = 0.8 × zscore(pred_5d) + 0.2 × zscore(pred_20d)
 
 | Task | Time | Trigger | Status |
 |------|------|---------|--------|
-| CSI 800 Data Sync | 21:30 daily | `qsys-csi800-daily-sync.timer` | ✅ Active |
-| Alpha V1 Weekly Train | Mon 07:00 | `qsys-alpha-v1-weekly-train.timer` | ✅ Active |
-| Alpha V1 Preopen | 08:00 trading day | `qsys-alpha-v1-preopen.timer` | ⏳ Pending (trading script) |
-| Research UI | 8000/tcp | `uvicorn` (manual) | ✅ Running |
+| CSI 800 Data Sync | Mon-Fri 21:30 | `qsys-csi800-daily-sync.timer` | ✅ Active |
+| Alpha V1 Weekly Train | Mon 07:00 | `qsys-alpha-v1-weekly-train.timer` | ✅ Active (Mon 07:00) |
+| Alpha V1 Preopen | Mon-Fri 08:00 | `qsys-preopen.timer` | ✅ Active (triggers `run_alpha_v1_daily.py --mode preopen`) |
+| Alpha V1 Postclose | Mon-Fri 15:30 | `qsys-post-close.timer` | ✅ Active (triggers `run_alpha_v1_daily.py --mode postclose`) |
 
 ### Status Dashboard
 
 | Check | Value |
 |-------|-------|
 | Research UI | `http://localhost:8000` — 2 backtest runs available |
-| Last CSI800 Sync | 2026-05-15 (success, 49s CPU) |
+| Last CSI800 Sync | 2026-05-21 (success) |
 | Next Sync | Today 21:30 |
 | Next Preopen | Tomorrow 08:00 |
-| Active Universe | CSI 800 (shadow, ¥500k) |
+| Active Universe | CSI 300 (shadow trading, ¥1M) — models trained on CSI 800 |
 | Models | `clean_5d` + `clean_20d` dual LightGBM, retrained weekly |
 | 0-cost Curve | Available in UI diagnostics (zero_cost_total_assets) |
 | Benchmark | CSI 300 avg price (equal-weighted universe) |
@@ -158,19 +188,18 @@ blended_score = 0.8 × zscore(pred_5d) + 0.2 × zscore(pred_20d)
 ### Shadow Trading Flow
 
 1. **21:30** — CSI 800 data sync + readiness audit → Telegram notification
-2. **08:00** — Alpha V1 preopen:
-   - Load CSI 800 data
-   - Train dual models (2yr rolling)
-   - Score & blend
-   - Build portfolio with alpha_v1 rules
-   - Generate shadow orders
-   - Send Telegram: prediction summary + buy plan
+2. **08:00** — Alpha V1 preopen (`run_alpha_v1_daily.py --mode preopen`):
+   - Load dual LightGBM models (from `experiments/alpha_v1_models/latest/`)
+   - Fetch CSI300 feature data
+   - Score & blend (0.8×zscore(p5) + 0.2×zscore(p20))
+   - Run shadow rebalance (`rank_weight_buffer` with `top_n=20`, weekly freq)
+   - Save predictions → `experiments/alpha_v1_shadow_predictions/`
+   - Send Telegram: top-5 picks + buy/sell plan with amounts and 手数
 3. **09:30** — Market open (A-share)
 4. **15:00** — Market close
-5. **15:30** — Post-close report:
-   - Actual positions vs plan
-   - P&L summary
-   - Signal quality update
+5. **15:30** — Post-close report (`run_alpha_v1_daily.py --mode postclose`):
+   - Read reconciliation data (or fallback to shadow execution summary)
+   - P&L snapshot + turnover
 
 ---
 
