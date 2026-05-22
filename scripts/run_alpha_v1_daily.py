@@ -370,16 +370,6 @@ def _is_execution_committed(trade_date: str) -> bool:
     return _committed_marker(trade_date).exists()
 
 
-def _load_execution_summary(trade_date: str) -> dict | None:
-    path = _exec_dir(trade_date) / "execution_summary.json"
-    if not path.exists():
-        return None
-    try:
-        return json.loads(path.read_text())
-    except (json.JSONDecodeError, OSError):
-        return None
-
-
 # ── MTM（独立进程可重复运行）────────────────────────────────────────────
 
 def _try_mark_to_market(trade_date: str,
@@ -466,13 +456,23 @@ def _try_mark_to_market(trade_date: str,
         if priced_count == 0:
             return None
         details.sort(key=lambda x: x[5], reverse=True)
+        # Get positions_before_count from execution_summary if available
+        exec_summary_path = _exec_dir(trade_date) / "execution_summary.json"
+        pos_before = 0
+        if exec_summary_path.exists():
+            try:
+                es = json.loads(exec_summary_path.read_text())
+                pos_before = es.get("positions_before_count", 0)
+            except (json.JSONDecodeError, OSError):
+                pass
         snapshot = {
             "cash": cash, "market_value": total_market_value,
             "total_value": total_value, "initial_capital": initial_capital,
             "cumulative_pnl": cumulative_pnl,
             "cumulative_pnl_pct": round(cumulative_pnl_pct, 2),
             "daily_pnl": daily_pnl, "priced_count": priced_count,
-            "total_positions": len(positions), "details": details,
+            "total_positions": len(positions), "positions_before_count": pos_before,
+            "details": details,
         }
         _save_mtm_snapshot(trade_date, snapshot)
         return snapshot
@@ -535,18 +535,20 @@ def _build_preopen_message(trade_date: str, rebalance_skipped: bool,
             lines += ["", "📋 计划交易（以 OPEN 价执行）", ""]
             if not buys.empty:
                 lines.append(f"  计划买入 ({len(buys)}):")
+                lines.append(f"    {'代码':<12} {'名称':<8} {'买入金额':<12} 手数  score")
                 for _, row in buys.iterrows():
                     name = _get_stock_name(row["instrument"])
                     diff_val = float(row.get("diff_value", 0))
                     qty = int(row.get("requested_qty", 0))
-                    lines.append(f"    {row['instrument']} {name}  +{_fmt(diff_val)}  {qty//100}手  score={row['score']:.4f}")
+                    lines.append(f"    {row['instrument']:<12} {name:<8} +{_fmt(diff_val):<10} {qty//100}手  {row['score']:.4f}")
             if not sells.empty:
                 lines.append(f"  计划卖出 ({len(sells)}):")
+                lines.append(f"    {'代码':<12} {'名称':<8} {'卖出金额':<12} 手数  score")
                 for _, row in sells.iterrows():
                     name = _get_stock_name(row["instrument"])
                     diff_val = float(row.get("diff_value", 0))
                     qty = int(row.get("requested_qty", 0))
-                    lines.append(f"    {row['instrument']} {name}  -{_fmt(abs(diff_val))}  {qty//100}手  score={row['score']:.4f}")
+                    lines.append(f"    {row['instrument']:<12} {name:<8} -{_fmt(abs(diff_val)):<10} {qty//100}手  {row['score']:.4f}")
             lines.append("")
         except Exception as e:
             lines.append(f"  ⚠ 无法读取交易计划详情: {e}")
@@ -566,7 +568,8 @@ def _build_postclose_message(trade_date: str, mtm: dict | None = None,
                               execution_committed: bool = False,
                               execution_skipped: bool = False,
                               debug_run: bool = False,
-                              stale_check: dict | None = None) -> str:
+                              stale_check: dict | None = None,
+                              idempotent_skip: bool = False) -> str:
     _get_stock_name("")
     lines = [
         f"📊 Alpha V1 Post-close {trade_date}",
@@ -576,9 +579,12 @@ def _build_postclose_message(trade_date: str, mtm: dict | None = None,
         lines.append("🔧 调试模式 — 不修改 shadow 账户")
         lines.append("")
     if execution_committed and not execution_skipped:
-        lines += ["✅ 执行状态: 已完成（幂等跳过，未重复执行）", ""]
+        if idempotent_skip:
+            lines += ["✅ 执行状态: 已完成（执行记录已存在）", ""]
+        else:
+            lines += ["✅ 执行状态: 已完成", ""]
     elif execution_committed and execution_skipped:
-        lines += ["✅ 执行状态: 无计划需执行（跳过）", ""]
+        lines += ["✅ 执行状态: 无计划需执行", ""]
     elif debug_run:
         lines += ["🔧 执行状态: 调试模式，未提交 shadow 账户", ""]
     if stale_check:
@@ -596,8 +602,8 @@ def _build_postclose_message(trade_date: str, mtm: dict | None = None,
     if artifacts:
         lines.append(f"🏦 执行摘要（按 {trade_date} 开盘价）")
         lines.append(
-            f"  成交额: {_fmt(artifacts.turnover)}  委托: {artifacts.order_count} "
-            f"成交: {artifacts.filled_count}  被拒: {artifacts.rejected_count}"
+            f"  成交额: {_fmt(artifacts.turnover)}  买入委托: {artifacts.order_count} "
+            f"成交: {artifacts.filled_count}  未成交: {artifacts.rejected_count}"
         )
         mv = artifacts.total_value_after - artifacts.cash_after
         lines.append(
@@ -612,7 +618,12 @@ def _build_postclose_message(trade_date: str, mtm: dict | None = None,
         lines.append(f"  累计 PnL: {cum_pnl_str} ({mtm['cumulative_pnl_pct']:+.2f}%)")
         lines.append(f"  当日 PnL: {daily_str}")
         lines.append(f"  Total: {_fmt(mtm['total_value'])}  Cash: {_fmt(mtm['cash'])}")
-        lines.append(f"  Position: {_fmt(mtm['market_value'])}  Holdings: {mtm['priced_count']}/{mtm['total_positions']}只")
+        pos_before = mtm.get('positions_before_count', 0)
+        pos_after = mtm.get('priced_count', 0)
+        if pos_before > 0:
+            lines.append(f"  Position: {_fmt(mtm['market_value'])}  Holdings: {pos_after}只（原有{pos_before} + 新增{pos_after - pos_before}）")
+        else:
+            lines.append(f"  Position: {_fmt(mtm['market_value'])}  Holdings: {pos_after}只")
         top3 = mtm['details'][:3]
         bot3 = mtm['details'][-3:] if len(mtm['details']) >= 3 else mtm['details']
         if top3:
@@ -752,7 +763,7 @@ def run_postclose(trade_date: str, debug_run: bool = False,
     has_skip = has_skip_meta and not has_plan
     already_committed = _is_execution_committed(trade_date)
     if already_committed and not force_rerun:
-        print(f"  ⏭ 执行已提交（COMMITTED 标记存在），幂等跳过")
+        print(f"  ⏭ 执行已提交（COMMITTED 标记存在），跳过")
         print(f"  💡 如需重新执行请使用 --force-rerun + --reason")
         artifacts = _load_artifacts_for_notification(trade_date)
         mtm = _try_mark_to_market(trade_date)
@@ -760,11 +771,11 @@ def run_postclose(trade_date: str, debug_run: bool = False,
             msg = _build_postclose_message(
                 trade_date, mtm=mtm, artifacts=artifacts,
                 execution_committed=True, execution_skipped=has_skip,
-                debug_run=debug_run,
+                debug_run=debug_run, idempotent_skip=True,
             )
             _send_notification(msg)
         elapsed = time.time() - t0
-        print(f"\n✅ Post-close {trade_date} (idempotent skip) completed in {elapsed:.0f}s")
+        print(f"\n✅ Post-close {trade_date} (已提交，跳过) completed in {elapsed:.0f}s")
         return
     if already_committed and force_rerun:
         if not reason:
@@ -819,7 +830,7 @@ def run_postclose(trade_date: str, debug_run: bool = False,
             sys.exit(1)
         if not debug_run:
             print(f"\n  Committing to shadow account...")
-            _commit_execution(trade_date, staging_exec_dir, artifacts)
+            _commit_execution(trade_date, staging_exec_dir)
             print(f"  ✅ Shadow account updated")
         else:
             print(f"\n  🔧 调试模式 — 不提交 shadow 账户")
@@ -903,8 +914,7 @@ def _load_artifacts_for_notification(trade_date: str) -> ShadowRebalanceArtifact
     )
 
 
-def _commit_execution(trade_date: str, staging_dir: Path,
-                       artifacts: ShadowRebalanceArtifacts) -> None:
+def _commit_execution(trade_date: str, staging_dir: Path) -> None:
     exec_dir = _exec_dir(trade_date)
     exec_dir.mkdir(parents=True, exist_ok=True)
     for fname in ["account_after.json", "positions_after.csv", "execution_summary.json"]:

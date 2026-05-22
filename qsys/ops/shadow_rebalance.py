@@ -718,6 +718,7 @@ def execute_alpha_v1_plan(
         raise ShadowRebalanceError("Plan has no order intents")
 
     account, prior_account, _ = _load_shadow_account(shadow_dir)
+    positions_before_count = len(account.positions)
     instruments = sorted(set(order_intents["instrument"].astype(str)) | set(account.positions.keys()))
 
     open_prices, market_status = _fetch_market_snapshot(
@@ -815,6 +816,8 @@ def execute_alpha_v1_plan(
         "total_value_before": float(prior_account.get("total_value", 0)),
         "total_value_after": total_value_after,
         "turnover": turnover,
+        "positions_before_count": positions_before_count,
+        "positions_after_count": len(positions_after),
         "no_real_orders": True,
         "notes": [
             "executed_at_open",
