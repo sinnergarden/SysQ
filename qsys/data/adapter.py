@@ -793,36 +793,47 @@ class QlibAdapter:
         try:
             self.init_qlib()
             stale_pct = self._check_stale_after_update(since_date, sample_size=20)
-            if stale_pct > 80:
+            if stale_pct < -0.5:
+                log.warning(f"Read-back verification inconclusive ({stale_pct}), skipping auto-fix")
+            elif stale_pct > 80:
                 log.warning(
                     f"dump_update produced stale data ({stale_pct:.0f}% unchanged) "
                     f"on {since_date}.  Falling back to convert_fix to repair..."
                 )
                 self._run_dump_script(csv_dir, mode="dump_fix")
         except Exception as e:
-            log.warning(f"Read-back verification skipped ({e})")
+            log.warning(f"Read-back verification error ({e})")
 
     def _check_stale_after_update(self, since_date: str, sample_size: int = 30) -> float:
         """Quick read-back check: compare close prices on since_date vs previous trading day.
-        Returns the percentage of sampled stocks with unchanged prices (0-100).
-        Returns 0 if check can't be performed (no data, single calendar entry, etc.).
+
+        Uses reset_index() to normalize qlib's MultiIndex (instrument, datetime),
+        converting datetime Timestamps to YYYY-MM-DD string for robust comparison.
+
+        Returns:
+            Percentage of sampled stocks with unchanged prices (0-100).
+            -1.0 if check cannot be performed (unverifiable).
         """
         cal_path = self.qlib_dir / "calendars" / "day.txt"
         if not cal_path.exists():
-            return 0.0
+            log.warning("qlib calendar not found, cannot verify data freshness")
+            return -1.0
         cal = [l.strip() for l in cal_path.read_text().splitlines() if l.strip()]
         try:
             idx = cal.index(since_date)
         except ValueError:
-            return 0.0
+            log.warning(f"{since_date} not in qlib calendar, cannot verify")
+            return -1.0
         if idx < 1:
-            return 0.0
+            log.warning(f"{since_date} is the first calendar entry, nothing to compare against")
+            return -1.0
         prev_date = cal[idx - 1]
 
         import random
         all_feature_dirs = sorted(self.qlib_dir.glob("features/*"))
         if not all_feature_dirs:
-            return 0.0
+            log.warning("no feature directories found, cannot verify")
+            return -1.0
         sampled = random.sample(all_feature_dirs, min(sample_size, len(all_feature_dirs)))
         symbols = [d.name for d in sampled]
 
@@ -830,18 +841,30 @@ class QlibAdapter:
             from qlib.data import D
             df_now = D.features(symbols, ["$close"], start_time=since_date, end_time=since_date)
             df_prev = D.features(symbols, ["$close"], start_time=prev_date, end_time=prev_date)
-        except Exception:
-            return 0.0
+        except Exception as e:
+            log.warning(f"D.features() query failed: {e}, cannot verify")
+            return -1.0
 
         if df_now is None or df_now.empty or df_prev is None or df_prev.empty:
-            return 0.0
+            log.warning("D.features() returned empty data, cannot verify")
+            return -1.0
+
+        # Normalize MultiIndex: (instrument, datetime) → reset, datetime→string
+        now = df_now.reset_index()
+        now["datetime"] = now["datetime"].astype(str).str[:10]
+        prev = df_prev.reset_index()
+        prev["datetime"] = prev["datetime"].astype(str).str[:10]
 
         stale = 0
         total = 0
         for sym in symbols:
             try:
-                c_now = float(df_now.loc[(sym, since_date), "$close"])
-                c_prev = float(df_prev.loc[(sym, prev_date), "$close"])
+                r_now = now[(now["instrument"] == sym) & (now["datetime"] == since_date)]
+                r_prev = prev[(prev["instrument"] == sym) & (prev["datetime"] == prev_date)]
+                if r_now.empty or r_prev.empty:
+                    continue
+                c_now = float(r_now["$close"].iloc[0])
+                c_prev = float(r_prev["$close"].iloc[0])
                 if min(abs(c_now), abs(c_prev)) < 0.01:
                     continue
                 total += 1
@@ -851,7 +874,8 @@ class QlibAdapter:
                 continue
 
         if total == 0:
-            return 0.0
+            log.warning("no overlapping stock data for read-back comparison")
+            return -1.0
         pct = stale / total * 100
         log.info(f"Read-back check: {stale}/{total} sampled stocks unchanged ({pct:.0f}%)")
         return pct

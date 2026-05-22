@@ -691,12 +691,17 @@ def execute_alpha_v1_plan(
     plan_dir: str | Path,
     execution_date: str,
     output_dir: str | Path,
+    debug_run: bool = False,
 ) -> ShadowRebalanceArtifacts:
     """Execute a saved alpha_v1 plan using execution_date's OPEN price.
 
     Reads plan artifacts (order intents), loads current shadow account,
     executes at OPEN price via MatchEngine, then MTM at CLOSE price.
     Writes results to output_dir and updates shadow account.
+
+    When debug_run=True, reads shadow account as input but NEVER writes
+    to shadow/account.json, shadow/positions.csv, or shadow/ledger.csv.
+    All derived outputs are written to output_dir only.
     """
     plan_dir = Path(plan_dir)
     output_dir = Path(output_dir)
@@ -768,8 +773,9 @@ def execute_alpha_v1_plan(
         "initial_capital": float(prior_account.get("initial_capital", DEFAULT_INITIAL_CAPITAL)),
     }
     write_json(output_dir / "account_after.json", account_after)
-    write_json(shadow_dir / "account.json", account_after)
-    positions_after.to_csv(shadow_dir / "positions.csv", index=False)
+    if not debug_run:
+        write_json(shadow_dir / "account.json", account_after)
+        positions_after.to_csv(shadow_dir / "positions.csv", index=False)
 
     ledger_rows = []
     for item in results:
@@ -784,7 +790,8 @@ def execute_alpha_v1_plan(
             "fee": float(item.get("fee", 0.0) or 0.0),
             "status": item["status"], "reason": item.get("reason", "plan_execution"),
         })
-    _append_ledger(shadow_dir / "ledger.csv", ledger_rows)
+    if not debug_run:
+        _append_ledger(shadow_dir / "ledger.csv", ledger_rows)
 
     execution_summary = {
         "trade_date": execution_date,
@@ -813,6 +820,7 @@ def execute_alpha_v1_plan(
             "executed_at_open",
             f"execution_price=open_{execution_date}",
             f"mtm_price=close_{execution_date}",
+            *(["debug_run"] if debug_run else []),
         ],
     }
     write_json(output_dir / "execution_summary.json", execution_summary)
