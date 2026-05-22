@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import json
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
@@ -178,7 +179,7 @@ def _load_shadow_account(shadow_dir: Path) -> tuple[Account, dict[str, Any], pd.
     return account, payload, positions
 
 
-def _fetch_market_snapshot(trade_date: str, instruments: list[str]) -> tuple[dict[str, float], pd.DataFrame]:
+def _fetch_market_snapshot(trade_date: str, instruments: list[str], price_col: str = "close") -> tuple[dict[str, float], pd.DataFrame]:
     adapter = QlibAdapter()
     adapter.init_qlib()
     market = adapter.get_features(instruments, ["$close", "$open", "$factor", "$paused", "$high_limit", "$low_limit"], start_time=trade_date, end_time=trade_date)
@@ -196,16 +197,17 @@ def _fetch_market_snapshot(trade_date: str, instruments: list[str]) -> tuple[dic
         raise ShadowRebalanceError(f"no market snapshot rows for {trade_date}")
     frame = frame.sort_values(["instrument", "datetime"]).drop_duplicates(subset=["instrument"], keep="last")
     frame["close"] = pd.to_numeric(frame["close"], errors="coerce")
+    frame["open"] = pd.to_numeric(frame["open"], errors="coerce")
     frame["limit_up"] = pd.to_numeric(frame["limit_up"], errors="coerce")
     frame["limit_down"] = pd.to_numeric(frame["limit_down"], errors="coerce")
     frame["is_suspended"] = frame["is_suspended"].fillna(0).astype(bool)
-    frame["is_limit_up"] = (frame["limit_up"] > 0.01) & (frame["close"] >= frame["limit_up"])
-    frame["is_limit_down"] = (frame["limit_down"] > 0.01) & (frame["close"] <= frame["limit_down"])
-    frame = frame.dropna(subset=["close"])
+    frame["is_limit_up"] = (frame["limit_up"] > 0.01) & (frame[price_col] >= frame["limit_up"])
+    frame["is_limit_down"] = (frame["limit_down"] > 0.01) & (frame[price_col] <= frame["limit_down"])
+    frame = frame.dropna(subset=[price_col])
     if frame.empty:
         raise ShadowRebalanceError(f"no valid close prices for {trade_date}")
     market_status = frame.set_index("instrument")[["is_suspended", "is_limit_up", "is_limit_down"]]
-    current_prices = frame.set_index("instrument")["close"].astype(float).to_dict()
+    current_prices = frame.set_index("instrument")[price_col].astype(float).to_dict()
     return current_prices, market_status
 
 
@@ -611,4 +613,233 @@ def run_alpha_v1_shadow_rebalance(*, base_dir: str | Path, run_id: str, trade_da
         strategy_id=config.strategy_id,
         strategy_version=config.version,
         portfolio_method="rank_weight_buffer",
+    )
+
+
+def build_alpha_v1_plan(
+    *,
+    base_dir: str | Path,
+    trade_date: str,
+    reference_date: str,
+    predictions_path: str | Path,
+    output_dir: str | Path,
+) -> Path:
+    """Build alpha_v1 trading plan from predictions, without executing.
+
+    Reads predictions, loads current shadow holdings, fetches close prices
+    for reference_date, computes target weights and order intents.
+    Saves to output_dir/plan/ — no MatchEngine, no shadow account writes.
+    Returns the plan directory.
+    """
+    plan_dir = Path(output_dir) / "plan"
+    plan_dir.mkdir(parents=True, exist_ok=True)
+    config = ALPHA_V1_CANDIDATE
+
+    predictions = _read_predictions(predictions_path)
+    shadow_dir = Path(base_dir) / "shadow"
+    account, prior_account, _ = _load_shadow_account(shadow_dir)
+    instruments = sorted(set(predictions["instrument"].astype(str)) | set(account.positions.keys()))
+
+    current_prices, market_status = _fetch_market_snapshot(
+        reference_date, instruments, price_col="close",
+    )
+    target_weights, target_frame = _build_target_weights(
+        predictions, current_prices, account,
+        portfolio_fn=build_rank_weight_portfolio,
+        top_n=config.portfolio.top_n,
+        buffer_hold=config.portfolio.buffer_hold,
+        buffer_buy=config.portfolio.buffer_buy,
+        single_stock_cap=config.portfolio.single_stock_cap,
+        strategy_id=config.strategy_id,
+        strategy_version=config.version,
+    )
+    orders, order_intents, rebalance_audit, cash_before, market_value_before, total_value_before = _build_order_intents(
+        account, predictions, target_weights, current_prices, trade_date,
+    )
+
+    target_frame.to_csv(plan_dir / "target_weights.csv", index=False)
+    order_intents.to_csv(plan_dir / "order_intents.csv", index=False)
+    rebalance_audit.to_csv(plan_dir / "rebalance_audit.csv", index=False)
+    write_json(plan_dir / "plan_meta.json", {
+        "trade_date": trade_date,
+        "reference_date": reference_date,
+        "strategy_id": config.strategy_id,
+        "strategy_version": config.version,
+        "portfolio_method": "rank_weight_buffer",
+        "top_n": config.portfolio.top_n,
+        "buffer_hold": config.portfolio.buffer_hold,
+        "buffer_buy": config.portfolio.buffer_buy,
+        "single_stock_cap": config.portfolio.single_stock_cap,
+        "cash_before": cash_before,
+        "market_value_before": market_value_before,
+        "total_value_before": total_value_before,
+        "buy_count": len([o for o in orders if o["side"] == "buy"]),
+        "sell_count": len([o for o in orders if o["side"] == "sell"]),
+        "total_orders": len(orders),
+        "build_ts": datetime.now().isoformat(),
+    })
+
+    print(f"  ✅ Plan built: {len(orders)} orders ({len([o for o in orders if o['side'] == 'buy'])} buy / "
+          f"{len([o for o in orders if o['side'] == 'sell'])} sell), "
+          f"value=¥{total_value_before:_.0f}, cash=¥{cash_before:_.0f}")
+    return plan_dir
+
+
+def execute_alpha_v1_plan(
+    *,
+    base_dir: str | Path,
+    plan_dir: str | Path,
+    execution_date: str,
+    output_dir: str | Path,
+) -> ShadowRebalanceArtifacts:
+    """Execute a saved alpha_v1 plan using execution_date's OPEN price.
+
+    Reads plan artifacts (order intents), loads current shadow account,
+    executes at OPEN price via MatchEngine, then MTM at CLOSE price.
+    Writes results to output_dir and updates shadow account.
+    """
+    plan_dir = Path(plan_dir)
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    shadow_dir = Path(base_dir) / "shadow"
+
+    plan_meta_path = plan_dir / "plan_meta.json"
+    if not plan_meta_path.exists():
+        raise ShadowRebalanceError(f"Plan meta not found: {plan_meta_path}")
+    plan_meta = json.loads(plan_meta_path.read_text())
+
+    order_intents = pd.read_csv(plan_dir / "order_intents.csv")
+    if order_intents.empty:
+        raise ShadowRebalanceError("Plan has no order intents")
+
+    account, prior_account, _ = _load_shadow_account(shadow_dir)
+    instruments = sorted(set(order_intents["instrument"].astype(str)) | set(account.positions.keys()))
+
+    open_prices, market_status = _fetch_market_snapshot(
+        execution_date, instruments, price_col="open",
+    )
+
+    orders = []
+    for _, row in order_intents.iterrows():
+        inst = str(row["instrument"])
+        side = str(row["side"])
+        qty = int(float(row.get("requested_qty", 0)))
+        if qty <= 0:
+            continue
+        price = float(open_prices.get(inst, 0))
+        if price <= 0:
+            continue
+        orders.append({
+            "symbol": inst, "side": side, "amount": qty, "price": price,
+            "order_type": "market",
+            "strategy_id": plan_meta.get("strategy_id", "alpha_v1"),
+        })
+
+    if not orders:
+        raise ShadowRebalanceError("No executable orders after price validation")
+
+    matcher = MatchEngine(slippage=0.0)
+    results = matcher.match(orders, account, market_status, open_prices)
+    account.settlement()
+
+    buy_count = sum(1 for o in orders if o["side"] == "buy")
+    sell_count = sum(1 for o in orders if o["side"] == "sell")
+    filled_count = sum(1 for r in results if r["status"] == "filled")
+    rejected_count = sum(1 for r in results if r["status"] == "rejected")
+    turnover = float(sum(
+        float(r.get("filled_amount", 0)) * float(r.get("deal_price", 0.0))
+        for r in results if r["status"] == "filled"
+    ))
+
+    close_prices, _ = _fetch_market_snapshot(execution_date, instruments, price_col="close")
+    positions_after = _positions_frame(account, close_prices)
+    market_value_after = float(positions_after["market_value"].sum()) if not positions_after.empty else 0.0
+    cash_after = float(account.cash)
+    total_value_after = float(cash_after + market_value_after)
+
+    positions_after.to_csv(output_dir / "positions_after.csv", index=False)
+    account_after = {
+        "trade_date": execution_date,
+        "cash": cash_after,
+        "available_cash": cash_after,
+        "market_value": market_value_after,
+        "total_value": total_value_after,
+        "last_run_id": f"alpha_v1_execute_{execution_date}",
+        "initial_capital": float(prior_account.get("initial_capital", DEFAULT_INITIAL_CAPITAL)),
+    }
+    write_json(output_dir / "account_after.json", account_after)
+    write_json(shadow_dir / "account.json", account_after)
+    positions_after.to_csv(shadow_dir / "positions.csv", index=False)
+
+    ledger_rows = []
+    for item in results:
+        o = item["order"]
+        qty = int(item.get("filled_amount", o.get("amount", 0)) or 0)
+        price = float(item.get("deal_price", o.get("price", 0.0)) or 0.0)
+        ledger_rows.append({
+            "run_id": f"alpha_v1_execute_{execution_date}",
+            "trade_date": execution_date,
+            "instrument": o["symbol"], "side": o["side"],
+            "quantity": qty, "price": price, "amount": float(qty * price),
+            "fee": float(item.get("fee", 0.0) or 0.0),
+            "status": item["status"], "reason": item.get("reason", "plan_execution"),
+        })
+    _append_ledger(shadow_dir / "ledger.csv", ledger_rows)
+
+    execution_summary = {
+        "trade_date": execution_date,
+        "run_id": f"alpha_v1_execute_{execution_date}",
+        "status": "success",
+        "strategy_id": plan_meta.get("strategy_id", "alpha_v1"),
+        "strategy_version": plan_meta.get("strategy_version", ""),
+        "portfolio_method": "plan_execution",
+        "portfolio_params": {
+            "price_mode": "open", "mtm_mode": "close",
+            "plan_trade_date": plan_meta.get("trade_date", ""),
+            "plan_reference_date": plan_meta.get("reference_date", ""),
+        },
+        "order_count": len(orders), "buy_count": buy_count, "sell_count": sell_count,
+        "filled_count": filled_count, "rejected_count": rejected_count,
+        "skipped_count": len(order_intents) - len(orders),
+        "cash_before": float(prior_account.get("cash", 0)),
+        "cash_after": cash_after,
+        "market_value_before": float(prior_account.get("market_value", 0)),
+        "market_value_after": market_value_after,
+        "total_value_before": float(prior_account.get("total_value", 0)),
+        "total_value_after": total_value_after,
+        "turnover": turnover,
+        "no_real_orders": True,
+        "notes": [
+            "executed_at_open",
+            f"execution_price=open_{execution_date}",
+            f"mtm_price=close_{execution_date}",
+        ],
+    }
+    write_json(output_dir / "execution_summary.json", execution_summary)
+
+    return ShadowRebalanceArtifacts(
+        trade_date=execution_date,
+        run_id=f"alpha_v1_execute_{execution_date}",
+        status="success",
+        strategy_id=plan_meta.get("strategy_id", "alpha_v1"),
+        strategy_version=plan_meta.get("strategy_version", ""),
+        portfolio_method="plan_execution",
+        top_n=plan_meta.get("top_n", 20),
+        buffer_hold=plan_meta.get("buffer_hold", 60),
+        buffer_buy=plan_meta.get("buffer_buy", 40),
+        single_stock_cap=plan_meta.get("single_stock_cap", 0.07),
+        turnover_buffer=0.0, price_mode="open", rebalance_mode="plan_execution",
+        target_weights_path=str(plan_dir / "target_weights.csv"),
+        order_intents_path=str(plan_dir / "order_intents.csv"),
+        execution_summary_path=str(output_dir / "execution_summary.json"),
+        account_after_path=str(output_dir / "account_after.json"),
+        positions_after_path=str(output_dir / "positions_after.csv"),
+        shadow_account_path=str(shadow_dir / "account.json"),
+        shadow_positions_path=str(shadow_dir / "positions.csv"),
+        shadow_ledger_path=str(shadow_dir / "ledger.csv"),
+        rebalance_audit_path=str(plan_dir / "rebalance_audit.csv"),
+        order_count=len(orders), buy_count=buy_count, sell_count=sell_count,
+        skipped_count=max(len(order_intents) - len(orders), 0),
+        filled_count=filled_count, rejected_count=rejected_count,
+        turnover=turnover, cash_after=cash_after, total_value_after=total_value_after,
     )
