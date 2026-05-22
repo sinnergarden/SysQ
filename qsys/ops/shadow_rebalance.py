@@ -106,6 +106,7 @@ class ShadowRebalanceArtifacts:
     execution_summary_path: str
     account_after_path: str
     positions_after_path: str
+    ledger_rows_path: str
     shadow_account_path: str
     shadow_positions_path: str
     shadow_ledger_path: str
@@ -717,9 +718,17 @@ def execute_alpha_v1_plan(
     if order_intents.empty:
         raise ShadowRebalanceError("Plan has no order intents")
 
-    account, prior_account, _ = _load_shadow_account(shadow_dir)
+    account, prior_account, positions_df = _load_shadow_account(shadow_dir)
     positions_before_count = len(account.positions)
     instruments = sorted(set(order_intents["instrument"].astype(str)) | set(account.positions.keys()))
+
+    # Save before-state for --force-rerun restore
+    write_json(output_dir / "account_before.json", prior_account)
+    pos_before_path = output_dir / "positions_before.csv"
+    if not positions_df.empty:
+        positions_df.to_csv(pos_before_path, index=False)
+    else:
+        pd.DataFrame(columns=POSITION_COLUMNS).to_csv(pos_before_path, index=False)
 
     open_prices, market_status = _fetch_market_snapshot(
         execution_date, instruments, price_col="open",
@@ -774,9 +783,6 @@ def execute_alpha_v1_plan(
         "initial_capital": float(prior_account.get("initial_capital", DEFAULT_INITIAL_CAPITAL)),
     }
     write_json(output_dir / "account_after.json", account_after)
-    if not debug_run:
-        write_json(shadow_dir / "account.json", account_after)
-        positions_after.to_csv(shadow_dir / "positions.csv", index=False)
 
     ledger_rows = []
     for item in results:
@@ -791,8 +797,7 @@ def execute_alpha_v1_plan(
             "fee": float(item.get("fee", 0.0) or 0.0),
             "status": item["status"], "reason": item.get("reason", "plan_execution"),
         })
-    if not debug_run:
-        _append_ledger(shadow_dir / "ledger.csv", ledger_rows)
+    pd.DataFrame(ledger_rows).to_csv(output_dir / "ledger_rows.csv", index=False)
 
     execution_summary = {
         "trade_date": execution_date,
@@ -845,9 +850,10 @@ def execute_alpha_v1_plan(
         execution_summary_path=str(output_dir / "execution_summary.json"),
         account_after_path=str(output_dir / "account_after.json"),
         positions_after_path=str(output_dir / "positions_after.csv"),
-        shadow_account_path=str(shadow_dir / "account.json"),
-        shadow_positions_path=str(shadow_dir / "positions.csv"),
-        shadow_ledger_path=str(shadow_dir / "ledger.csv"),
+        ledger_rows_path=str(output_dir / "ledger_rows.csv"),
+        shadow_account_path="",
+        shadow_positions_path="",
+        shadow_ledger_path="",
         rebalance_audit_path=str(plan_dir / "rebalance_audit.csv"),
         order_count=len(orders), buy_count=buy_count, sell_count=sell_count,
         skipped_count=max(len(order_intents) - len(orders), 0),

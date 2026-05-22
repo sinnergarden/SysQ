@@ -41,6 +41,16 @@ if _ENV_FILE.exists():
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
+# Force output root — set at mode handler entry; all path helpers derive from it.
+_FORCE_OUTPUT_ROOT: Path | None = None
+
+
+class StaleDataError(Exception):
+    """Raised when stale close-price check blocks execution."""
+    def __init__(self, message: str, stale_check: dict):
+        super().__init__(message)
+        self.stale_check = stale_check
+
 from qlib.data import D as qlib_D
 from qsys.data.adapter import QlibAdapter
 from qsys.feature.library import FeatureLibrary
@@ -235,9 +245,6 @@ def _load_mtm_snapshot(trade_date: str) -> dict | None:
         return None
 
 
-_STALE_DATA_WARNED: set[str] = set()
-
-
 def _check_stale_prices(trade_date: str, close_prices: dict[str, float],
                         positions: pd.DataFrame) -> dict:
     """Compare today's close prices with previous MTM snapshot.
@@ -322,67 +329,68 @@ def _check_stale_prices(trade_date: str, close_prices: dict[str, float],
         ]
         msg = "\n".join(lines)
         print(msg)
-        if trade_date not in _STALE_DATA_WARNED:
-            _STALE_DATA_WARNED.add(trade_date)
-            _send_notification(
-                f"⛔ CRITICAL: 收盘价数据陈旧 — {trade_date}\n"
-                f"检查持仓: {checked}只，价格未变: {identical}只 ({stale_ratio:.0%})\n"
-                f"qlib 数据同步可能未成功写入新数据\n"
-                f"请检查: python scripts/ops/sync_csi800_daily.py --apply"
-            )
-        sys.exit(1)
+        raise StaleDataError(msg, result)
     else:
         result["status"] = "passed"
     return result
 
 
-def _save_stale_check(trade_date: str, check_result: dict) -> None:
-    mtm_dir = (PROJECT_ROOT / "experiments" / "alpha_v1_daily"
-               / trade_date / "mtm")
-    mtm_dir.mkdir(parents=True, exist_ok=True)
-    write_json(mtm_dir / "stale_check.json", check_result)
+def _save_stale_check(output_dir: Path, check_result: dict) -> None:
+    stale_path = output_dir / "mtm" / "stale_check.json"
+    stale_path.parent.mkdir(parents=True, exist_ok=True)
+    write_json(stale_path, check_result)
 
 
 # ── Artifact paths ──────────────────────────────────────────────────────
 
-def _daily_dir(trade_date: str) -> Path:
+def _resolve_run_root(trade_date: str, debug_run: bool = False,
+                      output_dir: str | None = None) -> Path:
+    """Resolve output root for this run. Called once at mode handler entry."""
+    if output_dir:
+        return Path(output_dir)
+    if debug_run:
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        return PROJECT_ROOT / "experiments" / "debug" / "alpha_v1" / f"{trade_date}_{ts}"
     return PROJECT_ROOT / "experiments" / "alpha_v1_daily" / trade_date
 
-def _plan_dir(trade_date: str) -> Path:
-    return _daily_dir(trade_date) / "plan"
 
-def _exec_dir(trade_date: str) -> Path:
-    return _daily_dir(trade_date) / "execution"
+def _plan_dir(run_root: Path) -> Path:
+    return run_root / "plan"
 
-def _staging_dir(trade_date: str) -> Path:
-    return _exec_dir(trade_date) / "staging"
+def _exec_dir(run_root: Path) -> Path:
+    return run_root / "execution"
 
-def _mtm_dir(trade_date: str) -> Path:
-    return _daily_dir(trade_date) / "mtm"
+def _staging_dir(run_root: Path) -> Path:
+    return _exec_dir(run_root) / "staging"
 
-def _committed_marker(trade_date: str) -> Path:
-    return _exec_dir(trade_date) / "COMMITTED"
+
+def _committed_marker(run_root: Path) -> Path:
+    return _exec_dir(run_root) / "COMMITTED"
 
 
 # ── 执行状态检查 ─────────────────────────────────────────────────────────
 
-def _is_execution_committed(trade_date: str) -> bool:
-    return _committed_marker(trade_date).exists()
+def _is_execution_committed(run_root: Path) -> bool:
+    return _committed_marker(run_root).exists()
 
 
 # ── MTM（独立进程可重复运行）────────────────────────────────────────────
 
-def _try_mark_to_market(trade_date: str,
+def _try_mark_to_market(trade_date: str, output_dir: Path,
+                        account_path: Path | None = None,
+                        positions_path: Path | None = None,
                         close_prices_override: dict[str, float] | None = None) -> dict | None:
-    pos_path = PROJECT_ROOT / "shadow" / "positions.csv"
-    acct_path = PROJECT_ROOT / "shadow" / "account.json"
-    if not pos_path.exists() or not acct_path.exists():
+    if positions_path is None:
+        positions_path = PROJECT_ROOT / "shadow" / "positions.csv"
+    if account_path is None:
+        account_path = PROJECT_ROOT / "shadow" / "account.json"
+    if not positions_path.exists() or not account_path.exists():
         return None
     try:
-        positions = pd.read_csv(pos_path)
+        positions = pd.read_csv(positions_path)
         if positions.empty:
             return None
-        account = json.loads(acct_path.read_text())
+        account = json.loads(account_path.read_text())
         if close_prices_override is not None:
             close_prices = close_prices_override
         else:
@@ -419,8 +427,6 @@ def _try_mark_to_market(trade_date: str,
                     pass
         if not close_prices:
             return None
-        stale_result = _check_stale_prices(trade_date, close_prices, positions)
-        _save_stale_check(trade_date, stale_result)
         total_market_value = 0.0
         total_cost = 0.0
         priced_count = 0
@@ -456,25 +462,16 @@ def _try_mark_to_market(trade_date: str,
         if priced_count == 0:
             return None
         details.sort(key=lambda x: x[5], reverse=True)
-        # Get positions_before_count from execution_summary if available
-        exec_summary_path = _exec_dir(trade_date) / "execution_summary.json"
-        pos_before = 0
-        if exec_summary_path.exists():
-            try:
-                es = json.loads(exec_summary_path.read_text())
-                pos_before = es.get("positions_before_count", 0)
-            except (json.JSONDecodeError, OSError):
-                pass
         snapshot = {
             "cash": cash, "market_value": total_market_value,
             "total_value": total_value, "initial_capital": initial_capital,
             "cumulative_pnl": cumulative_pnl,
             "cumulative_pnl_pct": round(cumulative_pnl_pct, 2),
             "daily_pnl": daily_pnl, "priced_count": priced_count,
-            "total_positions": len(positions), "positions_before_count": pos_before,
+            "total_positions": len(positions),
             "details": details,
         }
-        _save_mtm_snapshot(trade_date, snapshot)
+        _save_mtm_snapshot(output_dir, snapshot)
         return snapshot
     except Exception as e:
         if isinstance(e, SystemExit):
@@ -483,19 +480,19 @@ def _try_mark_to_market(trade_date: str,
         return None
 
 
-def _save_mtm_snapshot(trade_date: str, snapshot: dict) -> None:
-    mtm_dir = _mtm_dir(trade_date)
-    mtm_dir.mkdir(parents=True, exist_ok=True)
-    write_json(mtm_dir / "mtm_snapshot.json", snapshot)
+def _save_mtm_snapshot(output_dir: Path, snapshot: dict) -> None:
+    mtm_path = output_dir / "mtm" / "mtm_snapshot.json"
+    mtm_path.parent.mkdir(parents=True, exist_ok=True)
+    write_json(mtm_path, snapshot)
 
 
 # ── 存档已有产物（force-rerun 使用）─────────────────────────────────────
 
-def _archive_execution(trade_date: str) -> None:
-    exec_dir = _exec_dir(trade_date)
+def _archive_execution(run_root: Path) -> None:
+    exec_dir = _exec_dir(run_root)
     if not exec_dir.exists():
         return
-    archive_dir = _daily_dir(trade_date) / "archive"
+    archive_dir = run_root / "archive"
     archive_dir.mkdir(parents=True, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     shutil.move(str(exec_dir), str(archive_dir / f"execution_{ts}"))
@@ -507,7 +504,8 @@ def _archive_execution(trade_date: str) -> None:
 def _build_preopen_message(trade_date: str, rebalance_skipped: bool,
                             data_date: str, top_picks: list[tuple[str, float]],
                             pred_count: int,
-                            pred_path: str | Path | None = None) -> str:
+                            pred_path: str | Path | None = None,
+                            run_root: Path | None = None) -> str:
     lines = [
         f"✅ Alpha V1 Pre-open {trade_date}",
         f"Time: {_now_str()}",
@@ -518,7 +516,7 @@ def _build_preopen_message(trade_date: str, rebalance_skipped: bool,
         name = _get_stock_name(inst)
         lines.append(f"  {i}. {inst} {name}  score={score:.4f}")
         # Show existing plan details if available (even on skip re-runs)
-    plan_dir = _plan_dir(trade_date)
+    plan_dir = _plan_dir(run_root) if run_root else Path(trade_date) / "plan"
     intents_path = plan_dir / "order_intents.csv"
     has_existing_plan = intents_path.exists()
     if has_existing_plan:
@@ -646,7 +644,8 @@ def _build_postclose_message(trade_date: str, mtm: dict | None = None,
 
 # ── run_meta ──────────────────────────────────────────────────────────────
 
-def _save_run_meta(trade_date: str, mode: str, data_date: str | None = None,
+def _save_run_meta(run_root: Path, trade_date: str, mode: str,
+                    data_date: str | None = None,
                     debug_run: bool = False, reason: str | None = None,
                     extra: dict | None = None) -> None:
     meta = {
@@ -656,16 +655,19 @@ def _save_run_meta(trade_date: str, mode: str, data_date: str | None = None,
         "ts": datetime.now().isoformat(),
         **(extra or {}),
     }
-    d = _daily_dir(trade_date)
-    d.mkdir(parents=True, exist_ok=True)
-    write_json(d / "run_meta.json", meta)
+    run_root.mkdir(parents=True, exist_ok=True)
+    write_json(run_root / "run_meta.json", meta)
 
 
 # ── Mode handlers ──────────────────────────────────────────────────────
 
 def run_preopen(trade_date: str, debug_run: bool = False,
-                no_notify: bool = False, reason: str | None = None) -> None:
+                no_notify: bool = False, reason: str | None = None,
+                output_dir: str | None = None) -> None:
     t0 = time.time()
+    run_root = _resolve_run_root(trade_date, debug_run=debug_run, output_dir=output_dir)
+    global _FORCE_OUTPUT_ROOT
+    _FORCE_OUTPUT_ROOT = run_root
     print(f"\n{'=' * 60}")
     print(f"Alpha V1 Pre-open — {trade_date}" + (" (DEBUG)" if debug_run else ""))
     print(f"{'=' * 60}")
@@ -711,13 +713,13 @@ def run_preopen(trade_date: str, debug_run: bool = False,
     for inst, score in top_picks:
         print(f"    #{top_picks.index((inst, score)) + 1} {inst}  score={score:.4f}")
     print(f"\n[4/4] Building trading plan...")
-    output_dir = _daily_dir(trade_date)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    _save_run_meta(trade_date, "preopen", data_date=data_date, debug_run=debug_run, reason=reason)
+    run_root.mkdir(parents=True, exist_ok=True)
+    _save_run_meta(run_root, trade_date, "preopen", data_date=data_date,
+                   debug_run=debug_run, reason=reason)
     rebalance_skipped = not _should_rebalance(trade_date)
     if rebalance_skipped:
         print(f"  ⏭ {ALPHA_V1_CANDIDATE.portfolio.rebalance_freq} policy, already ran this week")
-        plan_dir = _plan_dir(trade_date)
+        plan_dir = _plan_dir(run_root)
         plan_dir.mkdir(parents=True, exist_ok=True)
         write_json(plan_dir / "plan_meta.json", {
             "trade_date": trade_date, "reference_date": data_date,
@@ -729,7 +731,7 @@ def run_preopen(trade_date: str, debug_run: bool = False,
         try:
             build_alpha_v1_plan(
                 base_dir=".", trade_date=trade_date, reference_date=data_date,
-                predictions_path=str(pred_path), output_dir=str(output_dir),
+                predictions_path=str(pred_path), output_dir=str(run_root),
             )
         except Exception as e:
             print(f"  ❌ 建仓计划失败: {e}")
@@ -738,7 +740,8 @@ def run_preopen(trade_date: str, debug_run: bool = False,
             return
     if not no_notify:
         msg = _build_preopen_message(trade_date, rebalance_skipped, data_date,
-                                      top_picks, len(pred_df), pred_path)
+                                      top_picks, len(pred_df), pred_path,
+                                      run_root=run_root)
         _send_notification(msg)
     elapsed = time.time() - t0
     print(f"\n✅ Pre-open {trade_date} completed in {elapsed:.0f}s")
@@ -746,27 +749,39 @@ def run_preopen(trade_date: str, debug_run: bool = False,
 
 def run_postclose(trade_date: str, debug_run: bool = False,
                   no_notify: bool = False, force_rerun: bool = False,
-                  reason: str | None = None) -> None:
+                  reason: str | None = None,
+                  output_dir: str | None = None) -> None:
     t0 = time.time()
+    run_root = _resolve_run_root(trade_date, debug_run=debug_run, output_dir=output_dir)
+    global _FORCE_OUTPUT_ROOT
+    _FORCE_OUTPUT_ROOT = run_root
     print(f"\n{'=' * 60}")
     print(f"Alpha V1 Post-close — {trade_date}"
           + (" (DEBUG)" if debug_run else "")
           + (" (FORCE-RERUN)" if force_rerun else ""))
     print(f"{'=' * 60}")
-    daily_output = _daily_dir(trade_date)
-    daily_output.mkdir(parents=True, exist_ok=True)
-    _save_run_meta(trade_date, "postclose", debug_run=debug_run, reason=reason,
+    run_root.mkdir(parents=True, exist_ok=True)
+    _save_run_meta(run_root, trade_date, "postclose", debug_run=debug_run, reason=reason,
                    extra={"force_rerun": force_rerun})
-    plan_dir = _plan_dir(trade_date)
-    has_plan = plan_dir.exists() and (plan_dir / "order_intents.csv").exists()
-    has_skip_meta = plan_dir.exists() and (plan_dir / "plan_meta.json").exists()
+    # In debug mode: read plan from production path if not in debug path
+    plan_dir = _plan_dir(run_root)
+    if debug_run and not (plan_dir / "order_intents.csv").exists():
+        prod_root = PROJECT_ROOT / "experiments" / "alpha_v1_daily" / trade_date
+        prod_plan = _plan_dir(prod_root)
+        if (prod_plan / "order_intents.csv").exists():
+            plan_dir = prod_plan
+            print(f"  ℹ 使用生产路径计划: {plan_dir}")
+    has_plan = (plan_dir / "order_intents.csv").exists()
+    has_skip_meta = (plan_dir / "plan_meta.json").exists()
     has_skip = has_skip_meta and not has_plan
-    already_committed = _is_execution_committed(trade_date)
+    already_committed = _is_execution_committed(run_root)
+
+    # ── Idempotent skip ──
     if already_committed and not force_rerun:
         print(f"  ⏭ 执行已提交（COMMITTED 标记存在），跳过")
         print(f"  💡 如需重新执行请使用 --force-rerun + --reason")
-        artifacts = _load_artifacts_for_notification(trade_date)
-        mtm = _try_mark_to_market(trade_date)
+        artifacts = _load_artifacts_for_notification(trade_date, run_root)
+        mtm = _load_mtm_snapshot(trade_date)
         if not no_notify:
             msg = _build_postclose_message(
                 trade_date, mtm=mtm, artifacts=artifacts,
@@ -777,23 +792,52 @@ def run_postclose(trade_date: str, debug_run: bool = False,
         elapsed = time.time() - t0
         print(f"\n✅ Post-close {trade_date} (已提交，跳过) completed in {elapsed:.0f}s")
         return
+
+    # ── Force-rerun: restore before-state, then archive ──
     if already_committed and force_rerun:
         if not reason:
             print("  ❌ --force-rerun 必须配合 --reason")
             sys.exit(1)
         print(f"  ⚠ --force-rerun 生效，原因: {reason}")
-        _archive_execution(trade_date)
+        staging_before = _staging_dir(run_root) / "account_before.json"
+        pos_before = _staging_dir(run_root) / "positions_before.csv"
+        has_before_state = staging_before.exists() and pos_before.exists()
+        if has_before_state:
+            shutil.copy2(str(staging_before), str(PROJECT_ROOT / "shadow" / "account.json"))
+            shutil.copy2(str(pos_before), str(PROJECT_ROOT / "shadow" / "positions.csv"))
+            print(f"  🔄 Shadow 已恢复至执行前状态")
+        else:
+            print(f"  ⚠ 无执行前状态快照，无法重执行，仅做 MTM + 通知")
+            _archive_execution(run_root)
+            mtm = _load_mtm_snapshot(trade_date)
+            artifacts = _load_artifacts_for_notification(trade_date, run_root)
+            if not no_notify:
+                msg = _build_postclose_message(
+                    trade_date, mtm=mtm, artifacts=artifacts,
+                    execution_committed=True, execution_skipped=has_skip,
+                    debug_run=debug_run,
+                )
+                _send_notification(msg)
+            elapsed = time.time() - t0
+            print(f"\n✅ Post-close {trade_date} (MTM + notify only) completed in {elapsed:.0f}s")
+            return
+        _archive_execution(run_root)
+
+    # ── Plan check ──
     if not has_plan and not has_skip:
+        msg = (f"⛔ Alpha V1 Post-close {trade_date} BLOCKED\n"
+               f"未找到 preopen 计划文件: {plan_dir}\n"
+               f"请先运行 preopen。")
+        print(f"\n{msg}")
         if not no_notify:
-            _send_notification(
-                f"⛔ Alpha V1 Post-close {trade_date} BLOCKED\n"
-                f"未找到 preopen 计划文件: {plan_dir}\n"
-                f"请先运行 preopen。"
-            )
+            _send_notification(msg)
         sys.exit(1)
+
+    # ── Execution ──
     artifacts = None
+    staging_exec_dir = _staging_dir(run_root)
     if has_plan:
-        print(f"\n[1/3] Validating execution prerequisites...")
+        print(f"\n[1/4] Validating execution prerequisites...")
         instruments = _load_plan_instruments(plan_dir)
         if instruments:
             try:
@@ -810,9 +854,36 @@ def run_postclose(trade_date: str, debug_run: bool = False,
                         f"开盘价数据不可用。\n{e}"
                     )
                 sys.exit(1)
-        staging_exec_dir = _staging_dir(trade_date)
+
+        # Stale close-price check BEFORE execution
+        print(f"\n[2/4] Stale close-price check...")
+        shadow_pos = PROJECT_ROOT / "shadow" / "positions.csv"
+        if shadow_pos.exists():
+            pos_df = pd.read_csv(shadow_pos)
+            if not pos_df.empty:
+                close_prices = _fetch_close_prices(trade_date, pos_df["instrument"].tolist())
+                if close_prices:
+                    try:
+                        stale_result = _check_stale_prices(trade_date, close_prices, pos_df)
+                        _save_stale_check(run_root, stale_result)
+                        print(f"  ✅ Stale check: {stale_result['status']} "
+                              f"({stale_result['identical_count']}/{stale_result['checked_count']} identical)")
+                    except StaleDataError as e:
+                        _save_stale_check(run_root, e.stale_check)
+                        print(f"  ❌ {e}")
+                        if not no_notify:
+                            _send_notification(
+                                f"⛔ Alpha V1 Post-close {trade_date} BLOCKED\n"
+                                f"收盘价数据陈旧，阻断执行。\n"
+                                f"一致={e.stale_check.get('identical_count', 0)}/"
+                                f"{e.stale_check.get('checked_count', 0)} "
+                                f"({e.stale_check.get('identical_ratio', 0)*100:.0f}%)\n"
+                                f"请运行数据同步后重试。"
+                            )
+                        sys.exit(1)
+
         staging_exec_dir.mkdir(parents=True, exist_ok=True)
-        print(f"\n[2/3] Executing plan at OPEN price...")
+        print(f"\n[3/4] Executing plan at OPEN price...")
         try:
             artifacts = execute_alpha_v1_plan(
                 base_dir=".", plan_dir=str(plan_dir),
@@ -828,14 +899,28 @@ def run_postclose(trade_date: str, debug_run: bool = False,
             if not no_notify:
                 _send_notification(f"⛔ Alpha V1 Post-close {trade_date} FAILED\n{e}")
             sys.exit(1)
+
         if not debug_run:
-            print(f"\n  Committing to shadow account...")
-            _commit_execution(trade_date, staging_exec_dir)
+            print(f"  Committing to shadow account...")
+            _commit_execution(run_root, staging_exec_dir)
             print(f"  ✅ Shadow account updated")
         else:
-            print(f"\n  🔧 调试模式 — 不提交 shadow 账户")
-    print(f"\n{'[3/3]' if has_plan else '[1/1]'} MTM at CLOSE price...")
-    mtm = _try_mark_to_market(trade_date)
+            print(f"  🔧 调试模式 — 不提交 shadow 账户")
+
+    # ── MTM at CLOSE price ──
+    print(f"\n{'[4/4]' if has_plan else '[1/1]'} MTM at CLOSE price...")
+    if debug_run and has_plan:
+        # Debug mode: read from staging artifacts, not production shadow/
+        staging_acct = staging_exec_dir / "account_after.json"
+        staging_pos = staging_exec_dir / "positions_after.csv"
+        mtm = _try_mark_to_market(
+            trade_date, output_dir=run_root,
+            account_path=staging_acct if staging_acct.exists() else None,
+            positions_path=staging_pos if staging_pos.exists() else None,
+        )
+    else:
+        mtm = _try_mark_to_market(trade_date, output_dir=run_root)
+
     if mtm is None:
         print(f"  ⚠ 收盘价数据未就绪")
         if not no_notify:
@@ -845,8 +930,10 @@ def run_postclose(trade_date: str, debug_run: bool = False,
                 f"请先运行: python scripts/ops/sync_csi800_daily.py --apply"
             )
         sys.exit(1)
+
+    # ── Notify ──
     if not no_notify:
-        stale_check_path = _mtm_dir(trade_date) / "stale_check.json"
+        stale_check_path = run_root / "mtm" / "stale_check.json"
         stale_check = None
         if stale_check_path.exists():
             try:
@@ -855,13 +942,46 @@ def run_postclose(trade_date: str, debug_run: bool = False,
                 pass
         msg = _build_postclose_message(
             trade_date, mtm=mtm, artifacts=artifacts,
-            execution_committed=already_committed or not debug_run,
+            execution_committed=not debug_run,
             execution_skipped=has_skip, debug_run=debug_run,
             stale_check=stale_check,
         )
         _send_notification(msg)
+
     elapsed = time.time() - t0
     print(f"\n✅ Post-close {trade_date} completed in {elapsed:.0f}s")
+
+
+def _fetch_close_prices(trade_date: str, instruments: list[str]) -> dict[str, float]:
+    """Fetch close prices from qlib for given instruments on trade_date."""
+    if not instruments:
+        return {}
+    try:
+        adapter = QlibAdapter()
+        adapter.init_qlib()
+        market = adapter.get_features(instruments, ["$close"],
+                                      start_time=trade_date, end_time=trade_date)
+        if market is None or market.empty:
+            return {}
+        if isinstance(market.index, pd.MultiIndex):
+            frame = market.reset_index()
+            frame = frame[frame.iloc[:, 1].astype(str).str.startswith(trade_date)]
+        else:
+            frame = market.reset_index()
+        if frame.empty:
+            return {}
+        frame = frame.drop_duplicates(subset=["instrument"], keep="last")
+        prices = {}
+        for _, r in frame.iterrows():
+            try:
+                v = float(r["$close"])
+                if not pd.isna(v) and v > 0:
+                    prices[str(r["instrument"])] = v
+            except (ValueError, TypeError):
+                pass
+        return prices
+    except Exception:
+        return {}
 
 
 def _load_plan_instruments(plan_dir: Path) -> list[str]:
@@ -875,8 +995,8 @@ def _load_plan_instruments(plan_dir: Path) -> list[str]:
         return []
 
 
-def _load_artifacts_for_notification(trade_date: str) -> ShadowRebalanceArtifacts | None:
-    exec_dir = _exec_dir(trade_date)
+def _load_artifacts_for_notification(trade_date: str, run_root: Path) -> ShadowRebalanceArtifacts | None:
+    exec_dir = _exec_dir(run_root)
     summary_path = exec_dir / "execution_summary.json"
     if not summary_path.exists():
         return None
@@ -884,7 +1004,7 @@ def _load_artifacts_for_notification(trade_date: str) -> ShadowRebalanceArtifact
         summary = json.loads(summary_path.read_text())
     except (json.JSONDecodeError, OSError):
         return None
-    plan_dir = _plan_dir(trade_date)
+    plan_dir = _plan_dir(run_root)
     return ShadowRebalanceArtifacts(
         trade_date=trade_date,
         run_id=summary.get("run_id", ""),
@@ -901,6 +1021,7 @@ def _load_artifacts_for_notification(trade_date: str) -> ShadowRebalanceArtifact
         account_after_path=str(exec_dir / "account_after.json"),
         positions_after_path=str(exec_dir / "positions_after.csv"),
         shadow_account_path="", shadow_positions_path="", shadow_ledger_path="",
+        ledger_rows_path="",
         rebalance_audit_path=str(plan_dir / "rebalance_audit.csv") if (plan_dir / "rebalance_audit.csv").exists() else "",
         order_count=summary.get("order_count", 0),
         buy_count=summary.get("buy_count", 0),
@@ -914,33 +1035,59 @@ def _load_artifacts_for_notification(trade_date: str) -> ShadowRebalanceArtifact
     )
 
 
-def _commit_execution(trade_date: str, staging_dir: Path) -> None:
-    exec_dir = _exec_dir(trade_date)
+def _commit_execution(run_root: Path, staging_dir: Path) -> None:
+    exec_dir = _exec_dir(run_root)
     exec_dir.mkdir(parents=True, exist_ok=True)
+    # 1. Ledger rows: dedup by run_id, then append to shadow/ledger.csv
+    ledger_src = staging_dir / "ledger_rows.csv"
+    shadow_ledger = PROJECT_ROOT / "shadow" / "ledger.csv"
+    if ledger_src.exists():
+        new_rows = pd.read_csv(ledger_src)
+        if "run_id" in new_rows.columns and shadow_ledger.exists():
+            try:
+                existing = pd.read_csv(shadow_ledger)
+                if existing.empty:
+                    existing = pd.DataFrame()
+            except pd.errors.EmptyDataError:
+                existing = pd.DataFrame()
+            if not existing.empty and "run_id" in existing.columns:
+                run_id = new_rows["run_id"].iloc[0]
+                existing = existing[existing["run_id"] != run_id]
+            combined = pd.concat([existing, new_rows], ignore_index=True)
+            combined.to_csv(shadow_ledger, index=False)
+        else:
+            new_rows.to_csv(shadow_ledger, index=False)
+    # 2. Copy staging artifacts to execution/
     for fname in ["account_after.json", "positions_after.csv", "execution_summary.json"]:
         src = staging_dir / fname
         if src.exists():
             shutil.copy2(str(src), str(exec_dir / fname))
-    src_acct = staging_dir / "account_after.json"
-    if src_acct.exists():
-        shutil.copy2(str(src_acct), str(PROJECT_ROOT / "shadow" / "account.json"))
-    src_pos = staging_dir / "positions_after.csv"
-    if src_pos.exists():
-        shutil.copy2(str(src_pos), str(PROJECT_ROOT / "shadow" / "positions.csv"))
-    _committed_marker(trade_date).touch()
+    # 3. Update shadow account / positions
+    for fname, dst_name in [("account_after.json", "account.json"),
+                             ("positions_after.csv", "positions.csv")]:
+        src = staging_dir / fname
+        if src.exists():
+            shutil.copy2(str(src), str(PROJECT_ROOT / "shadow" / dst_name))
+    # 4. Atomic COMMITTED marker (write to temp, rename)
+    marker = _committed_marker(run_root)
+    tmp_marker = exec_dir / ".COMMITTED.tmp"
+    tmp_marker.write_text("")
+    tmp_marker.rename(marker)
     print(f"  ✅ 执行已提交: {exec_dir}")
 
 
-def run_notify_only(trade_date: str, debug_run: bool = False) -> None:
+def run_notify_only(trade_date: str, output_dir: str | None = None) -> None:
     print(f"\n{'=' * 60}")
     print(f"Alpha V1 Notify-only — {trade_date}")
     print(f"{'=' * 60}")
-    artifacts = _load_artifacts_for_notification(trade_date)
-    mtm = _try_mark_to_market(trade_date)
-    already_committed = _is_execution_committed(trade_date)
-    has_skip = _plan_dir(trade_date).exists() and not (
-        _plan_dir(trade_date) / "order_intents.csv").exists()
-    stale_check_path = _mtm_dir(trade_date) / "stale_check.json"
+    run_root = _resolve_run_root(trade_date, output_dir=output_dir)
+    artifacts = _load_artifacts_for_notification(trade_date, run_root)
+    # Read-only: load existing MTM snapshot, never recalculate
+    mtm = _load_mtm_snapshot(trade_date)
+    already_committed = _is_execution_committed(run_root)
+    has_skip = _plan_dir(run_root).exists() and not (
+        _plan_dir(run_root) / "order_intents.csv").exists()
+    stale_check_path = run_root / "mtm" / "stale_check.json"
     stale_check = None
     if stale_check_path.exists():
         try:
@@ -950,7 +1097,7 @@ def run_notify_only(trade_date: str, debug_run: bool = False) -> None:
     msg = _build_postclose_message(
         trade_date, mtm=mtm, artifacts=artifacts,
         execution_committed=already_committed, execution_skipped=has_skip,
-        debug_run=debug_run, stale_check=stale_check,
+        debug_run=False, stale_check=stale_check,
     )
     _send_notification(msg)
 
@@ -998,15 +1145,17 @@ def main() -> None:
     if not args.trade_date:
         parser.error(f"--trade-date 是 {args.mode} 模式的必填参数")
     if args.notify_only:
-        run_notify_only(args.trade_date, debug_run=args.debug_run)
+        run_notify_only(args.trade_date, output_dir=args.output_dir)
         return
     if args.mode == "preopen":
         run_preopen(args.trade_date, debug_run=args.debug_run,
-                     no_notify=args.no_notify, reason=args.reason)
+                     no_notify=args.no_notify, reason=args.reason,
+                     output_dir=args.output_dir)
     elif args.mode == "postclose":
         run_postclose(args.trade_date, debug_run=args.debug_run,
                        no_notify=args.no_notify,
-                       force_rerun=args.force_rerun, reason=args.reason)
+                       force_rerun=args.force_rerun, reason=args.reason,
+                       output_dir=args.output_dir)
 
 
 if __name__ == "__main__":
