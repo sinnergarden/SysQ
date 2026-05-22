@@ -234,15 +234,20 @@ def _fmt(amount: float) -> str:
 
 # ── Stale data detection（使用 mtm_snapshot.json）─────────────────────
 
-def _load_mtm_snapshot(trade_date: str) -> dict | None:
-    path = (PROJECT_ROOT / "experiments" / "alpha_v1_daily"
-            / trade_date / "mtm" / "mtm_snapshot.json")
-    if not path.exists():
+def _load_mtm_snapshot(snapshot_path: Path) -> dict | None:
+    """Load MTM snapshot from explicit path."""
+    if not snapshot_path.exists():
         return None
     try:
-        return json.loads(path.read_text())
+        return json.loads(snapshot_path.read_text())
     except (json.JSONDecodeError, OSError):
         return None
+
+def _load_prod_mtm_snapshot(trade_date: str) -> dict | None:
+    """Load previous trading day's production MTM snapshot for stale check."""
+    path = (PROJECT_ROOT / "experiments" / "alpha_v1_daily"
+            / trade_date / "mtm" / "mtm_snapshot.json")
+    return _load_mtm_snapshot(path)
 
 
 def _check_stale_prices(trade_date: str, close_prices: dict[str, float],
@@ -267,7 +272,7 @@ def _check_stale_prices(trade_date: str, close_prices: dict[str, float],
     }
     if prev_date is None:
         return result
-    prev_snapshot = _load_mtm_snapshot(prev_date)
+    prev_snapshot = _load_prod_mtm_snapshot(prev_date)
     if prev_snapshot is None:
         print(f"  ⚠ 无上一交易日 ({prev_date}) MTM 快照，跳过陈旧检查")
         return result
@@ -302,7 +307,12 @@ def _check_stale_prices(trade_date: str, close_prices: dict[str, float],
     result["identical_ratio"] = stale_ratio
     result["examples"] = examples
     if checked == 0:
-        result["status"] = "skipped"
+        # checked==0 but prev_close+close_prices exist → no instrument overlap
+        if prev_close and close_prices:
+            result["status"] = "skipped_low_overlap"
+            result["total_instruments"] = len(positions)
+        else:
+            result["status"] = "skipped"
         return result
     if stale_ratio > 0.85:
         result["status"] = "blocked"
@@ -366,6 +376,9 @@ def _staging_dir(run_root: Path) -> Path:
 
 def _committed_marker(run_root: Path) -> Path:
     return _exec_dir(run_root) / "COMMITTED"
+
+def _committing_marker(run_root: Path) -> Path:
+    return _exec_dir(run_root) / "COMMITTING"
 
 
 # ── 执行状态检查 ─────────────────────────────────────────────────────────
@@ -452,7 +465,7 @@ def _try_mark_to_market(trade_date: str, output_dir: Path,
         cumulative_pnl_pct = cumulative_pnl / initial_capital * 100 if initial_capital > 0 else 0.0
         prev_date = _prev_trading_day(trade_date)
         if prev_date is not None:
-            prev_snap = _load_mtm_snapshot(prev_date)
+            prev_snap = _load_prod_mtm_snapshot(prev_date)
             if prev_snap is not None:
                 daily_pnl = total_value - float(prev_snap["total_value"])
             else:
@@ -587,7 +600,7 @@ def _build_postclose_message(trade_date: str, mtm: dict | None = None,
         lines += ["🔧 执行状态: 调试模式，未提交 shadow 账户", ""]
     if stale_check:
         sc = stale_check
-        status_icon = {"passed": "✅", "blocked": "⛔", "skipped": "⏭"}
+        status_icon = {"passed": "✅", "blocked": "⛔", "skipped": "⏭", "skipped_low_overlap": "⏭"}
         lines.append(
             f"📡 数据陈旧检查: {status_icon.get(sc.get('status', ''), '❓')} "
             f"一致={sc.get('identical_count', 0)}/{sc.get('checked_count', 0)} "
@@ -704,8 +717,13 @@ def run_preopen(trade_date: str, debug_run: bool = False,
         if not no_notify:
             _send_notification(f"❌ Alpha V1 Pre-open {trade_date}\n预测生成失败: {e}")
         return
-    PREDICTIONS_DIR.mkdir(parents=True, exist_ok=True)
-    pred_path = PREDICTIONS_DIR / f"predictions_{trade_date}.csv"
+    if debug_run:
+        pred_dir = run_root / "predictions"
+        pred_dir.mkdir(parents=True, exist_ok=True)
+        pred_path = pred_dir / f"predictions_{trade_date}.csv"
+    else:
+        PREDICTIONS_DIR.mkdir(parents=True, exist_ok=True)
+        pred_path = PREDICTIONS_DIR / f"predictions_{trade_date}.csv"
     pred_df.to_csv(pred_path, index=False)
     print(f"  → {len(pred_df)} predictions saved: {pred_path}")
     top = pred_df.sort_values("score", ascending=False).head(5)
@@ -776,12 +794,23 @@ def run_postclose(trade_date: str, debug_run: bool = False,
     has_skip = has_skip_meta and not has_plan
     already_committed = _is_execution_committed(run_root)
 
+    # ── COMMITTING crash recovery check ──
+    committing_path = _committing_marker(run_root)
+    if committing_path.exists() and not already_committed:
+        msg = (f"⛔ COMMITTING 标记存在（无 COMMITTED）！\n"
+               f"上次提交中崩溃，execution/ 目录可能不完整。\n"
+               f"请人工检查后手动删除 COMMITTING 文件重试。")
+        print(f"\n{'=' * 60}")
+        print(msg)
+        print(f"{'=' * 60}")
+        sys.exit(1)
+
     # ── Idempotent skip ──
     if already_committed and not force_rerun:
         print(f"  ⏭ 执行已提交（COMMITTED 标记存在），跳过")
         print(f"  💡 如需重新执行请使用 --force-rerun + --reason")
         artifacts = _load_artifacts_for_notification(trade_date, run_root)
-        mtm = _load_mtm_snapshot(trade_date)
+        mtm = _load_mtm_snapshot(run_root / "mtm" / "mtm_snapshot.json")
         if not no_notify:
             msg = _build_postclose_message(
                 trade_date, mtm=mtm, artifacts=artifacts,
@@ -799,28 +828,22 @@ def run_postclose(trade_date: str, debug_run: bool = False,
             print("  ❌ --force-rerun 必须配合 --reason")
             sys.exit(1)
         print(f"  ⚠ --force-rerun 生效，原因: {reason}")
-        staging_before = _staging_dir(run_root) / "account_before.json"
-        pos_before = _staging_dir(run_root) / "positions_before.csv"
-        has_before_state = staging_before.exists() and pos_before.exists()
+        exec_before = _exec_dir(run_root) / "account_before.json"
+        pos_before = _exec_dir(run_root) / "positions_before.csv"
+        has_before_state = exec_before.exists() and pos_before.exists()
         if has_before_state:
-            shutil.copy2(str(staging_before), str(PROJECT_ROOT / "shadow" / "account.json"))
+            shutil.copy2(str(exec_before), str(PROJECT_ROOT / "shadow" / "account.json"))
             shutil.copy2(str(pos_before), str(PROJECT_ROOT / "shadow" / "positions.csv"))
             print(f"  🔄 Shadow 已恢复至执行前状态")
         else:
-            print(f"  ⚠ 无执行前状态快照，无法重执行，仅做 MTM + 通知")
-            _archive_execution(run_root)
-            mtm = _load_mtm_snapshot(trade_date)
-            artifacts = _load_artifacts_for_notification(trade_date, run_root)
+            msg = (f"⛔ Alpha V1 Post-close {trade_date} BLOCKED\n"
+                   f"--force-rerun 需要 execution/account_before.json 和 "
+                   f"positions_before.csv 才能重放交易。\n"
+                   f"文件不存在，阻断执行。")
+            print(f"\n{msg}")
             if not no_notify:
-                msg = _build_postclose_message(
-                    trade_date, mtm=mtm, artifacts=artifacts,
-                    execution_committed=True, execution_skipped=has_skip,
-                    debug_run=debug_run,
-                )
                 _send_notification(msg)
-            elapsed = time.time() - t0
-            print(f"\n✅ Post-close {trade_date} (MTM + notify only) completed in {elapsed:.0f}s")
-            return
+            sys.exit(1)
         _archive_execution(run_root)
 
     # ── Plan check ──
@@ -857,30 +880,40 @@ def run_postclose(trade_date: str, debug_run: bool = False,
 
         # Stale close-price check BEFORE execution
         print(f"\n[2/4] Stale close-price check...")
+        # Build union of current positions and plan instruments
+        all_instruments: set[str] = set()
         shadow_pos = PROJECT_ROOT / "shadow" / "positions.csv"
         if shadow_pos.exists():
             pos_df = pd.read_csv(shadow_pos)
             if not pos_df.empty:
-                close_prices = _fetch_close_prices(trade_date, pos_df["instrument"].tolist())
-                if close_prices:
-                    try:
-                        stale_result = _check_stale_prices(trade_date, close_prices, pos_df)
-                        _save_stale_check(run_root, stale_result)
-                        print(f"  ✅ Stale check: {stale_result['status']} "
-                              f"({stale_result['identical_count']}/{stale_result['checked_count']} identical)")
-                    except StaleDataError as e:
-                        _save_stale_check(run_root, e.stale_check)
-                        print(f"  ❌ {e}")
-                        if not no_notify:
-                            _send_notification(
-                                f"⛔ Alpha V1 Post-close {trade_date} BLOCKED\n"
-                                f"收盘价数据陈旧，阻断执行。\n"
-                                f"一致={e.stale_check.get('identical_count', 0)}/"
-                                f"{e.stale_check.get('checked_count', 0)} "
-                                f"({e.stale_check.get('identical_ratio', 0)*100:.0f}%)\n"
-                                f"请运行数据同步后重试。"
-                            )
-                        sys.exit(1)
+                all_instruments.update(pos_df["instrument"].tolist())
+        intents_path = plan_dir / "order_intents.csv"
+        if intents_path.exists():
+            intents_df = pd.read_csv(intents_path)
+            all_instruments.update(intents_df["instrument"].tolist())
+        if all_instruments:
+            close_prices = _fetch_close_prices(trade_date, sorted(all_instruments))
+            if close_prices:
+                stale_positions = pd.DataFrame(
+                    {"instrument": list(all_instruments), "quantity": 0})
+                try:
+                    stale_result = _check_stale_prices(trade_date, close_prices, stale_positions)
+                    _save_stale_check(run_root, stale_result)
+                    print(f"  ✅ Stale check: {stale_result['status']} "
+                          f"({stale_result['identical_count']}/{stale_result['checked_count']} identical)")
+                except StaleDataError as e:
+                    _save_stale_check(run_root, e.stale_check)
+                    print(f"  ❌ {e}")
+                    if not no_notify:
+                        _send_notification(
+                            f"⛔ Alpha V1 Post-close {trade_date} BLOCKED\n"
+                            f"收盘价数据陈旧，阻断执行。\n"
+                            f"一致={e.stale_check.get('identical_count', 0)}/"
+                            f"{e.stale_check.get('checked_count', 0)} "
+                            f"({e.stale_check.get('identical_ratio', 0)*100:.0f}%)\n"
+                            f"请运行数据同步后重试。"
+                        )
+                    sys.exit(1)
 
         staging_exec_dir.mkdir(parents=True, exist_ok=True)
         print(f"\n[3/4] Executing plan at OPEN price...")
@@ -1038,42 +1071,53 @@ def _load_artifacts_for_notification(trade_date: str, run_root: Path) -> ShadowR
 def _commit_execution(run_root: Path, staging_dir: Path) -> None:
     exec_dir = _exec_dir(run_root)
     exec_dir.mkdir(parents=True, exist_ok=True)
-    # 1. Ledger rows: dedup by run_id, then append to shadow/ledger.csv
-    ledger_src = staging_dir / "ledger_rows.csv"
-    shadow_ledger = PROJECT_ROOT / "shadow" / "ledger.csv"
-    if ledger_src.exists():
-        new_rows = pd.read_csv(ledger_src)
-        if "run_id" in new_rows.columns and shadow_ledger.exists():
-            try:
-                existing = pd.read_csv(shadow_ledger)
-                if existing.empty:
+    # Check for COMMITTING (crash recovery)
+    committing_path = _committing_marker(run_root)
+    if committing_path.exists():
+        print(f"  ❌ COMMITTING 标记已存在，疑似半提交状态。请人工检查。")
+        sys.exit(1)
+    # Write COMMITTING before any write
+    committing_path.write_text("")
+    try:
+        # 1. Ledger rows: dedup by run_id, then append to shadow/ledger.csv
+        ledger_src = staging_dir / "ledger_rows.csv"
+        shadow_ledger = PROJECT_ROOT / "shadow" / "ledger.csv"
+        if ledger_src.exists():
+            new_rows = pd.read_csv(ledger_src)
+            if "run_id" in new_rows.columns and shadow_ledger.exists():
+                try:
+                    existing = pd.read_csv(shadow_ledger)
+                    if existing.empty:
+                        existing = pd.DataFrame()
+                except pd.errors.EmptyDataError:
                     existing = pd.DataFrame()
-            except pd.errors.EmptyDataError:
-                existing = pd.DataFrame()
-            if not existing.empty and "run_id" in existing.columns:
-                run_id = new_rows["run_id"].iloc[0]
-                existing = existing[existing["run_id"] != run_id]
-            combined = pd.concat([existing, new_rows], ignore_index=True)
-            combined.to_csv(shadow_ledger, index=False)
-        else:
-            new_rows.to_csv(shadow_ledger, index=False)
-    # 2. Copy staging artifacts to execution/
-    for fname in ["account_after.json", "positions_after.csv", "execution_summary.json"]:
-        src = staging_dir / fname
-        if src.exists():
-            shutil.copy2(str(src), str(exec_dir / fname))
-    # 3. Update shadow account / positions
-    for fname, dst_name in [("account_after.json", "account.json"),
-                             ("positions_after.csv", "positions.csv")]:
-        src = staging_dir / fname
-        if src.exists():
-            shutil.copy2(str(src), str(PROJECT_ROOT / "shadow" / dst_name))
-    # 4. Atomic COMMITTED marker (write to temp, rename)
-    marker = _committed_marker(run_root)
-    tmp_marker = exec_dir / ".COMMITTED.tmp"
-    tmp_marker.write_text("")
-    tmp_marker.rename(marker)
-    print(f"  ✅ 执行已提交: {exec_dir}")
+                if not existing.empty and "run_id" in existing.columns:
+                    run_id = new_rows["run_id"].iloc[0]
+                    existing = existing[existing["run_id"] != run_id]
+                combined = pd.concat([existing, new_rows], ignore_index=True)
+                combined.to_csv(shadow_ledger, index=False)
+            else:
+                new_rows.to_csv(shadow_ledger, index=False)
+        # 2. Copy staging artifacts to execution/ (including before-state for force-rerun)
+        for fname in ["account_after.json", "positions_after.csv", "execution_summary.json",
+                       "account_before.json", "positions_before.csv"]:
+            src = staging_dir / fname
+            if src.exists():
+                shutil.copy2(str(src), str(exec_dir / fname))
+        # 3. Update shadow account / positions
+        for fname, dst_name in [("account_after.json", "account.json"),
+                                 ("positions_after.csv", "positions.csv")]:
+            src = staging_dir / fname
+            if src.exists():
+                shutil.copy2(str(src), str(PROJECT_ROOT / "shadow" / dst_name))
+        # 4. Rename COMMITTING → COMMITTED (atomic)
+        committing_path.rename(_committed_marker(run_root))
+        print(f"  ✅ 执行已提交: {exec_dir}")
+    except BaseException:
+        # Clean up COMMITTING on any failure (including SystemExit)
+        if committing_path.exists():
+            committing_path.unlink()
+        raise
 
 
 def run_notify_only(trade_date: str, output_dir: str | None = None) -> None:
@@ -1082,8 +1126,8 @@ def run_notify_only(trade_date: str, output_dir: str | None = None) -> None:
     print(f"{'=' * 60}")
     run_root = _resolve_run_root(trade_date, output_dir=output_dir)
     artifacts = _load_artifacts_for_notification(trade_date, run_root)
-    # Read-only: load existing MTM snapshot, never recalculate
-    mtm = _load_mtm_snapshot(trade_date)
+    # Read-only: load existing MTM snapshot from run_root, never recalculate
+    mtm = _load_mtm_snapshot(run_root / "mtm" / "mtm_snapshot.json")
     already_committed = _is_execution_committed(run_root)
     has_skip = _plan_dir(run_root).exists() and not (
         _plan_dir(run_root) / "order_intents.csv").exists()

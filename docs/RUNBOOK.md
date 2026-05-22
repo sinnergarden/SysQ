@@ -122,7 +122,7 @@ experiments/alpha_v1_daily/{trade_date}/
 ### 幂等（Idempotency）
 
 - **盘后执行（postclose）是幂等的**：一旦 `execution/COMMITTED` 标记存在，再次运行不会重复执行，只重新计算 MTM + 发通知
-- **如需覆盖**：`--force-rerun --reason "原因"` 会存档旧 execution/ 并重新执行
+- **如需覆盖**：`--force-rerun --reason "原因"` 需要 `execution/account_before.json` 和 `positions_before.csv` 存在；缺少时直接阻断（不降级为只发通知）
 - 注意：幂等 ≠ 不执行。第一次运行正常执行，第二次起跳过（执行记录已存在）
 
 ### 调试指南
@@ -131,7 +131,7 @@ experiments/alpha_v1_daily/{trade_date}/
 |------|------|
 | 只改通知文案，验证效果 | `--notify-only`（不执行，从已有产物重建通知）|
 | 测试完整流程但不改 shadow | `--debug-run`（不写 account.json/positions.csv/ledger.csv）|
-| 某天执行失败要重跑 | `--force-rerun --reason "修复了XXbug"` |
+| 某天执行失败要重跑 | `--force-rerun --reason "修复了XXbug"`（需存在 before snapshot，否则阻断）|
 | 本地开发不想刷屏 | `--no-notify` |
 
 ### 执行流程（postclose 事务性）
@@ -140,16 +140,20 @@ experiments/alpha_v1_daily/{trade_date}/
 staging/ → 校验（开盘价、COMMITTED） → MatchEngine 执行 → commit → shadow/
 ```
 
-commit 操作是原子的：
-1. 复制 staging 产物到 execution/
-2. 更新 shadow/account.json 和 positions.csv
-3. 追加 ledger.csv
-4. 创建 COMMITTED 标记
+commit 操作是原子的（可崩溃恢复）：
+1. 创建 COMMITTING 标记（开始标志）
+2. 追加 ledger.csv（run_id 去重）
+3. 复制 staging 产物到 execution/（含 before snapshot）
+4. 更新 shadow/account.json 和 positions.csv
+5. 重命名 COMMITTING → COMMITTED（完成标志）
+
+**崩溃保护**：如果启动时发现 COMMITTING 但无 COMMITTED → 阻断执行，提示人工检查。
 
 ### 数据陈旧保护
 
-- postclose 时检查收盘价：与前一天 MTM 快照对比
-- 如果 >85% 的股票收盘价与前一日完全相同 → 阻塞执行（sys.exit 1）
+- postclose 时检查收盘价：对照当前持仓 ∪ 计划订单所有股票代码与前一日 MTM 快照对比
+- 如果 >85% 的股票收盘价与前一日完全相同 → `StaleDataError` 阻断执行
+- 首次建仓或持仓与计划均无上一交易日 MTM 覆盖 → `skipped_low_overlap`（通知中显示 ⏭）
 - 检查结果写入 `mtm/stale_check.json`
 
 ### 布署
