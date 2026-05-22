@@ -517,49 +517,47 @@ def _build_preopen_message(trade_date: str, rebalance_skipped: bool,
     for i, (inst, score) in enumerate(top_picks[:5], 1):
         name = _get_stock_name(inst)
         lines.append(f"  {i}. {inst} {name}  score={score:.4f}")
-    if rebalance_skipped:
-        lines += [
-            "", "⏭ 本周已调仓，跳过重复交易",
-            f"策略: {ALPHA_V1_CANDIDATE.display_name} | 频率: {ALPHA_V1_CANDIDATE.portfolio.rebalance_freq}",
-            f"Universe: {UNIVERSE} | 预测: {pred_count}只",
-        ]
-    else:
-        plan_dir = _plan_dir(trade_date)
-        intents_path = plan_dir / "order_intents.csv"
-        if intents_path.exists():
-            try:
-                orders_df = pd.read_csv(intents_path)
-                if pred_path and Path(pred_path).exists():
-                    scores_df = pd.read_csv(pred_path)[["instrument", "score"]]
-                    orders_df = orders_df.merge(scores_df, on="instrument", how="left")
-                    orders_df["score"] = orders_df["score"].fillna(0.0)
-                else:
-                    orders_df["score"] = 0.0
-                buys = orders_df[orders_df["side"] == "buy"].sort_values("score", ascending=False)
-                sells = orders_df[orders_df["side"] == "sell"].sort_values("score", ascending=False)
-                lines += ["", "📋 计划交易（以 OPEN 价执行）", ""]
-                if not buys.empty:
-                    lines.append(f"  计划买入 ({len(buys)}):")
-                    for _, row in buys.iterrows():
-                        name = _get_stock_name(row["instrument"])
-                        diff_val = float(row.get("diff_value", 0))
-                        qty = int(row.get("requested_qty", 0))
-                        lines.append(f"    {row['instrument']} {name}  +{_fmt(diff_val)}  {qty//100}手  score={row['score']:.4f}")
-                if not sells.empty:
-                    lines.append(f"  计划卖出 ({len(sells)}):")
-                    for _, row in sells.iterrows():
-                        name = _get_stock_name(row["instrument"])
-                        diff_val = float(row.get("diff_value", 0))
-                        qty = int(row.get("requested_qty", 0))
-                        lines.append(f"    {row['instrument']} {name}  -{_fmt(abs(diff_val))}  {qty//100}手  score={row['score']:.4f}")
-                lines.append("")
-            except Exception as e:
-                lines.append(f"  ⚠ 无法读取交易计划详情: {e}")
-        lines += [
-            f"📝 注: 计划不执行交易，待 21:30 数据同步后 postclose 以开盘价执行",
-            f"策略: {ALPHA_V1_CANDIDATE.display_name} | 频率: {ALPHA_V1_CANDIDATE.portfolio.rebalance_freq}",
-            f"Universe: {UNIVERSE} | 预测: {pred_count}只 | 参考数据: {data_date}",
-        ]
+        # Show existing plan details if available (even on skip re-runs)
+    plan_dir = _plan_dir(trade_date)
+    intents_path = plan_dir / "order_intents.csv"
+    has_existing_plan = intents_path.exists()
+    if has_existing_plan:
+        try:
+            orders_df = pd.read_csv(intents_path)
+            if pred_path and Path(pred_path).exists():
+                scores_df = pd.read_csv(pred_path)[["instrument", "score"]]
+                orders_df = orders_df.merge(scores_df, on="instrument", how="left")
+                orders_df["score"] = orders_df["score"].fillna(0.0)
+            else:
+                orders_df["score"] = 0.0
+            buys = orders_df[orders_df["side"] == "buy"].sort_values("score", ascending=False)
+            sells = orders_df[orders_df["side"] == "sell"].sort_values("score", ascending=False)
+            lines += ["", "📋 计划交易（以 OPEN 价执行）", ""]
+            if not buys.empty:
+                lines.append(f"  计划买入 ({len(buys)}):")
+                for _, row in buys.iterrows():
+                    name = _get_stock_name(row["instrument"])
+                    diff_val = float(row.get("diff_value", 0))
+                    qty = int(row.get("requested_qty", 0))
+                    lines.append(f"    {row['instrument']} {name}  +{_fmt(diff_val)}  {qty//100}手  score={row['score']:.4f}")
+            if not sells.empty:
+                lines.append(f"  计划卖出 ({len(sells)}):")
+                for _, row in sells.iterrows():
+                    name = _get_stock_name(row["instrument"])
+                    diff_val = float(row.get("diff_value", 0))
+                    qty = int(row.get("requested_qty", 0))
+                    lines.append(f"    {row['instrument']} {name}  -{_fmt(abs(diff_val))}  {qty//100}手  score={row['score']:.4f}")
+            lines.append("")
+        except Exception as e:
+            lines.append(f"  ⚠ 无法读取交易计划详情: {e}")
+    if rebalance_skipped and not has_existing_plan:
+        lines += ["", "⏭ 本周已调仓，跳过重复交易"]
+    lines += [
+        f"策略: {ALPHA_V1_CANDIDATE.display_name} | 频率: {ALPHA_V1_CANDIDATE.portfolio.rebalance_freq}",
+        f"Universe: {UNIVERSE} | 预测: {pred_count}只 | 参考数据: {data_date}",
+    ]
+    if has_existing_plan:
+        lines += ["", "📝 注: 计划不执行交易，待 21:30 数据同步后 postclose 以开盘价执行"]
     return "\n".join(lines)
 
 
