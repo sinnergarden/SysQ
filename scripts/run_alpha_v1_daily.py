@@ -370,7 +370,7 @@ def _build_postclose_message(trade_date: str) -> str:
                 lines.append(f"⚠ 无法解析 shadow execution 数据: {e}")
         else:
             lines.append("⚠ Reconciliation 数据不存在")
-            lines.append("请运行 run_post_close.py 或检查 shadow 账户")
+            lines.append("盘前未运行或数据未就绪，无 shadow 账户记录")
 
     return "\n".join(lines)
 
@@ -405,6 +405,16 @@ def run_preopen(trade_date: str) -> None:
     except Exception as e:
         print(f"  ❌ {e}")
         _send_notification(f"<b>❌ Alpha V1 Pre-open {trade_date}</b>\n数据获取失败: {e}")
+        return
+
+    if frame.empty:
+        print(f"  ⚠ 交易日 {trade_date} 无数据（qlib 数据未就绪或休市日）")
+        _send_notification(
+            f"<b>⚠ Alpha V1 Pre-open {trade_date}</b>\n"
+            f"交易日无数据，跳过\n"
+            f"当前 qlib 最新可用数据可能早于 {trade_date}\n"
+            f"请检查数据同步是否完成"
+        )
         return
 
     # 3. Generate predictions
