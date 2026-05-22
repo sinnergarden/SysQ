@@ -233,7 +233,8 @@ def _find_summary_file(trade_date: str) -> Path | None:
 
 def _build_preopen_message(trade_date: str, artifacts, pred_count: int,
                             top_picks: list[tuple[str, float]],
-                            rebalance_skipped: bool = False) -> str:
+                            rebalance_skipped: bool = False,
+                            pred_path: str | Path | None = None) -> str:
     """构建 preopen Telegram 通知文本。"""
     lines = [
         f"<b>✅ Alpha V1 Pre-open {trade_date}</b>",
@@ -264,21 +265,29 @@ def _build_preopen_message(trade_date: str, artifacts, pred_count: int,
     if intents_path and Path(intents_path).exists():
         try:
             orders_df = pd.read_csv(intents_path)
-            buys = orders_df[orders_df["side"] == "buy"]
-            sells = orders_df[orders_df["side"] == "sell"]
+            # Merge scores from predictions for score-sorted display
+            if pred_path and Path(pred_path).exists():
+                scores_df = pd.read_csv(pred_path)[["instrument", "score"]]
+                orders_df = orders_df.merge(scores_df, on="instrument", how="left")
+                orders_df["score"] = orders_df["score"].fillna(0.0)
+            else:
+                orders_df["score"] = 0.0
+
+            buys = orders_df[orders_df["side"] == "buy"].sort_values("score", ascending=False)
+            sells = orders_df[orders_df["side"] == "sell"].sort_values("score", ascending=False)
 
             if not buys.empty:
                 lines.append(f"  买入 ({len(buys)}):")
                 for _, row in buys.iterrows():
                     name = _get_stock_name(row["instrument"])
                     diff_val = float(row.get("diff_value", 0))
-                    lines.append(f"    {row['instrument']} {name}  +{_fmt(diff_val)}")
+                    lines.append(f"    {row['instrument']} {name}  +{_fmt(diff_val)}  score={row['score']:.4f}")
             if not sells.empty:
                 lines.append(f"  卖出 ({len(sells)}):")
                 for _, row in sells.iterrows():
                     name = _get_stock_name(row["instrument"])
                     diff_val = float(row.get("diff_value", 0))
-                    lines.append(f"    {row['instrument']} {name}  -{_fmt(abs(diff_val))}")
+                    lines.append(f"    {row['instrument']} {name}  -{_fmt(abs(diff_val))}  score={row['score']:.4f}")
         except Exception:
             lines.append(f"  Orders: {artifacts.order_count} ({artifacts.buy_count} buy / {artifacts.sell_count} sell)")
     else:
@@ -493,7 +502,7 @@ def run_preopen(trade_date: str) -> None:
             return
 
     # 5. Telegram notify
-    msg = _build_preopen_message(trade_date, artifacts, len(pred_df), top_picks, rebalance_skipped)
+    msg = _build_preopen_message(trade_date, artifacts, len(pred_df), top_picks, rebalance_skipped, pred_path)
     _send_notification(msg)
 
     elapsed = time.time() - t0
