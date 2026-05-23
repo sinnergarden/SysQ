@@ -111,6 +111,37 @@ def insert_orders(conn: sqlite3.Connection, orders: list[dict[str, Any]]) -> lis
     return rows
 
 
+def insert_orders_ignore_conflicts(
+    conn: sqlite3.Connection, orders: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Insert orders, skipping any that already exist (by order_id)."""
+    now = _now()
+    rows = []
+    for o in orders:
+        order_id = o.get("order_id", _new_id("ord_"))
+        if conn.execute("SELECT 1 FROM orders WHERE order_id=?", (order_id,)).fetchone():
+            rows.append(dict(
+                conn.execute("SELECT * FROM orders WHERE order_id=?", (order_id,)).fetchone()
+            ))
+            continue
+        conn.execute(
+            """INSERT OR IGNORE INTO orders
+               (order_id, run_id, account_id, strategy_id, trade_date,
+                symbol, side, order_type, quantity, limit_price,
+                target_weight, status, reason, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                order_id, o["run_id"], o["account_id"], o["strategy_id"], o["trade_date"],
+                o["symbol"], o["side"], o.get("order_type", "market"),
+                o["quantity"], o.get("limit_price"),
+                o.get("target_weight"), o.get("status", "pending"),
+                o.get("reason"), now, now,
+            ),
+        )
+        rows.append(dict(conn.execute("SELECT * FROM orders WHERE order_id=?", (order_id,)).fetchone()))
+    return rows
+
+
 def get_orders_by_run(conn: sqlite3.Connection, run_id: str) -> list[dict[str, Any]]:
     return [dict(r) for r in conn.execute("SELECT * FROM orders WHERE run_id=?", (run_id,)).fetchall()]
 

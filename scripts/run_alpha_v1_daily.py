@@ -48,7 +48,7 @@ _FORCE_OUTPUT_ROOT: Path | None = None
 LEDGER_DB_PATH = str(PROJECT_ROOT / "data" / "trade.db")
 
 def _shadow_account_id() -> str:
-    return f"shadow_{ALPHA_V1_CANDIDATE.strategy_id}"
+    return ALPHA_V1_CANDIDATE.shadow_account_id
 
 
 class StaleDataError(Exception):

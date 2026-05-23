@@ -22,12 +22,13 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from qsys.ledger.service import LedgerService
 from qsys.ledger.migration import ShadowMigrator
+from qsys.strategy.alpha_v1.spec import ALPHA_V1_CANDIDATE
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Migrate shadow CSV/JSON to SQLite")
-    parser.add_argument("--account-id", default="shadow_alpha_v1", help="Account ID for ledger")
-    parser.add_argument("--strategy-id", default="alpha_v1_candidate_v3", help="Strategy ID")
+    parser.add_argument("--account-id", default=ALPHA_V1_CANDIDATE.shadow_account_id, help="Account ID for ledger")
+    parser.add_argument("--strategy-id", default=ALPHA_V1_CANDIDATE.strategy_id, help="Strategy ID")
     parser.add_argument("--shadow-dir", default=str(PROJECT_ROOT / "shadow"), help="Shadow data directory")
     parser.add_argument("--db-path", default=str(PROJECT_ROOT / "data" / "trade.db"), help="SQLite ledger path")
     args = parser.parse_args()

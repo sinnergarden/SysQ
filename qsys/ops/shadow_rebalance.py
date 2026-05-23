@@ -763,6 +763,11 @@ def _write_execution_to_ledger(
     Called from execute_alpha_v1_plan() when db_path is provided.
     This is the single point where fills, orders, and snapshots
     enter the ledger as source of truth.
+
+    Run-idempotency rules:
+    - If run_id already exists with status "completed": skip all writes (return early).
+    - If run_id exists but not completed: re-open with force=True, then write.
+    - If run_id does not exist: create normally, then write.
     """
     service = LedgerService(db_path)
     account_id = f"shadow_{strategy_id}"
@@ -772,18 +777,26 @@ def _write_execution_to_ledger(
     # Ensure account exists
     service.create_account(account_id, "shadow", initial_capital)
 
-    # Start run (skip if already exists = idempotent for re-runs)
-    try:
+    # Check run existence
+    existing_run = service.get_run(run_id)
+    if existing_run:
+        if existing_run["status"] == "completed":
+            print(f"  ⏭  Run {run_id} already completed — skip ledger write")
+            service.close()
+            return
+        # exists but not completed — re-open with force
+        print(f"  ⚠  Run {run_id} exists (status={existing_run['status']}) — force re-start")
         service.start_run(
-            run_id=run_id,
-            trade_date=trade_date,
-            strategy_id=strategy_id,
-            account_id=account_id,
+            run_id=run_id, trade_date=trade_date,
+            strategy_id=strategy_id, account_id=account_id,
+            mode="postclose", force=True,
+        )
+    else:
+        service.start_run(
+            run_id=run_id, trade_date=trade_date,
+            strategy_id=strategy_id, account_id=account_id,
             mode="postclose",
         )
-    except ValueError:
-        # DuplicateRunError: skip — run already recorded
-        pass
 
     # Record orders
     order_dicts = []
@@ -802,7 +815,9 @@ def _write_execution_to_ledger(
             "status": "filled",
             "reason": "plan_execution",
         })
-    service.record_orders(run_id, order_dicts)
+    # Record orders (idempotent: skip if order_id already exists)
+    from qsys.ledger import repository as repo
+    repo.insert_orders_ignore_conflicts(service.conn, order_dicts)
 
     # Build fills from match results
     fill_dicts = []
@@ -837,7 +852,7 @@ def _write_execution_to_ledger(
         })
 
     if fill_dicts:
-        service.apply_fills(run_id, fill_dicts, t_plus_one=True)
+        service.apply_fills(run_id, fill_dicts, t_plus_one=True, idempotent=True)
 
     # Portfolio snapshot at close prices
     prices_dict: dict[str, float] = {}

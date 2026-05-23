@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
-import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -12,8 +12,10 @@ from typing import Any
 from qsys.ledger.service import LedgerService
 
 
-def _new_id(prefix: str = "") -> str:
-    return f"{prefix}{uuid.uuid4().hex[:16]}"
+def _mig_id(account_id: str, kind: str, row_index: int, seed: str = "") -> str:
+    """Deterministic ID for migration: mig_{kind}_{md5 prefix}."""
+    raw = f"{account_id}.{kind}.{row_index}.{seed}"
+    return f"mig_{kind}_{hashlib.md5(raw.encode()).hexdigest()[:16]}"
 
 
 class MigrationReport:
@@ -87,25 +89,29 @@ class ShadowMigrator:
         print(f"  ✅ Account {account_id} (initial ¥{initial_cash:,.2f})")
 
         # If account.json had residual cash beyond initial deposit,
-        # record it as adjustment
+        # record it as adjustment (skip if already recorded — idempotent)
         if report.total_cash != initial_cash and report.total_cash > 0:
             adjustment = report.total_cash - initial_cash
             conn = self.service.conn
             from qsys.ledger import repository as repo
-            with conn:
-                repo.insert_cash_event(
-                    conn,
-                    event_id=_new_id("cash_"),
-                    account_id=account_id,
-                    run_id=None,
-                    trade_date=datetime.now().strftime("%Y-%m-%d"),
-                    event_type="MIGRATION_ADJUST",
-                    amount=adjustment,
-                    note="Cash adjustment from legacy account.json",
+            event_id = _mig_id(account_id, "cash_adj", 0, "MIGRATION_ADJUST")
+            if conn.execute("SELECT 1 FROM cash_ledger WHERE cash_event_id=?", (event_id,)).fetchone():
+                report.warnings.append(f"Cash adjustment ¥{adjustment:+.2f} already recorded — skipping")
+            else:
+                with conn:
+                    repo.insert_cash_event(
+                        conn,
+                        event_id=event_id,
+                        account_id=account_id,
+                        run_id=None,
+                        trade_date=datetime.now().strftime("%Y-%m-%d"),
+                        event_type="MIGRATION_ADJUST",
+                        amount=adjustment,
+                        note="Cash adjustment from legacy account.json",
+                    )
+                report.warnings.append(
+                    f"Cash adjusted by ¥{adjustment:+.2f} (legacy cash ≠ initial_capital)"
                 )
-            report.warnings.append(
-                f"Cash adjusted by ¥{adjustment:+.2f} (legacy cash ≠ initial_capital)"
-            )
 
         # ── 2. Migrate positions.csv ──
         positions_path = self.shadow_dir / "positions.csv"
@@ -134,19 +140,21 @@ class ShadowMigrator:
                             last_price=float(row.get("last_price", cost)),
                             market_value=float(row.get("market_value", qty * cost)),
                         )
-                        repo.insert_position_event(
-                            conn,
-                            event_id=_new_id("pos_"),
-                            account_id=account_id,
-                            run_id=None,
-                            trade_date=datetime.now().strftime("%Y-%m-%d"),
-                            symbol=symbol,
-                            event_type="MIGRATION_INIT",
-                            quantity_delta=qty,
-                            price=cost,
-                            amount=qty * cost,
-                            note="Initial position from legacy migration",
-                        )
+                        pos_event_id = _mig_id(account_id, "pos_init", 0, symbol)
+                        if not conn.execute("SELECT 1 FROM position_ledger WHERE position_event_id=?", (pos_event_id,)).fetchone():
+                            repo.insert_position_event(
+                                conn,
+                                event_id=pos_event_id,
+                                account_id=account_id,
+                                run_id=None,
+                                trade_date=datetime.now().strftime("%Y-%m-%d"),
+                                symbol=symbol,
+                                event_type="MIGRATION_INIT",
+                                quantity_delta=qty,
+                                price=cost,
+                                amount=qty * cost,
+                                note="Initial position from legacy migration",
+                            )
                     report.position_count += 1
             print(f"  ✅ Positions: {report.position_count} symbols")
 
@@ -184,18 +192,16 @@ class ShadowMigrator:
                         net = gross + fee if side == "BUY" else gross - fee
 
                         # Normalize legacy run_id to ledger run_id
-                        leg_run_id = run_id_legacy or f"{trade_date}.legacy.shadow" if trade_date else _new_id("run_")
+                        leg_run_id = run_id_legacy or f"{trade_date}.legacy.shadow" if trade_date else f"{trade_date}.legacy"
 
                         # Create a strategy run entry if not yet created
                         if leg_run_id not in run_id_to_legacy_run:
                             ledger_run_id = f"{trade_date}.{strategy_id}.shadow"
-                            try:
+                            if not self.service.get_run(ledger_run_id):
                                 self.service.start_run(
                                     ledger_run_id, trade_date, strategy_id,
                                     account_id, "legacy_migration",
                                 )
-                            except ValueError:
-                                pass  # already exists
                             run_id_to_legacy_run[leg_run_id] = {
                                 "ledger_run_id": ledger_run_id,
                                 "trade_date": trade_date,
@@ -203,8 +209,8 @@ class ShadowMigrator:
                         else:
                             ledger_run_id = run_id_to_legacy_run[leg_run_id]["ledger_run_id"]
 
-                        order_id = _new_id("ord_")
-                        fill_id = _new_id("fil_")
+                        order_id = _mig_id(account_id, "ord", report.ledger_rows_parsed, symbol)
+                        fill_id = _mig_id(account_id, "fil", report.ledger_rows_parsed, symbol)
 
                         order = {
                             "order_id": order_id,
@@ -247,12 +253,12 @@ class ShadowMigrator:
                             {"row": report.ledger_rows_parsed, "reason": str(e)}
                         )
 
-            # Apply in batches by run
+            # Apply in batches by run (idempotent)
             if orders_batch:
                 conn = self.service.conn
                 with conn:
                     from qsys.ledger import repository as repo
-                    repo.insert_orders(conn, orders_batch)
+                    repo.insert_orders_ignore_conflicts(conn, orders_batch)
                 report.orders_migrated = len(orders_batch)
 
             if fills_batch:
@@ -264,7 +270,7 @@ class ShadowMigrator:
 
                 for run, run_fills in fills_by_run.items():
                     try:
-                        self.service.apply_fills(run, run_fills, t_plus_one=False)
+                        self.service.apply_fills(run, run_fills, t_plus_one=False, idempotent=True)
                         report.fills_migrated += len(run_fills)
                     except Exception as e:
                         report.warnings.append(

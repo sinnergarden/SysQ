@@ -108,12 +108,32 @@ class LedgerService:
         account_id: str,
         mode: str,
         metadata: dict[str, Any] | None = None,
+        force: bool = False,
     ) -> dict[str, Any]:
-        """Start a new strategy run. Raises DuplicateRunError if run_id exists."""
+        """Start a strategy run.
+
+        Parameters
+        ----------
+        force : bool, default False
+            If False (default), raises DuplicateRunError when run_id exists.
+            If True, re-opens an existing run_id (sets status back to 'started',
+            updates trade_date/mode/metadata) for controlled re-runs.
+        """
         conn = self.conn
         existing = repo.get_strategy_run(conn, run_id)
-        if existing:
+        if existing and not force:
             raise DuplicateRunError(f"Run {run_id} already exists (status={existing['status']})")
+        if existing and force:
+            # Re-open existing run
+            with conn:
+                conn.execute(
+                    "UPDATE strategy_runs SET status='started', mode=?, notes=COALESCE(notes||'; ','')||? "
+                    "WHERE run_id=?",
+                    (mode, f"force_rerun at {_now()}", run_id),
+                )
+                return dict(
+                    conn.execute("SELECT * FROM strategy_runs WHERE run_id=?", (run_id,)).fetchone()
+                )
         with conn:
             return repo.insert_strategy_run(
                 conn, run_id, trade_date, strategy_id, account_id, mode,
@@ -150,6 +170,7 @@ class LedgerService:
         fills: list[dict[str, Any]],
         open_prices: dict[str, float] | None = None,
         t_plus_one: bool = True,
+        idempotent: bool = False,
     ) -> list[dict[str, Any]]:
         """Apply fills atomically.
 
@@ -174,6 +195,9 @@ class LedgerService:
         t_plus_one : bool, default True
             If True, BUY fills do NOT increase available_quantity until
             next trading day (A-share T+1 settlement rule).
+        idempotent : bool, default False
+            If True, skip fills whose fill_id already exists instead of raising
+            DuplicateFillError.  If all fills already exist, returns [].
         """
         run = self._require_run(run_id)
         acct_id = run["account_id"]
@@ -183,14 +207,30 @@ class LedgerService:
         conn = self.conn
         with conn:
             # 1. Validate: no duplicate fill_ids
-            for f in fills:
-                fid = f.get("fill_id", "")
-                if fid:
-                    existing = conn.execute(
+            fills_to_process = list(fills)
+            if idempotent:
+                filtered: list[dict[str, Any]] = []
+                for f in fills_to_process:
+                    fid = f.get("fill_id", "")
+                    if fid and conn.execute(
                         "SELECT 1 FROM fills WHERE fill_id=?", (fid,)
-                    ).fetchone()
-                    if existing:
-                        raise DuplicateFillError(f"Fill {fid} already exists")
+                    ).fetchone():
+                        continue  # skip already-existing fill
+                    filtered.append(f)
+                fills_to_process = filtered
+                if not fills_to_process:
+                    return []
+            else:
+                for f in fills_to_process:
+                    fid = f.get("fill_id", "")
+                    if fid:
+                        existing = conn.execute(
+                            "SELECT 1 FROM fills WHERE fill_id=?", (fid,)
+                        ).fetchone()
+                        if existing:
+                            raise DuplicateFillError(f"Fill {fid} already exists")
+
+            fills = fills_to_process
 
             # 2. Compute cash impact and validate sufficiency
             current_cash = repo.get_cash_balance(conn, acct_id)
@@ -240,10 +280,25 @@ class LedgerService:
                 f.setdefault("strategy_id", strat_id)
                 f.setdefault("trade_date", trade_date)
 
-            # 4. Insert fills
+            # 4. Auto-create orders that don't exist (fills FK → orders)
+            for f in fills:
+                oid = f["order_id"]
+                if not conn.execute("SELECT 1 FROM orders WHERE order_id=?", (oid,)).fetchone():
+                    conn.execute(
+                        """INSERT OR IGNORE INTO orders
+                           (order_id, run_id, account_id, strategy_id, trade_date,
+                            symbol, side, order_type, quantity, limit_price,
+                            target_weight, status, reason, created_at, updated_at)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'filled', 'auto-created', ?, ?)""",
+                        (oid, f["run_id"], f["account_id"], f["strategy_id"],
+                         f["trade_date"], f["symbol"], f["side"], "market",
+                         f["quantity"], f["price"], _now(), _now()),
+                    )
+
+            # 5. Insert fills
             inserted = repo.insert_fills(conn, fills)
 
-            # 5. Update orders, cash ledger, position ledger, positions
+            # 6. Update orders, cash ledger, position ledger, positions
             order_statuses: dict[str, int] = {}
             for f in fills:
                 oid = f["order_id"]
@@ -294,7 +349,7 @@ class LedgerService:
 
                 if side == "BUY":
                     new_qty = old_qty + qty
-                    new_avail = old_avail  # T+1: not available today
+                    new_avail = old_avail + qty if not t_plus_one else old_avail  # T+1: not available today
                     new_cost = (
                         (old_cost * old_qty + price * qty) / new_qty
                         if new_qty > 0 else 0.0
