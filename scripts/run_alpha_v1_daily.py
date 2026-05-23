@@ -422,6 +422,7 @@ def _try_mark_to_market(trade_date: str, output_dir: Path,
             acct = service.get_account(_shadow_account_id())
             if acct:
                 ledger_account = dict(acct)
+                ledger_account["cash"] = service.get_cash(_shadow_account_id())
                 ledger_positions = service.get_positions(_shadow_account_id())
                 ledger_rows = []
                 for p in ledger_positions:
@@ -523,16 +524,11 @@ def _try_mark_to_market(trade_date: str, output_dir: Path,
             priced_count += 1
             details.append((inst, _get_stock_name(inst), qty, cost, close, market_val - qty * cost))
         cash = float(account.get("cash", 0))
-        # If using ledger, account may not have a "cash" key — load separately
+        # Ledger accounts table has no "cash" column; set during init above
         if cash == 0.0 and db_path and Path(db_path).exists():
             try:
-                import sqlite3
-                from qsys.ledger.repository import get_cash_balance
-                tmp_conn = sqlite3.connect(db_path)
-                tmp_conn.row_factory = sqlite3.Row
-                acct_id = _shadow_account_id()
-                cash = get_cash_balance(tmp_conn, acct_id)
-                tmp_conn.close()
+                from qsys.ledger.service import LedgerService
+                cash = LedgerService(db_path).get_cash(_shadow_account_id())
             except Exception:
                 pass
         initial_capital = float(account.get("initial_capital", 1_000_000))

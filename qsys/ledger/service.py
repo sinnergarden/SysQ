@@ -141,7 +141,8 @@ class LedgerService:
             )
 
     def finish_run(self, run_id: str, status: str = "completed") -> None:
-        repo.finish_strategy_run(self.conn, run_id, status=status)
+        with self.conn:
+            repo.finish_strategy_run(self.conn, run_id, status=status)
 
     def get_run(self, run_id: str) -> dict[str, Any] | None:
         return repo.get_strategy_run(self.conn, run_id)
