@@ -253,34 +253,20 @@ class ShadowMigrator:
                             {"row": report.ledger_rows_parsed, "reason": str(e)}
                         )
 
-            # Apply in batches by run (idempotent)
-            if orders_batch:
-                conn = self.service.conn
-                with conn:
-                    from qsys.ledger import repository as repo
+            # Apply in batches by run (idempotent, snapshot-first)
+            # Orders/fills go to historical tables only — no cash/position changes.
+            # Positions come from positions.csv, cash from account.json.
+            conn = self.service.conn
+            with conn:
+                from qsys.ledger import repository as repo
+                if orders_batch:
                     repo.insert_orders_ignore_conflicts(conn, orders_batch)
-                report.orders_migrated = len(orders_batch)
+                    report.orders_migrated = len(orders_batch)
+                if fills_batch:
+                    repo.insert_fills_ignore_conflicts(conn, fills_batch)
+                    report.fills_migrated = len(fills_batch)
 
-            if fills_batch:
-                # Group fills by ledger_run_id for transactional apply
-                from collections import defaultdict
-                fills_by_run: dict[str, list[dict]] = defaultdict(list)
-                for f in fills_batch:
-                    fills_by_run[f["run_id"]].append(f)
-
-                for run, run_fills in fills_by_run.items():
-                    try:
-                        self.service.apply_fills(run, run_fills, t_plus_one=False, idempotent=True)
-                        report.fills_migrated += len(run_fills)
-                    except Exception as e:
-                        report.warnings.append(
-                            f"  ⚠ apply_fills for run {run} failed: {e} — "
-                            f"skipping {len(run_fills)} fills"
-                        )
-                        report.skipped_rows.append(
-                            {"run": run, "reason": f"apply_fills failed: {e}"}
-                        )
-
-            print(f"  ✅ Orders: {report.orders_migrated}, Fills: {report.fills_migrated}")
+            if fills_batch or orders_batch:
+                print(f"  ✅ Orders: {report.orders_migrated}, Fills: {report.fills_migrated}")
 
         return report

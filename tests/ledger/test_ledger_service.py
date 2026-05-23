@@ -85,8 +85,8 @@ def _fill(symbol: str, side: str, qty: int, price: float,
           **kw: Any) -> dict[str, Any]:
     gross = qty * price
     return {
-        "fill_id": _next_fill_id(symbol),
-        "order_id": _next_order_id(symbol),
+        "fill_id": kw["fill_id"] if "fill_id" in kw else _next_fill_id(symbol),
+        "order_id": kw["order_id"] if "order_id" in kw else _next_order_id(symbol),
         "symbol": symbol,
         "side": side,
         "quantity": qty,
@@ -522,34 +522,32 @@ class TestMigrationIdempotency:
 
     def test_migration_cash_correct(self, service: LedgerService,
                                      shadow_dir: Path) -> None:
-        """Migrated cash balance includes INIT + adjustment + fills."""
+        """Migrated cash = INIT + MIGRATION_ADJUST (snapshot-first, fills do not affect cash)."""
         acct_id = "shadow_alpha_v1"
         migrator = ShadowMigrator(service, shadow_dir)
         migrator.migrate(acct_id, "alpha_v1")
         # account.json: cash=950000, initial_capital=1000000
-        # So cash events: +1000000 (INIT) + (-50000 adjustment)
-        #   + 2 BUY fills from ledger.csv: -10000 - 10000
-        # Total = 1000000 - 50000 - 10000 - 10000 = 930000
+        # Cash events: +1000000 (INIT) + (-50000 MIGRATION_ADJUST) = 950000
+        # Historical fills are recorded in fills table but do NOT affect cash_ledger.
         cash = service.get_cash(acct_id)
-        assert cash == pytest.approx(930_000.0, abs=100.0)
+        assert cash == pytest.approx(950_000.0, abs=100.0)
 
     def test_migration_positions(self, service: LedgerService,
                                   shadow_dir: Path) -> None:
-        """Migrated positions include positions.csv + ledger.csv fills."""
+        """Migrated positions match positions.csv (snapshot-first, fills do not affect positions)."""
         migrator = ShadowMigrator(service, shadow_dir)
         migrator.migrate("shadow_alpha_v1", "alpha_v1")
 
-        # Positions reflect positions.csv snapshot PLUS ledger.csv BUY fills
-        # positions.csv: 600000.SH=1000, 600001.SH=500
-        # ledger.csv BUY fills add another: 600000.SH=1000, 600001.SH=500
+        # Positions from positions.csv only — historical fills go to fills table
+        # without affecting current positions/cash.
         pos1 = service.get_position("shadow_alpha_v1", "600000.SH")
         assert pos1 is not None
-        assert pos1["quantity"] == 2000
+        assert pos1["quantity"] == 1000
         assert pos1["avg_cost"] == pytest.approx(10.0)
 
         pos2 = service.get_position("shadow_alpha_v1", "600001.SH")
         assert pos2 is not None
-        assert pos2["quantity"] == 1000
+        assert pos2["quantity"] == 500
         assert pos2["avg_cost"] == pytest.approx(20.0)
 
     def test_migration_reconstruct_fills(self, service: LedgerService,

@@ -180,6 +180,39 @@ def insert_fills(conn: sqlite3.Connection, fills: list[dict[str, Any]]) -> list[
     return rows
 
 
+def insert_fills_ignore_conflicts(
+    conn: sqlite3.Connection, fills: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Insert fills, skipping any that already exist (by fill_id), idempotent."""
+    now = _now()
+    rows = []
+    for f in fills:
+        fill_id = f.get("fill_id", _new_id("fil_"))
+        if conn.execute("SELECT 1 FROM fills WHERE fill_id=?", (fill_id,)).fetchone():
+            rows.append(dict(
+                conn.execute("SELECT * FROM fills WHERE fill_id=?", (fill_id,)).fetchone()
+            ))
+            continue
+        conn.execute(
+            """INSERT INTO fills
+               (fill_id, order_id, run_id, account_id, strategy_id, trade_date,
+                symbol, side, quantity, price, gross_amount,
+                commission, stamp_tax, slippage, net_amount,
+                fill_time, source)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                fill_id, f["order_id"], f["run_id"], f["account_id"],
+                f["strategy_id"], f["trade_date"],
+                f["symbol"], f["side"], f["quantity"], f["price"],
+                f["gross_amount"], f.get("commission", 0.0),
+                f.get("stamp_tax", 0.0), f.get("slippage", 0.0),
+                f["net_amount"], now, f.get("source", "simulation"),
+            ),
+        )
+        rows.append(dict(conn.execute("SELECT * FROM fills WHERE fill_id=?", (fill_id,)).fetchone()))
+    return rows
+
+
 def get_fills_by_run(conn: sqlite3.Connection, run_id: str) -> list[dict[str, Any]]:
     return [dict(r) for r in conn.execute("SELECT * FROM fills WHERE run_id=?", (run_id,)).fetchall()]
 

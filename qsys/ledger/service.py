@@ -148,8 +148,16 @@ class LedgerService:
 
     # ── Orders ──────────────────────────────────────────────────────
 
-    def record_orders(self, run_id: str, orders: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Record orders for a run. Idempotent within a transaction."""
+    def record_orders(self, run_id: str, orders: list[dict[str, Any]],
+                       idempotent: bool = False) -> list[dict[str, Any]]:
+        """Record orders for a run.
+
+        Parameters
+        ----------
+        idempotent : bool, default False
+            If True, skip orders whose order_id already exists instead of
+            raising IntegrityError.
+        """
         run = self._require_run(run_id)
         for o in orders:
             o.setdefault("run_id", run_id)
@@ -157,6 +165,8 @@ class LedgerService:
             o.setdefault("strategy_id", run["strategy_id"])
             o.setdefault("trade_date", run["trade_date"])
         with self.conn:
+            if idempotent:
+                return repo.insert_orders_ignore_conflicts(self.conn, orders)
             return repo.insert_orders(self.conn, orders)
 
     def get_orders(self, run_id: str) -> list[dict[str, Any]]:

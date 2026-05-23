@@ -798,11 +798,13 @@ def _write_execution_to_ledger(
             mode="postclose",
         )
 
-    # Record orders
+    # Record orders with deterministic IDs (run_id + symbol + side + index)
     order_dicts = []
-    for o in orders:
+    for i, o in enumerate(orders):
+        oid = f"ord_{run_id.replace('.', '_')}_{o['symbol']}_{o['side']}_{i}"
+        o["_oid"] = oid  # carried to fill loop via results references
         order_dicts.append({
-            "order_id": f"ord_{execution_date}_{o['symbol']}",
+            "order_id": oid,
             "run_id": run_id,
             "account_id": account_id,
             "strategy_id": strategy_id,
@@ -815,13 +817,11 @@ def _write_execution_to_ledger(
             "status": "filled",
             "reason": "plan_execution",
         })
-    # Record orders (idempotent: skip if order_id already exists)
-    from qsys.ledger import repository as repo
-    repo.insert_orders_ignore_conflicts(service.conn, order_dicts)
+    service.record_orders(run_id, order_dicts, idempotent=True)
 
-    # Build fills from match results
+    # Build fills from match results with deterministic order_id linkage
     fill_dicts = []
-    for item in results:
+    for i, item in enumerate(results):
         o = item["order"]
         qty = int(item.get("filled_amount", o.get("amount", 0)) or 0)
         if qty <= 0:
@@ -833,8 +833,8 @@ def _write_execution_to_ledger(
         net = gross + fee if side == "BUY" else gross - fee
 
         fill_dicts.append({
-            "fill_id": f"fil_{execution_date}_{o['symbol']}",
-            "order_id": f"ord_{execution_date}_{o['symbol']}",
+            "fill_id": f"fil_{run_id.replace('.', '_')}_{o['symbol']}_{o['side']}_{i}",
+            "order_id": o["_oid"],
             "run_id": run_id,
             "account_id": account_id,
             "strategy_id": strategy_id,
