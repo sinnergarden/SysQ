@@ -1,10 +1,35 @@
 strategy_id: alpha_v1
 display_name: Alpha V1
+stage: candidate
+family: ml
+owner: quant_research
 account_id: shadow_alpha_v1
 universe: csi300
 feature_set: alpha_v1
 model_version: alpha_v1_candidate_202605
 signal_version: blend_0.8:0.2
+
+hypothesis: >
+  Multi-factor alpha combining momentum, value, and quality signals
+  via gradient-boosted ensemble, targeting excess returns over CSI300.
+
+lifecycle:
+  created: 2026-04-01
+  stage_history:
+    - stage: research
+      at: 2026-04-01
+    - stage: candidate
+      at: 2026-04-15
+
+evaluation:
+  latest_eval_at: null
+  latest_status: null
+
+promotion_gates:
+  backtest_verified: true
+  contract_tests_pass: true
+  debug_run_pass: true
+  observation_days: 0
 
 paths:
   model_dir: experiments/alpha_v1_models/latest
