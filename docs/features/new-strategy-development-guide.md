@@ -1,5 +1,17 @@
 # New Strategy Development Guide
 
+> **Framework Contracts** — this guide references three formal contract
+> documents that define the SysQ framework boundaries:
+>
+> - [Strategy Interface Contract](../contracts/strategy-interface.md) —
+>   full ``StrategyCandidate`` protocol spec with hook contracts and
+>   "must not" rules.
+> - [Artifact Contract](../contracts/artifact-contract.md) — run root
+>   layout, per-file CSV/JSON schemas, replay rules.
+> - [Data Interface Contract](../contracts/data-interface.md) — date
+>   semantics, data cutoff rules, market snapshot and feature frame
+>   contracts.
+
 ## 1. When to Create a New Strategy
 
 A new `StrategyCandidate` adapter is warranted when:
