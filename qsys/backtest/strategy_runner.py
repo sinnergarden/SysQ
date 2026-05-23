@@ -18,8 +18,8 @@ Modes
 - ``cached_daily_equivalent``
   Allows batch / cached data loading when mathematically equivalent
   under the same visible-data mask and execution semantics.  Future
-  optimisation path — current skeleton treats it identically to
-  ``strict_daily_equivalent``.
+  optimisation path — current implementation calls the same code path
+  as ``strict_daily_equivalent``.
 
 Usage
 -----
@@ -36,15 +36,48 @@ Usage
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import json
+import tempfile
+from pathlib import Path
 from typing import Any
 
+import pandas as pd
+
 from qsys.backtest.result import BacktestRunResult
+from qsys.ops.market_snapshot import fetch_market_snapshot
+from qsys.ops.plan_builder import build_order_intents
+from qsys.ops.shadow_execution import positions_frame
+from qsys.trader.account import Account
+from qsys.trader.matcher import MatchEngine
 
 SUPPORTED_MODES = frozenset({
     "strict_daily_equivalent",
     "cached_daily_equivalent",
 })
+
+SUPPORTED_ARTIFACT_MODES = frozenset({"summary", "debug"})
+
+
+def _resolve_trading_dates(start_date: str, end_date: str) -> list[str]:
+    """Resolve trading dates in [*start_date*, *end_date*] (inclusive).
+
+    Uses qlib calendar when available; falls back to ``pd.bdate_range``.
+    """
+    try:
+        from qlib.data import D as qlib_D
+        from qsys.data.adapter import QlibAdapter
+
+        QlibAdapter().init_qlib()
+        cal = qlib_D.calendar(start_time=start_date, end_time=end_date)
+        if cal is not None and len(cal) > 0:
+            return [pd.Timestamp(d).strftime("%Y-%m-%d") for d in cal]
+    except Exception:
+        pass
+    # Fallback: business days
+    return [
+        d.strftime("%Y-%m-%d")
+        for d in pd.bdate_range(start=start_date, end=end_date)
+    ]
 
 
 class BacktestRunner:
@@ -57,7 +90,7 @@ class BacktestRunner:
     execution_model : optional
         Execution model for fill simulation.
     artifact_mode : str
-        ``"summary"`` or ``"full"`` (default ``"summary"``).
+        ``"summary"`` or ``"debug"`` (default ``"summary"``).
     mode : str
         Backtest mode (default ``"cached_daily_equivalent"``).
     """
@@ -73,6 +106,11 @@ class BacktestRunner:
             raise ValueError(
                 f"unsupported mode {mode!r}; "
                 f"must be one of {sorted(SUPPORTED_MODES)}"
+            )
+        if artifact_mode not in SUPPORTED_ARTIFACT_MODES:
+            raise ValueError(
+                f"unsupported artifact_mode {artifact_mode!r}; "
+                f"must be one of {sorted(SUPPORTED_ARTIFACT_MODES)}"
             )
         self._data_provider = data_provider
         self._execution_model = execution_model
@@ -101,6 +139,8 @@ class BacktestRunner:
         rebalance_freq: str | None = None,
         initial_capital: float = 1_000_000.0,
         dry_run: bool = True,
+        output_dir: str | Path | None = None,
+        initial_account: Account | None = None,
     ) -> BacktestRunResult:
         """Run a strategy over a date range.
 
@@ -109,8 +149,9 @@ class BacktestRunner:
         Parameters
         ----------
         strategy
-            A ``StrategyCandidate``-compatible adapter instance (or a
-            research stub with compatible hooks).
+            A ``StrategyCandidate``-compatible adapter instance.  Must expose
+            ``generate_predictions_for_date`` and ``build_plan_for_backtest``
+            for full backtest support.
         spec
             A ``StrategySpec`` instance.
         start_date
@@ -123,6 +164,13 @@ class BacktestRunner:
             Starting capital.
         dry_run
             If ``True``, skip any persistent side effects.
+        output_dir
+            Optional directory for per-run output.  If provided, writes
+            ``backtest_result.json`` and (when ``artifact_mode="debug"``)
+            per-day artifacts.
+        initial_account
+            Optional pre-configured ``Account``.  If omitted, creates an
+            empty account with *initial_capital*.
 
         Returns
         -------
@@ -135,87 +183,290 @@ class BacktestRunner:
             )
 
         spec_id = getattr(spec, "strategy_id", "unknown")
+        backtest_id = f"{spec_id}_bt_{start_date}_{end_date}"
+        output_path = Path(output_dir) if output_dir else None
+
+        if output_path:
+            output_path.mkdir(parents=True, exist_ok=True)
 
         # ── Lightweight hook check ──────────────────────────────────
-        has_predict_hook = hasattr(strategy, "generate_predictions_for_date")
-
-        # ── Skeleton body ───────────────────────────────────────────
-        # Future implementation:
-        #   1. Build trading calendar from start_date to end_date.
-        #   2. For strict_daily_equivalent: iterate day by day, calling
-        #      generate_predictions_for_date (or the standard hook chain
-        #      without production IO).
-        #   3. For cached_daily_equivalent: batch-load feature panel,
-        #      then iterate day by day with cached data.
-        #   4. Track portfolio, compute metrics.
-        #   5. Return BacktestRunResult with computed metrics.
-        #
-        # This skeleton returns "not_implemented" unless the strategy
-        # has a lightweight generate_predictions_for_date hook.
-
-        if not has_predict_hook:
-            return BacktestRunResult(
-                strategy_id=spec_id,
-                backtest_id=f"{spec_id}_bt_{start_date}_{end_date}",
-                start_date=start_date,
-                end_date=end_date,
-                mode=self._mode,
-                rebalance_freq=rebalance_freq or "weekly",
+        has_bt_hooks = (
+            hasattr(strategy, "generate_predictions_for_date")
+            and callable(getattr(strategy, "generate_predictions_for_date", None))
+            and hasattr(strategy, "build_plan_for_backtest")
+            and callable(getattr(strategy, "build_plan_for_backtest", None))
+        )
+        if not has_bt_hooks:
+            return self._return_not_implemented(
+                spec_id, backtest_id, start_date, end_date,
+                rebalance_freq=rebalance_freq,
                 initial_capital=initial_capital,
-                status="not_implemented",
-                notes="strategy lacks generate_predictions_for_date hook; "
-                      "full backtest not implemented yet",
             )
 
-        # ── Optional: call generate_predictions_for_date over range ──
-        return self._run_with_predict_hook(
-            strategy, spec_id, start_date, end_date,
-            rebalance_freq=rebalance_freq,
-            initial_capital=initial_capital,
+        # ── Resolve trading dates ───────────────────────────────────
+        trading_dates = _resolve_trading_dates(start_date, end_date)
+        trading_dates = [d for d in trading_dates if start_date <= d <= end_date]
+
+        # ── Initial account ─────────────────────────────────────────
+        account = initial_account or Account(init_cash=initial_capital)
+
+        # ── Daily loop ──────────────────────────────────────────────
+        daily_summaries: list[dict[str, Any]] = []
+        daily_debug_dir = (
+            output_path / "daily" if output_path and self._artifact_mode == "debug"
+            else None
         )
 
-    # ── Internal helpers ────────────────────────────────────────────────
+        for trade_date in trading_dates:
+            day_result = self._run_one_day(
+                strategy=strategy,
+                account=account,
+                trade_date=trade_date,
+                backtest_id=backtest_id,
+                debug_dir=daily_debug_dir,
+            )
+            daily_summaries.append(day_result)
 
-    def _run_with_predict_hook(
+        # ── Compute final metrics ───────────────────────────────────
+        final_mv = account.get_market_value({})
+        # Need prices for accurate market value — use last day's close
+        if daily_summaries:
+            last = daily_summaries[-1]
+            final_value = last.get("total_value_after", account.cash + final_mv)
+        else:
+            final_value = account.cash + final_mv
+
+        total_return = (
+            (final_value / initial_capital) - 1.0 if initial_capital > 0 else 0.0
+        )
+
+        result = BacktestRunResult(
+            strategy_id=spec_id,
+            backtest_id=backtest_id,
+            start_date=start_date,
+            end_date=end_date,
+            mode=self._mode,
+            rebalance_freq=rebalance_freq or "daily",
+            initial_capital=initial_capital,
+            final_value=final_value,
+            total_return=total_return,
+            status="completed",
+            daily_summary=daily_summaries,
+            notes=f"backtest over {len(trading_dates)} trading days; "
+                  f"mode={self._mode}; artifact_mode={self._artifact_mode}",
+        )
+
+        # ── Write output ────────────────────────────────────────────
+        if output_path:
+            self._write_summary(result, output_path)
+
+        return result
+
+    # ── Per-day execution ──────────────────────────────────────────────
+
+    def _run_one_day(
         self,
+        *,
         strategy: Any,
-        strategy_id: str,
+        account: Account,
+        trade_date: str,
+        backtest_id: str,
+        current_prices: dict[str, float] | None = None,
+        debug_dir: Path | None = None,
+    ) -> dict[str, Any]:
+        """Execute one trading day: predict → plan → execute → record.
+
+        Matches ``run_shadow_rebalance`` semantics (close-price execution)
+        for valid comparison against the replay baseline.
+        """
+        # Resolve data date (last trading day with observable data)
+        data_date = strategy.resolve_data_date(trade_date)
+
+        # 1. Generate predictions
+        predictions = strategy.generate_predictions_for_date(
+            trade_date, data_date=data_date,
+        )
+        if predictions is None or (isinstance(predictions, pd.DataFrame) and predictions.empty):
+            return self._empty_day(trade_date, data_date, account, "no_predictions")
+
+        # 2. Build plan via strategy hook (writes target_weights/order_intents to plan_dir)
+        day_out = debug_dir / trade_date if debug_dir else Path(tempfile.mkdtemp())
+        day_out.mkdir(parents=True, exist_ok=True)
+
+        plan_dir = strategy.build_plan_for_backtest(
+            predictions, account, trade_date, output_dir=day_out,
+        )
+
+        # 3. Read plan artifacts and execute
+        target_df = pd.read_csv(plan_dir / "target_weights.csv")
+        target_weights = dict(zip(target_df["instrument"], target_df["target_weight"]))
+        rebalance_audit = pd.read_csv(plan_dir / "rebalance_audit.csv")
+
+        instruments = sorted(
+            set(predictions["instrument"].astype(str))
+            | set(account.positions.keys())
+        )
+        try:
+            current_prices, market_status = fetch_market_snapshot(
+                trade_date, instruments,
+            )
+        except Exception as exc:
+            return self._empty_day(
+                trade_date, data_date, account,
+                f"no_market_data: {exc}",
+            )
+
+        orders, order_intents, _, cash_before, mv_before, tv_before = (
+            build_order_intents(
+                account, predictions, target_weights, current_prices, trade_date,
+            )
+        )
+
+        matcher = MatchEngine(slippage=0.0)
+        results = matcher.match(orders, account, market_status, current_prices)
+        account.settlement()
+
+        # 5. Record state
+        buy_count = sum(1 for o in orders if o["side"] == "buy")
+        sell_count = sum(1 for o in orders if o["side"] == "sell")
+        filled_count = sum(1 for r in results if r["status"] == "filled")
+        rejected_count = sum(1 for r in results if r["status"] == "rejected")
+        turnover = float(sum(
+            float(r.get("filled_amount", 0)) * float(r.get("deal_price", 0.0))
+            for r in results if r["status"] == "filled"
+        ))
+
+        pos_frame = positions_frame(account, current_prices)
+        market_value_after = float(pos_frame["market_value"].sum()) if not pos_frame.empty else 0.0
+        cash_after = float(account.cash)
+        total_value_after = float(cash_after + market_value_after)
+
+        day_result = {
+            "trade_date": trade_date,
+            "data_date": data_date,
+            "cash_before": float(cash_before),
+            "market_value_before": float(mv_before),
+            "total_value_before": float(tv_before),
+            "cash_after": cash_after,
+            "market_value_after": market_value_after,
+            "total_value_after": total_value_after,
+            "order_count": len(orders),
+            "buy_count": buy_count,
+            "sell_count": sell_count,
+            "filled_count": filled_count,
+            "rejected_count": rejected_count,
+            "turnover": turnover,
+            "position_count": len(account.positions),
+            "status": "success",
+        }
+
+        # Write debug artifacts
+        if debug_dir:
+            with open(day_out / "execution_summary.json", "w") as f:
+                json.dump(day_result, f, indent=2, default=str)
+            pos_frame.to_csv(day_out / "positions_after.csv", index=False)
+            from qsys.utils.json_io import write_json
+
+            write_json(day_out / "account_after.json", {
+                "trade_date": trade_date,
+                "cash": cash_after,
+                "available_cash": cash_after,
+                "market_value": market_value_after,
+                "total_value": total_value_after,
+                "last_run_id": backtest_id,
+                "initial_capital": account.init_cash,
+            })
+            if predictions is not None and not predictions.empty:
+                predictions.to_csv(day_out / "predictions.csv", index=False)
+
+        return day_result
+
+    # ── Helpers ────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _empty_day(
+        trade_date: str, data_date: str, account: Account, reason: str,
+    ) -> dict[str, Any]:
+        pos_frame = positions_frame(account, {})
+        mv = float(pos_frame["market_value"].sum()) if not pos_frame.empty else 0.0
+        return {
+            "trade_date": trade_date,
+            "data_date": data_date,
+            "cash_before": float(account.cash),
+            "market_value_before": mv,
+            "total_value_before": float(account.cash + mv),
+            "cash_after": float(account.cash),
+            "market_value_after": mv,
+            "total_value_after": float(account.cash + mv),
+            "order_count": 0,
+            "buy_count": 0,
+            "sell_count": 0,
+            "filled_count": 0,
+            "rejected_count": 0,
+            "turnover": 0.0,
+            "position_count": len(account.positions),
+            "status": reason,
+        }
+
+    def _return_not_implemented(
+        self,
+        spec_id: str,
+        backtest_id: str,
         start_date: str,
         end_date: str,
         *,
         rebalance_freq: str | None = None,
         initial_capital: float = 1_000_000.0,
     ) -> BacktestRunResult:
-        """Run lightweight date-by-date prediction loop.
-
-        Only used when the strategy exposes ``generate_predictions_for_date``.
-        This is an optional research-only hook (not part of the
-        ``StrategyCandidate`` protocol).
-        """
-        import pandas as pd
-
-        dates = pd.bdate_range(start=start_date, end=end_date)
-        predict_count = 0
-
-        for d in dates:
-            date_str = d.strftime("%Y-%m-%d")
-            try:
-                result = strategy.generate_predictions_for_date(date_str)
-                if result is not None:
-                    predict_count += 1
-            except Exception:
-                pass
-
         return BacktestRunResult(
-            strategy_id=strategy_id,
-            backtest_id=f"{strategy_id}_bt_{start_date}_{end_date}",
+            strategy_id=spec_id,
+            backtest_id=backtest_id,
             start_date=start_date,
             end_date=end_date,
             mode=self._mode,
             rebalance_freq=rebalance_freq or "weekly",
             initial_capital=initial_capital,
-            final_value=initial_capital,
-            total_return=0.0,
-            status="completed",
-            notes=f"lightweight run: {predict_count} dates with predictions",
+            status="not_implemented",
+            notes="strategy lacks generate_predictions_for_date and/or "
+                  "build_plan_for_backtest hooks; full backtest not implemented",
         )
+
+    @staticmethod
+    def _write_summary(result: BacktestRunResult, output_path: Path) -> None:
+        """Write backtest result summary JSON."""
+        from qsys.utils.json_io import write_json
+
+        summary = {
+            "strategy_id": result.strategy_id,
+            "backtest_id": result.backtest_id,
+            "start_date": result.start_date,
+            "end_date": result.end_date,
+            "mode": result.mode,
+            "rebalance_freq": result.rebalance_freq,
+            "initial_capital": result.initial_capital,
+            "final_value": result.final_value,
+            "total_return": result.total_return,
+            "status": result.status,
+            "daily_count": len(result.daily_summary),
+        }
+        write_json(output_path / "backtest_result.json", summary)
+
+        # Write daily summary CSV
+        if result.daily_summary:
+            pd.DataFrame(result.daily_summary).to_csv(
+                output_path / "daily_summary.csv", index=False,
+            )
+
+
+# ── Legacy compatibility ───────────────────────────────────────────────────────
+
+def _not_implemented_run(
+    strategy: Any,
+    spec: Any,
+    start_date: str,
+    end_date: str,
+    **kwargs: Any,
+) -> BacktestRunResult:
+    """Standalone fallback when the strategy has no backtest hooks."""
+    runner = BacktestRunner()
+    return runner.run_range(strategy, spec, start_date, end_date, **kwargs)

@@ -442,6 +442,57 @@ class AlphaV1StrategyAdapter:
         )
         return True
 
+    # ── Backtest hooks ─────────────────────────────────────────────
+
+    def generate_predictions_for_date(
+        self, trade_date: str, *, data_date: str | None = None,
+    ) -> pd.DataFrame:
+        """Generate predictions for a single historical date.
+
+        Reuses existing adapter methods: ``resolve_data_date``,
+        ``load_model``, ``fetch_data``, ``generate_predictions``.
+        ``load_model`` is idempotent (cached in ``_loaded_models``).
+        """
+        dd = data_date or self.resolve_data_date(trade_date)
+        if not self._loaded_models:
+            self.load_model()
+        data = self.fetch_data(dd)
+        if data is None or (isinstance(data, pd.DataFrame) and data.empty):
+            return pd.DataFrame()
+        return self.generate_predictions(data)
+
+    def build_plan_for_backtest(
+        self,
+        predictions: pd.DataFrame,
+        account: Any,
+        trade_date: str,
+        output_dir: Any,
+    ) -> Path:
+        """Build a trading plan using in-memory ``account`` state.
+
+        Reuses ``build_plan_from_predictions`` from ``qsys.ops.plan_builder``.
+        Returns path to ``plan`` subdirectory under *output_dir*.
+        """
+        from qsys.backtest.portfolio import build_rank_weight_portfolio
+        from qsys.ops.plan_builder import build_plan_from_predictions
+
+        p = ALPHA_V1_CANDIDATE.portfolio
+        return build_plan_from_predictions(
+            shadow_dir=Path("/tmp/_bt_shadow"),  # dummy — account provided
+            trade_date=trade_date,
+            predictions=predictions,
+            output_dir=Path(output_dir),
+            portfolio_fn=build_rank_weight_portfolio,
+            top_n=p.top_n,
+            buffer_hold=p.buffer_hold,
+            buffer_buy=p.buffer_buy,
+            single_stock_cap=p.single_stock_cap,
+            strategy_id=self.strategy_id,
+            strategy_version=self.model_version,
+            portfolio_method="rank_weight_buffer",
+            account=account,
+        )
+
     def load_plan_instruments(self, plan_dir: Any) -> list[str]:
         intents_path = Path(plan_dir) / "order_intents.csv"
         if not intents_path.exists():
