@@ -48,6 +48,71 @@
 
 ---
 
+## 阶段总览
+
+| Phase | 名称 | 状态 | 时间 |
+|-------|------|------|------|
+| Phase 1 | Stable Daily Operation | 进行中 | 2026 Q2 |
+| **Phase 1.5** | **Framework Stabilization** | **当前启动** | **2026 Q2-Q3** |
+| Phase 2 | Research → Candidate → Shadow → Production | 规划中 | 2026 Q3-Q4 |
+| Phase 3 | UI Debug & Production Hardening | 规划中 | 2026 Q4+ |
+
+---
+
+## Phase 1.5 — Framework Stabilization（框架稳定化）
+
+### 背景
+
+SysQ 已完成从脚本集合到准生产 daily ops 系统的关键转变。SQLite ledger 已取代 JSON/CSV 成为影子/仿真账户状态的事实标准。
+
+当前系统的能力已超越"研究脚本集合"阶段，但尚未完全达到"可运营生产系统"的成熟度。框架稳定化的目标是：在增加新策略复杂度之前，先收紧核心边界、标准化生命周期、固化产物契约。
+
+### 核心声明
+
+- **SQLite ledger 是影子/仿真账户状态的事实标准**。所有账户余额、持仓、成交、订单、现金流水、组合快照均以 `data/trade.db` 为准。
+- **JSON/CSV shadow 文件不再作为事实标准**。历史 shadow 文件已归档或迁移，新数据不再写入 shadow/*.json / *.csv。`check_shadow_status.py` 等检查工具优先读取 ledger，legacy CSV 仅为 fallback。
+- **下一优先级是框架稳定化，而不是新的 alpha 策略复杂度**。在 Phase 1.5 完成前，不引入需要修改 protected core 的新策略逻辑。
+- **Protected core 默认冻结**。`qsys/ledger/`、`qsys/backtest/`、`qsys/trader/` 核心模块、daily ops 主入口脚本、执行配置等受 ADR-005 保护，不允许随意修改。
+- **Research 层保持灵活**。因子研究、特征实验、模型调参仍在 `research/`、`qsys/signal/`、`qsys/feature/`、`qsys/model/` 等非保护区域内自由进行。
+- **所有策略必须遵循策略生命周期和产物契约**。Research → Candidate → Shadow → Production 的晋升流程和 artifact contract 由 ADR-006、ADR-007 定义。
+
+### 具体交付物
+
+#### 1. Protected Core Boundary（ADR-005）
+- 定义哪些模块受保护、不可随意修改。
+- 定义修改 protected core 时必须包含的 PR 信息。
+- 定义禁止事项清单，防止策略研究绕过核心约束。
+
+#### 2. Strategy Lifecycle（ADR-006）
+- 定义 Research → Candidate → Shadow → Production → Retired 的完整生命周期。
+- 每阶段标注 allowed / forbidden actions、required inputs / outputs、promotion criteria。
+
+#### 3. Artifact Contract（ADR-007 + docs/schema/）
+- 定义 SignalArtifact、OrderIntentArtifact、ExecutionArtifact、PortfolioSnapshot、CandidateReport、RunManifest 的标准字段。
+- 所有策略晋升至 Candidate 以上级别时必须遵守这些契约。
+
+#### 4. Agent Governance（AGENTS.md 更新）
+- 增加 Builder / Reviewer / Operator 三种 agent 角色定义。
+- Builder 可在 research 层自由修改；Reviewer 检查 protected core 和 artifact contract；Operator 执行 daily pipeline 不修改代码。
+- alpha_v1 分类为 Shadow Baseline，非自由研究沙盒。
+
+#### 5. Templates
+- 提供 research report template 和 candidate promotion checklist。
+- 降低研究到候选的转换摩擦，确保每次晋升有可追溯的记录。
+
+### 完成判定
+
+- [ ] ADR-005 (Protected Core Boundary) 已采纳
+- [ ] ADR-006 (Strategy Lifecycle) 已采纳
+- [ ] ADR-007 (Artifact Contract) 已采纳
+- [ ] docs/schema/ 产物契约文档已就绪
+- [ ] AGENTS.md 已按 Phase 1.5 更新
+- [ ] alpha_v1 已明确分类为 Shadow Baseline
+- [ ] Research 报告模板 + 候选晋升检查清单可用
+- [ ] Protected core 变更检查脚本可用
+
+---
+
 ## 已完成 / 已形成共识
 
 - 数据 readiness 是训练、回测、 daily ops 的前置条件

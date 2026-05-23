@@ -1,11 +1,11 @@
-# Alpha V1 — Baseline Version (Production Candidate)
+# Alpha V1 — Baseline Version (Shadow Baseline / Daily Ops Baseline)
 
 ## Strategy Identity
 
 | Field | Value |
 |-------|-------|
 | ID | `qsys_alpha_v1_blend20_weekly_top20_buffer` |
-| Status | **Production candidate** (shadow trading) |
+| Status | **Shadow Baseline / Daily Ops Baseline** |
 | Universe | CSI 300 / CSI 800 |
 | Horizon | Weekly rebalance |
 | Max Positions | 20 |
@@ -200,6 +200,65 @@ blended_score = 0.8 × zscore(pred_5d) + 0.2 × zscore(pred_20d)
 5. **15:30** — Post-close report (`run_alpha_v1_daily.py --mode postclose`):
    - Read reconciliation data (or fallback to shadow execution summary)
    - P&L snapshot + turnover
+
+---
+
+## Current Lifecycle Classification
+
+根据 ADR-006 Strategy Lifecycle 和 ADR-005 Protected Core Boundary，alpha_v1 的当前分类如下：
+
+### 阶段：Shadow Baseline / Daily Ops Baseline
+
+| 维度 | 状态 |
+|------|------|
+| **Phase** | Shadow（影子/仿真阶段） |
+| **Type** | Baseline |
+| **Status** | Active — 每日稳定运行 |
+| **Start Date** | 2026-05 (Phase 1 daily ops 过渡完成) |
+| **Not (Yet)** | Production（生产阶段） |
+| **Not** | Research sandbox（自由研究沙盒） |
+
+### 验证职责
+
+alpha_v1 作为 Shadow Baseline 用于验证以下系统组件：
+
+- ✅ Daily pipeline（preopen → postclose）
+- ✅ SQLite ledger integration（账户、订单、成交、现金流、持仓、快照）
+- ✅ Run archive（运行产物管理）
+- ✅ MTM（Mark-to-Market 估值）
+- ✅ Order Intent generation（交易意图生成）
+- ✅ Reporting（盘前/盘后报告）
+- ✅ Stale data protection（陈旧数据保护）
+- ✅ Telegram 通知
+- ✅ 两阶段提交崩溃安全（COMMITTING / COMMITTED）
+
+### 策略细节（冻结清单）
+
+以下设置是 alpha_v1 Shadow Baseline 的冻结参数，修改需要经过 Protected Core 变更流程：
+
+| 参数 | 当前值 | 保护级别 |
+|------|--------|---------|
+| Universe | CSI 300 | Baseline（shadow trading） |
+| Training Universe | CSI 800 | Baseline |
+| Horizon | Weekly | Baseline |
+| Model | Dual LightGBM (5d + 20d) | Baseline |
+| Blend Weight | 0.8 / 0.2 | Baseline |
+| Portfolio | rank_weight_buffer | Baseline |
+| Top N | 20 | Baseline |
+| Buffer Hold | 60 | Baseline |
+| Buffer Buy | 40 | Baseline |
+| Single Stock Cap | 7% | Baseline |
+| Commission | 0.03% | Baseline |
+| Stamp Duty | 0.1% | Baseline |
+| Slippage | 0.1% | Baseline |
+| Min Commission | ¥5 | Baseline |
+| Features | Clean features (~132) | Baseline |
+
+### 未来演进
+
+- **alpha_v1.1 / alpha_v2** 的研究必须先在 `research/` 和 `candidate` 层进行，通过 ADR-006 定义的策略生命周期循序渐进，不能直接修改 daily pipeline 入口。
+- **alpha_v1 作为 Shadow Baseline** 会继续运行，直到有候选策略通过 Shadow 验证并正式接替其地位。
+- 将 alpha_v1 提升到 Production 需要满足 ADR-006 中定义的 Production promotion 条件（broker read-only reconciliation、kill switch、manual confirmation 等）。
 
 ---
 

@@ -171,3 +171,88 @@ python -m unittest discover tests
 - 验证结果
 - 风险与回滚
 - 下一步命令
+
+---
+
+## Phase 1.5 — Framework Stabilization
+
+详见 [ROADMAP.md](ROADMAP.md) Phase 1.5 和 ADR-005~007。
+
+### 当前状态
+
+SysQ 处于 **Phase 1.5 Framework Stabilization**。SQLite ledger 已是影子/仿真账户状态的事实标准。系统已从研究脚本集合演化为准生产 daily ops 核心，需要明确的治理协议。
+
+### 角色定义
+
+根据操作范围和权限，AI 助手承担以下角色之一：
+
+#### Builder Agent
+
+**可默认修改**：
+
+- `research/` — 研究实验
+- `configs/research/` — 研究配置
+- `configs/candidates/` — 候选策略配置
+- `qsys/signal/` — 信号生成逻辑
+- `qsys/feature/` — 特征工程与因子
+- `qsys/model/` — 模型定义与训练
+- `qsys/strategy/candidates/` — 候选策略实现
+- `reports/research/` — 研究报告
+- `tests/` — 测试（非 Protected Core 对应测试）
+- `docs/` — 文档（非 Protected Core 部分）
+
+**不得默认修改**（参见 ADR-005 Protected Core Boundary）：
+
+- `qsys/ledger/` — 账本核心
+- `qsys/backtest/` — 回测引擎
+- `qsys/trader/matcher.py` — 成交匹配引擎
+- `qsys/trader/account.py` — 账户抽象
+- `scripts/run_alpha_v1_daily.py` — Daily ops 主入口
+- 生产 DAG 与 systemd timer 配置
+- Broker bridge（`qsys/broker/`）
+- 执行配置与运行清单
+
+#### Reviewer Agent
+
+**审查时必查项**：
+
+- [ ] Protected Core 是否有变更
+- [ ] 回测/matcher/ledger 语义是否发生变化
+- [ ] Artifact contract 是否被绕过
+- [ ] 是否存在数据泄漏风险
+- [ ] 是否影响 production daily 运行
+- [ ] 测试和验证证据是否充分
+
+#### Operator Agent
+
+**可执行**：
+
+- 运行 daily pipeline（preopen / postclose）
+- 检查 run archive 状态
+- 检查 ledger 状态
+- 生成 daily report
+- 检查 shadow 账户状态
+- 检查数据新鲜度
+
+**禁止操作**：
+
+- ❌ 修改代码
+- ❌ 编辑 ledger 历史记录
+- ❌ 删除 production artifacts
+- ❌ 自动提交真实券商订单
+- ❌ 绕过 manual confirmation
+
+### 风险分级更新
+
+| 风险级 | 范围 | 操作 |
+|--------|------|------|
+| 低 | 研究层文档、research 代码、测试补齐、Builder 许可路径 | 可直接修改 |
+| 中 | 跨模块重构（非 Protected Core）、配置接口调整、脚本入口行为变更 | 先说明影响再改 |
+| 高 | Protected Core、公共 API、持久化结构、交易规则、核心流程重写 | 必须先讨论且满足 ADR-005 PR 要求 |
+
+### alpha_v1 分类
+
+alpha_v1 是 **Shadow Baseline / Daily Ops Baseline**，不是自由研究沙盒，也不是生产环境。
+- 用于验证 daily pipeline、ledger 集成、run archive、MTM、order intent 生成、报告、stale data protection
+- 未来的 alpha_v1.1 / alpha_v2 研究必须先发生在 research/candidate 层，不能直接修改 daily pipeline 入口
+- 修改 alpha_v1 的 daily ops 主入口需要满足 ADR-005 Protected Core 变更要求
