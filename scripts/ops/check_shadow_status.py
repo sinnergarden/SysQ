@@ -90,18 +90,14 @@ def _read_shadow_ledger(base_dir: Path) -> tuple[dict[str, Any], list[str]]:
             service = LedgerService(_LEDGER_DB_PATH)
             summary = service.get_ledger_summary()
             # Get last run from fills
-            conn = service.conn
-            last_row = conn.execute(
-                "SELECT run_id, trade_date FROM fills ORDER BY fill_id DESC LIMIT 1"
-            ).fetchone()
             service.close()
             return {
                 "exists": summary["fill_count"] > 0,
                 "source": "ledger",
                 "fill_count": summary["fill_count"],
                 "order_count": summary["order_count"],
-                "last_run_id": last_row["run_id"] if last_row else None,
-                "last_trade_date": last_row["trade_date"] if last_row else None,
+                "last_run_id": summary.get("last_run_id"),
+                "last_trade_date": summary.get("last_trade_date"),
             }, []
         except Exception:
             pass

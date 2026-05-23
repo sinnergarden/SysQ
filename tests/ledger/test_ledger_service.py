@@ -688,6 +688,58 @@ class TestPortfolioSnapshot:
         assert count == 1
 
 
+class TestPortfolioSnapshotUniqueIndex:
+    """Verify DB-level unique index on (account_id, trade_date, run_id)."""
+
+    def test_unique_index_created(self, db_path: str) -> None:
+        """ensure_schema creates the unique index."""
+        from qsys.ledger.schema import ensure_schema
+        conn = create_connection(db_path)
+        ensure_schema(conn)
+        # Query sqlite_master for the index
+        row = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='index' AND name=?",
+            ("idx_portfolio_snapshots_unique",),
+        ).fetchone()
+        assert row is not None, "Unique index not found"
+        assert row["name"] == "idx_portfolio_snapshots_unique"
+        conn.close()
+
+    def test_unique_index_prevents_duplicate(self, db_path: str) -> None:
+        """Inserting same (account_id, trade_date, run_id) twice raises IntegrityError."""
+        from qsys.ledger.schema import ensure_schema
+        conn = create_connection(db_path)
+        ensure_schema(conn)
+
+        # Need an account for the FK constraint
+        conn.execute(
+            "INSERT INTO accounts (account_id, account_type, initial_cash) "
+            "VALUES ('test_acct', 'shadow', 1000000.0)"
+        )
+        conn.commit()
+
+        conn.execute(
+            """INSERT INTO portfolio_snapshots
+               (snapshot_id, account_id, run_id, trade_date,
+                cash, total_market_value, total_asset)
+               VALUES ('snp_001', 'test_acct', 'run_001', '2026-05-23',
+                       100000.0, 50000.0, 150000.0)"""
+        )
+        conn.commit()
+
+        # Second insert with same (account_id, trade_date, run_id) must fail
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                """INSERT INTO portfolio_snapshots
+                   (snapshot_id, account_id, run_id, trade_date,
+                    cash, total_market_value, total_asset)
+                   VALUES ('snp_002', 'test_acct', 'run_001', '2026-05-23',
+                           90000.0, 60000.0, 150000.0)"""
+            )
+            conn.commit()
+        conn.close()
+
+
 # ═════════════════════════════════════════════════════════════════════
 # 12. finish_run + completed-run retry
 # ═════════════════════════════════════════════════════════════════════
@@ -843,6 +895,21 @@ class TestLedgerServiceQueries:
         assert summary["order_count"] == 1
         assert summary["fill_count"] == 1
         assert summary["fill_volume"] == pytest.approx(1000.0)
+
+    def test_get_ledger_summary_includes_last_run(self, service: LedgerService) -> None:
+        """get_ledger_summary returns last_run_id and last_trade_date."""
+        _start_run(service)
+        summary = service.get_ledger_summary(ACCT)
+        # No fills yet
+        assert summary["last_run_id"] is None
+        assert summary["last_trade_date"] is None
+
+        service.apply_fills(RUN, [
+            _fill("600000.SH", "BUY", 100, 10.0),
+        ])
+        summary = service.get_ledger_summary(ACCT)
+        assert summary["last_run_id"] == RUN
+        assert summary["last_trade_date"] == "2026-05-23"
 
     def test_list_accounts(self, service: LedgerService) -> None:
         service.create_account("test_a", "shadow", 100_000.0)

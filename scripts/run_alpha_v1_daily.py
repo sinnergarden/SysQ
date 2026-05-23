@@ -1021,7 +1021,10 @@ def run_postclose(trade_date: str, debug_run: bool = False,
 
         if not debug_run:
             print(f"  Committing artifacts...")
-            _commit_execution(run_root, staging_exec_dir)
+            _commit_execution(run_root, staging_exec_dir,
+                              db_path=LEDGER_DB_PATH if not debug_run else None,
+                              strategy_id=ALPHA_V1_CANDIDATE.strategy_id,
+                              trade_date=trade_date)
             print(f"  ✅ Execution committed")
         else:
             print(f"  🔧 调试模式 — 不提交 shadow 账户")
@@ -1163,7 +1166,10 @@ def _cleanup_committing(run_root: Path) -> None:
         print(f"  🧹 COMMITTING marker cleaned up")
 
 
-def _commit_execution(run_root: Path, staging_dir: Path) -> None:
+def _commit_execution(run_root: Path, staging_dir: Path,
+                      db_path: str | None = None,
+                      strategy_id: str | None = None,
+                      trade_date: str | None = None) -> None:
     exec_dir = _exec_dir(run_root)
     exec_dir.mkdir(parents=True, exist_ok=True)
     # COMMITTING should already exist (written before execute_alpha_v1_plan)
@@ -1171,19 +1177,70 @@ def _commit_execution(run_root: Path, staging_dir: Path) -> None:
     if not committing_path.exists():
         print(f"  ❌ COMMITTING 标记不存在，疑似提交顺序错误。")
         sys.exit(1)
+
+    ledger_written = False
     try:
-        # 1. Copy staging artifacts to execution/ (including before-state for force-rerun)
+        # 1. Write SQLite ledger from staging payload (before artifact copy,
+        #    so that COMMITTING protects against inconsistent retry)
+        if db_path and strategy_id and trade_date:
+            from qsys.ops.shadow_rebalance import _write_execution_to_ledger
+            payload_path = staging_dir / "ledger_payload.json"
+            if payload_path.exists():
+                payload = json.loads(payload_path.read_text())
+                positions_df = pd.DataFrame()
+                pos_csv = staging_dir / "positions_after.csv"
+                if pos_csv.exists():
+                    positions_df = pd.read_csv(pos_csv)
+
+                # Read cash/market/total from execution_summary for snapshot accuracy
+                summary_path = staging_dir / "execution_summary.json"
+                if summary_path.exists():
+                    summary = json.loads(summary_path.read_text())
+                    cash_after = summary.get("cash_after", 0.0)
+                    market_value_after = summary.get("market_value_after", 0.0)
+                    total_value_after = summary.get("total_value_after", 0.0)
+                else:
+                    cash_after = market_value_after = total_value_after = 0.0
+
+                _write_execution_to_ledger(
+                    db_path=db_path,
+                    execution_date=trade_date,
+                    strategy_id=strategy_id,
+                    orders=payload["orders"],
+                    ledger_rows=[],
+                    results=payload["results"],
+                    close_prices=payload["close_prices"],
+                    cash_after=cash_after,
+                    market_value_after=market_value_after,
+                    total_value_after=total_value_after,
+                    positions_after=positions_df,
+                    initial_capital=payload.get("initial_capital", 1_000_000.0),
+                )
+                ledger_written = True
+            else:
+                print(f"  ⚠ ledger_payload.json 不存在于 {staging_dir}，跳过 ledger 写入")
+
+        # 2. Copy staging artifacts to execution/ (including before-state for force-rerun)
         for fname in ["account_after.json", "positions_after.csv", "execution_summary.json",
-                       "account_before.json", "positions_before.csv", "ledger_rows.csv"]:
+                       "account_before.json", "positions_before.csv", "ledger_rows.csv",
+                       "ledger_payload.json"]:
             src = staging_dir / fname
             if src.exists():
                 shutil.copy2(str(src), str(exec_dir / fname))
-        # 2. Rename COMMITTING → COMMITTED (atomic)
+
+        # 3. Rename COMMITTING → COMMITTED (atomic)
         committing_path.rename(_committed_marker(run_root))
         print(f"  ✅ 执行已提交 (COMMITTED): {exec_dir}")
+
     except BaseException:
-        # Clean up COMMITTING on any failure
-        _cleanup_committing(run_root)
+        if ledger_written:
+            # Ledger was written but artifact commit failed.
+            # PRESERVE COMMITTING to prevent retry with inconsistent state.
+            print(f"  ❌ Ledger written but artifact commit failed — COMMITTING preserved")
+            print(f"  💡 Manual recovery: fix issue, delete COMMITTING, verify execution/ dir")
+        else:
+            # Ledger failed — clean COMMITTING so retry is possible
+            _cleanup_committing(run_root)
         raise
 
 

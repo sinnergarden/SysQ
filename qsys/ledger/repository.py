@@ -499,7 +499,7 @@ def list_accounts(
 def get_ledger_summary(
     conn: sqlite3.Connection, account_id: str | None = None,
 ) -> dict[str, Any]:
-    """Return aggregate ledger stats (order/fill counts, sums)."""
+    """Return aggregate ledger stats (order/fill counts, sums) plus last run info."""
     account_filter = "WHERE account_id=?" if account_id else ""
     params = (account_id,) if account_id else ()
 
@@ -516,10 +516,18 @@ def get_ledger_summary(
         f"SELECT COUNT(*) FROM cash_ledger {account_filter}", params,
     ).fetchone()[0]
 
+    # Last run info from fills
+    last_fill = conn.execute(
+        f"SELECT run_id, trade_date FROM fills {account_filter} "
+        f"ORDER BY fill_time DESC LIMIT 1", params,
+    ).fetchone()
+
     return {
         "account_id": account_id,
         "order_count": order_count,
         "fill_count": fill_count,
         "fill_volume": float(fill_volume),
         "cash_event_count": cash_events,
+        "last_run_id": last_fill["run_id"] if last_fill else None,
+        "last_trade_date": last_fill["trade_date"] if last_fill else None,
     }

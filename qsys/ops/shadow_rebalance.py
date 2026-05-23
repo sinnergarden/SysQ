@@ -760,7 +760,7 @@ def _write_execution_to_ledger(
 ) -> None:
     """Write execution results to SQLite ledger.
 
-    Called from execute_alpha_v1_plan() when db_path is provided.
+    Called from _commit_execution() after COMMITTING marker is written.
     This is the single point where fills, orders, and snapshots
     enter the ledger as source of truth.
 
@@ -894,8 +894,12 @@ def execute_alpha_v1_plan(
 
     Reads plan artifacts (order intents), loads current shadow account,
     executes at OPEN price via MatchEngine, then MTM at CLOSE price.
-    Writes results to output_dir and delegates state persistence to
-    LedgerService when db_path is provided (SQLite replaces shadow files).
+    Writes staging results to output_dir.
+
+    When db_path is provided, saves a ledger_payload.json to staging_dir
+    for later commit by _commit_execution().  The actual SQLite ledger
+    write happens inside the COMMITTING/COMMITTED boundary to keep
+    ledger state and committed artifacts consistent.
 
     When debug_run=True, reads shadow account as input but NEVER writes
     to shadow/account.json, shadow/positions.csv, or shadow/ledger.csv.
@@ -1008,22 +1012,18 @@ def execute_alpha_v1_plan(
         })
     pd.DataFrame(ledger_rows).to_csv(output_dir / "ledger_rows.csv", index=False)
 
-    # ── Write to SQLite ledger (when db_path provided and not debug) ──
+    # ── Save ledger payload for later commit (in _commit_execution) ──
+    # execute_alpha_v1_plan generates staging artifacts only.
+    # The actual SQLite ledger write happens in _commit_execution() so that
+    # ledger state and execution artifacts share a single commit boundary.
     if db_path and not debug_run:
-        _write_execution_to_ledger(
-            db_path=db_path,
-            execution_date=execution_date,
-            strategy_id=plan_meta.get("strategy_id", "alpha_v1"),
-            orders=orders,
-            ledger_rows=ledger_rows,
-            results=results,
-            close_prices=close_prices,
-            cash_after=cash_after,
-            market_value_after=market_value_after,
-            total_value_after=total_value_after,
-            positions_after=positions_after,
-            initial_capital=float(prior_account.get("initial_capital", DEFAULT_INITIAL_CAPITAL)),
-        )
+        ledger_payload = {
+            "orders": orders,
+            "results": results,
+            "close_prices": close_prices,
+            "initial_capital": float(prior_account.get("initial_capital", DEFAULT_INITIAL_CAPITAL)),
+        }
+        write_json(output_dir / "ledger_payload.json", ledger_payload)
 
     execution_summary = {
         "trade_date": execution_date,

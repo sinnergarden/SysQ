@@ -153,6 +153,9 @@ CREATE TABLE IF NOT EXISTS portfolio_snapshots (
     created_at          TEXT NOT NULL DEFAULT (datetime('now')),
     FOREIGN KEY (account_id) REFERENCES accounts(account_id)
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_portfolio_snapshots_unique
+ON portfolio_snapshots(account_id, trade_date, run_id);
 """
 
 
