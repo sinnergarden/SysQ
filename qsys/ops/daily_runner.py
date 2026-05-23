@@ -9,6 +9,7 @@ its inline stage sequence.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from qsys.ops.run_context import DailyRunContext
 
@@ -21,7 +22,7 @@ class DailyRunner:
     concrete stage logic is added in Phase B.
     """
 
-    def run_preopen(self, ctx: DailyRunContext) -> None:
+    def run_preopen(self, ctx: DailyRunContext, strategy: Any = None) -> None:
         """Pre-open stage: inference → plan → notify.
 
         Phase B will implement::
@@ -39,7 +40,7 @@ class DailyRunner:
         self._ensure_dirs(ctx)
         # Phase B: delegate to strategy hooks
 
-    def run_postclose(self, ctx: DailyRunContext) -> None:
+    def run_postclose(self, ctx: DailyRunContext, strategy: Any = None) -> None:
         """Post-close stage: execute → MTM → notify.
 
         Phase B will implement::
@@ -56,7 +57,7 @@ class DailyRunner:
         self._ensure_dirs(ctx)
         # Phase B: delegate to strategy hooks
 
-    def run_train(self, ctx: DailyRunContext) -> None:
+    def run_train(self, ctx: DailyRunContext, strategy: Any = None) -> None:
         """Train stage: weekly model retraining.
 
         Phase B will implement::

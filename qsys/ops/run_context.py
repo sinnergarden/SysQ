@@ -5,7 +5,8 @@ This module is part of the Protected Core / Runtime boundary layer.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 
@@ -20,7 +21,7 @@ class DailyRunContext:
 
     trade_date: str
     mode: str  # "preopen" | "postclose" | "train"
-    run_root: Path
+    run_root: Path  # actual artifact directory (resolved by resolve_run_root)
     project_root: Path
     strategy_id: str
     account_id: str
@@ -39,28 +40,34 @@ class DailyRunContext:
     # Audit trail
     reason: str | None = None
 
-    # Derived helpers — populated by the runner, not the CLI parser
-    _output_resolved: bool = field(default=False, repr=False, compare=False)
-
     @property
     def output_dir_resolved(self) -> Path:
-        """Return effective output directory, resolving defaults on first call."""
-        if self.output_dir is not None:
-            return self.output_dir
-        return self.run_root / "experiments" / "alpha_v1_daily" / self.trade_date
+        """Alias for run_root — the resolved artifact directory."""
+        return self.run_root
 
 
-def resolve_run_root(project_root: Path, debug_run: bool, output_dir: Path | None) -> Path:
-    """Resolve the effective run root.
+def resolve_run_root(
+    project_root: Path,
+    strategy_id: str,
+    trade_date: str,
+    *,
+    debug_run: bool = False,
+    output_dir: Path | None = None,
+) -> Path:
+    """Resolve run_root for a daily pipeline invocation.
 
-    *debug* → *output_dir* if given else a temp directory under *project_root*.
-    *production* → *project_root* always.
+    Production
+        ``project_root/experiments/<strategy_id>_daily/<trade_date>``
+
+    Debug with --output-dir
+        The given *output_dir*.
+
+    Debug without --output-dir
+        ``project_root/experiments/debug/<strategy_id>/<trade_date>_<timestamp>``
     """
-    if not debug_run:
-        return project_root
     if output_dir is not None:
         return output_dir
-    import tempfile
-
-    tmp = tempfile.mkdtemp(prefix="alpha_v1_debug_", dir=str(project_root))
-    return Path(tmp)
+    if debug_run:
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        return project_root / "experiments" / "debug" / strategy_id / f"{trade_date}_{ts}"
+    return project_root / "experiments" / f"{strategy_id}_daily" / trade_date

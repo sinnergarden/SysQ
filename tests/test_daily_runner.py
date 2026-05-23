@@ -8,12 +8,14 @@ from pathlib import Path
 
 from qsys.ops.daily_runner import DailyRunner
 from qsys.ops.run_context import DailyRunContext
+from qsys.strategy.alpha_v1.adapter import AlphaV1StrategyAdapter
 
 
 class TestDailyRunner(unittest.TestCase):
     """DailyRunner — validates context, creates directories, logs stage."""
 
     def setUp(self):
+        self.strategy = AlphaV1StrategyAdapter()
         self.tmpdir = tempfile.TemporaryDirectory()
         self.run_root = Path(self.tmpdir.name) / "run"
         self.project_root = Path(self.tmpdir.name) / "proj"
@@ -93,6 +95,11 @@ class TestDailyRunner(unittest.TestCase):
         self.runner.run_preopen(self.ctx_preopen)
         self.runner.run_postclose(self.ctx_postclose)
         self.runner.run_train(self.ctx_train)
+        self.assertTrue(self.run_root.exists())
+
+    def test_with_strategy_candidate(self):
+        """Method accepts an optional StrategyCandidate argument."""
+        self.runner.run_preopen(self.ctx_preopen, strategy=self.strategy)
         self.assertTrue(self.run_root.exists())
 
 

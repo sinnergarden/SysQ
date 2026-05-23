@@ -30,7 +30,7 @@ class TestDailyRunContext(unittest.TestCase):
         ctx = DailyRunContext(
             trade_date="2026-05-18",
             mode="preopen",
-            run_root=Path("/tmp/run"),
+            run_root=Path("/custom/output"),
             project_root=Path("/tmp/proj"),
             strategy_id="alpha_v1",
             account_id="shadow_alpha_v1",
@@ -47,8 +47,7 @@ class TestDailyRunContext(unittest.TestCase):
             strategy_id="alpha_v1",
             account_id="shadow_alpha_v1",
         )
-        expected = Path("/tmp/run") / "experiments" / "alpha_v1_daily" / "2026-05-18"
-        self.assertEqual(ctx.output_dir_resolved, expected)
+        self.assertEqual(ctx.output_dir_resolved, Path("/tmp/run"))
 
     def test_flags_default_to_false(self):
         ctx = DailyRunContext(
@@ -89,22 +88,38 @@ class TestDailyRunContext(unittest.TestCase):
 
 
 class TestResolveRunRoot(unittest.TestCase):
-    """resolve_run_root — production vs debug resolution."""
+    """resolve_run_root — production vs debug vs output_dir resolution."""
 
-    def test_production_returns_project_root(self):
-        result = resolve_run_root(Path("/proj"), debug_run=False, output_dir=None)
-        self.assertEqual(result, Path("/proj"))
+    def test_production_path(self):
+        result = resolve_run_root(
+            Path("/proj"), "alpha_v1", "2026-05-18",
+            debug_run=False, output_dir=None,
+        )
+        expected = Path("/proj") / "experiments" / "alpha_v1_daily" / "2026-05-18"
+        self.assertEqual(result, expected)
 
     def test_debug_with_output_dir(self):
-        result = resolve_run_root(Path("/proj"), debug_run=True, output_dir=Path("/custom"))
+        result = resolve_run_root(
+            Path("/proj"), "alpha_v1", "2026-05-18",
+            debug_run=True, output_dir=Path("/custom"),
+        )
         self.assertEqual(result, Path("/custom"))
 
-    def test_debug_without_output_dir_creates_temp(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            proj = Path(tmp)
-            result = resolve_run_root(proj, debug_run=True, output_dir=None)
-            self.assertTrue(str(result).startswith(str(proj / "alpha_v1_debug_")))
-            self.assertTrue(result.exists())
+    def test_debug_without_output_dir(self):
+        result = resolve_run_root(
+            Path("/proj"), "alpha_v1", "2026-05-18",
+            debug_run=True, output_dir=None,
+        )
+        expected = Path("/proj") / "experiments" / "debug" / "alpha_v1" / "2026-05-18_"
+        self.assertTrue(str(result).startswith(str(expected)))
+
+    def test_different_strategy_id(self):
+        result = resolve_run_root(
+            Path("/proj"), "beta_v2", "2026-05-18",
+            debug_run=False, output_dir=None,
+        )
+        expected = Path("/proj") / "experiments" / "beta_v2_daily" / "2026-05-18"
+        self.assertEqual(result, expected)
 
 
 if __name__ == "__main__":

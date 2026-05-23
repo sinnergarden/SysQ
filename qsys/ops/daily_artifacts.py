@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from qsys.ops.shadow_rebalance import write_json
+from qsys.common.io import write_json
 
 
 def save_run_meta(

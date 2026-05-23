@@ -12,7 +12,7 @@ import pandas as pd
 
 from qlib.data import D as qlib_D
 from qsys.data.adapter import QlibAdapter
-from qsys.ops.shadow_rebalance import write_json
+from qsys.common.io import write_json
 
 
 class StaleDataError(Exception):
