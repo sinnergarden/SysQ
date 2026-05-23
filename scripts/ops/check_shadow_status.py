@@ -10,6 +10,9 @@ from typing import Any
 from qsys.ops.model_registry import latest_shadow_model_is_usable, read_latest_shadow_model
 from qsys.ops.state import atomic_write_json, load_json
 
+# Default ledger DB path
+_LEDGER_DB_PATH = str(Path(__file__).resolve().parent.parent.parent / "data" / "trade.db")
+
 
 def _utc_now_text() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
@@ -44,6 +47,44 @@ def _read_run_bundle(pointer_path: Path, summary_key: str) -> tuple[dict[str, An
 
 
 def _read_shadow_account(base_dir: Path) -> tuple[dict[str, Any], list[str]]:
+    # Try ledger first
+    if Path(_LEDGER_DB_PATH).exists():
+        try:
+            from qsys.ledger.service import LedgerService
+            service = LedgerService(_LEDGER_DB_PATH)
+            # Find all shadow accounts
+            conn = service.conn
+            rows = conn.execute(
+                "SELECT account_id, initial_cash FROM accounts WHERE account_id LIKE 'shadow_%'"
+            ).fetchall()
+            if rows:
+                acct_id = rows[0]["account_id"]
+                cash = service.get_cash(acct_id)
+                positions = service.get_positions(acct_id)
+                total_mv = sum(
+                    float(p.get("market_value", 0) or 0) for p in positions
+                )
+                snapshot = conn.execute(
+                    "SELECT trade_date FROM portfolio_snapshots WHERE account_id=? ORDER BY trade_date DESC LIMIT 1",
+                    (acct_id,),
+                ).fetchone()
+                last_trade_date = snapshot["trade_date"] if snapshot else None
+                service.close()
+                return {
+                    "cash": cash,
+                    "available_cash": cash,
+                    "market_value": total_mv,
+                    "total_value": cash + total_mv,
+                    "position_count": len(positions),
+                    "last_run_id": None,
+                    "last_trade_date": last_trade_date,
+                    "source": "ledger",
+                    "account_id": acct_id,
+                }, []
+        except Exception:
+            pass
+
+    # Fallback to shadow files
     account_path = base_dir / "shadow" / "account.json"
     if not account_path.exists():
         return {}, ["shadow account missing"]
@@ -51,15 +92,41 @@ def _read_shadow_account(base_dir: Path) -> tuple[dict[str, Any], list[str]]:
 
 
 def _read_shadow_ledger(base_dir: Path) -> tuple[dict[str, Any], list[str]]:
+    # Try ledger first
+    if Path(_LEDGER_DB_PATH).exists():
+        try:
+            from qsys.ledger.service import LedgerService
+            service = LedgerService(_LEDGER_DB_PATH)
+            conn = service.conn
+            fill_count = conn.execute("SELECT COUNT(*) FROM fills").fetchone()[0]
+            order_count = conn.execute("SELECT COUNT(*) FROM orders").fetchone()[0]
+            last_row = conn.execute(
+                "SELECT run_id, trade_date FROM fills ORDER BY fill_id DESC LIMIT 1"
+            ).fetchone()
+            service.close()
+            return {
+                "exists": True,
+                "source": "ledger",
+                "fill_count": fill_count,
+                "order_count": order_count,
+                "last_run_id": last_row["run_id"] if last_row else None,
+                "last_trade_date": last_row["trade_date"] if last_row else None,
+            }, []
+        except Exception:
+            pass
+
+    # Fallback to shadow CSV
     ledger_path = base_dir / "shadow" / "ledger.csv"
     if not ledger_path.exists():
-        return {"exists": False, "row_count": 0, "last_run_id": None, "last_trade_date": None}, ["shadow ledger missing"]
+        return {"exists": False, "source": "missing", "fill_count": 0, "last_run_id": None, "last_trade_date": None}, ["shadow ledger missing"]
     with ledger_path.open("r", encoding="utf-8", newline="") as handle:
         rows = list(csv.DictReader(handle))
     last_row = rows[-1] if rows else {}
     return {
         "exists": True,
-        "row_count": len(rows),
+        "source": "shadow_csv",
+        "fill_count": len(rows),
+        "order_count": len(rows),
         "last_run_id": last_row.get("run_id"),
         "last_trade_date": last_row.get("trade_date"),
     }, []

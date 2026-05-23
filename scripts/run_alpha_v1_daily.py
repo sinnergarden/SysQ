@@ -44,6 +44,12 @@ sys.path.insert(0, str(PROJECT_ROOT))
 # Force output root — set at mode handler entry; all path helpers derive from it.
 _FORCE_OUTPUT_ROOT: Path | None = None
 
+# ── Ledger ────────────────────────────────────────────────────────────
+LEDGER_DB_PATH = str(PROJECT_ROOT / "data" / "trade.db")
+
+def _shadow_account_id() -> str:
+    return f"shadow_{ALPHA_V1_CANDIDATE.strategy_id}"
+
 
 class StaleDataError(Exception):
     """Raised when stale close-price check blocks execution."""
@@ -94,18 +100,38 @@ def _should_rebalance(trade_date: str) -> bool:
         return True
     trade_dt = datetime.strptime(trade_date, "%Y-%m-%d").date()
     current_iso = trade_dt.isocalendar()
-    account_path = PROJECT_ROOT / "shadow" / "account.json"
-    if account_path.exists():
+    # Try ledger first, fall back to shadow/account.json
+    last_trade_date: str | None = None
+    if Path(LEDGER_DB_PATH).exists():
         try:
-            account = json.loads(account_path.read_text())
-            last_trade_date = account.get("trade_date", "")
-            if last_trade_date:
-                last_dt = datetime.strptime(last_trade_date, "%Y-%m-%d").date()
-                last_iso = last_dt.isocalendar()
-                if last_iso[0] == current_iso[0] and last_iso[1] == current_iso[1]:
-                    return False
-        except (json.JSONDecodeError, OSError):
+            from qsys.ledger.service import LedgerService
+            service = LedgerService(LEDGER_DB_PATH)
+            acct = service.get_account(_shadow_account_id())
+            if acct:
+                last_trade_date = None  # Ledger doesn't store last trade date on account
+            # Use portfolio_snapshots to find last snapshot date
+            rows = service.conn.execute(
+                "SELECT trade_date FROM portfolio_snapshots WHERE account_id=? ORDER BY trade_date DESC LIMIT 1",
+                (_shadow_account_id(),),
+            ).fetchall()
+            for r in rows:
+                last_trade_date = r["trade_date"]
+            service.close()
+        except Exception:
             pass
+    if not last_trade_date:
+        account_path = PROJECT_ROOT / "shadow" / "account.json"
+        if account_path.exists():
+            try:
+                acct_data = json.loads(account_path.read_text())
+                last_trade_date = acct_data.get("trade_date", "")
+            except (json.JSONDecodeError, OSError):
+                pass
+    if last_trade_date:
+        last_dt = datetime.strptime(last_trade_date, "%Y-%m-%d").date()
+        last_iso = last_dt.isocalendar()
+        if last_iso[0] == current_iso[0] and last_iso[1] == current_iso[1]:
+            return False
     return True
 
 
@@ -392,18 +418,65 @@ def _is_execution_committed(run_root: Path) -> bool:
 def _try_mark_to_market(trade_date: str, output_dir: Path,
                         account_path: Path | None = None,
                         positions_path: Path | None = None,
-                        close_prices_override: dict[str, float] | None = None) -> dict | None:
-    if positions_path is None:
+                        close_prices_override: dict[str, float] | None = None,
+                        db_path: str | None = None) -> dict | None:
+
+    # Load from ledger when available
+    ledger_account: dict | None = None
+    ledger_df = None
+    if db_path and Path(db_path).exists():
+        try:
+            from qsys.ledger.service import LedgerService
+            service = LedgerService(db_path)
+            acct = service.get_account(_shadow_account_id())
+            if acct:
+                ledger_account = dict(acct)
+                ledger_positions = service.get_positions(_shadow_account_id())
+                ledger_rows = []
+                for p in ledger_positions:
+                    if int(p["quantity"]) <= 0:
+                        continue
+                    ledger_rows.append({
+                        "instrument": p["symbol"],
+                        "quantity": int(p["quantity"]),
+                        "cost_price": float(p["avg_cost"]),
+                        "last_price": float(p.get("last_price", 0)),
+                        "market_value": float(p.get("market_value", 0)),
+                    })
+                if ledger_rows:
+                    ledger_df = pd.DataFrame(ledger_rows)
+                else:
+                    ledger_account = None
+            service.close()
+        except Exception:
+            pass
+
+    if positions_path is None and ledger_df is None:
         positions_path = PROJECT_ROOT / "shadow" / "positions.csv"
-    if account_path is None:
+    if account_path is None and ledger_account is None:
         account_path = PROJECT_ROOT / "shadow" / "account.json"
-    if not positions_path.exists() or not account_path.exists():
-        return None
-    try:
-        positions = pd.read_csv(positions_path)
-        if positions.empty:
+
+    if ledger_account is not None and ledger_df is not None:
+        positions = ledger_df
+        account = ledger_account
+    else:
+        if not positions_path or not positions_path.exists():
             return None
-        account = json.loads(account_path.read_text())
+        if not account_path or not account_path.exists():
+            return None
+        try:
+            positions = pd.read_csv(positions_path)
+        except Exception:
+            return None
+        try:
+            account = json.loads(account_path.read_text())
+        except (json.JSONDecodeError, OSError):
+            return None
+
+    if positions.empty:
+        return None
+
+    try:
         if close_prices_override is not None:
             close_prices = close_prices_override
         else:
@@ -750,6 +823,7 @@ def run_preopen(trade_date: str, debug_run: bool = False,
             build_alpha_v1_plan(
                 base_dir=".", trade_date=trade_date, reference_date=data_date,
                 predictions_path=str(pred_path), output_dir=str(run_root),
+                db_path=LEDGER_DB_PATH if not debug_run else None,
             )
         except Exception as e:
             print(f"  ❌ 建仓计划失败: {e}")
@@ -882,6 +956,16 @@ def run_postclose(trade_date: str, debug_run: bool = False,
         print(f"\n[2/4] Stale close-price check...")
         # Build union of current positions and plan instruments
         all_instruments: set[str] = set()
+        if Path(LEDGER_DB_PATH).exists():
+            try:
+                from qsys.ledger.service import LedgerService
+                svc = LedgerService(LEDGER_DB_PATH)
+                for p in svc.get_positions(_shadow_account_id()):
+                    if int(p["quantity"]) > 0:
+                        all_instruments.add(p["symbol"])
+                svc.close()
+            except Exception:
+                pass
         shadow_pos = PROJECT_ROOT / "shadow" / "positions.csv"
         if shadow_pos.exists():
             pos_df = pd.read_csv(shadow_pos)
@@ -922,6 +1006,7 @@ def run_postclose(trade_date: str, debug_run: bool = False,
                 base_dir=".", plan_dir=str(plan_dir),
                 execution_date=trade_date, output_dir=str(staging_exec_dir),
                 debug_run=debug_run,
+                db_path=LEDGER_DB_PATH if not debug_run else None,
             )
             print(f"  ✅ orders={artifacts.order_count}, "
                   f"total={_fmt(artifacts.total_value_after)}, "
@@ -952,7 +1037,8 @@ def run_postclose(trade_date: str, debug_run: bool = False,
             positions_path=staging_pos if staging_pos.exists() else None,
         )
     else:
-        mtm = _try_mark_to_market(trade_date, output_dir=run_root)
+        mtm = _try_mark_to_market(trade_date, output_dir=run_root,
+                                   db_path=LEDGER_DB_PATH if not debug_run else None)
 
     if mtm is None:
         print(f"  ⚠ 收盘价数据未就绪")
@@ -1079,40 +1165,15 @@ def _commit_execution(run_root: Path, staging_dir: Path) -> None:
     # Write COMMITTING before any write
     committing_path.write_text("")
     try:
-        # 1. Ledger rows: dedup by run_id, then append to shadow/ledger.csv
-        ledger_src = staging_dir / "ledger_rows.csv"
-        shadow_ledger = PROJECT_ROOT / "shadow" / "ledger.csv"
-        if ledger_src.exists():
-            new_rows = pd.read_csv(ledger_src)
-            if "run_id" in new_rows.columns and shadow_ledger.exists():
-                try:
-                    existing = pd.read_csv(shadow_ledger)
-                    if existing.empty:
-                        existing = pd.DataFrame()
-                except pd.errors.EmptyDataError:
-                    existing = pd.DataFrame()
-                if not existing.empty and "run_id" in existing.columns:
-                    run_id = new_rows["run_id"].iloc[0]
-                    existing = existing[existing["run_id"] != run_id]
-                combined = pd.concat([existing, new_rows], ignore_index=True)
-                combined.to_csv(shadow_ledger, index=False)
-            else:
-                new_rows.to_csv(shadow_ledger, index=False)
-        # 2. Copy staging artifacts to execution/ (including before-state for force-rerun)
+        # 1. Copy staging artifacts to execution/ (including before-state for force-rerun)
         for fname in ["account_after.json", "positions_after.csv", "execution_summary.json",
-                       "account_before.json", "positions_before.csv"]:
+                       "account_before.json", "positions_before.csv", "ledger_rows.csv"]:
             src = staging_dir / fname
             if src.exists():
                 shutil.copy2(str(src), str(exec_dir / fname))
-        # 3. Update shadow account / positions
-        for fname, dst_name in [("account_after.json", "account.json"),
-                                 ("positions_after.csv", "positions.csv")]:
-            src = staging_dir / fname
-            if src.exists():
-                shutil.copy2(str(src), str(PROJECT_ROOT / "shadow" / dst_name))
-        # 4. Rename COMMITTING → COMMITTED (atomic)
+        # 2. Rename COMMITTING → COMMITTED (atomic)
         committing_path.rename(_committed_marker(run_root))
-        print(f"  ✅ 执行已提交: {exec_dir}")
+        print(f"  ✅ 执行已提交 (ledger source of truth): {exec_dir}")
     except BaseException:
         # Clean up COMMITTING on any failure (including SystemExit)
         if committing_path.exists():
