@@ -207,6 +207,17 @@ class FakeStrategy:
     def send_notification(self, text: str) -> None:
         self._record("send_notification")
 
+    # ── Training ──────────────────────────────────────────────────────────
+
+    def train(self, context: Any) -> Any:
+        self._record("train")
+        from qsys.model.training import TrainingResult
+        return TrainingResult(
+            strategy_id=self.strategy_id,
+            model_version="v1",
+            model_dir="/tmp/test_train",
+        )
+
 
 # ── Tests ────────────────────────────────────────────────────────────────
 
@@ -287,6 +298,13 @@ class TestDailyRunner(unittest.TestCase):
         self.assertFalse(self.run_root.exists())
         self.runner.run_train(self.ctx_train, FakeStrategy())
         self.assertTrue(self.run_root.exists())
+        # TrainingResult persists as an artifact
+        result_file = self.run_root / "training_result.json"
+        self.assertTrue(result_file.exists())
+        import json
+        data = json.loads(result_file.read_text())
+        self.assertEqual(data["strategy_id"], "fake_strat")
+        self.assertEqual(data["status"], "success")
 
     def test_run_train_rejects_wrong_mode(self):
         with self.assertRaises(ValueError):

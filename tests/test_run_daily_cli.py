@@ -160,22 +160,107 @@ class TestDispatch(unittest.TestCase):
 
         mock_runner.run_notify_only.assert_called_once()
 
-    @patch("scripts.run_daily.subprocess.run")
+    @patch("scripts.run_daily.DailyRunner")
     @patch("scripts.run_daily.create_strategy")
     @patch("scripts.run_daily.load_strategy_config")
     def test_dispatch_train(
-        self, mock_load_cfg, mock_create, mock_subproc_run,
+        self, mock_load_cfg, mock_create, mock_runner_cls,
     ):
+        """Train mode dispatches to DailyRunner.run_train."""
         mock_strategy = mock_create.return_value
         mock_strategy.strategy_id = "alpha_v1"
         mock_strategy.account_id = "shadow_alpha_v1"
         mock_strategy.display_name = "Alpha V1"
-        mock_subproc_run.return_value.returncode = 0
+        mock_runner = mock_runner_cls.return_value
 
         # Train mode does not need trade-date
         run_daily_main(["--strategy", "alpha_v1", "--mode", "train"])
 
-        mock_subproc_run.assert_called_once()
+        mock_runner.run_train.assert_called_once()
+
+    @patch("scripts.run_daily.DailyRunner")
+    @patch("scripts.run_daily.create_strategy")
+    @patch("scripts.run_daily.load_strategy_config")
+    def test_dispatch_train_with_trade_date(
+        self, mock_load_cfg, mock_create, mock_runner_cls,
+    ):
+        """Train mode accepts optional --trade-date."""
+        mock_strategy = mock_create.return_value
+        mock_strategy.strategy_id = "alpha_v1"
+        mock_strategy.account_id = "shadow_alpha_v1"
+        mock_strategy.display_name = "Alpha V1"
+        mock_runner = mock_runner_cls.return_value
+
+        run_daily_main([
+            "--strategy", "alpha_v1", "--mode", "train",
+            "--trade-date", "2026-05-22",
+        ])
+
+        mock_runner.run_train.assert_called_once()
+
+    @patch("scripts.run_daily.DailyRunner")
+    @patch("scripts.run_daily.create_strategy")
+    @patch("scripts.run_daily.load_strategy_config")
+    def test_dispatch_train_with_debug(
+        self, mock_load_cfg, mock_create, mock_runner_cls,
+    ):
+        """Train mode with --debug-run creates a debug run_root."""
+        mock_strategy = mock_create.return_value
+        mock_strategy.strategy_id = "alpha_v1"
+        mock_strategy.account_id = "shadow_alpha_v1"
+        mock_strategy.display_name = "Alpha V1"
+        mock_runner = mock_runner_cls.return_value
+
+        run_daily_main([
+            "--strategy", "alpha_v1", "--mode", "train",
+            "--debug-run", "--no-notify",
+        ])
+
+        mock_runner.run_train.assert_called_once()
+        # Verify the ctx has debug_run=True
+        ctx = mock_runner.run_train.call_args[0][0]
+        self.assertTrue(ctx.debug_run)
+
+    @patch("scripts.run_daily.DailyRunner")
+    @patch("scripts.run_daily.create_strategy")
+    @patch("scripts.run_daily.load_strategy_config")
+    def test_dispatch_train_output_dir(
+        self, mock_load_cfg, mock_create, mock_runner_cls,
+    ):
+        """Train mode with --output-dir uses given path."""
+        mock_strategy = mock_create.return_value
+        mock_strategy.strategy_id = "alpha_v1"
+        mock_strategy.account_id = "shadow_alpha_v1"
+        mock_strategy.display_name = "Alpha V1"
+        mock_runner = mock_runner_cls.return_value
+
+        run_daily_main([
+            "--strategy", "alpha_v1", "--mode", "train",
+            "--output-dir", "/tmp/my_train_run",
+        ])
+
+        ctx = mock_runner.run_train.call_args[0][0]
+        self.assertEqual(str(ctx.run_root), "/tmp/my_train_run")
+
+    @patch("scripts.run_daily.load_strategy_config")
+    def test_train_end_date_injected_into_config(self, mock_load_cfg):
+        """--train-end-date is injected into config before strategy creation."""
+        mock_load_cfg.return_value = {}
+        with patch("scripts.run_daily.create_strategy") as mock_create:
+            mock_strat = mock_create.return_value
+            mock_strat.strategy_id = "alpha_v1"
+            mock_strat.account_id = "shadow_alpha_v1"
+            mock_strat.display_name = "Alpha V1"
+
+            with patch("scripts.run_daily.DailyRunner") as mock_runner_cls:
+                run_daily_main([
+                    "--strategy", "alpha_v1", "--mode", "train",
+                    "--train-end-date", "2026-05-15",
+                ])
+
+        # Config should have training.end_date injected
+        passed_config = mock_create.call_args[0][1]
+        assert passed_config["training"]["end_date"] == "2026-05-15"
 
 
 if __name__ == "__main__":

@@ -112,6 +112,11 @@ class _BaseValidCandidate:
     def load_artifacts_for_notification(self, context: Any) -> Any | None:
         return None
 
+    # ── Training ─────────────────────────────────────────────────────────
+
+    def train(self, context: Any) -> Any:
+        return None
+
     # ── Notifications ───────────────────────────────────────────────────
 
     def build_preopen_message(

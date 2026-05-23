@@ -147,5 +147,18 @@ class StrategyCandidate(Protocol):
     ) -> str:
         """Format postclose notification text."""
 
+    # ── Training ──────────────────────────────────────────────────────────
+
+    def train(self, context: Any) -> Any:
+        """Run strategy-specific training.
+
+        The DailyRunner delegates to this method during ``train`` mode.
+        Different model families (LightGBM, Transformer, etc.) are free to
+        implement completely different training logic behind this single
+        hook — the runner does not know the model type.
+
+        Returns a ``TrainingResult``-like object (see ``qsys.model.training``).
+        """
+
     def send_notification(self, text: str) -> None:
         """Send *text* via Telegram (or configured channel)."""
