@@ -263,5 +263,68 @@ class TestDispatch(unittest.TestCase):
         assert passed_config["training"]["end_date"] == "2026-05-15"
 
 
+class TestAlphaV2Dispatch(unittest.TestCase):
+    """Verify alpha_v2 dispatches through run_daily_main."""
+
+    @patch("scripts.run_daily.DailyRunner")
+    @patch("scripts.run_daily.create_strategy")
+    @patch("scripts.run_daily.load_strategy_config")
+    def test_dispatch_alpha_v2_train(
+        self, mock_load_cfg, mock_create, mock_runner_cls,
+    ):
+        """Alpha v2 train mode dispatches to DailyRunner.run_train."""
+        mock_strat = mock_create.return_value
+        mock_strat.strategy_id = "alpha_v2"
+        mock_strat.account_id = "shadow_alpha_v2"
+        mock_strat.display_name = "Alpha V2 Smoke"
+        mock_runner = mock_runner_cls.return_value
+
+        run_daily_main(["--strategy", "alpha_v2", "--mode", "train"])
+
+        mock_runner.run_train.assert_called_once()
+
+    @patch("scripts.run_daily.DailyRunner")
+    @patch("scripts.run_daily.create_strategy")
+    @patch("scripts.run_daily.load_strategy_config")
+    @patch("scripts.run_daily.resolve_run_root")
+    def test_dispatch_alpha_v2_preopen(
+        self, mock_resolve_root, mock_load_cfg, mock_create, mock_runner_cls,
+    ):
+        """Alpha v2 preopen mode dispatches to DailyRunner.run_preopen."""
+        mock_strat = mock_create.return_value
+        mock_strat.strategy_id = "alpha_v2"
+        mock_strat.account_id = "shadow_alpha_v2"
+        mock_strat.display_name = "Alpha V2 Smoke"
+        mock_runner = mock_runner_cls.return_value
+
+        run_daily_main([
+            "--strategy", "alpha_v2", "--mode", "preopen",
+            "--trade-date", "2026-05-22", "--no-notify",
+        ])
+
+        mock_runner.run_preopen.assert_called_once()
+
+    @patch("scripts.run_daily.DailyRunner")
+    @patch("scripts.run_daily.create_strategy")
+    @patch("scripts.run_daily.load_strategy_config")
+    @patch("scripts.run_daily.resolve_run_root")
+    def test_dispatch_alpha_v2_postclose(
+        self, mock_resolve_root, mock_load_cfg, mock_create, mock_runner_cls,
+    ):
+        """Alpha v2 postclose mode dispatches to DailyRunner.run_postclose."""
+        mock_strat = mock_create.return_value
+        mock_strat.strategy_id = "alpha_v2"
+        mock_strat.account_id = "shadow_alpha_v2"
+        mock_strat.display_name = "Alpha V2 Smoke"
+        mock_runner = mock_runner_cls.return_value
+
+        run_daily_main([
+            "--strategy", "alpha_v2", "--mode", "postclose",
+            "--trade-date", "2026-05-22", "--no-notify",
+        ])
+
+        mock_runner.run_postclose.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -19,11 +19,23 @@ class TestRegistry:
         assert "alpha_v1" in STRATEGY_REGISTRY
         assert STRATEGY_REGISTRY["alpha_v1"] is AlphaV1StrategyAdapter
 
+    def test_alpha_v2_registered(self):
+        from qsys.strategy.alpha_v2.adapter import AlphaV2StrategyAdapter
+
+        assert "alpha_v2" in STRATEGY_REGISTRY
+        assert STRATEGY_REGISTRY["alpha_v2"] is AlphaV2StrategyAdapter
+
     def test_get_alpha_v1_class(self):
         from qsys.strategy.alpha_v1.adapter import AlphaV1StrategyAdapter
 
         cls = get_strategy_class("alpha_v1")
         assert cls is AlphaV1StrategyAdapter
+
+    def test_get_alpha_v2_class(self):
+        from qsys.strategy.alpha_v2.adapter import AlphaV2StrategyAdapter
+
+        cls = get_strategy_class("alpha_v2")
+        assert cls is AlphaV2StrategyAdapter
 
 
 class TestGetStrategyClass:
@@ -33,14 +45,19 @@ class TestGetStrategyClass:
         cls = get_strategy_class("alpha_v1")
         assert cls is not None
 
+    def test_known_strategy_alpha_v2(self):
+        cls = get_strategy_class("alpha_v2")
+        assert cls is not None
+
     def test_unknown_strategy_raises(self):
-        with pytest.raises(ValueError, match="alpha_v2"):
-            get_strategy_class("alpha_v2")
+        with pytest.raises(ValueError, match="alpha_v3"):
+            get_strategy_class("alpha_v3")
 
     def test_unknown_strategy_message_lists_known(self):
         with pytest.raises(ValueError) as exc_info:
             get_strategy_class("nonexistent")
         assert "alpha_v1" in str(exc_info.value)
+        assert "alpha_v2" in str(exc_info.value)
 
 
 class TestCreateStrategy:
@@ -51,6 +68,12 @@ class TestCreateStrategy:
 
         s = create_strategy("alpha_v1")
         assert isinstance(s, AlphaV1StrategyAdapter)
+
+    def test_create_alpha_v2(self):
+        from qsys.strategy.alpha_v2.adapter import AlphaV2StrategyAdapter
+
+        s = create_strategy("alpha_v2")
+        assert isinstance(s, AlphaV2StrategyAdapter)
 
     def test_create_with_config(self):
         from qsys.strategy.alpha_v1.adapter import AlphaV1StrategyAdapter
