@@ -79,6 +79,7 @@ def finish_strategy_run(conn: sqlite3.Connection, run_id: str, status: str = "co
         "UPDATE strategy_runs SET status=?, finished_at=? WHERE run_id=?",
         (status, _now(), run_id),
     )
+    conn.commit()
 
 
 def get_strategy_run(conn: sqlite3.Connection, run_id: str) -> dict[str, Any] | None:
