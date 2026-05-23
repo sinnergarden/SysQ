@@ -7,10 +7,9 @@ positions, and ledger state across a set of trade dates.
 
 Usage:
     python scripts/dev/compare_weekly_replay.py \\
-        --baseline /path/to/main/experiments \\
-        --candidate /path/to/branch/experiments \\
-        --trade-dates 2026-05-18,2026-05-19,2026-05-20,2026-05-21,2026-05-22 \\
-        [--ledger-db data/trade.db]
+        --baseline /path/to/main/project/root \\
+        --candidate /path/to/branch/project/root \\
+        --trade-dates 2026-05-18,2026-05-19,2026-05-20,2026-05-21,2026-05-22
 """
 
 from __future__ import annotations
@@ -183,19 +182,13 @@ def compare_artifacts(base_dir: Path, cand_dir: Path, trade_dates: list[str]) ->
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Compare weekly replay outputs between branches")
-    parser.add_argument("--baseline", required=True, help="Path to main branch experiments dir (or project root)")
-    parser.add_argument("--candidate", required=True, help="Path to PR branch experiments dir (or project root)")
+    parser.add_argument("--baseline", required=True, help="Path to main branch project root")
+    parser.add_argument("--candidate", required=True, help="Path to PR branch project root")
     parser.add_argument("--trade-dates", required=True, help="Comma-separated trade dates, e.g. 2026-05-18,2026-05-19,...")
-    parser.add_argument("--ledger-db", default=None, help="Path to trade.db for ledger comparison")
     args = parser.parse_args()
 
     base_dir = Path(args.baseline)
     cand_dir = Path(args.candidate)
-    # If pointing to project root, append experiments
-    if (base_dir / "experiments").exists() and not str(base_dir).endswith("experiments"):
-        base_dir = base_dir / "experiments"
-    if (cand_dir / "experiments").exists() and not str(cand_dir).endswith("experiments"):
-        cand_dir = cand_dir / "experiments"
 
     trade_dates = [d.strip() for d in args.trade_dates.split(",") if d.strip()]
     print(f"Trade dates: {trade_dates}")

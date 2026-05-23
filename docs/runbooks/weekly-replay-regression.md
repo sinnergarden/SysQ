@@ -18,7 +18,7 @@ python -c "
 from qsys.ledger.service import LedgerService
 db = 'data/trade.db'
 svc = LedgerService(db)
-svc.create_account('shadow_alpha_v1', initial_cash=1_000_000.0)
+svc.create_account('shadow_alpha_v1', 'shadow', 1_000_000.0)
 svc.close()
 "
 ```
@@ -106,8 +106,8 @@ Telegram 消息内容不在对比范围内（时间戳、run_id 等会变化）�
 
 ```bash
 python scripts/dev/compare_weekly_replay.py \
-    --baseline /path/to/main/experiments \
-    --candidate /path/to/branch/experiments \
+    --baseline /path/to/main/project/root \
+    --candidate /path/to/branch/project/root \
     --trade-dates 2026-05-18,2026-05-19,2026-05-20,2026-05-21,2026-05-22
 ```
 
@@ -127,7 +127,7 @@ python scripts/dev/compare_weekly_replay.py \
    rm -f data/trade.db
    python -c "
    from qsys.ledger.service import LedgerService
-   LedgerService('data/trade.db').create_account('shadow_alpha_v1', initial_cash=1_000_000.0)
+   LedgerService('data/trade.db').create_account('shadow_alpha_v1', 'shadow', 1_000_000.0)
    "
    ```
 
