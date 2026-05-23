@@ -1,11 +1,11 @@
-# Alpha V1 — Baseline Version (Production Candidate)
+# Alpha V1 — Baseline Version (Shadow Baseline / Daily Ops Baseline)
 
 ## Strategy Identity
 
 | Field | Value |
 |-------|-------|
 | ID | `qsys_alpha_v1_blend20_weekly_top20_buffer` |
-| Status | **Production candidate** (shadow trading) |
+| Status | **Shadow Baseline / Daily Ops Baseline** |
 | Universe | CSI 300 / CSI 800 |
 | Horizon | Weekly rebalance |
 | Max Positions | 20 |
