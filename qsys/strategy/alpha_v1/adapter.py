@@ -84,6 +84,10 @@ class AlphaV1StrategyAdapter:
     def account_id(self) -> str:
         return ALPHA_V1_CANDIDATE.shadow_account_id
 
+    @property
+    def display_name(self) -> str:
+        return "Alpha V1"
+
     # ── Configuration ──────────────────────────────────────────────────
 
     @property
@@ -270,7 +274,6 @@ class AlphaV1StrategyAdapter:
 
     def build_plan(self, predictions: Any, target_dir: Any) -> bool:
         from qsys.ops.shadow_rebalance import build_alpha_v1_plan
-        from qsys.utils.json_io import write_json
 
         target_dir = Path(target_dir)
         target_dir.mkdir(parents=True, exist_ok=True)
@@ -279,26 +282,14 @@ class AlphaV1StrategyAdapter:
         pred_path = target_dir / "predictions_for_plan.csv"
         predictions.to_csv(pred_path, index=False)
 
-        try:
-            build_alpha_v1_plan(
-                base_dir=".",
-                trade_date=str(predictions["trade_date"].iloc[0]),
-                reference_date=str(predictions["trade_date"].iloc[0]),
-                predictions_path=str(pred_path),
-                output_dir=str(target_dir.parent),  # run_root
-                db_path=self._ledger_db_path,
-            )
-        except Exception:
-            # build_alpha_v1_plan may raise if rebalance skipped;
-            # write plan_meta.json with status="skipped"
-            write_json(target_dir / "plan_meta.json", {
-                "trade_date": str(predictions["trade_date"].iloc[0]),
-                "status": "skipped",
-                "reason": "build_alpha_v1_plan raised",
-                "build_ts": datetime.now().isoformat(),
-            })
-            return False
-
+        build_alpha_v1_plan(
+            base_dir=".",
+            trade_date=str(predictions["trade_date"].iloc[0]),
+            reference_date=str(predictions["trade_date"].iloc[0]),
+            predictions_path=str(pred_path),
+            output_dir=str(target_dir.parent),  # run_root
+            db_path=self._ledger_db_path,
+        )
         return True
 
     def load_plan_instruments(self, plan_dir: Any) -> list[str]:
@@ -310,6 +301,38 @@ class AlphaV1StrategyAdapter:
             return sorted(set(df["instrument"].astype(str)))
         except Exception:
             return []
+
+    def save_predictions(self, predictions: Any, run_root: Any, trade_date: str) -> None:
+        """Save predictions to the alpha_v1 shared predictions directory."""
+        shared_dir = self._project_root / "experiments" / "alpha_v1_shadow_predictions"
+        shared_dir.mkdir(parents=True, exist_ok=True)
+        path = shared_dir / f"predictions_{trade_date}.csv"
+        predictions.to_csv(path, index=False)
+        print(f"  → {len(predictions)} predictions saved: {path}")
+
+    def fetch_open_prices(self, trade_date: str, instruments: list[str]) -> dict[str, float]:
+        """Fetch open prices via qlib for the given instruments."""
+        from qsys.data.adapter import QlibAdapter
+
+        adapter = QlibAdapter()
+        adapter.init_qlib()
+        market = adapter.get_features(
+            instruments, ["$open"],
+            start_time=trade_date, end_time=trade_date,
+        )
+        if market is None or market.empty:
+            return {}
+        if isinstance(market.index, pd.MultiIndex):
+            market = market.swaplevel().sort_index()
+        frame = market.reset_index()
+        frame = frame[frame["datetime"].astype(str).str.startswith(trade_date)]
+        if frame.empty:
+            return {}
+        frame = frame.sort_values(["instrument", "datetime"]).drop_duplicates(
+            subset=["instrument"], keep="last"
+        )
+        prices = frame.set_index("instrument")["$open"].astype(float).to_dict()
+        return prices
 
     # ── Execute + MTM ──────────────────────────────────────────────────
 

@@ -34,6 +34,10 @@ class FakeStrategy:
         return "shadow_fake"
 
     @property
+    def display_name(self) -> str:
+        return "Fake Strat"
+
+    @property
     def universe(self) -> str:
         return "fake_universe"
 
@@ -121,7 +125,14 @@ class FakeStrategy:
 
     def load_plan_instruments(self, plan_dir: Any) -> list[str]:
         self._record("load_plan_instruments")
-        return []
+        return ["000001", "000002"]  # return instruments so fetch_open_prices is exercised
+
+    def save_predictions(self, predictions: Any, run_root: Any, trade_date: str) -> None:
+        self._record("save_predictions")
+
+    def fetch_open_prices(self, trade_date: str, instruments: list[str]) -> dict[str, float]:
+        self._record("fetch_open_prices")
+        return {"000001": 10.0}
 
     # ── Execute + MTM ───────────────────────────────────────────────────
 
@@ -255,7 +266,7 @@ class TestDailyRunner(unittest.TestCase):
 
     def test_run_preopen_rejects_wrong_mode(self):
         with self.assertRaises(ValueError):
-            self.runner.run_preopen(self.ctx_postclose)
+            self.runner.run_preopen(self.ctx_postclose, FakeStrategy())
 
     def test_run_postclose_creates_run_root(self):
         self.assertFalse(self.run_root.exists())
@@ -271,16 +282,16 @@ class TestDailyRunner(unittest.TestCase):
 
     def test_run_postclose_rejects_wrong_mode(self):
         with self.assertRaises(ValueError):
-            self.runner.run_postclose(self.ctx_preopen)
+            self.runner.run_postclose(self.ctx_preopen, FakeStrategy())
 
     def test_run_train_creates_run_root(self):
         self.assertFalse(self.run_root.exists())
-        self.runner.run_train(self.ctx_train)
+        self.runner.run_train(self.ctx_train, FakeStrategy())
         self.assertTrue(self.run_root.exists())
 
     def test_run_train_rejects_wrong_mode(self):
         with self.assertRaises(ValueError):
-            self.runner.run_train(self.ctx_preopen)
+            self.runner.run_train(self.ctx_preopen, FakeStrategy())
 
     def test_debug_mode_tag_in_output(self):
         strategy = FakeStrategy()
@@ -291,7 +302,7 @@ class TestDailyRunner(unittest.TestCase):
         strategy = FakeStrategy()
         self.runner.run_preopen(self.ctx_preopen, strategy)
         self.runner.run_postclose(self.ctx_postclose, strategy)
-        self.runner.run_train(self.ctx_train)
+        self.runner.run_train(self.ctx_train, strategy)
         self.assertTrue(self.run_root.exists())
 
     def test_with_strategy_candidate(self):
@@ -330,6 +341,7 @@ class TestDailyRunnerOrchestration(unittest.TestCase):
             "load_model",
             "fetch_data",
             "generate_predictions",
+            "save_predictions",
             "should_rebalance",
             "build_plan",
             # build_preopen_message/send_notification skipped because no_notify=True
@@ -401,6 +413,7 @@ class TestDailyRunnerOrchestration(unittest.TestCase):
 
         # Verify postclose calls
         self.assertIn("load_plan_instruments", strategy.calls)
+        self.assertIn("fetch_open_prices", strategy.calls)
         self.assertIn("execute_plan", strategy.calls)
         self.assertIn("commit_execution", strategy.calls)
         self.assertIn("mark_to_market", strategy.calls)

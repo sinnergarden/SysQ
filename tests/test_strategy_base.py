@@ -38,6 +38,10 @@ class _BaseValidCandidate:
         return "shadow_test_strat"
 
     @property
+    def display_name(self) -> str:
+        return "Test Strat"
+
+    @property
     def universe(self) -> str:
         return "csi300"
 
@@ -84,6 +88,12 @@ class _BaseValidCandidate:
 
     def load_plan_instruments(self, plan_dir: Any) -> list[str]:
         return []
+
+    def save_predictions(self, predictions: Any, run_root: Any, trade_date: str) -> None:
+        pass
+
+    def fetch_open_prices(self, trade_date: str, instruments: list[str]) -> dict[str, float]:
+        return {}
 
     # ── Execute + MTM ───────────────────────────────────────────────────
 

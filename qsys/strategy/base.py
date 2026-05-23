@@ -32,6 +32,12 @@ class IStrategy(ABC):
 class StrategyCandidate(Protocol):
     """Runtime protocol for daily-ops strategy resolution.
 
+    This is a **runtime adapter interface** — every strategy adapter must
+    implement all members (``@runtime_checkable`` checks the full protocol
+    body). The DailyRunner calls these methods during preopen / postclose /
+    notify-only stages; no strategy-specific imports, strings, or path
+    conventions should leak into the runner.
+
     Identity + config properties and lifecycle hook methods that the
     DailyRunner calls during preopen / postclose / notify-only stages.
     Every strategy adapter must implement all members (``@runtime_checkable``
@@ -45,6 +51,10 @@ class StrategyCandidate(Protocol):
 
     @property
     def account_id(self) -> str: ...
+
+    @property
+    def display_name(self) -> str:
+        """Human-readable name for notifications (e.g. 'Alpha V1')."""
 
     # ── Configuration ──────────────────────────────────────────────────
 
@@ -92,6 +102,14 @@ class StrategyCandidate(Protocol):
 
     def load_plan_instruments(self, plan_dir: Any) -> list[str]:
         """Return instrument codes from the plan at *plan_dir*."""
+
+    def save_predictions(self, predictions: Any, run_root: Any, trade_date: str) -> None:
+        """Persist predictions to strategy-specific shared location."""
+
+    def fetch_open_prices(self, trade_date: str, instruments: list[str]) -> dict[str, float]:
+        """Fetch open prices for *instruments* on *trade_date*.
+        Returns dict[instrument → open_price].
+        """
 
     # ── Execute + MTM ──────────────────────────────────────────────────
 

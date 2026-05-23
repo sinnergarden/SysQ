@@ -1,7 +1,8 @@
 """DailyRunner — reusable multi-strategy daily pipeline skeleton.
 
 Owns the stage orchestration sequence but delegates strategy-specific work
-through the ``StrategyCandidate`` protocol.
+through the ``StrategyCandidate`` protocol (a runtime adapter interface).
+No strategy-specific strings, imports, or path conventions should leak here.
 """
 
 from __future__ import annotations
@@ -31,6 +32,7 @@ from qsys.ops.mtm import (
     save_stale_check,
 )
 from qsys.ops.run_context import DailyRunContext
+from qsys.strategy.base import StrategyCandidate
 
 
 class DailyRunner:
@@ -62,7 +64,7 @@ class DailyRunner:
     # ── Preopen ─────────────────────────────────────────────────────────
 
     def run_preopen(
-        self, ctx: DailyRunContext, strategy: Any = None
+        self, ctx: DailyRunContext, strategy: StrategyCandidate
     ) -> None:
         """Pre-open stage: inference → plan → notify."""
         self._validate(ctx, allowed={"preopen"})
@@ -97,7 +99,7 @@ class DailyRunner:
                 print(f"  ⚠ 交易日 {ctx.trade_date} 无数据")
                 if not ctx.no_notify:
                     strategy.send_notification(
-                        f"⚠ Alpha V1 Pre-open {ctx.trade_date}\n交易日无数据，跳过"
+                        f"⚠ {strategy.display_name} Pre-open {ctx.trade_date}\n交易日无数据，跳过"
                     )
                 return
             frame = raw_data.get("frame", pd.DataFrame())
@@ -106,7 +108,7 @@ class DailyRunner:
             print(f"  ❌ {e}")
             if not ctx.no_notify:
                 strategy.send_notification(
-                    f"❌ Alpha V1 Pre-open {ctx.trade_date}\n数据获取失败: {e}"
+                    f"❌ {strategy.display_name} Pre-open {ctx.trade_date}\n数据获取失败: {e}"
                 )
             return
 
@@ -120,7 +122,7 @@ class DailyRunner:
             print(f"  ❌ {e}")
             if not ctx.no_notify:
                 strategy.send_notification(
-                    f"❌ Alpha V1 Pre-open {ctx.trade_date}\n预测生成失败: {e}"
+                    f"❌ {strategy.display_name} Pre-open {ctx.trade_date}\n预测生成失败: {e}"
                 )
             return
 
@@ -129,12 +131,11 @@ class DailyRunner:
         pred_path.parent.mkdir(parents=True, exist_ok=True)
         predictions.to_csv(pred_path, index=False)
 
-        # Also save to shared predictions dir (alpha_v1 convention)
-        shared_pred_dir = run_root.parent.parent / "experiments" / "alpha_v1_shadow_predictions"
-        shared_pred_dir.mkdir(parents=True, exist_ok=True)
-        shared_path = shared_pred_dir / f"predictions_{ctx.trade_date}.csv"
-        predictions.to_csv(shared_path, index=False)
-        print(f"  → {len(predictions)} predictions saved: {shared_path}")
+        # Strategy-specific prediction persistence (e.g. shared predictions dir)
+        try:
+            strategy.save_predictions(predictions, run_root, ctx.trade_date)
+        except Exception as e:
+            print(f"  ⚠ save_predictions failed: {e}")
 
         # ADR-7 signal sidecar
         try:
@@ -180,7 +181,7 @@ class DailyRunner:
                 print(f"  ❌ 建仓计划失败: {e}")
                 if not ctx.no_notify:
                     strategy.send_notification(
-                        f"❌ Alpha V1 Pre-open {ctx.trade_date}\n建仓计划失败: {e}"
+                        f"❌ {strategy.display_name} Pre-open {ctx.trade_date}\n建仓计划失败: {e}"
                     )
                 return
 
@@ -197,7 +198,7 @@ class DailyRunner:
     # ── Postclose ───────────────────────────────────────────────────────
 
     def run_postclose(
-        self, ctx: DailyRunContext, strategy: Any = None
+        self, ctx: DailyRunContext, strategy: StrategyCandidate
     ) -> None:
         """Post-close stage: execute → MTM → notify."""
         self._validate(ctx, allowed={"postclose"})
@@ -262,13 +263,13 @@ class DailyRunner:
                 print("  ❌ --force-rerun 必须配合 --reason")
                 sys.exit(1)
             print(f"  ⚠ --force-rerun 生效，原因: {ctx.reason}")
-            self._restore_before_state(ctx, run_root)
+            self._restore_before_state(ctx, run_root, strategy)
             archive_execution(run_root)
 
         # ── Plan check ──
         if not has_plan and not has_skip:
             msg = (
-                f"⛔ Alpha V1 Post-close {ctx.trade_date} BLOCKED\n"
+                f"⛔ {strategy.display_name} Post-close {ctx.trade_date} BLOCKED\n"
                 f"未找到 preopen 计划文件: {plan_dir}\n"
                 f"请先运行 preopen。"
             )
@@ -306,7 +307,7 @@ class DailyRunner:
                 print(f"  ❌ 执行失败: {e}")
                 if not ctx.no_notify:
                     strategy.send_notification(
-                        f"⛔ Alpha V1 Post-close {ctx.trade_date} FAILED\n{e}"
+                        f"⛔ {strategy.display_name} Post-close {ctx.trade_date} FAILED\n{e}"
                     )
                 sys.exit(1)
 
@@ -325,7 +326,7 @@ class DailyRunner:
             print(f"  ⚠ 收盘价数据未就绪")
             if not ctx.no_notify:
                 strategy.send_notification(
-                    f"⛔ Alpha V1 Post-close {ctx.trade_date}\n"
+                    f"⛔ {strategy.display_name} Post-close {ctx.trade_date}\n"
                     f"收盘价数据未就绪。数据同步可能尚未完成。\n"
                     f"请先运行: python scripts/ops/sync_csi800_daily.py --apply"
                 )
@@ -356,7 +357,7 @@ class DailyRunner:
     # ── Notify-only ─────────────────────────────────────────────────────
 
     def run_notify_only(
-        self, ctx: DailyRunContext, strategy: Any = None
+        self, ctx: DailyRunContext, strategy: StrategyCandidate
     ) -> None:
         """Re-send notification from existing artifacts without any execution."""
         run_root = ctx.run_root
@@ -388,13 +389,12 @@ class DailyRunner:
 
     # ── Train ───────────────────────────────────────────────────────────
 
-    def run_train(self, ctx: DailyRunContext, strategy: Any = None) -> None:
+    def run_train(self, ctx: DailyRunContext, strategy: StrategyCandidate) -> None:
         """Train stage: delegates to weekly training script."""
         self._validate(ctx, allowed={"train"})
         self._log_stage("train", ctx)
         self._ensure_dirs(ctx)
-        # Phase B: train remains delegated to the shell script
-        print("  ℹ Training delegated to run_alpha_v1_weekly_train.py")
+        print(f"  ℹ {strategy.display_name} training delegated to weekly script")
 
     # ── Private helpers ─────────────────────────────────────────────────
 
@@ -418,8 +418,9 @@ class DailyRunner:
     def _ensure_dirs(ctx: DailyRunContext) -> None:
         ctx.run_root.mkdir(parents=True, exist_ok=True)
 
-    @staticmethod
-    def _restore_before_state(ctx: DailyRunContext, run_root: Path) -> None:
+    def _restore_before_state(
+        self, ctx: DailyRunContext, run_root: Path, strategy: StrategyCandidate
+    ) -> None:
         """Restore shadow account/positions to pre-execution state."""
         exec_before = run_root / "execution" / "account_before.json"
         pos_before = run_root / "execution" / "positions_before.csv"
@@ -430,28 +431,25 @@ class DailyRunner:
             print(f"  🔄 Shadow 已恢复至执行前状态")
         else:
             msg = (
-                f"⛔ Alpha V1 Post-close {ctx.trade_date} BLOCKED\n"
+                f"⛔ {strategy.display_name} Post-close {ctx.trade_date} BLOCKED\n"
                 f"--force-rerun 需要 execution/account_before.json 和 "
                 f"positions_before.csv 才能重放交易。\n"
                 f"文件不存在，阻断执行。"
             )
             print(f"\n{msg}")
             if not ctx.no_notify:
-                from qsys.strategy.alpha_v1.adapter import AlphaV1StrategyAdapter
-                AlphaV1StrategyAdapter().send_notification(msg)
+                strategy.send_notification(msg)
             sys.exit(1)
 
     def _validate_prerequisites(
-        self, ctx: DailyRunContext, plan_dir: Path, strategy: Any
+        self, ctx: DailyRunContext, plan_dir: Path, strategy: StrategyCandidate
     ) -> None:
         """Open price check + stale close-price check."""
         instruments = strategy.load_plan_instruments(plan_dir)
         if instruments:
             try:
-                from qsys.ops.shadow_rebalance import _fetch_market_snapshot
-
-                open_prices, _ = _fetch_market_snapshot(
-                    ctx.trade_date, instruments, price_col="open"
+                open_prices = strategy.fetch_open_prices(
+                    ctx.trade_date, instruments
                 )
                 if not open_prices:
                     raise ValueError("No open prices available")
@@ -460,7 +458,7 @@ class DailyRunner:
                 print(f"  ❌ 开盘价不可用: {e}")
                 if not ctx.no_notify:
                     strategy.send_notification(
-                        f"⛔ Alpha V1 Post-close {ctx.trade_date} BLOCKED\n"
+                        f"⛔ {strategy.display_name} Post-close {ctx.trade_date} BLOCKED\n"
                         f"开盘价数据不可用。\n{e}"
                     )
                 sys.exit(1)
@@ -489,7 +487,7 @@ class DailyRunner:
                     print(f"  ❌ {e}")
                     if not ctx.no_notify:
                         strategy.send_notification(
-                            f"⛔ Alpha V1 Post-close {ctx.trade_date} BLOCKED\n"
+                            f"⛔ {strategy.display_name} Post-close {ctx.trade_date} BLOCKED\n"
                             f"收盘价数据陈旧，阻断执行。\n"
                             f"一致={e.stale_check.get('identical_count', 0)}/"
                             f"{e.stale_check.get('checked_count', 0)} "
