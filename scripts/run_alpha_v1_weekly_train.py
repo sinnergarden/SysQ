@@ -12,6 +12,12 @@ Schedule: systemd timer, Sunday 20:00 or Monday 07:00 (before pre-open).
 Usage:
   python scripts/run_alpha_v1_weekly_train.py
   python scripts/run_alpha_v1_weekly_train.py --end-date 2026-05-18
+
+.. warning::
+   Historical replay: ``--end-date`` is **required**.  Without it the script
+   defaults to ``datetime.now()``, which leaks future data into the training
+   set and produces inflated PnL.  Production use (systemd timer) is safe
+   because "now" is truly the current date.
 """
 from __future__ import annotations
 

@@ -193,6 +193,23 @@ Any change that touches the runtime (DailyRunner, adapter, execution) requires 5
 
 Research-layer changes (new features, model training) do not require replay.
 
+### Replay: critical `--end-date` caveat
+
+When running replay for a past date range, **always pass `--end-date` to the training script**:
+
+```bash
+# WRONG — uses datetime.now() as end date, leaks future data into training
+python scripts/run_alpha_v1_weekly_train.py
+
+# RIGHT — trains only on data up to the Friday before the test week
+python scripts/run_alpha_v1_weekly_train.py --end-date 2026-05-15
+```
+
+Without `--end-date`, the training script defaults to `datetime.now()`, which includes all
+future trading days in the training set — producing lookahead bias and inflated PnL. This
+is safe for real production (where "now" is truly the current date) but catastrophic for
+historical replay.
+
 ---
 
 ## 8. How to Run Through `run_daily.py`
