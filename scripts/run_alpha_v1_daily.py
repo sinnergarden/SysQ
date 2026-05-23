@@ -47,19 +47,29 @@ _FORCE_OUTPUT_ROOT: Path | None = None
 # ── Ledger ────────────────────────────────────────────────────────────
 LEDGER_DB_PATH = str(PROJECT_ROOT / "data" / "trade.db")
 
+
 def _shadow_account_id() -> str:
     return ALPHA_V1_CANDIDATE.shadow_account_id
 
 
-class StaleDataError(Exception):
-    """Raised when stale close-price check blocks execution."""
-    def __init__(self, message: str, stale_check: dict):
-        super().__init__(message)
-        self.stale_check = stale_check
-
 from qlib.data import D as qlib_D
 from qsys.data.adapter import QlibAdapter
 from qsys.feature.library import FeatureLibrary
+from qsys.ops.commit_guard import (
+    cleanup_committing,
+    committed_marker,
+    committing_marker,
+    is_execution_committed,
+)
+from qsys.ops.daily_artifacts import archive_execution, save_run_meta
+from qsys.ops.mtm import (
+    StaleDataError,
+    check_stale_prices,
+    fetch_close_prices,
+    load_mtm_snapshot,
+    save_stale_check,
+    try_mark_to_market,
+)
 from qsys.ops.shadow_rebalance import build_alpha_v1_plan
 from qsys.ops.shadow_rebalance import execute_alpha_v1_plan
 from qsys.ops.shadow_rebalance import ShadowRebalanceArtifacts
@@ -212,18 +222,6 @@ def generate_predictions_for_date(models, clean_features, frame, trade_date: str
     return pd.DataFrame(rows)
 
 
-# ── 日期工具 ──────────────────────────────────────────────────────────────
-
-def _prev_trading_day(trade_date: str) -> str | None:
-    try:
-        cal = qlib_D.calendar(start_time="2010-01-01", end_time=trade_date)
-        if cal is None or len(cal) < 2:
-            return None
-        return pd.Timestamp(cal[-2]).strftime("%Y-%m-%d")
-    except Exception:
-        return None
-
-
 # ── Telegram 通知格式化 ────────────────────────────────────────────────
 
 def _send_notification(text: str) -> None:
@@ -249,125 +247,6 @@ def _fmt(amount: float) -> str:
     return f"¥{amount/1000:.2f}k"
 
 
-# ── Stale data detection（使用 mtm_snapshot.json）─────────────────────
-
-def _load_mtm_snapshot(snapshot_path: Path) -> dict | None:
-    """Load MTM snapshot from explicit path."""
-    if not snapshot_path.exists():
-        return None
-    try:
-        return json.loads(snapshot_path.read_text())
-    except (json.JSONDecodeError, OSError):
-        return None
-
-def _load_prod_mtm_snapshot(trade_date: str) -> dict | None:
-    """Load previous trading day's production MTM snapshot for stale check."""
-    path = (PROJECT_ROOT / "experiments" / "alpha_v1_daily"
-            / trade_date / "mtm" / "mtm_snapshot.json")
-    return _load_mtm_snapshot(path)
-
-
-def _check_stale_prices(trade_date: str, close_prices: dict[str, float],
-                        positions: pd.DataFrame) -> dict:
-    """Compare today's close prices with previous MTM snapshot.
-
-    使用前一交易日的 mtm_snapshot.json 中的 details 做对比。
-    如果 >85% 的持仓价格未变（容差 < 0.005），硬阻断。
-
-    返回 stale_check dict，包含检查结果元数据。
-    """
-    prev_date = _prev_trading_day(trade_date)
-    result = {
-        "trade_date": trade_date,
-        "prev_trade_date": prev_date,
-        "checked_count": 0,
-        "identical_count": 0,
-        "identical_ratio": 0.0,
-        "threshold": 0.85,
-        "status": "skipped",
-        "examples": [],
-    }
-    if prev_date is None:
-        return result
-    prev_snapshot = _load_prod_mtm_snapshot(prev_date)
-    if prev_snapshot is None:
-        print(f"  ⚠ 无上一交易日 ({prev_date}) MTM 快照，跳过陈旧检查")
-        return result
-    prev_details: list = prev_snapshot.get("details", [])
-    if not prev_details:
-        return result
-    prev_close: dict[str, float] = {}
-    for entry in prev_details:
-        if isinstance(entry, (list, tuple)) and len(entry) >= 5:
-            inst = str(entry[0])
-            close_val = float(entry[4])
-            if close_val > 0:
-                prev_close[inst] = close_val
-    if not prev_close:
-        return result
-    checked = 0
-    identical = 0
-    tol = 0.005
-    examples: list[str] = []
-    for _, row in positions.iterrows():
-        inst = str(row["instrument"])
-        if inst in close_prices and inst in prev_close:
-            checked += 1
-            diff = abs(close_prices[inst] - prev_close[inst])
-            if diff < tol:
-                identical += 1
-                if len(examples) < 3:
-                    examples.append(f"{inst}: {prev_close[inst]} → {close_prices[inst]} (no change)")
-    stale_ratio = identical / checked if checked > 0 else 0.0
-    result["checked_count"] = checked
-    result["identical_count"] = identical
-    result["identical_ratio"] = stale_ratio
-    result["examples"] = examples
-    if checked == 0:
-        # checked==0 but prev_close+close_prices exist → no instrument overlap
-        if prev_close and close_prices:
-            result["status"] = "skipped_low_overlap"
-            result["total_instruments"] = len(positions)
-        else:
-            result["status"] = "skipped"
-        return result
-    if stale_ratio > 0.85:
-        result["status"] = "blocked"
-        lines = [
-            f"\n{'=' * 60}",
-            f"⛔ CRITICAL: 收盘价数据疑似陈旧/前向填充！",
-            f"{'=' * 60}",
-            f"交易日: {trade_date}",
-            f"上一交易日: {prev_date}",
-            f"检查持仓: {checked}只",
-            f"价格未变: {identical}只 ({stale_ratio:.0%})",
-            f"阈值: > 85% 价格未变 → 判定数据陈旧",
-        ]
-        for ex in examples:
-            lines.append(f"  {ex}")
-        lines += [
-            "",
-            "说明: qlib 数据同步可能失败，当日最新行情未写入。",
-            "      忽略此错误直接 MTM 会使用前一天的收盘价，",
-            "      导致 PnL 结果完全错误（假 ¥0 日收益）。",
-            "",
-            "请检查数据同步: python scripts/ops/sync_csi800_daily.py --apply",
-            "=" * 60,
-        ]
-        msg = "\n".join(lines)
-        print(msg)
-        raise StaleDataError(msg, result)
-    else:
-        result["status"] = "passed"
-    return result
-
-
-def _save_stale_check(output_dir: Path, check_result: dict) -> None:
-    stale_path = output_dir / "mtm" / "stale_check.json"
-    stale_path.parent.mkdir(parents=True, exist_ok=True)
-    write_json(stale_path, check_result)
-
-
 # ── Artifact paths ──────────────────────────────────────────────────────
 
 def _resolve_run_root(trade_date: str, debug_run: bool = False,
@@ -389,199 +268,6 @@ def _exec_dir(run_root: Path) -> Path:
 
 def _staging_dir(run_root: Path) -> Path:
     return _exec_dir(run_root) / "staging"
-
-
-def _committed_marker(run_root: Path) -> Path:
-    return _exec_dir(run_root) / "COMMITTED"
-
-def _committing_marker(run_root: Path) -> Path:
-    return _exec_dir(run_root) / "COMMITTING"
-
-
-# ── 执行状态检查 ─────────────────────────────────────────────────────────
-
-def _is_execution_committed(run_root: Path) -> bool:
-    return _committed_marker(run_root).exists()
-
-
-# ── MTM（独立进程可重复运行）────────────────────────────────────────────
-
-def _try_mark_to_market(trade_date: str, output_dir: Path,
-                        account_path: Path | None = None,
-                        positions_path: Path | None = None,
-                        close_prices_override: dict[str, float] | None = None,
-                        db_path: str | None = None) -> dict | None:
-
-    # Load from ledger when available
-    ledger_account: dict | None = None
-    ledger_df = None
-    if db_path and Path(db_path).exists():
-        try:
-            from qsys.ledger.service import LedgerService
-            service = LedgerService(db_path)
-            acct = service.get_account(_shadow_account_id())
-            if acct:
-                ledger_account = dict(acct)
-                ledger_account["cash"] = service.get_cash(_shadow_account_id())
-                ledger_positions = service.get_positions(_shadow_account_id())
-                ledger_rows = []
-                for p in ledger_positions:
-                    if int(p["quantity"]) <= 0:
-                        continue
-                    ledger_rows.append({
-                        "instrument": p["symbol"],
-                        "quantity": int(p["quantity"]),
-                        "cost_price": float(p["avg_cost"]),
-                        "last_price": float(p.get("last_price", 0)),
-                        "market_value": float(p.get("market_value", 0)),
-                    })
-                if ledger_rows:
-                    ledger_df = pd.DataFrame(ledger_rows)
-                else:
-                    ledger_account = None
-            service.close()
-        except Exception:
-            pass
-
-    if positions_path is None and ledger_df is None:
-        positions_path = PROJECT_ROOT / "shadow" / "positions.csv"
-    if account_path is None and ledger_account is None:
-        account_path = PROJECT_ROOT / "shadow" / "account.json"
-
-    if ledger_account is not None and ledger_df is not None:
-        positions = ledger_df
-        account = ledger_account
-    else:
-        if not positions_path or not positions_path.exists():
-            return None
-        if not account_path or not account_path.exists():
-            return None
-        try:
-            positions = pd.read_csv(positions_path)
-        except Exception:
-            return None
-        try:
-            account = json.loads(account_path.read_text())
-        except (json.JSONDecodeError, OSError):
-            return None
-
-    if positions.empty:
-        return None
-
-    try:
-        if close_prices_override is not None:
-            close_prices = close_prices_override
-        else:
-            adapter = QlibAdapter()
-            adapter.init_qlib()
-            instruments = positions["instrument"].tolist()
-            market = adapter.get_features(
-                instruments, ["$close"],
-                start_time=trade_date, end_time=trade_date,
-            )
-            if market is None or market.empty:
-                return None
-            if isinstance(market.index, pd.MultiIndex):
-                market = market.copy()
-                frame = market.reset_index()
-                frame = frame[frame.iloc[:, 1].astype(str).str.startswith(trade_date)]
-            else:
-                frame = market.reset_index()
-            if frame.empty:
-                return None
-            frame = frame.drop_duplicates(subset=["instrument"], keep="last")
-            close_col = [c for c in frame.columns if c == "$close"]
-            if not close_col:
-                return None
-            close_col = close_col[0]
-            close_prices = {}
-            for _, r in frame.iterrows():
-                inst = str(r["instrument"])
-                try:
-                    val = float(r[close_col])
-                    if not pd.isna(val) and val > 0:
-                        close_prices[inst] = val
-                except (ValueError, TypeError):
-                    pass
-        if not close_prices:
-            return None
-        total_market_value = 0.0
-        total_cost = 0.0
-        priced_count = 0
-        details: list[tuple] = []
-        for _, row in positions.iterrows():
-            inst = str(row["instrument"])
-            qty = int(float(row.get("quantity", 0)))
-            if qty <= 0:
-                continue
-            cost = float(row.get("cost_price", 0))
-            close = close_prices.get(inst)
-            if close is None:
-                continue
-            market_val = qty * close
-            total_market_value += market_val
-            total_cost += qty * cost
-            priced_count += 1
-            details.append((inst, _get_stock_name(inst), qty, cost, close, market_val - qty * cost))
-        cash = float(account.get("cash", 0))
-        # Ledger accounts table has no "cash" column; set during init above
-        if cash == 0.0 and db_path and Path(db_path).exists():
-            try:
-                from qsys.ledger.service import LedgerService
-                cash = LedgerService(db_path).get_cash(_shadow_account_id())
-            except Exception:
-                pass
-        initial_capital = float(account.get("initial_capital", 1_000_000))
-        total_value = cash + total_market_value
-        cumulative_pnl = total_value - initial_capital
-        cumulative_pnl_pct = cumulative_pnl / initial_capital * 100 if initial_capital > 0 else 0.0
-        prev_date = _prev_trading_day(trade_date)
-        if prev_date is not None:
-            prev_snap = _load_prod_mtm_snapshot(prev_date)
-            if prev_snap is not None:
-                daily_pnl = total_value - float(prev_snap["total_value"])
-            else:
-                daily_pnl = cumulative_pnl
-        else:
-            daily_pnl = cumulative_pnl
-        if priced_count == 0:
-            return None
-        details.sort(key=lambda x: x[5], reverse=True)
-        snapshot = {
-            "cash": cash, "market_value": total_market_value,
-            "total_value": total_value, "initial_capital": initial_capital,
-            "cumulative_pnl": cumulative_pnl,
-            "cumulative_pnl_pct": round(cumulative_pnl_pct, 2),
-            "daily_pnl": daily_pnl, "priced_count": priced_count,
-            "total_positions": len(positions),
-            "details": details,
-        }
-        _save_mtm_snapshot(output_dir, snapshot)
-        return snapshot
-    except Exception as e:
-        if isinstance(e, SystemExit):
-            raise
-        print(f"  ⚠ mark-to-market failed: {e}")
-        return None
-
-
-def _save_mtm_snapshot(output_dir: Path, snapshot: dict) -> None:
-    mtm_path = output_dir / "mtm" / "mtm_snapshot.json"
-    mtm_path.parent.mkdir(parents=True, exist_ok=True)
-    write_json(mtm_path, snapshot)
-
-
-# ── 存档已有产物（force-rerun 使用）─────────────────────────────────────
-
-def _archive_execution(run_root: Path) -> None:
-    exec_dir = _exec_dir(run_root)
-    if not exec_dir.exists():
-        return
-    archive_dir = run_root / "archive"
-    archive_dir.mkdir(parents=True, exist_ok=True)
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    shutil.move(str(exec_dir), str(archive_dir / f"execution_{ts}"))
-    print(f"  📦 已有执行产物已存档: archive/execution_{ts}")
 
 
 # ── 通知构建 ─────────────────────────────────────────────────────────────
@@ -727,23 +413,6 @@ def _build_postclose_message(trade_date: str, mtm: dict | None = None,
     return "\n".join(lines)
 
 
-# ── run_meta ──────────────────────────────────────────────────────────────
-
-def _save_run_meta(run_root: Path, trade_date: str, mode: str,
-                    data_date: str | None = None,
-                    debug_run: bool = False, reason: str | None = None,
-                    extra: dict | None = None) -> None:
-    meta = {
-        "trade_date": trade_date,
-        "mode": mode, "reference_date": data_date,
-        "debug_run": debug_run, "reason": reason,
-        "ts": datetime.now().isoformat(),
-        **(extra or {}),
-    }
-    run_root.mkdir(parents=True, exist_ok=True)
-    write_json(run_root / "run_meta.json", meta)
-
-
 # ── Mode handlers ──────────────────────────────────────────────────────
 
 def run_preopen(trade_date: str, debug_run: bool = False,
@@ -813,7 +482,7 @@ def run_preopen(trade_date: str, debug_run: bool = False,
         print(f"    #{top_picks.index((inst, score)) + 1} {inst}  score={score:.4f}")
     print(f"\n[4/4] Building trading plan...")
     run_root.mkdir(parents=True, exist_ok=True)
-    _save_run_meta(run_root, trade_date, "preopen", data_date=data_date,
+    save_run_meta(run_root, trade_date, "preopen", data_date=data_date,
                    debug_run=debug_run, reason=reason)
     rebalance_skipped = not _should_rebalance(trade_date)
     if rebalance_skipped:
@@ -872,7 +541,7 @@ def run_postclose(trade_date: str, debug_run: bool = False,
           + (" (FORCE-RERUN)" if force_rerun else ""))
     print(f"{'=' * 60}")
     run_root.mkdir(parents=True, exist_ok=True)
-    _save_run_meta(run_root, trade_date, "postclose", debug_run=debug_run, reason=reason,
+    save_run_meta(run_root, trade_date, "postclose", debug_run=debug_run, reason=reason,
                    extra={"force_rerun": force_rerun})
     # In debug mode: read plan from production path if not in debug path
     plan_dir = _plan_dir(run_root)
@@ -885,10 +554,10 @@ def run_postclose(trade_date: str, debug_run: bool = False,
     has_plan = (plan_dir / "order_intents.csv").exists()
     has_skip_meta = (plan_dir / "plan_meta.json").exists()
     has_skip = has_skip_meta and not has_plan
-    already_committed = _is_execution_committed(run_root)
+    already_committed = is_execution_committed(run_root)
 
     # ── COMMITTING crash recovery check ──
-    committing_path = _committing_marker(run_root)
+    committing_path = committing_marker(run_root)
     if committing_path.exists() and not already_committed:
         msg = (f"⛔ COMMITTING 标记存在（无 COMMITTED）！\n"
                f"上次提交中崩溃，execution/ 目录可能不完整。\n"
@@ -903,7 +572,7 @@ def run_postclose(trade_date: str, debug_run: bool = False,
         print(f"  ⏭ 执行已提交（COMMITTED 标记存在），跳过")
         print(f"  💡 如需重新执行请使用 --force-rerun + --reason")
         artifacts = _load_artifacts_for_notification(trade_date, run_root)
-        mtm = _load_mtm_snapshot(run_root / "mtm" / "mtm_snapshot.json")
+        mtm = load_mtm_snapshot(run_root / "mtm" / "mtm_snapshot.json")
         if not no_notify:
             msg = _build_postclose_message(
                 trade_date, mtm=mtm, artifacts=artifacts,
@@ -937,7 +606,7 @@ def run_postclose(trade_date: str, debug_run: bool = False,
             if not no_notify:
                 _send_notification(msg)
             sys.exit(1)
-        _archive_execution(run_root)
+        archive_execution(run_root)
 
     # ── Plan check ──
     if not has_plan and not has_skip:
@@ -995,17 +664,20 @@ def run_postclose(trade_date: str, debug_run: bool = False,
             intents_df = pd.read_csv(intents_path)
             all_instruments.update(intents_df["instrument"].tolist())
         if all_instruments:
-            close_prices = _fetch_close_prices(trade_date, sorted(all_instruments))
+            close_prices = fetch_close_prices(trade_date, sorted(all_instruments))
             if close_prices:
                 stale_positions = pd.DataFrame(
                     {"instrument": list(all_instruments), "quantity": 0})
                 try:
-                    stale_result = _check_stale_prices(trade_date, close_prices, stale_positions)
-                    _save_stale_check(run_root, stale_result)
+                    stale_result = check_stale_prices(
+                        trade_date, close_prices, stale_positions,
+                        project_root=PROJECT_ROOT,
+                    )
+                    save_stale_check(run_root, stale_result)
                     print(f"  ✅ Stale check: {stale_result['status']} "
                           f"({stale_result['identical_count']}/{stale_result['checked_count']} identical)")
                 except StaleDataError as e:
-                    _save_stale_check(run_root, e.stale_check)
+                    save_stale_check(run_root, e.stale_check)
                     print(f"  ❌ {e}")
                     if not no_notify:
                         _send_notification(
@@ -1020,7 +692,7 @@ def run_postclose(trade_date: str, debug_run: bool = False,
 
         # ── Write COMMITTING before ledger write (crash-safe boundary) ──
         if not debug_run:
-            committing_path = _committing_marker(run_root)
+            committing_path = committing_marker(run_root)
             if committing_path.exists():
                 print(f"  ❌ COMMITTING 标记已存在，疑似半提交状态。请人工检查。")
                 sys.exit(1)
@@ -1042,7 +714,7 @@ def run_postclose(trade_date: str, debug_run: bool = False,
         except Exception as e:
             # Clean up COMMITTING on failure so retry is possible
             if not debug_run:
-                _cleanup_committing(run_root)
+                cleanup_committing(run_root)
             print(f"  ❌ 执行失败: {e}")
             if not no_notify:
                 _send_notification(f"⛔ Alpha V1 Post-close {trade_date} FAILED\n{e}")
@@ -1090,14 +762,20 @@ def run_postclose(trade_date: str, debug_run: bool = False,
         # Debug mode: read from staging artifacts, not production shadow/
         staging_acct = staging_exec_dir / "account_after.json"
         staging_pos = staging_exec_dir / "positions_after.csv"
-        mtm = _try_mark_to_market(
+        mtm = try_mark_to_market(
             trade_date, output_dir=run_root,
             account_path=staging_acct if staging_acct.exists() else None,
             positions_path=staging_pos if staging_pos.exists() else None,
+            project_root=PROJECT_ROOT,
+            shadow_account_id=_shadow_account_id(),
+            get_stock_name_fn=_get_stock_name,
         )
     else:
-        mtm = _try_mark_to_market(trade_date, output_dir=run_root,
-                                   db_path=LEDGER_DB_PATH if not debug_run else None)
+        mtm = try_mark_to_market(trade_date, output_dir=run_root,
+                                   db_path=LEDGER_DB_PATH if not debug_run else None,
+                                   project_root=PROJECT_ROOT,
+                                   shadow_account_id=_shadow_account_id(),
+                                   get_stock_name_fn=_get_stock_name)
 
     if mtm is None:
         print(f"  ⚠ 收盘价数据未就绪")
@@ -1151,37 +829,7 @@ def run_postclose(trade_date: str, debug_run: bool = False,
     print(f"\n✅ Post-close {trade_date} completed in {elapsed:.0f}s")
 
 
-def _fetch_close_prices(trade_date: str, instruments: list[str]) -> dict[str, float]:
-    """Fetch close prices from qlib for given instruments on trade_date."""
-    if not instruments:
-        return {}
-    try:
-        adapter = QlibAdapter()
-        adapter.init_qlib()
-        market = adapter.get_features(instruments, ["$close"],
-                                      start_time=trade_date, end_time=trade_date)
-        if market is None or market.empty:
-            return {}
-        if isinstance(market.index, pd.MultiIndex):
-            frame = market.reset_index()
-            frame = frame[frame.iloc[:, 1].astype(str).str.startswith(trade_date)]
-        else:
-            frame = market.reset_index()
-        if frame.empty:
-            return {}
-        frame = frame.drop_duplicates(subset=["instrument"], keep="last")
-        prices = {}
-        for _, r in frame.iterrows():
-            try:
-                v = float(r["$close"])
-                if not pd.isna(v) and v > 0:
-                    prices[str(r["instrument"])] = v
-            except (ValueError, TypeError):
-                pass
-        return prices
-    except Exception:
-        return {}
-
+# ── Helpers (kept in script — pipeline-specific) ─────────────────────
 
 def _load_plan_instruments(plan_dir: Path) -> list[str]:
     intents_path = plan_dir / "order_intents.csv"
@@ -1234,14 +882,6 @@ def _load_artifacts_for_notification(trade_date: str, run_root: Path) -> ShadowR
     )
 
 
-def _cleanup_committing(run_root: Path) -> None:
-    """Remove COMMITTING marker on failure so retry is possible."""
-    committing_path = _committing_marker(run_root)
-    if committing_path.exists():
-        committing_path.unlink()
-        print(f"  🧹 COMMITTING marker cleaned up")
-
-
 def _commit_execution(run_root: Path, staging_dir: Path,
                       db_path: str | None = None,
                       strategy_id: str | None = None,
@@ -1249,7 +889,7 @@ def _commit_execution(run_root: Path, staging_dir: Path,
     exec_dir = _exec_dir(run_root)
     exec_dir.mkdir(parents=True, exist_ok=True)
     # COMMITTING should already exist (written before execute_alpha_v1_plan)
-    committing_path = _committing_marker(run_root)
+    committing_path = committing_marker(run_root)
     if not committing_path.exists():
         print(f"  ❌ COMMITTING 标记不存在，疑似提交顺序错误。")
         sys.exit(1)
@@ -1305,7 +945,7 @@ def _commit_execution(run_root: Path, staging_dir: Path,
                 shutil.copy2(str(src), str(exec_dir / fname))
 
         # 3. Rename COMMITTING → COMMITTED (atomic)
-        committing_path.rename(_committed_marker(run_root))
+        committing_path.rename(committed_marker(run_root))
         print(f"  ✅ 执行已提交 (COMMITTED): {exec_dir}")
 
     except BaseException:
@@ -1316,7 +956,7 @@ def _commit_execution(run_root: Path, staging_dir: Path,
             print(f"  💡 Manual recovery: fix issue, delete COMMITTING, verify execution/ dir")
         else:
             # Ledger failed — clean COMMITTING so retry is possible
-            _cleanup_committing(run_root)
+            cleanup_committing(run_root)
         raise
 
 
@@ -1327,8 +967,8 @@ def run_notify_only(trade_date: str, output_dir: str | None = None) -> None:
     run_root = _resolve_run_root(trade_date, output_dir=output_dir)
     artifacts = _load_artifacts_for_notification(trade_date, run_root)
     # Read-only: load existing MTM snapshot from run_root, never recalculate
-    mtm = _load_mtm_snapshot(run_root / "mtm" / "mtm_snapshot.json")
-    already_committed = _is_execution_committed(run_root)
+    mtm = load_mtm_snapshot(run_root / "mtm" / "mtm_snapshot.json")
+    already_committed = is_execution_committed(run_root)
     has_skip = _plan_dir(run_root).exists() and not (
         _plan_dir(run_root) / "order_intents.csv").exists()
     stale_check_path = run_root / "mtm" / "stale_check.json"
