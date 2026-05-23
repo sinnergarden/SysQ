@@ -81,16 +81,19 @@ class StrategyCandidate(Protocol):
     def get_stock_name(self, ts_code: str) -> str:
         """Return human-readable name for a stock code."""
 
-    def load_model(self) -> Any:
-        """Load strategy-specific model(s) — returns opaque model object."""
+    def load_model(self) -> None:
+        """Load strategy-specific model(s) — prints summary, stores internally."""
 
     def fetch_data(self, data_date: str) -> Any:
-        """Fetch feature data for *data_date* — returns DataFrame."""
+        """Fetch feature data for *data_date* — prints row count, returns opaque data."""
 
     # ── Predict + Plan ─────────────────────────────────────────────────
 
     def generate_predictions(self, data: Any) -> Any:
-        """Run inference on *data* — returns predictions DataFrame."""
+        """Run inference on *data* using internally stored model — returns predictions DataFrame."""
+
+    def print_predictions_summary(self, predictions: Any) -> None:
+        """Print top picks summary to console (e.g. top 5 with scores)."""
 
     def should_rebalance(self, trade_date: str) -> bool:
         """Check whether rebalancing should occur (e.g. weekly frequency)."""

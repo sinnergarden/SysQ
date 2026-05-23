@@ -95,6 +95,9 @@ class _BaseValidCandidate:
     def fetch_open_prices(self, trade_date: str, instruments: list[str]) -> dict[str, float]:
         return {}
 
+    def print_predictions_summary(self, predictions: Any) -> None:
+        pass
+
     # ── Execute + MTM ───────────────────────────────────────────────────
 
     def execute_plan(self, context: Any) -> Any:

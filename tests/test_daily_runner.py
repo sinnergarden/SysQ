@@ -72,20 +72,16 @@ class FakeStrategy:
     def get_stock_name(self, ts_code: str) -> str:
         return ts_code
 
-    def load_model(self) -> Any:
+    def load_model(self) -> None:
         self._record("load_model")
-        return {"models": {}, "clean_features": []}
 
     def fetch_data(self, data_date: str) -> Any:
         self._record("fetch_data")
         import pandas as pd
 
-        return {
-            "frame": pd.DataFrame(
-                {"instrument": ["000001", "000002"], "trade_date": [data_date, data_date]}
-            ),
-            "clean_features": [],
-        }
+        return pd.DataFrame(
+            {"instrument": ["000001", "000002"], "trade_date": [data_date, data_date]}
+        )
 
     # ── Predict + Plan ──────────────────────────────────────────────────
 
@@ -133,6 +129,9 @@ class FakeStrategy:
     def fetch_open_prices(self, trade_date: str, instruments: list[str]) -> dict[str, float]:
         self._record("fetch_open_prices")
         return {"000001": 10.0}
+
+    def print_predictions_summary(self, predictions: Any) -> None:
+        self._record("print_predictions_summary")
 
     # ── Execute + MTM ───────────────────────────────────────────────────
 
@@ -342,6 +341,7 @@ class TestDailyRunnerOrchestration(unittest.TestCase):
             "fetch_data",
             "generate_predictions",
             "save_predictions",
+            "print_predictions_summary",
             "should_rebalance",
             "build_plan",
             # build_preopen_message/send_notification skipped because no_notify=True

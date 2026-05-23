@@ -83,27 +83,13 @@ class DailyRunner:
         # [1/4] Resolve data date + load model
         print("\n[1/4] Resolving date & loading model...")
         data_date = strategy.resolve_data_date(ctx.trade_date)
-        model = strategy.load_model()
-        for tag in ["5d", "20d"]:
-            models_dict = model.get("models", {})
-            if tag in models_dict:
-                print(f"  Model {tag}: {models_dict[tag][0].num_trees()} trees")
-        print(f"  Features: {len(model.get('clean_features', []))}")
+        strategy.load_model()  # prints model info internally
         print(f"  Data date: {data_date}")
 
         # [2/4] Fetch data
         print(f"\n[2/4] Fetching data for {data_date}...")
         try:
-            raw_data = strategy.fetch_data(data_date)
-            if raw_data is None or (isinstance(raw_data, dict) and raw_data.get("frame", pd.DataFrame()).empty):
-                print(f"  ⚠ 交易日 {ctx.trade_date} 无数据")
-                if not ctx.no_notify:
-                    strategy.send_notification(
-                        f"⚠ {strategy.display_name} Pre-open {ctx.trade_date}\n交易日无数据，跳过"
-                    )
-                return
-            frame = raw_data.get("frame", pd.DataFrame())
-            print(f"  {strategy.universe}: {len(frame)} rows (data_date={data_date})")
+            raw_data = strategy.fetch_data(data_date)  # prints row count internally
         except Exception as e:
             print(f"  ❌ {e}")
             if not ctx.no_notify:
@@ -115,8 +101,6 @@ class DailyRunner:
         # [3/4] Generate predictions
         print(f"\n[3/4] Generating predictions...")
         try:
-            # Attach model to data so generate_predictions can use it
-            raw_data["_models"] = model.get("models", {})
             predictions = strategy.generate_predictions(raw_data)
         except Exception as e:
             print(f"  ❌ {e}")
@@ -154,9 +138,7 @@ class DailyRunner:
             print(f"  ⚠ ADR-7 signal sidecar failed: {e}")
 
         # Top picks for display
-        top = predictions.sort_values("score", ascending=False).head(5)
-        for i, (_, row) in enumerate(top.iterrows(), 1):
-            print(f"    #{i} {row['instrument']}  score={row['score']:.4f}")
+        strategy.print_predictions_summary(predictions)
 
         # [4/4] Build trading plan
         print(f"\n[4/4] Building trading plan...")

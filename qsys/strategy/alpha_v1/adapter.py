@@ -57,6 +57,8 @@ class AlphaV1StrategyAdapter:
         self._project_root = project_root or Path(__file__).resolve().parents[3]
         self._stock_names: dict[str, str] = {}
         self._stock_names_loaded = False
+        self._loaded_models: dict = {}
+        self._clean_features: list[str] = []
 
     # ── Derived paths ──────────────────────────────────────────────────
 
@@ -147,7 +149,7 @@ class AlphaV1StrategyAdapter:
             print(f"  ⚠ {trade_date} 无数据，回退到 {data_date}")
         return data_date
 
-    def load_model(self) -> Any:
+    def load_model(self) -> None:
         import lightgbm as lgb
 
         models: dict[str, tuple[Any, pd.Series, pd.Series]] = {}
@@ -161,18 +163,20 @@ class AlphaV1StrategyAdapter:
             center = pd.Series(json.loads(center_path.read_text()))
             scale = pd.Series(json.loads(scale_path.read_text()))
             models[tag] = (model, center, scale)
+            print(f"  Model {tag}: {model.num_trees()} trees")
         # Resolve feature list
         features_file = self._model_dir / "features.json"
         if features_file.exists():
-            clean_features = json.loads(features_file.read_text())
+            self._clean_features = json.loads(features_file.read_text())
         else:
             from qsys.feature.library import FeatureLibrary
 
             all_features = FeatureLibrary.get_semantic_all_features_config()
             from qsys.strategy.alpha_v1.spec import get_clean_features
 
-            clean_features = get_clean_features(all_features)
-        return {"models": models, "clean_features": clean_features}
+            self._clean_features = get_clean_features(all_features)
+        print(f"  Features: {len(self._clean_features)}")
+        self._loaded_models = models
 
     def fetch_data(self, data_date: str) -> Any:
         from qlib.data import D as qlib_D
@@ -183,9 +187,6 @@ class AlphaV1StrategyAdapter:
         adapter = QlibAdapter()
         adapter.init_qlib()
         all_features = FeatureLibrary.get_semantic_all_features_config()
-        from qsys.strategy.alpha_v1.spec import get_clean_features
-
-        clean_features = get_clean_features(all_features)
         raw = adapter.get_features(
             self.UNIVERSE,
             all_features + ["$close"],
@@ -197,29 +198,29 @@ class AlphaV1StrategyAdapter:
             return pd.DataFrame()
         frame = raw.reset_index().rename(columns={"datetime": "trade_date"})
         frame = frame.loc[:, ~frame.columns.duplicated()]
-        return {"frame": frame, "clean_features": clean_features}
+        print(f"  {self.UNIVERSE}: {len(frame)} rows (data_date={data_date})")
+        return frame
 
     # ── Predict + Plan ──────────────────────────────────────────────────
 
     def generate_predictions(self, data: Any) -> Any:
-        frame: pd.DataFrame = data["frame"]
-        clean_features: list[str] = data["clean_features"]
+        frame: pd.DataFrame = data
         from qsys.strategy.alpha_v1.spec import ALPHA_V1_CANDIDATE as C
 
+        if frame is None or (isinstance(frame, pd.DataFrame) and frame.empty):
+            raise ValueError("交易日无数据")
         trade_date = frame["trade_date"].iloc[0] if "trade_date" in frame.columns else "unknown"
-        if frame.empty:
-            raise ValueError(f"交易日 {trade_date} 无数据")
-        X = frame[clean_features].astype(np.float32).fillna(0.0)
+        if not self._clean_features:
+            raise ValueError("clean_features empty — call load_model() first")
+        X = frame[self._clean_features].astype(np.float32).fillna(0.0)
         if X.empty or len(X) < 10:
             raise ValueError(f"交易日 {trade_date} 数据不足 ({len(X)} rows)")
 
-        # Lazy load models from self.load_model() result — stored in data
-        models: dict = data.get("_models", {})
-        if not models:
-            raise ValueError("models missing — call load_model() and attach as data['_models']")
+        if not self._loaded_models:
+            raise ValueError("models not loaded — call load_model() first")
 
-        pred_5d_model, center_5d, scale_5d = models["5d"]
-        pred_20d_model, center_20d, scale_20d = models["20d"]
+        pred_5d_model, center_5d, scale_5d = self._loaded_models["5d"]
+        pred_20d_model, center_20d, scale_20d = self._loaded_models["20d"]
         Xz_5d = _robust_zscore_transform(X, center_5d, scale_5d)
         Xz_20d = _robust_zscore_transform(X, center_20d, scale_20d)
         p5 = pd.Series(pred_5d_model.predict(Xz_5d.values), index=X.index)
@@ -333,6 +334,12 @@ class AlphaV1StrategyAdapter:
         )
         prices = frame.set_index("instrument")["$open"].astype(float).to_dict()
         return prices
+
+    def print_predictions_summary(self, predictions: Any) -> None:
+        """Print top-5 predictions to console."""
+        top = predictions.sort_values("score", ascending=False).head(5)
+        for i, (_, row) in enumerate(top.iterrows(), 1):
+            print(f"    #{i} {row['instrument']}  score={row['score']:.4f}")
 
     # ── Execute + MTM ──────────────────────────────────────────────────
 
