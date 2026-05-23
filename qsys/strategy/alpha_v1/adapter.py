@@ -59,19 +59,103 @@ class AlphaV1StrategyAdapter:
         self._stock_names_loaded = False
         self._loaded_models: dict = {}
         self._clean_features: list[str] = []
+        # Optional overrides set by ``from_config``
+        self._config_display_name: str | None = None
+        self._config_model_dir: Path | None = None
+        self._config_predictions_dir: Path | None = None
+        self._config_ledger_db_path: str | None = None
+
+    # ── Factory ────────────────────────────────────────────────────────────
+
+    @classmethod
+    def from_config(
+        cls,
+        config: dict | None = None,
+        project_root: Path | None = None,
+    ) -> "AlphaV1StrategyAdapter":
+        """Construct from an optional YAML config dict.
+
+        Parameters
+        ----------
+        config : dict or None
+            Parsed YAML content.  Fields that may be overridden:
+
+            - ``display_name`` — cosmetic only
+            - ``paths.model_dir`` — overrides ``_model_dir``
+            - ``paths.predictions_dir`` — overrides ``_predictions_dir``
+            - ``paths.ledger_db`` — overrides ``_ledger_db_path``
+
+        project_root : Path or None
+            Project root for path resolution.
+
+        Raises
+        ------
+        ValueError
+            If a ``portfolio`` section is present and any of its values differ
+            from the frozen ``ALPHA_V1_CANDIDATE`` spec.
+        """
+        self = cls(project_root=project_root)
+
+        cfg = config or {}
+        self._config_display_name = cfg.get("display_name")
+
+        # ── Path overrides ────────────────────────────────────────────
+        paths = cfg.get("paths", {})
+        pr = self._project_root
+
+        raw_model_dir = paths.get("model_dir")
+        if raw_model_dir:
+            p = Path(raw_model_dir)
+            self._config_model_dir = p if p.is_absolute() else pr / raw_model_dir
+
+        raw_pred_dir = paths.get("predictions_dir")
+        if raw_pred_dir:
+            p = Path(raw_pred_dir)
+            self._config_predictions_dir = p if p.is_absolute() else pr / raw_pred_dir
+
+        raw_ledger = paths.get("ledger_db")
+        if raw_ledger:
+            p = Path(raw_ledger)
+            self._config_ledger_db_path = str(p if p.is_absolute() else pr / raw_ledger)
+
+        # ── Portfolio guard ───────────────────────────────────────────
+        portfolio = cfg.get("portfolio")
+        if portfolio is not None:
+            spec = ALPHA_V1_CANDIDATE.portfolio
+            mismatches: list[str] = []
+            for attr in ("top_n", "buffer_hold", "buffer_buy",
+                         "single_stock_cap", "rebalance_freq"):
+                val = portfolio.get(attr)
+                if val is not None and val != getattr(spec, attr):
+                    mismatches.append(
+                        f"  portfolio.{attr}: config={val!r}, spec={getattr(spec, attr)!r}"
+                    )
+            if mismatches:
+                raise ValueError(
+                    "Config portfolio values differ from frozen ALPHA_V1_CANDIDATE:\n"
+                    + "\n".join(mismatches)
+                )
+
+        return self
 
     # ── Derived paths ──────────────────────────────────────────────────
 
     @property
     def _model_dir(self) -> Path:
+        if self._config_model_dir is not None:
+            return self._config_model_dir
         return self._project_root / "experiments/alpha_v1_models/latest"
 
     @property
     def _predictions_dir(self) -> Path:
+        if self._config_predictions_dir is not None:
+            return self._config_predictions_dir
         return self._project_root / "experiments/alpha_v1_shadow_predictions"
 
     @property
     def _ledger_db_path(self) -> str:
+        if self._config_ledger_db_path is not None:
+            return self._config_ledger_db_path
         return str(self._project_root / "data" / "trade.db")
 
     UNIVERSE = "csi300"
@@ -88,7 +172,7 @@ class AlphaV1StrategyAdapter:
 
     @property
     def display_name(self) -> str:
-        return "Alpha V1"
+        return self._config_display_name or "Alpha V1"
 
     # ── Configuration ──────────────────────────────────────────────────
 

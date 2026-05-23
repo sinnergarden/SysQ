@@ -154,5 +154,89 @@ class TestAlphaV1StrategyAdapter(unittest.TestCase):
             self.assertEqual(cm.exception.code, 1)
 
 
+    # ── from_config tests ──────────────────────────────────────────────
+
+    def test_from_config_defaults_no_config(self):
+        """from_config() with no config is identical to default __init__."""
+        adapter = AlphaV1StrategyAdapter.from_config()
+        self.assertEqual(adapter.strategy_id, "alpha_v1")
+        self.assertEqual(adapter.display_name, "Alpha V1")
+        self.assertEqual(adapter.rebalance_policy["top_n"], 20)
+
+    def test_from_config_empty_dict(self):
+        """from_config with empty dict behaves like no config."""
+        adapter = AlphaV1StrategyAdapter.from_config({})
+        self.assertEqual(adapter.display_name, "Alpha V1")
+
+    def test_from_config_overrides_display_name(self):
+        adapter = AlphaV1StrategyAdapter.from_config({"display_name": "Custom Alpha"})
+        self.assertEqual(adapter.display_name, "Custom Alpha")
+
+    def test_from_config_overrides_paths(self):
+        """Relative paths are resolved against project_root."""
+        pr = Path("/tmp/test_from_config_pr")
+        adapter = AlphaV1StrategyAdapter.from_config(
+            {"paths": {"model_dir": "custom_models/latest"}},
+            project_root=pr,
+        )
+        expected = pr / "custom_models/latest"
+        self.assertEqual(adapter._model_dir, expected)
+
+    def test_from_config_overrides_absolute_paths(self):
+        adapter = AlphaV1StrategyAdapter.from_config(
+            {"paths": {"model_dir": "/absolute/path"}},
+        )
+        self.assertEqual(adapter._model_dir, Path("/absolute/path"))
+
+    def test_from_config_overrides_predictions_dir(self):
+        pr = Path("/tmp/test_pr")
+        adapter = AlphaV1StrategyAdapter.from_config(
+            {"paths": {"predictions_dir": "custom_preds"}},
+            project_root=pr,
+        )
+        self.assertEqual(adapter._predictions_dir, pr / "custom_preds")
+
+    def test_from_config_overrides_ledger_db(self):
+        pr = Path("/tmp/test_pr")
+        adapter = AlphaV1StrategyAdapter.from_config(
+            {"paths": {"ledger_db": "custom/trade.db"}},
+            project_root=pr,
+        )
+        self.assertEqual(adapter._ledger_db_path, str(pr / "custom/trade.db"))
+
+    def test_from_config_rejects_mismatched_top_n(self):
+        with self.assertRaises(ValueError):
+            AlphaV1StrategyAdapter.from_config({"portfolio": {"top_n": 999}})
+
+    def test_from_config_rejects_mismatched_buffer_hold(self):
+        with self.assertRaises(ValueError):
+            AlphaV1StrategyAdapter.from_config({"portfolio": {"buffer_hold": 999}})
+
+    def test_from_config_rejects_mismatched_buffer_buy(self):
+        with self.assertRaises(ValueError):
+            AlphaV1StrategyAdapter.from_config({"portfolio": {"buffer_buy": 999}})
+
+    def test_from_config_rejects_mismatched_single_stock_cap(self):
+        with self.assertRaises(ValueError):
+            AlphaV1StrategyAdapter.from_config({"portfolio": {"single_stock_cap": 0.99}})
+
+    def test_from_config_rejects_mismatched_rebalance_freq(self):
+        with self.assertRaises(ValueError):
+            AlphaV1StrategyAdapter.from_config({"portfolio": {"rebalance_freq": "daily"}})
+
+    def test_from_config_error_message_includes_field(self):
+        with self.assertRaises(ValueError) as cm:
+            AlphaV1StrategyAdapter.from_config({"portfolio": {"top_n": 999}})
+        msg = str(cm.exception)
+        self.assertIn("top_n", msg)
+        self.assertIn("999", msg)
+        self.assertIn("20", msg)
+
+    def test_from_config_passes_project_root_to_init(self):
+        pr = Path("/tmp/test_pr_from_config")
+        adapter = AlphaV1StrategyAdapter.from_config(project_root=pr)
+        self.assertEqual(adapter._project_root, pr)
+
+
 if __name__ == "__main__":
     unittest.main()
