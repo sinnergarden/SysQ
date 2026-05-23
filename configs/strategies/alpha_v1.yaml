@@ -17,3 +17,17 @@ portfolio:
   buffer_buy: 40
   single_stock_cap: 0.07
   rebalance_freq: weekly
+
+label:
+  horizons: [5, 20]
+  type: forward_return
+
+training:
+  train_days: 504
+  test_days: 5
+  step_days: 5
+  model_type: lightgbm_dual
+
+feature:
+  feature_set: alpha_v1
+  schema_version: current

@@ -237,6 +237,78 @@ class TestAlphaV1StrategyAdapter(unittest.TestCase):
         adapter = AlphaV1StrategyAdapter.from_config(project_root=pr)
         self.assertEqual(adapter._project_root, pr)
 
+    def test_from_config_stores_config(self):
+        """from_config stores the config dict for downstream use (e.g. training)."""
+        cfg = {"display_name": "Test", "paths": {"model_dir": "custom"}}
+        adapter = AlphaV1StrategyAdapter.from_config(cfg, project_root=Path("/tmp"))
+        self.assertIsNotNone(adapter._config)
+        self.assertEqual(adapter._config["display_name"], "Test")
+
+    def test_from_config_empty_config_stores_empty(self):
+        adapter = AlphaV1StrategyAdapter.from_config()
+        self.assertEqual(adapter._config, {})
+
+    # ── train() delegation ─────────────────────────────────────────────
+
+    def test_train_returns_training_result(self):
+        """train() returns a TrainingResult-like object."""
+        result = self.adapter.train(None)
+        # When no training script exists, should return a failed result with a message
+        self.assertIsNotNone(result)
+        self.assertTrue(hasattr(result, "status"))
+        self.assertTrue(hasattr(result, "strategy_id"))
+
+    # ── from_config training/label/feature validation ────────────────────
+
+    def test_from_config_rejects_mismatched_train_days(self):
+        with self.assertRaises(ValueError) as cm:
+            AlphaV1StrategyAdapter.from_config({"training": {"train_days": 999}})
+        self.assertIn("train_days", str(cm.exception))
+
+    def test_from_config_rejects_mismatched_test_days(self):
+        with self.assertRaises(ValueError):
+            AlphaV1StrategyAdapter.from_config({"training": {"test_days": 999}})
+
+    def test_from_config_rejects_mismatched_step_days(self):
+        with self.assertRaises(ValueError):
+            AlphaV1StrategyAdapter.from_config({"training": {"step_days": 999}})
+
+    def test_from_config_rejects_mismatched_label_horizons(self):
+        with self.assertRaises(ValueError) as cm:
+            AlphaV1StrategyAdapter.from_config({"label": {"horizons": [1, 2, 3]}})
+        self.assertIn("horizons", str(cm.exception))
+
+    def test_from_config_rejects_mismatched_label_type(self):
+        with self.assertRaises(ValueError) as cm:
+            AlphaV1StrategyAdapter.from_config({"label": {"type": "classification"}})
+        self.assertIn("label.type", str(cm.exception))
+
+    def test_from_config_rejects_mismatched_feature_set(self):
+        with self.assertRaises(ValueError) as cm:
+            AlphaV1StrategyAdapter.from_config({"feature": {"feature_set": "alpha_v2"}})
+        self.assertIn("feature.feature_set", str(cm.exception))
+
+    def test_from_config_rejects_mismatched_schema_version(self):
+        with self.assertRaises(ValueError) as cm:
+            AlphaV1StrategyAdapter.from_config({"feature": {"schema_version": "v2"}})
+        self.assertIn("feature.schema_version", str(cm.exception))
+
+    def test_from_config_training_mismatch_error_includes_config_value(self):
+        with self.assertRaises(ValueError) as cm:
+            AlphaV1StrategyAdapter.from_config({"training": {"train_days": 999}})
+        msg = str(cm.exception)
+        self.assertIn("999", msg)
+
+    def test_from_config_label_horizons_accepts_different_order(self):
+        """[20, 5] is accepted because it sorts to [5, 20]."""
+        adapter = AlphaV1StrategyAdapter.from_config({"label": {"horizons": [20, 5]}})
+        self.assertEqual(adapter.strategy_id, "alpha_v1")
+
+    def test_from_config_training_section_optional(self):
+        """Omitting the training section entirely is fine."""
+        adapter = AlphaV1StrategyAdapter.from_config({"display_name": "Test"})
+        self.assertEqual(adapter.display_name, "Test")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -146,6 +146,101 @@ def send_notification(self, text: str) -> None: ...
 
 ---
 
+## 3.5 Training Interface (`train`)
+
+The ``train`` hook is intentionally **coarse** — different model families need
+very different training logic:
+
+```python
+def train(self, context: Any) -> Any:
+    """Run strategy-specific training.
+
+    Returns a ``TrainingResult``-like object (see ``qsys.model.training``).
+    """
+    trainer = MyStrategyTrainer(...)
+    return trainer.run(context)
+```
+
+**Why coarse?** LightGBM and Transformer training share almost nothing:
+
+| Concern | LightGBM | Transformer |
+|---------|----------|-------------|
+| Input | Tabular feature matrix | Sequence tensors |
+| Label | Forward return (scalar) | Multi-horizon return (vector) |
+| Model | Booster tree ensemble | Attention-based checkpoint |
+| Validation | RankIC, MSE | Spearman, MAPE, Sharpe |
+| Output | ``model_5d.txt`` + scalers | checkpoint.pt + tokenizer/schema |
+
+The DailyRunner calls ``strategy.train(ctx)`` and gets back a
+``TrainingResult``.  It does **not** know:
+
+- What model type was trained
+- What features or labels were used
+- What the training window was
+- What evaluation metrics mean
+
+### TrainingResult contract
+
+Defined in ``qsys/model/training.py``:
+
+```python
+@dataclass
+class TrainingResult:
+    strategy_id: str
+    model_version: str
+    model_dir: str
+    train_start: str | None = None
+    train_end: str | None = None
+    valid_start: str | None = None
+    valid_end: str | None = None
+    metrics: dict[str, Any] = field(default_factory=dict)
+    artifacts: dict[str, str] = field(default_factory=dict)
+    status: str = "success"       # "success" | "failed"
+    message: str | None = None
+
+@dataclass
+class ModelManifest:
+    strategy_id: str
+    model_version: str
+    model_type: str               # "lightgbm_dual", "transformer", "dnn"
+    feature_set: str
+    label: dict[str, Any]
+    train_window: dict[str, Any]
+    created_at: str
+    artifacts: dict[str, str]
+    metrics: dict[str, Any]
+    git_commit: str | None = None
+```
+
+### Strategy adapter owns training delegation
+
+```python
+class AlphaV1StrategyAdapter:
+    def train(self, context: Any) -> TrainingResult:
+        from qsys.model.alpha_v1_trainer import AlphaV1Trainer
+        trainer = AlphaV1Trainer(project_root=..., config=...)
+        return trainer.run(context)
+```
+
+### Future Transformer strategy
+
+```python
+class AlphaV2StrategyAdapter:
+    def train(self, context: Any) -> TrainingResult:
+        trainer = TransformerTrainer(
+            project_root=...,
+            config=...,
+            sequence_length=60,
+            d_model=128,
+        )
+        return trainer.run(context)
+```
+
+No changes to DailyRunner needed.  The training pipeline is entirely
+strategy-owned.
+
+---
+
 ## 4. Plan Interface (`build_plan`)
 
 `build_plan` must write the following files to `target_dir`:

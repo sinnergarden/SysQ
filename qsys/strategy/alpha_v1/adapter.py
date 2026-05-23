@@ -60,6 +60,7 @@ class AlphaV1StrategyAdapter:
         self._loaded_models: dict = {}
         self._clean_features: list[str] = []
         # Optional overrides set by ``from_config``
+        self._config: dict | None = None
         self._config_display_name: str | None = None
         self._config_model_dir: Path | None = None
         self._config_predictions_dir: Path | None = None
@@ -97,6 +98,7 @@ class AlphaV1StrategyAdapter:
         self = cls(project_root=project_root)
 
         cfg = config or {}
+        self._config = cfg
         self._config_display_name = cfg.get("display_name")
 
         # ── Path overrides ────────────────────────────────────────────
@@ -134,6 +136,64 @@ class AlphaV1StrategyAdapter:
                 raise ValueError(
                     "Config portfolio values differ from frozen ALPHA_V1_CANDIDATE:\n"
                     + "\n".join(mismatches)
+                )
+
+        # ── Training / label / feature guard ──────────────────────────
+        training = cfg.get("training")
+        if training is not None:
+            spec_t = ALPHA_V1_CANDIDATE.training
+            t_mismatches: list[str] = []
+            for attr, expected in [("train_days", spec_t.train_days),
+                                     ("test_days", spec_t.test_days),
+                                     ("step_days", spec_t.step_days)]:
+                val = training.get(attr)
+                if val is not None and val != expected:
+                    t_mismatches.append(
+                        f"  training.{attr}: config={val!r}, spec={expected!r}"
+                    )
+            if t_mismatches:
+                raise ValueError(
+                    "Config training values differ from frozen ALPHA_V1_CANDIDATE:\n"
+                    + "\n".join(t_mismatches)
+                )
+
+        label_cfg = cfg.get("label")
+        if label_cfg is not None:
+            l_mismatches: list[str] = []
+            horizons = label_cfg.get("horizons")
+            expected_horizons = [5, 20]
+            if horizons is not None and sorted(horizons) != expected_horizons:
+                l_mismatches.append(
+                    f"  label.horizons: config={horizons!r}, expected={expected_horizons!r}"
+                )
+            label_type = label_cfg.get("type")
+            if label_type is not None and label_type != "forward_return":
+                l_mismatches.append(
+                    f"  label.type: config={label_type!r}, expected='forward_return'"
+                )
+            if l_mismatches:
+                raise ValueError(
+                    "Config label values differ from frozen alpha_v1 semantics:\n"
+                    + "\n".join(l_mismatches)
+                )
+
+        feature_cfg = cfg.get("feature")
+        if feature_cfg is not None:
+            f_mismatches: list[str] = []
+            fs = feature_cfg.get("feature_set")
+            if fs is not None and fs != "alpha_v1":
+                f_mismatches.append(
+                    f"  feature.feature_set: config={fs!r}, expected='alpha_v1'"
+                )
+            sv = feature_cfg.get("schema_version")
+            if sv is not None and sv != "current":
+                f_mismatches.append(
+                    f"  feature.schema_version: config={sv!r}, expected='current'"
+                )
+            if f_mismatches:
+                raise ValueError(
+                    "Config feature values differ from frozen alpha_v1 semantics:\n"
+                    + "\n".join(f_mismatches)
                 )
 
         return self
@@ -602,6 +662,19 @@ class AlphaV1StrategyAdapter:
             cash_after=summary.get("cash_after", 0.0),
             total_value_after=summary.get("total_value_after", 0.0),
         )
+
+    # ── Training ─────────────────────────────────────────────────────────
+
+    def train(self, context: Any) -> Any:
+        """Delegate to AlphaV1Trainer."""
+        from qsys.model.alpha_v1_trainer import AlphaV1Trainer
+
+        trainer = AlphaV1Trainer(
+            project_root=self._project_root,
+            config=self._config,
+            model_version=self.model_version,
+        )
+        return trainer.run(context)
 
     # ── Notifications ──────────────────────────────────────────────────
 

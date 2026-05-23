@@ -17,6 +17,7 @@ from typing import Any
 
 import pandas as pd
 
+from qsys.model.training import write_training_result
 from qsys.ops.commit_guard import (
     cleanup_committing,
     committed_marker,
@@ -372,11 +373,38 @@ class DailyRunner:
     # ── Train ───────────────────────────────────────────────────────────
 
     def run_train(self, ctx: DailyRunContext, strategy: StrategyCandidate) -> None:
-        """Train stage: delegates to weekly training script."""
+        """Train stage: delegates to strategy.train()."""
         self._validate(ctx, allowed={"train"})
         self._log_stage("train", ctx)
         self._ensure_dirs(ctx)
-        print(f"  ℹ {strategy.display_name} training delegated to weekly script")
+
+        t0 = time.time()
+        result = strategy.train(ctx)
+        elapsed = time.time() - t0
+
+        if result is None:
+            print(f"  ℹ {strategy.display_name} training returned None (not implemented?)")
+            return
+
+        print(f"\n{'=' * 60}")
+        print(f"Training Result — {strategy.display_name}")
+        print(f"  Status:      {result.status}")
+        print(f"  Model:       {result.model_version}")
+        if result.model_dir:
+            print(f"  Model dir:   {result.model_dir}")
+        if result.metrics:
+            print(f"  Metrics:     {result.metrics}")
+        if result.artifacts:
+            print(f"  Artifacts:   {len(result.artifacts)} files")
+        if result.message:
+            print(f"  Message:     {result.message}")
+        print(f"  Duration:    {elapsed:.0f}s")
+        print(f"{'=' * 60}")
+
+        # Persist TrainingResult to run artifact
+        training_result_path = ctx.run_root / "training_result.json"
+        write_training_result(result, training_result_path)
+        print(f"  → Result saved: {training_result_path}")
 
     # ── Private helpers ─────────────────────────────────────────────────
 

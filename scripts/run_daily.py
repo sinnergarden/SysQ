@@ -18,9 +18,9 @@ from __future__ import annotations
 
 import argparse
 import os
-import subprocess
 import sys
 import warnings
+from datetime import datetime
 from pathlib import Path
 
 warnings.filterwarnings("ignore")
@@ -82,6 +82,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="危险模式：覆盖已提交的执行产物（必须配合 --reason）",
     )
     parser.add_argument("--reason", help="操作原因说明（--force-rerun 必填）")
+    parser.add_argument(
+        "--train-end-date",
+        help="训练数据截止日期 YYYY-MM-DD（仅 train 模式）",
+    )
     return parser
 
 
@@ -107,29 +111,46 @@ def run_daily_main(argv: list[str] | None = None) -> None:
 
     strategy_id = args.strategy
     config = load_strategy_config(strategy_id, PROJECT_ROOT)
+
+    # Inject training end_date into config so it flows through to the trainer
+    if args.train_end_date:
+        config.setdefault("training", {})["end_date"] = args.train_end_date
+
     strategy = create_strategy(strategy_id, config, project_root=PROJECT_ROOT)
 
     runner = DailyRunner()
 
     # ── Train — no trade-date required ────────────────────────────────
     if args.mode == "train":
-        print(f"\n{'=' * 60}")
-        print(f"{strategy.display_name} Weekly Training")
-        print(f"{'=' * 60}")
-        train_script = str(PROJECT_ROOT / "scripts" / f"run_{strategy_id}_weekly_train.py")
-        if not Path(train_script).exists():
-            print(f"  ❌ 脚本不存在: {train_script}")
-            return
-        print(f"  启动: {train_script}")
-        result = subprocess.run(
-            [sys.executable, train_script],
-            cwd=str(PROJECT_ROOT),
-            capture_output=False,
-        )
-        if result.returncode != 0:
-            print(f"  ❌ 训练失败 (exit {result.returncode})")
+        trade_date = args.trade_date or datetime.now().strftime("%Y-%m-%d")
+        if args.output_dir:
+            train_run_root = Path(args.output_dir)
+        elif args.debug_run:
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            train_run_root = (
+                PROJECT_ROOT / "experiments" / "debug"
+                / strategy.strategy_id / f"train_{trade_date}_{ts}"
+            )
         else:
-            print(f"  ✅ 训练完成")
+            train_run_root = (
+                PROJECT_ROOT / "experiments"
+                / f"{strategy.strategy_id}_train" / trade_date
+            )
+
+        ctx = DailyRunContext(
+            trade_date=trade_date,
+            mode="train",
+            run_root=train_run_root,
+            project_root=PROJECT_ROOT,
+            strategy_id=strategy.strategy_id,
+            account_id=strategy.account_id,
+            debug_run=args.debug_run,
+            no_notify=args.no_notify,
+            force_rerun=False,
+            reason=args.reason,
+            output_dir=Path(args.output_dir) if args.output_dir else None,
+        )
+        runner.run_train(ctx, strategy)
         return
 
     # ── Modes requiring trade-date ────────────────────────────────────
