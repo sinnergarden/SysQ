@@ -189,6 +189,11 @@ class AlphaV1CandidateConfig:
     blend: AlphaV1BlendConfig = field(default_factory=AlphaV1BlendConfig)
     health: AlphaV1HealthThresholds = field(default_factory=AlphaV1HealthThresholds)
 
+    @property
+    def shadow_account_id(self) -> str:
+        """Ledger account_id for this strategy's shadow account."""
+        return f"shadow_{self.strategy_id}"
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "version": self.version,

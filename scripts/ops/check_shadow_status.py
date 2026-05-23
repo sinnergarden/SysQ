@@ -10,6 +10,9 @@ from typing import Any
 from qsys.ops.model_registry import latest_shadow_model_is_usable, read_latest_shadow_model
 from qsys.ops.state import atomic_write_json, load_json
 
+# Default ledger DB path
+_LEDGER_DB_PATH = str(Path(__file__).resolve().parent.parent.parent / "data" / "trade.db")
+
 
 def _utc_now_text() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
@@ -44,6 +47,35 @@ def _read_run_bundle(pointer_path: Path, summary_key: str) -> tuple[dict[str, An
 
 
 def _read_shadow_account(base_dir: Path) -> tuple[dict[str, Any], list[str]]:
+    # Try ledger first
+    if Path(_LEDGER_DB_PATH).exists():
+        try:
+            from qsys.ledger.service import LedgerService
+            service = LedgerService(_LEDGER_DB_PATH)
+            accounts = service.list_accounts(account_type="shadow")
+            if accounts:
+                acct_id = accounts[0]["account_id"]
+                summary = service.get_account_summary(acct_id)
+                last_trade = service.get_latest_trade_date(acct_id)
+                service.close()
+                if summary:
+                    return {
+                        "cash": summary["cash"],
+                        "available_cash": summary["cash"],
+                        "market_value": summary["market_value"],
+                        "total_value": summary["total_value"],
+                        "position_count": summary["position_count"],
+                        "last_run_id": None,
+                        "last_trade_date": last_trade,
+                        "source": "ledger",
+                        "account_id": acct_id,
+                    }, []
+            else:
+                service.close()
+        except Exception:
+            pass
+
+    # Fallback to shadow files
     account_path = base_dir / "shadow" / "account.json"
     if not account_path.exists():
         return {}, ["shadow account missing"]
@@ -51,15 +83,37 @@ def _read_shadow_account(base_dir: Path) -> tuple[dict[str, Any], list[str]]:
 
 
 def _read_shadow_ledger(base_dir: Path) -> tuple[dict[str, Any], list[str]]:
+    # Try ledger first
+    if Path(_LEDGER_DB_PATH).exists():
+        try:
+            from qsys.ledger.service import LedgerService
+            service = LedgerService(_LEDGER_DB_PATH)
+            summary = service.get_ledger_summary()
+            # Get last run from fills
+            service.close()
+            return {
+                "exists": summary["fill_count"] > 0,
+                "source": "ledger",
+                "fill_count": summary["fill_count"],
+                "order_count": summary["order_count"],
+                "last_run_id": summary.get("last_run_id"),
+                "last_trade_date": summary.get("last_trade_date"),
+            }, []
+        except Exception:
+            pass
+
+    # Fallback to shadow CSV
     ledger_path = base_dir / "shadow" / "ledger.csv"
     if not ledger_path.exists():
-        return {"exists": False, "row_count": 0, "last_run_id": None, "last_trade_date": None}, ["shadow ledger missing"]
+        return {"exists": False, "source": "missing", "fill_count": 0, "last_run_id": None, "last_trade_date": None}, ["shadow ledger missing"]
     with ledger_path.open("r", encoding="utf-8", newline="") as handle:
         rows = list(csv.DictReader(handle))
     last_row = rows[-1] if rows else {}
     return {
         "exists": True,
-        "row_count": len(rows),
+        "source": "shadow_csv",
+        "fill_count": len(rows),
+        "order_count": len(rows),
         "last_run_id": last_row.get("run_id"),
         "last_trade_date": last_row.get("trade_date"),
     }, []

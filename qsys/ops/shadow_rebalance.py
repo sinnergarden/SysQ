@@ -13,10 +13,14 @@ from qsys.utils.json_io import write_json
 
 from qsys.backtest.portfolio import build_rank_weight_portfolio
 from qsys.data.adapter import QlibAdapter
+from qsys.ledger.service import LedgerService
 from qsys.strategy.alpha_v1 import ALPHA_V1_CANDIDATE
 from qsys.trader.account import Account, Position
 from qsys.trader.diff import OrderGenerator
 from qsys.trader.matcher import MatchEngine
+
+# Default DB path for the ledger
+DEFAULT_LEDGER_DB_PATH = str(Path(__file__).resolve().parent.parent.parent / "data" / "trade.db")
 
 DEFAULT_INITIAL_CAPITAL = 1_000_000.0
 DEFAULT_TURNOVER_BUFFER = 0.0
@@ -350,6 +354,50 @@ def _positions_frame(account: Account, current_prices: dict[str, float]) -> pd.D
     return pd.DataFrame(rows, columns=POSITION_COLUMNS)
 
 
+def _load_account_from_ledger(
+    service: LedgerService, account_id: str, initial_capital: float,
+) -> tuple[Account, dict[str, Any], pd.DataFrame]:
+    """Load Account + prior_account dict + positions DataFrame from LedgerService."""
+    cash = service.get_cash(account_id)
+    positions = service.get_positions(account_id)
+
+    account = Account(init_cash=initial_capital)
+    account.cash = cash
+
+    pos_rows: list[dict[str, Any]] = []
+    for p in positions:
+        sym = p["symbol"]
+        qty = int(p["quantity"])
+        if qty <= 0:
+            continue
+        avail = int(p["available_quantity"])
+        cost = float(p["avg_cost"])
+        account.positions[sym] = Position(
+            symbol=sym,
+            total_amount=qty,
+            sellable_amount=max(avail, 0),
+            avg_cost=cost,
+        )
+        pos_rows.append({
+            "instrument": sym, "quantity": qty,
+            "sellable_quantity": avail, "cost_price": cost,
+            "last_price": float(p.get("last_price", 0)),
+            "market_value": float(p.get("market_value", qty * cost)),
+        })
+
+    positions_df = pd.DataFrame(pos_rows, columns=POSITION_COLUMNS) if pos_rows else pd.DataFrame(columns=POSITION_COLUMNS)
+
+    total_mv = float(positions_df["market_value"].sum()) if not positions_df.empty else 0.0
+    total_value = cash + total_mv
+    prior_account = {
+        "trade_date": None,
+        "cash": cash, "available_cash": cash,
+        "market_value": total_mv, "total_value": total_value,
+        "last_run_id": None, "initial_capital": initial_capital,
+    }
+    return account, prior_account, positions_df
+
+
 def _append_ledger(path: Path, rows: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fieldnames = LEDGER_COLUMNS
@@ -624,6 +672,7 @@ def build_alpha_v1_plan(
     reference_date: str,
     predictions_path: str | Path,
     output_dir: str | Path,
+    db_path: str | None = None,
 ) -> Path:
     """Build alpha_v1 trading plan from predictions, without executing.
 
@@ -638,7 +687,16 @@ def build_alpha_v1_plan(
 
     predictions = _read_predictions(predictions_path)
     shadow_dir = Path(base_dir) / "shadow"
-    account, prior_account, _ = _load_shadow_account(shadow_dir)
+    if db_path and Path(db_path).exists():
+        _service = LedgerService(db_path)
+        account_id = f"shadow_{config.strategy_id}"
+        try:
+            init_cap = _service.get_initial_cash(account_id) or DEFAULT_INITIAL_CAPITAL
+        except Exception:
+            init_cap = DEFAULT_INITIAL_CAPITAL
+        account, prior_account, _ = _load_account_from_ledger(_service, account_id, init_cap)
+    else:
+        account, prior_account, _ = _load_shadow_account(shadow_dir)
     instruments = sorted(set(predictions["instrument"].astype(str)) | set(account.positions.keys()))
 
     current_prices, market_status = _fetch_market_snapshot(
@@ -686,6 +744,143 @@ def build_alpha_v1_plan(
     return plan_dir
 
 
+def _write_execution_to_ledger(
+    db_path: str,
+    execution_date: str,
+    strategy_id: str,
+    orders: list[dict[str, Any]],
+    ledger_rows: list[dict[str, Any]],
+    results: list[dict[str, Any]],
+    close_prices: dict[str, float],
+    cash_after: float,
+    market_value_after: float,
+    total_value_after: float,
+    positions_after: pd.DataFrame,
+    initial_capital: float = DEFAULT_INITIAL_CAPITAL,
+) -> None:
+    """Write execution results to SQLite ledger.
+
+    Called from _commit_execution() after COMMITTING marker is written.
+    This is the single point where fills, orders, and snapshots
+    enter the ledger as source of truth.
+
+    On success, calls service.finish_run() → status='completed'.
+    On failure, the run stays 'started' — caller can detect and handle.
+
+    Run-idempotency rules:
+    - If run_id already exists with status "completed": skip all writes (return early).
+    - If run_id exists but not completed: re-open with force=True, then write.
+    - If run_id does not exist: create normally, then write.
+    """
+    service = LedgerService(db_path)
+    account_id = f"shadow_{strategy_id}"
+    run_id = f"{execution_date}.{strategy_id}.shadow"
+    trade_date = execution_date
+
+    # Ensure account exists
+    service.create_account(account_id, "shadow", initial_capital)
+
+    # Check run existence
+    existing_run = service.get_run(run_id)
+    if existing_run:
+        if existing_run["status"] == "completed":
+            print(f"  ⏭  Run {run_id} already completed — skip ledger write")
+            service.close()
+            return
+        # exists but not completed — re-open with force
+        print(f"  ⚠  Run {run_id} exists (status={existing_run['status']}) — force re-start")
+        service.start_run(
+            run_id=run_id, trade_date=trade_date,
+            strategy_id=strategy_id, account_id=account_id,
+            mode="postclose", force=True,
+        )
+    else:
+        service.start_run(
+            run_id=run_id, trade_date=trade_date,
+            strategy_id=strategy_id, account_id=account_id,
+            mode="postclose",
+        )
+
+    try:
+        # Record orders with deterministic IDs (run_id + symbol + side + index)
+        order_dicts = []
+        for i, o in enumerate(orders):
+            oid = f"ord_{run_id.replace('.', '_')}_{o['symbol']}_{o['side']}_{i}"
+            o["_oid"] = oid  # carried to fill loop via results references
+            order_dicts.append({
+                "order_id": oid,
+                "run_id": run_id,
+                "account_id": account_id,
+                "strategy_id": strategy_id,
+                "trade_date": trade_date,
+                "symbol": o["symbol"],
+                "side": "BUY" if o["side"] == "buy" else "SELL",
+                "order_type": o.get("order_type", "market"),
+                "quantity": int(o.get("amount", 0)),
+                "limit_price": o.get("price"),
+                "status": "filled",
+                "reason": "plan_execution",
+            })
+        service.record_orders(run_id, order_dicts, idempotent=True)
+
+        # Build fills from match results with deterministic order_id linkage
+        fill_dicts = []
+        for i, item in enumerate(results):
+            o = item["order"]
+            qty = int(item.get("filled_amount", o.get("amount", 0)) or 0)
+            if qty <= 0:
+                continue
+            price = float(item.get("deal_price", o.get("price", 0.0)) or 0.0)
+            fee = float(item.get("fee", 0.0) or 0.0)
+            gross = qty * price
+            side = "BUY" if o["side"] == "buy" else "SELL"
+            net = gross + fee if side == "BUY" else gross - fee
+
+            fill_dicts.append({
+                "fill_id": f"fil_{run_id.replace('.', '_')}_{o['symbol']}_{o['side']}_{i}",
+                "order_id": o["_oid"],
+                "run_id": run_id,
+                "account_id": account_id,
+                "strategy_id": strategy_id,
+                "trade_date": trade_date,
+                "symbol": o["symbol"],
+                "side": side,
+                "quantity": qty,
+                "price": price,
+                "gross_amount": gross,
+                "commission": fee,
+                "stamp_tax": 0.0,
+                "slippage": 0.0,
+                "net_amount": net,
+                "source": "simulation",
+            })
+
+        if fill_dicts:
+            service.apply_fills(run_id, fill_dicts, t_plus_one=True, idempotent=True)
+
+        # Portfolio snapshot at close prices
+        prices_dict: dict[str, float] = {}
+        for _, row in positions_after.iterrows():
+            sym = str(row["instrument"])
+            prices_dict[sym] = close_prices.get(sym, float(row.get("last_price", 0)))
+        service.create_portfolio_snapshot(run_id, trade_date, prices=prices_dict)
+
+        # Mark run as completed
+        service.finish_run(run_id, "completed")
+        print(f"  ✅ Ledger run {run_id} completed")
+    except BaseException:
+        # On failure, mark run as failed for observability
+        try:
+            service.finish_run(run_id, "failed")
+        except Exception:
+            pass
+        service.close()
+        raise
+
+    service.close()
+
+
+
 def execute_alpha_v1_plan(
     *,
     base_dir: str | Path,
@@ -693,12 +888,18 @@ def execute_alpha_v1_plan(
     execution_date: str,
     output_dir: str | Path,
     debug_run: bool = False,
+    db_path: str | None = None,
 ) -> ShadowRebalanceArtifacts:
     """Execute a saved alpha_v1 plan using execution_date's OPEN price.
 
     Reads plan artifacts (order intents), loads current shadow account,
     executes at OPEN price via MatchEngine, then MTM at CLOSE price.
-    Writes results to output_dir and updates shadow account.
+    Writes staging results to output_dir.
+
+    When db_path is provided, saves a ledger_payload.json to staging_dir
+    for later commit by _commit_execution().  The actual SQLite ledger
+    write happens inside the COMMITTING/COMMITTED boundary to keep
+    ledger state and committed artifacts consistent.
 
     When debug_run=True, reads shadow account as input but NEVER writes
     to shadow/account.json, shadow/positions.csv, or shadow/ledger.csv.
@@ -718,7 +919,19 @@ def execute_alpha_v1_plan(
     if order_intents.empty:
         raise ShadowRebalanceError("Plan has no order intents")
 
-    account, prior_account, positions_df = _load_shadow_account(shadow_dir)
+    strategy_id = plan_meta.get("strategy_id", "alpha_v1")
+    if db_path and Path(db_path).exists():
+        _service = LedgerService(db_path)
+        account_id = f"shadow_{strategy_id}"
+        try:
+            initial_capital = _service.get_initial_cash(account_id) or DEFAULT_INITIAL_CAPITAL
+        except Exception:
+            initial_capital = DEFAULT_INITIAL_CAPITAL
+        account, prior_account, positions_df = _load_account_from_ledger(
+            _service, account_id, initial_capital,
+        )
+    else:
+        account, prior_account, positions_df = _load_shadow_account(shadow_dir)
     positions_before_count = len(account.positions)
     instruments = sorted(set(order_intents["instrument"].astype(str)) | set(account.positions.keys()))
 
@@ -798,6 +1011,19 @@ def execute_alpha_v1_plan(
             "status": item["status"], "reason": item.get("reason", "plan_execution"),
         })
     pd.DataFrame(ledger_rows).to_csv(output_dir / "ledger_rows.csv", index=False)
+
+    # ── Save ledger payload for later commit (in _commit_execution) ──
+    # execute_alpha_v1_plan generates staging artifacts only.
+    # The actual SQLite ledger write happens in _commit_execution() so that
+    # ledger state and execution artifacts share a single commit boundary.
+    if db_path and not debug_run:
+        ledger_payload = {
+            "orders": orders,
+            "results": results,
+            "close_prices": close_prices,
+            "initial_capital": float(prior_account.get("initial_capital", DEFAULT_INITIAL_CAPITAL)),
+        }
+        write_json(output_dir / "ledger_payload.json", ledger_payload)
 
     execution_summary = {
         "trade_date": execution_date,
