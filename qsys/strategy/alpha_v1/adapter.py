@@ -8,9 +8,6 @@ lifecycle hooks.
 from __future__ import annotations
 
 import json
-import shutil
-import sys
-import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -512,82 +509,16 @@ class AlphaV1StrategyAdapter:
         return artifacts
 
     def commit_execution(self, context: Any, staging_dir: Any) -> None:
-        from qsys.ops.commit_guard import (
-            cleanup_committing,
-            committed_marker,
-            committing_marker,
+        from qsys.ops.shadow_execution import commit_execution_artifacts
+
+        commit_execution_artifacts(
+            run_root=context.run_root,
+            staging_dir=staging_dir,
+            db_path=self._ledger_db_path,
+            trade_date=context.trade_date,
+            strategy_id=self.strategy_id,
+            debug_run=context.debug_run,
         )
-        from qsys.ops.shadow_rebalance import _write_execution_to_ledger
-
-        exec_dir = context.run_root / "execution"
-        staging_dir = Path(staging_dir)
-        exec_dir.mkdir(parents=True, exist_ok=True)
-
-        committing_path = committing_marker(context.run_root)
-        if not committing_path.exists():
-            print(f"  ❌ COMMITTING 标记不存在，疑似提交顺序错误。")
-            sys.exit(1)
-
-        ledger_written = False
-        try:
-            # 1. Write SQLite ledger from staging payload
-            if not context.debug_run:
-                payload_path = staging_dir / "ledger_payload.json"
-                if payload_path.exists():
-                    payload = json.loads(payload_path.read_text())
-                    positions_df = pd.DataFrame()
-                    pos_csv = staging_dir / "positions_after.csv"
-                    if pos_csv.exists():
-                        positions_df = pd.read_csv(pos_csv)
-
-                    summary_path = staging_dir / "execution_summary.json"
-                    if summary_path.exists():
-                        summary = json.loads(summary_path.read_text())
-                        cash_after = summary.get("cash_after", 0.0)
-                        market_value_after = summary.get("market_value_after", 0.0)
-                        total_value_after = summary.get("total_value_after", 0.0)
-                    else:
-                        cash_after = market_value_after = total_value_after = 0.0
-
-                    _write_execution_to_ledger(
-                        db_path=self._ledger_db_path,
-                        execution_date=context.trade_date,
-                        strategy_id=self.strategy_id,
-                        orders=payload["orders"],
-                        ledger_rows=[],
-                        results=payload["results"],
-                        close_prices=payload["close_prices"],
-                        cash_after=cash_after,
-                        market_value_after=market_value_after,
-                        total_value_after=total_value_after,
-                        positions_after=positions_df,
-                        initial_capital=payload.get("initial_capital", 1_000_000.0),
-                    )
-                    ledger_written = True
-                else:
-                    print(f"  ⚠ ledger_payload.json 不存在于 {staging_dir}，跳过 ledger 写入")
-
-            # 2. Copy staging artifacts to execution/
-            for fname in [
-                "account_after.json", "positions_after.csv", "execution_summary.json",
-                "account_before.json", "positions_before.csv", "ledger_rows.csv",
-                "ledger_payload.json",
-            ]:
-                src = staging_dir / fname
-                if src.exists():
-                    shutil.copy2(str(src), str(exec_dir / fname))
-
-            # 3. Rename COMMITTING → COMMITTED
-            committing_path.rename(committed_marker(context.run_root))
-            print(f"  ✅ 执行已提交 (COMMITTED): {exec_dir}")
-
-        except BaseException:
-            if ledger_written:
-                print(f"  ❌ Ledger written but artifact commit failed — COMMITTING preserved")
-                print(f"  💡 Manual recovery: fix issue, delete COMMITTING, verify execution/ dir")
-            else:
-                cleanup_committing(context.run_root)
-            raise
 
     def mark_to_market(self, context: Any) -> dict | None:
         from qsys.ops.mtm import (
@@ -623,7 +554,7 @@ class AlphaV1StrategyAdapter:
         return mtm
 
     def load_artifacts_for_notification(self, context: Any) -> Any | None:
-        from qsys.ops.shadow_rebalance import ShadowRebalanceArtifacts
+        from qsys.ops.shadow_execution import ShadowRebalanceArtifacts
 
         exec_dir = context.run_root / "execution"
         plan_dir = context.run_root / "plan"

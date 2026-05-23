@@ -216,10 +216,10 @@ class TestAlphaV2BuildPlan(unittest.TestCase):
     """build_plan writes plan artifacts."""
 
     def _patch_market_snapshot(self):
-        """Mock _fetch_market_snapshot to return fake prices."""
+        """Mock fetch_market_snapshot to return fake prices."""
         import pandas as pd
         patcher = patch(
-            "qsys.ops.shadow_rebalance._fetch_market_snapshot",
+            "qsys.ops.plan_builder.fetch_market_snapshot",
             return_value=(
                 {"600001": 10.0, "600002": 9.5, "600003": 11.0},
                 pd.DataFrame({"instrument": ["600001", "600002", "600003"],

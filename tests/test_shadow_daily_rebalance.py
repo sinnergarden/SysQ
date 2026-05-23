@@ -154,7 +154,7 @@ class TestShadowDailyRebalance(unittest.TestCase):
             with patch("scripts.ops.run_shadow_daily._build_data_status", return_value=_fake_data_status()), patch(
                 "scripts.ops.run_shadow_daily._build_feature_status", return_value=_fake_feature_status()
             ), patch("scripts.ops.run_shadow_daily.run_shadow_daily_inference", side_effect=_fake_inference), patch(
-                "qsys.ops.shadow_rebalance._fetch_market_snapshot", side_effect=_fake_market_snapshot
+                "qsys.ops.shadow_rebalance.fetch_market_snapshot", side_effect=_fake_market_snapshot
             ):
                 result = run_shadow_daily(base_dir, run_id="shadow_2026-04-25_090807", triggered_by="test")
 
@@ -235,7 +235,7 @@ class TestShadowDailyRebalance(unittest.TestCase):
                 "scripts.ops.run_shadow_daily._build_data_status", return_value=_fake_data_status()
             ), patch("scripts.ops.run_shadow_daily._build_feature_status", return_value=_fake_feature_status()), patch(
                 "scripts.ops.run_shadow_daily.run_shadow_daily_inference", side_effect=varied_inference
-            ), patch("qsys.ops.shadow_rebalance._fetch_market_snapshot", side_effect=_fake_market_snapshot):
+            ), patch("qsys.ops.shadow_rebalance.fetch_market_snapshot", side_effect=_fake_market_snapshot):
                 first = run_shadow_daily(base_dir, run_id="shadow_2026-04-25_090807", triggered_by="test", trade_date="2026-04-25")
                 second = run_shadow_daily(base_dir, run_id="shadow_2026-04-26_090807", triggered_by="test", trade_date="2026-04-26")
 
@@ -303,8 +303,8 @@ class TestShadowDailyRebalance(unittest.TestCase):
             with patch("scripts.ops.run_shadow_daily._build_data_status", return_value=_fake_data_status()), patch(
                 "scripts.ops.run_shadow_daily._build_feature_status", return_value=_fake_feature_status()
             ), patch("scripts.ops.run_shadow_daily.run_shadow_daily_inference", side_effect=_fake_inference), patch(
-                "qsys.ops.shadow_rebalance._fetch_market_snapshot", side_effect=no_order_market_snapshot
-            ), patch("qsys.ops.shadow_rebalance.OrderGenerator.generate_orders", return_value=[]):
+                "qsys.ops.shadow_rebalance.fetch_market_snapshot", side_effect=no_order_market_snapshot
+            ), patch("qsys.ops.plan_builder.OrderGenerator.generate_orders", return_value=[]):
                 result = run_shadow_daily(base_dir, run_id="shadow_2026-04-25_090807", triggered_by="test")
 
             run_dir = Path(result["run_dir"])
