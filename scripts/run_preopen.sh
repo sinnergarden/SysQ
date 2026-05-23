@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# systemd pre-open wrapper (08:30 Mon-Fri)
-# Computes signal_date = previous trading day, execution_date = today
+# systemd pre-open wrapper (08:00 Mon-Fri)
+# 盘前: 生成交易计划 → 21:30 CSI800 数据同步 → 22:00 postclose 开盘价执行 + 收盘价 MTM
 set -euo pipefail
 cd "$(cd "$(dirname "$0")/.." && pwd)"
 
@@ -26,10 +26,10 @@ if [ $EXIT_CODE -eq 0 ]; then
     $PYTHON scripts/run_alpha_v1_daily.py \
       --trade-date "$(date +%Y-%m-%d)" \
       --mode preopen \
-      2>/dev/null || true
+      || true
 else
     # 失败：简单通知
-    bash "$NOTIFY_SCRIPT" "Pre-open $SIGNAL_DATE -> $(date +%Y-%m-%d) FAILED (exit $EXIT_CODE)" 2>/dev/null || true
+    bash "$NOTIFY_SCRIPT" "Pre-open $SIGNAL_DATE -> $(date +%Y-%m-%d) FAILED (exit $EXIT_CODE)" || true
 fi
 
 exit $EXIT_CODE

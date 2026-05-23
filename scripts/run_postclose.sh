@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# systemd post-close wrapper (15:30 Mon-Fri)
-# REAL_SYNC_PATH env var or --real-sync CLI arg overrides automatic file discovery
+# systemd post-close wrapper (22:00 Mon-Fri)
+# 盘后: 读取 21:30 CSI800 sync 后的数据 → 开盘价执行交易计划 → 收盘价 MTM → 通知
+# 真实接入线上交易时: 9:25 集合竞价 + 9:30 确认买入（需额外脚本）
 set -u
 cd "$(cd "$(dirname "$0")/.." && pwd)"
 
@@ -55,7 +56,7 @@ if [ $EXIT_CODE -eq 0 ]; then
     $PYTHON scripts/run_alpha_v1_daily.py \
       --trade-date "$TODAY" \
       --mode postclose \
-      2>/dev/null || true
+      || true
 fi
 
 exit $EXIT_CODE
