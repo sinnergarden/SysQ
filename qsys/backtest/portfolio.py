@@ -59,6 +59,11 @@ def build_rank_weight_portfolio(
     selected = list(keep.keys()) + buys
     if not selected:
         return {}
+    # Sort by score descending for deterministic weight assignment.
+    # Previously the order depended on ``set()`` iteration (PYTHONHASHSEED),
+    # causing non-deterministic weights when multiple held stocks had
+    # ranks within the buffer-hold threshold.
+    selected.sort(key=lambda s: scores.get(s, 0.0), reverse=True)
 
     # Rank weight (linear decay) + cap redistribution
     tr = sum(range(1, len(selected) + 1))
