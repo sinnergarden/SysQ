@@ -131,6 +131,9 @@ class AlphaV1StrategyAdapter:
     def resolve_data_date(self, trade_date: str) -> str:
         from qlib.data import D as qlib_D
 
+        from qsys.data.adapter import QlibAdapter
+
+        QlibAdapter().init_qlib()
         cal = qlib_D.calendar(start_time="2020-01-01", end_time=trade_date)
         if cal is None or len(cal) == 0:
             print(f"  ⚠ qlib 日历无 <= {trade_date} 的交易日")
@@ -219,7 +222,7 @@ class AlphaV1StrategyAdapter:
         p20 = pd.Series(pred_20d_model.predict(Xz_20d.values), index=X.index)
         z5 = _cs_zscore(p5)
         z20 = _cs_zscore(p20)
-        blended = C.blend.weight_5d * z5 + C.blend.weight_20d * z20
+        blended = C.blend.blend_5d * z5 + C.blend.blend_20d * z20
 
         instruments = frame["instrument"].values
         rows = []
