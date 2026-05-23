@@ -26,8 +26,6 @@ Design decisions
 from __future__ import annotations
 
 import json
-import shutil
-import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -359,41 +357,15 @@ class AlphaV2StrategyAdapter:
         print(f"  → {len(predictions)} predictions saved: {path}")
 
     def build_plan(self, predictions: Any, target_dir: Any) -> bool:
-        """Build trading plan using config-driven portfolio parameters.
-
-        Reuses strategy-agnostic helpers from ``qsys.ops.shadow_rebalance``
-        (``_build_target_weights``, ``_build_order_intents``, etc.).  These
-        accept all parameters explicitly and have no alpha_v1 assumptions.
-        """
-        from qsys.ops.shadow_rebalance import (
-            _build_order_intents,
-            _build_target_weights,
-            _fetch_market_snapshot,
-            _load_shadow_account,
-            _read_predictions,
-        )
-        from qsys.utils.json_io import write_json
-
-        target_dir = Path(target_dir)
-        target_dir.mkdir(parents=True, exist_ok=True)
-
-        # Persist predictions so _read_predictions can load them
-        pred_path = target_dir / "predictions_for_plan.csv"
-        predictions.to_csv(pred_path, index=False)
-
-        trade_date = str(predictions["trade_date"].iloc[0])
-
-        account, prior_account, _ = _load_shadow_account(self._shadow_state_dir)
-        instruments = sorted(
-            set(predictions["instrument"].astype(str))
-            | set(account.positions.keys())
-        )
-        current_prices, _ = _fetch_market_snapshot(trade_date, instruments)
-
+        """Build trading plan using config-driven portfolio parameters."""
         from qsys.backtest.portfolio import build_rank_weight_portfolio
+        from qsys.ops.plan_builder import build_plan_from_predictions
 
-        target_weights, target_frame = _build_target_weights(
-            predictions, current_prices, account,
+        build_plan_from_predictions(
+            shadow_dir=self._shadow_state_dir,
+            trade_date=str(predictions["trade_date"].iloc[0]),
+            predictions=predictions,
+            output_dir=Path(target_dir).parent,
             portfolio_fn=build_rank_weight_portfolio,
             top_n=self._top_n,
             buffer_hold=self._buffer_hold,
@@ -403,37 +375,6 @@ class AlphaV2StrategyAdapter:
             strategy_version=self.model_version,
             portfolio_method="equal_weight_momentum",
         )
-        orders, order_intents, rebalance_audit, cash_before, mv_before, tv_before = (
-            _build_order_intents(
-                account, predictions, target_weights, current_prices, trade_date,
-            )
-        )
-
-        target_frame.to_csv(target_dir / "target_weights.csv", index=False)
-        order_intents.to_csv(target_dir / "order_intents.csv", index=False)
-        rebalance_audit.to_csv(target_dir / "rebalance_audit.csv", index=False)
-        write_json(target_dir / "plan_meta.json", {
-            "trade_date": trade_date,
-            "reference_date": trade_date,
-            "strategy_id": self.strategy_id,
-            "strategy_version": self.model_version,
-            "portfolio_method": "equal_weight_momentum",
-            "top_n": self._top_n,
-            "buffer_hold": self._buffer_hold,
-            "buffer_buy": self._buffer_buy,
-            "single_stock_cap": self._single_stock_cap,
-            "cash_before": cash_before,
-            "market_value_before": mv_before,
-            "total_value_before": tv_before,
-            "buy_count": len([o for o in orders if o["side"] == "buy"]),
-            "sell_count": len([o for o in orders if o["side"] == "sell"]),
-            "total_orders": len(orders),
-            "build_ts": datetime.now().isoformat(),
-        })
-
-        print(f"  ✅ Plan built: {len(orders)} orders "
-              f"({len([o for o in orders if o['side'] == 'buy'])} buy / "
-              f"{len([o for o in orders if o['side'] == 'sell'])} sell)")
         return True
 
     def load_plan_instruments(self, plan_dir: Any) -> list[str]:
@@ -471,21 +412,13 @@ class AlphaV2StrategyAdapter:
     # ── Execute + MTM ──────────────────────────────────────────────────
 
     def execute_plan(self, context: Any) -> Any:
-        """Execute plan via ``execute_alpha_v1_plan``.
-
-        Uses ``self._shadow_base_dir`` so the function resolves
-        ``base_dir / "shadow"`` internally, reading from
-        ``shadow_alpha_v2/shadow/`` (not alpha_v1's ``shadow/``).
-        Plan side (``build_plan``) also uses ``_shadow_state_dir``
-        (which IS ``_shadow_base_dir / "shadow"``), so both sides
-        read the same account state.
-        """
-        from qsys.ops.shadow_rebalance import execute_alpha_v1_plan
+        """Execute plan via ``execute_shadow_plan`` with generic run_id."""
+        from qsys.ops.shadow_execution import execute_shadow_plan
 
         plan_dir = context.run_root / "plan"
         staging_exec_dir = context.run_root / "execution" / "staging"
 
-        artifacts = execute_alpha_v1_plan(
+        artifacts = execute_shadow_plan(
             base_dir=str(self._shadow_base_dir),
             plan_dir=str(plan_dir),
             execution_date=context.trade_date,
@@ -496,78 +429,16 @@ class AlphaV2StrategyAdapter:
         return artifacts
 
     def commit_execution(self, context: Any, staging_dir: Any) -> None:
-        from qsys.ops.commit_guard import (
-            cleanup_committing,
-            committed_marker,
-            committing_marker,
+        from qsys.ops.shadow_execution import commit_execution_artifacts
+
+        commit_execution_artifacts(
+            run_root=context.run_root,
+            staging_dir=staging_dir,
+            db_path=self._ledger_db_path,
+            trade_date=context.trade_date,
+            strategy_id=self.strategy_id,
+            debug_run=context.debug_run,
         )
-        from qsys.ops.shadow_rebalance import _write_execution_to_ledger
-
-        exec_dir = context.run_root / "execution"
-        staging_dir = Path(staging_dir)
-        exec_dir.mkdir(parents=True, exist_ok=True)
-
-        committing_path = committing_marker(context.run_root)
-        if not committing_path.exists():
-            print(f"  ❌ COMMITTING marker not found — commit order error")
-            sys.exit(1)
-
-        ledger_written = False
-        try:
-            if not context.debug_run:
-                payload_path = staging_dir / "ledger_payload.json"
-                if payload_path.exists():
-                    payload = json.loads(payload_path.read_text())
-                    positions_df = pd.DataFrame()
-                    pos_csv = staging_dir / "positions_after.csv"
-                    if pos_csv.exists():
-                        positions_df = pd.read_csv(pos_csv)
-
-                    summary_path = staging_dir / "execution_summary.json"
-                    if summary_path.exists():
-                        summary = json.loads(summary_path.read_text())
-                        cash_after = summary.get("cash_after", 0.0)
-                        market_value_after = summary.get("market_value_after", 0.0)
-                        total_value_after = summary.get("total_value_after", 0.0)
-                    else:
-                        cash_after = market_value_after = total_value_after = 0.0
-
-                    _write_execution_to_ledger(
-                        db_path=self._ledger_db_path,
-                        execution_date=context.trade_date,
-                        strategy_id=self.strategy_id,
-                        orders=payload["orders"],
-                        ledger_rows=[],
-                        results=payload["results"],
-                        close_prices=payload["close_prices"],
-                        cash_after=cash_after,
-                        market_value_after=market_value_after,
-                        total_value_after=total_value_after,
-                        positions_after=positions_df,
-                        initial_capital=payload.get("initial_capital", 1_000_000.0),
-                    )
-                    ledger_written = True
-                else:
-                    print(f"  ⚠ ledger_payload.json not found in {staging_dir}")
-
-            for fname in [
-                "account_after.json", "positions_after.csv", "execution_summary.json",
-                "account_before.json", "positions_before.csv", "ledger_rows.csv",
-                "ledger_payload.json",
-            ]:
-                src = staging_dir / fname
-                if src.exists():
-                    shutil.copy2(str(src), str(exec_dir / fname))
-
-            committing_path.rename(committed_marker(context.run_root))
-            print(f"  ✅ Execution committed (COMMITTED): {exec_dir}")
-
-        except BaseException:
-            if ledger_written:
-                print(f"  ❌ Ledger written but artifact commit failed — COMMITTING preserved")
-            else:
-                cleanup_committing(context.run_root)
-            raise
 
     def mark_to_market(self, context: Any) -> dict | None:
         from qsys.ops.mtm import try_mark_to_market
