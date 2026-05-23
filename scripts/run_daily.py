@@ -1,0 +1,176 @@
+#!/usr/bin/env python3
+"""Generic daily ops entrypoint — strategy-agnostic.
+
+Usage::
+
+    python scripts/run_daily.py --strategy alpha_v1 --mode preopen \\
+        --trade-date 2026-05-22
+
+    python scripts/run_daily.py --strategy alpha_v1 --mode postclose \\
+        --trade-date 2026-05-22
+
+    python scripts/run_daily.py --strategy alpha_v1 --mode train
+
+    python scripts/run_daily.py --strategy alpha_v1 --notify-only \\
+        --trade-date 2026-05-22
+"""
+from __future__ import annotations
+
+import argparse
+import os
+import subprocess
+import sys
+import warnings
+from pathlib import Path
+
+warnings.filterwarnings("ignore")
+
+# ── 加载 .env（Telegram 凭据）────────────────────────────────────────
+
+_ENV_FILE = Path("/home/liuming/.openclaw/.env")
+if _ENV_FILE.exists():
+    for line in _ENV_FILE.read_text().splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            key, val = line.split("=", 1)
+            os.environ.setdefault(key.strip(), val.strip())
+
+# ── 路径常量 ──────────────────────────────────────────────────────────
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
+
+from qsys.common.config import load_strategy_config
+from qsys.ops.daily_runner import DailyRunner
+from qsys.ops.run_context import DailyRunContext, resolve_run_root
+from qsys.strategy.registry import create_strategy
+
+
+# ── CLI ────────────────────────────────────────────────────────────────
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Generic daily ops — strategy-agnostic entrypoint"
+    )
+    parser.add_argument("--strategy", required=True, help="策略 ID (如 alpha_v1)")
+    parser.add_argument(
+        "--mode",
+        choices=["preopen", "postclose", "train"],
+        default="preopen",
+        help="运行模式",
+    )
+    parser.add_argument("--trade-date", help="交易日期 YYYY-MM-DD")
+    parser.add_argument(
+        "--debug-run",
+        action="store_true",
+        help="调试模式：不修改 shadow/account.json / positions.csv / ledger.csv",
+    )
+    parser.add_argument(
+        "--output-dir",
+        help="调试模式下输出目录（默认: experiments/{strategy_id}_daily/{trade_date}）",
+    )
+    parser.add_argument("--no-notify", action="store_true", help="跳过 Telegram 通知")
+    parser.add_argument(
+        "--notify-only",
+        action="store_true",
+        help="仅从已有产物重建并发送通知，不执行任何交易",
+    )
+    parser.add_argument(
+        "--force-rerun",
+        action="store_true",
+        help="危险模式：覆盖已提交的执行产物（必须配合 --reason）",
+    )
+    parser.add_argument("--reason", help="操作原因说明（--force-rerun 必填）")
+    return parser
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.force_rerun and not args.reason:
+        parser.error("--force-rerun 必须配合 --reason 提供原因")
+    if args.mode == "train":
+        if args.force_rerun:
+            print("⚠ --force-rerun 对 train 模式无意义，忽略")
+    elif not args.trade_date:
+        parser.error(f"--trade-date 是 {args.mode} 模式的必填参数")
+    return args
+
+
+# ── Mode handlers ──────────────────────────────────────────────────────
+
+
+def run_daily_main(argv: list[str] | None = None) -> None:
+    """Orchestrate a daily run from parsed CLI arguments."""
+    args = parse_args(argv)
+
+    strategy_id = args.strategy
+    config = load_strategy_config(strategy_id, PROJECT_ROOT)
+    strategy = create_strategy(strategy_id, config, project_root=PROJECT_ROOT)
+
+    runner = DailyRunner()
+
+    # ── Train — no trade-date required ────────────────────────────────
+    if args.mode == "train":
+        print(f"\n{'=' * 60}")
+        print(f"{strategy.display_name} Weekly Training")
+        print(f"{'=' * 60}")
+        train_script = str(PROJECT_ROOT / "scripts" / f"run_{strategy_id}_weekly_train.py")
+        if not Path(train_script).exists():
+            print(f"  ❌ 脚本不存在: {train_script}")
+            return
+        print(f"  启动: {train_script}")
+        result = subprocess.run(
+            [sys.executable, train_script],
+            cwd=str(PROJECT_ROOT),
+            capture_output=False,
+        )
+        if result.returncode != 0:
+            print(f"  ❌ 训练失败 (exit {result.returncode})")
+        else:
+            print(f"  ✅ 训练完成")
+        return
+
+    # ── Modes requiring trade-date ────────────────────────────────────
+    trade_date = args.trade_date  # guaranteed non-None by parse_args above
+    run_root = resolve_run_root(
+        PROJECT_ROOT,
+        strategy.strategy_id,
+        trade_date,
+        debug_run=args.debug_run,
+        output_dir=Path(args.output_dir) if args.output_dir else None,
+    )
+
+    ctx = DailyRunContext(
+        trade_date=trade_date,
+        mode=args.mode,
+        run_root=run_root,
+        project_root=PROJECT_ROOT,
+        strategy_id=strategy.strategy_id,
+        account_id=strategy.account_id,
+        debug_run=args.debug_run,
+        no_notify=args.no_notify,
+        force_rerun=args.force_rerun,
+        reason=args.reason,
+        output_dir=Path(args.output_dir) if args.output_dir else None,
+    )
+
+    # ── Notify-only ──────────────────────────────────────────────────
+    if args.notify_only:
+        runner.run_notify_only(ctx, strategy)
+        return
+
+    # ── Preopen / Postclose ──────────────────────────────────────────
+    if args.mode == "preopen":
+        runner.run_preopen(ctx, strategy)
+    elif args.mode == "postclose":
+        runner.run_postclose(ctx, strategy)
+
+
+def main() -> None:
+    run_daily_main()
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,19 @@
+strategy_id: alpha_v1
+display_name: Alpha V1
+account_id: shadow_alpha_v1
+universe: csi300
+feature_set: alpha_v1
+model_version: alpha_v1_candidate_202605
+signal_version: blend_0.8:0.2
+
+paths:
+  model_dir: experiments/alpha_v1_models/latest
+  predictions_dir: experiments/alpha_v1_shadow_predictions
+  ledger_db: data/trade.db
+
+portfolio:
+  top_n: 20
+  buffer_hold: 60
+  buffer_buy: 40
+  single_stock_cap: 0.07
+  rebalance_freq: weekly
