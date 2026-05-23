@@ -800,10 +800,11 @@ def run_preopen(trade_date: str, debug_run: bool = False,
     print(f"  → {len(pred_df)} predictions saved: {pred_path}")
     try:
         from qsys.artifacts.adapters import adapt_predictions
-        from qsys.artifacts.writer import write_artifact, sidecar_path
-        for art in adapt_predictions(str(pred_path), strategy_id=ALPHA_V1_CANDIDATE.strategy_id):
-            write_artifact(art, sidecar_path(pred_path))
-        print(f"  → ADR-7 signal sidecar written")
+        from qsys.artifacts.writer import write_artifacts, sidecar_path
+        arts = list(adapt_predictions(str(pred_path), strategy_id=ALPHA_V1_CANDIDATE.strategy_id))
+        if arts:
+            write_artifacts(arts, sidecar_path(pred_path))
+        print(f"  → ADR-7 signal sidecar written ({len(arts)} rows)")
     except Exception as e:
         print(f"  ⚠ ADR-7 signal sidecar failed: {e}")
     top = pred_df.sort_values("score", ascending=False).head(5)
@@ -834,12 +835,13 @@ def run_preopen(trade_date: str, debug_run: bool = False,
             )
             try:
                 from qsys.artifacts.adapters import adapt_order_intents
-                from qsys.artifacts.writer import write_artifact, sidecar_path
+                from qsys.artifacts.writer import write_artifacts, sidecar_path
                 oi_path = _plan_dir(run_root) / "order_intents.csv"
                 if oi_path.exists():
-                    for art in adapt_order_intents(str(oi_path), strategy_id=ALPHA_V1_CANDIDATE.strategy_id, account_id=_shadow_account_id()):
-                        write_artifact(art, sidecar_path(oi_path))
-                    print(f"  → ADR-7 order intent sidecar written")
+                    oi_arts = list(adapt_order_intents(str(oi_path), strategy_id=ALPHA_V1_CANDIDATE.strategy_id, account_id=_shadow_account_id()))
+                    if oi_arts:
+                        write_artifacts(oi_arts, sidecar_path(oi_path))
+                    print(f"  → ADR-7 order intent sidecar written ({len(oi_arts)} rows)")
             except Exception as e:
                 print(f"  ⚠ ADR-7 order intent sidecar failed: {e}")
         except Exception as e:
@@ -1055,13 +1057,14 @@ def run_postclose(trade_date: str, debug_run: bool = False,
             print(f"  ✅ Execution committed")
             try:
                 from qsys.artifacts.adapters import adapt_executions, build_run_manifest, read_execution_summary
-                from qsys.artifacts.writer import write_artifact, sidecar_path
+                from qsys.artifacts.writer import write_artifact, write_artifacts, sidecar_path
                 exec_dir = _exec_dir(run_root)
                 lr_csv = exec_dir / "ledger_rows.csv"
                 if lr_csv.exists():
-                    for art in adapt_executions(str(lr_csv), strategy_id=ALPHA_V1_CANDIDATE.strategy_id, account_id=_shadow_account_id()):
-                        write_artifact(art, sidecar_path(lr_csv))
-                    print(f"  → ADR-7 execution sidecar written")
+                    ex_arts = list(adapt_executions(str(lr_csv), strategy_id=ALPHA_V1_CANDIDATE.strategy_id, account_id=_shadow_account_id()))
+                    if ex_arts:
+                        write_artifacts(ex_arts, sidecar_path(lr_csv))
+                    print(f"  → ADR-7 execution sidecar written ({len(ex_arts)} rows)")
                 summary = read_execution_summary(exec_dir / "execution_summary.json")
                 manifest = build_run_manifest(
                     run_id=summary.get("run_id", f"alpha_v1_execute_{trade_date}"),

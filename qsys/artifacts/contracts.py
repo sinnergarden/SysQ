@@ -161,6 +161,5 @@ class RunManifest:
 # ── Conversion helpers ─────────────────────────────────────────────────
 
 def artifact_to_dict(a: Any) -> dict[str, Any]:
-    """Convert an artifact dataclass to a dict, omitting None values."""
-    d = asdict(a)
-    return {k: v for k, v in d.items() if v is not None}
+    """Convert an artifact dataclass to a dict. None → JSON null."""
+    return asdict(a)

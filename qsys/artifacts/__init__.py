@@ -10,10 +10,7 @@ Usage:
     from qsys.artifacts.validator import validate
 
     artifacts = adapt_predictions("predictions.csv", strategy_id="alpha_v1")
-    for art in artifacts:
-        errors = validate(art)
-        if not errors:
-            write_artifact(art, sidecar_path("predictions.csv"))
+    write_artifacts(artifacts, sidecar_path("predictions.csv"))
 """
 
 from qsys.artifacts.contracts import (
@@ -34,7 +31,7 @@ from qsys.artifacts.adapters import (
     read_plan_meta,
     read_execution_summary,
 )
-from qsys.artifacts.writer import write_artifact, sidecar_path
+from qsys.artifacts.writer import write_artifact, write_artifacts, sidecar_path
 from qsys.artifacts.validator import validate
 
 __all__ = [
@@ -53,6 +50,7 @@ __all__ = [
     "read_plan_meta",
     "read_execution_summary",
     "write_artifact",
+    "write_artifacts",
     "sidecar_path",
     "validate",
 ]
