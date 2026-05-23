@@ -523,6 +523,18 @@ def _try_mark_to_market(trade_date: str, output_dir: Path,
             priced_count += 1
             details.append((inst, _get_stock_name(inst), qty, cost, close, market_val - qty * cost))
         cash = float(account.get("cash", 0))
+        # If using ledger, account may not have a "cash" key — load separately
+        if cash == 0.0 and db_path and Path(db_path).exists():
+            try:
+                import sqlite3
+                from qsys.ledger.repository import get_cash_balance
+                tmp_conn = sqlite3.connect(db_path)
+                tmp_conn.row_factory = sqlite3.Row
+                acct_id = _shadow_account_id()
+                cash = get_cash_balance(tmp_conn, acct_id)
+                tmp_conn.close()
+            except Exception:
+                pass
         initial_capital = float(account.get("initial_capital", 1_000_000))
         total_value = cash + total_market_value
         cumulative_pnl = total_value - initial_capital
@@ -996,6 +1008,7 @@ def run_postclose(trade_date: str, debug_run: bool = False,
             if committing_path.exists():
                 print(f"  ❌ COMMITTING 标记已存在，疑似半提交状态。请人工检查。")
                 sys.exit(1)
+            committing_path.parent.mkdir(parents=True, exist_ok=True)
             committing_path.write_text("")
             print(f"  📝 COMMITTING marker written — ledger write protected")
 
