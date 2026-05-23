@@ -348,26 +348,56 @@ def delete_positions(conn: sqlite3.Connection, account_id: str) -> None:
 
 # ── portfolio_snapshots ─────────────────────────────────────────────
 
-def insert_snapshot(conn: sqlite3.Connection, snapshot: dict[str, Any]) -> dict[str, Any]:
+def upsert_snapshot(conn: sqlite3.Connection, snapshot: dict[str, Any]) -> dict[str, Any]:
+    """Insert or update a portfolio snapshot by (account_id, trade_date, run_id).
+
+    Idempotent: same (account_id, trade_date, run_id) updates in place.
+    """
     now = _now()
     sid = snapshot.get("snapshot_id", _new_id("snp_"))
-    conn.execute(
-        """INSERT INTO portfolio_snapshots
-           (snapshot_id, account_id, run_id, trade_date,
-            cash, total_market_value, total_asset,
-            daily_pnl, daily_return, turnover, position_count,
-            created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (
-            sid, snapshot["account_id"], snapshot.get("run_id"),
-            snapshot["trade_date"],
-            snapshot["cash"], snapshot["total_market_value"],
-            snapshot["total_asset"],
-            snapshot.get("daily_pnl"), snapshot.get("daily_return"),
-            snapshot.get("turnover"), snapshot.get("position_count"),
-            now,
-        ),
-    )
+
+    existing = conn.execute(
+        "SELECT snapshot_id FROM portfolio_snapshots "
+        "WHERE account_id=? AND trade_date=? AND run_id=?",
+        (snapshot["account_id"], snapshot["trade_date"], snapshot.get("run_id")),
+    ).fetchone()
+
+    if existing:
+        conn.execute(
+            """UPDATE portfolio_snapshots SET
+               cash=?, total_market_value=?, total_asset=?,
+               daily_pnl=?, daily_return=?, turnover=?, position_count=?,
+               created_at=COALESCE(created_at, ?)
+               WHERE snapshot_id=?""",
+            (
+                snapshot["cash"], snapshot["total_market_value"],
+                snapshot["total_asset"],
+                snapshot.get("daily_pnl"), snapshot.get("daily_return"),
+                snapshot.get("turnover"), snapshot.get("position_count"),
+                now,
+                existing["snapshot_id"],
+            ),
+        )
+        sid = existing["snapshot_id"]
+    else:
+        conn.execute(
+            """INSERT INTO portfolio_snapshots
+               (snapshot_id, account_id, run_id, trade_date,
+                cash, total_market_value, total_asset,
+                daily_pnl, daily_return, turnover, position_count,
+                created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                sid, snapshot["account_id"], snapshot.get("run_id"),
+                snapshot["trade_date"],
+                snapshot["cash"], snapshot["total_market_value"],
+                snapshot["total_asset"],
+                snapshot.get("daily_pnl"), snapshot.get("daily_return"),
+                snapshot.get("turnover"), snapshot.get("position_count"),
+                now,
+            ),
+        )
+
     return dict(
         conn.execute("SELECT * FROM portfolio_snapshots WHERE snapshot_id=?", (sid,)).fetchone()
     )
@@ -394,3 +424,102 @@ def get_cash_balance(conn: sqlite3.Connection, account_id: str) -> float:
         (account_id,),
     ).fetchone()
     return float(row[0])
+
+
+# ── new query helpers ────────────────────────────────────────────
+
+
+def get_latest_snapshot(
+    conn: sqlite3.Connection, account_id: str,
+) -> dict[str, Any] | None:
+    """Get the most recent portfolio snapshot for an account."""
+    row = conn.execute(
+        "SELECT * FROM portfolio_snapshots WHERE account_id=? "
+        "ORDER BY trade_date DESC, created_at DESC LIMIT 1",
+        (account_id,),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def get_latest_trade_date(
+    conn: sqlite3.Connection, account_id: str,
+) -> str | None:
+    """Get the latest trade_date across fills and snapshots."""
+    row = conn.execute(
+        "SELECT MAX(trade_date) FROM ("
+        "  SELECT trade_date FROM fills WHERE account_id=? "
+        "  UNION ALL "
+        "  SELECT trade_date FROM portfolio_snapshots WHERE account_id=?"
+        ")",
+        (account_id, account_id),
+    ).fetchone()
+    return str(row[0]) if row and row[0] else None
+
+
+def get_account_summary(
+    conn: sqlite3.Connection, account_id: str,
+) -> dict[str, Any] | None:
+    """Return a summary dict for an account: cash, positions, last trade."""
+    acct = get_account(conn, account_id)
+    if not acct:
+        return None
+
+    cash = get_cash_balance(conn, account_id)
+    positions = get_positions(conn, account_id)
+    total_mv = sum(float(p.get("market_value", 0) or 0) for p in positions)
+    pos_count = len(positions)
+    last_trade = get_latest_trade_date(conn, account_id)
+
+    return {
+        "account_id": account_id,
+        "cash": cash,
+        "market_value": total_mv,
+        "total_value": cash + total_mv,
+        "position_count": pos_count,
+        "last_trade_date": last_trade,
+    }
+
+
+def list_accounts(
+    conn: sqlite3.Connection, account_type: str | None = None,
+) -> list[dict[str, Any]]:
+    """List all accounts, optionally filtered by account_type."""
+    if account_type:
+        return [
+            dict(r) for r in conn.execute(
+                "SELECT * FROM accounts WHERE account_type=? ORDER BY account_id",
+                (account_type,),
+            ).fetchall()
+        ]
+    return [
+        dict(r) for r in conn.execute("SELECT * FROM accounts ORDER BY account_id").fetchall()
+    ]
+
+
+def get_ledger_summary(
+    conn: sqlite3.Connection, account_id: str | None = None,
+) -> dict[str, Any]:
+    """Return aggregate ledger stats (order/fill counts, sums)."""
+    account_filter = "WHERE account_id=?" if account_id else ""
+    params = (account_id,) if account_id else ()
+
+    order_count = conn.execute(
+        f"SELECT COUNT(*) FROM orders {account_filter}", params,
+    ).fetchone()[0]
+    fill_count = conn.execute(
+        f"SELECT COUNT(*) FROM fills {account_filter}", params,
+    ).fetchone()[0]
+    fill_volume = conn.execute(
+        f"SELECT COALESCE(SUM(gross_amount), 0) FROM fills {account_filter}", params,
+    ).fetchone()[0]
+    cash_events = conn.execute(
+        f"SELECT COUNT(*) FROM cash_ledger {account_filter}", params,
+    ).fetchone()[0]
+
+    return {
+        "account_id": account_id,
+        "order_count": order_count,
+        "fill_count": fill_count,
+        "fill_volume": float(fill_volume),
+        "cash_event_count": cash_events,
+    }

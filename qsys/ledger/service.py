@@ -393,10 +393,16 @@ class LedgerService:
     # ── T+1 Settlement ──────────────────────────────────────────────
 
     def roll_available_positions(self, account_id: str, trade_date: str) -> None:
-        """Make previous day's BUY positions available for SELL.
+        """Make ALL current positions available for SELL.
 
-        A-share T+1 rule: stocks bought on day T can only be sold on day T+1.
-        This should be called at the start of each trading day.
+        ⚠ Simplified T+1: does NOT track per-day settlement.
+        Sets available_quantity = quantity for every position regardless
+        of when each lot was bought.  A proper T+1 implementation would
+        need a per-order settlement FIFO queue keyed by buy date.
+
+        This is safe for daily strategies that never day-trade, but
+        will over-release availability if called mid-session after a
+        same-day BUY.
         """
         conn = self.conn
         with conn:
@@ -453,7 +459,7 @@ class LedgerService:
             daily_pnl = total_asset - prev["total_asset"] if prev else None
             daily_return = (daily_pnl / prev["total_asset"]) if prev and prev["total_asset"] else None
 
-            snapshot = repo.insert_snapshot(conn, {
+            snapshot = repo.upsert_snapshot(conn, {
                 "snapshot_id": _new_id("snp_"),
                 "account_id": acct_id,
                 "run_id": run_id,
@@ -502,6 +508,28 @@ class LedgerService:
 
     def get_position_events(self, run_id: str) -> list[dict[str, Any]]:
         return repo.get_position_events_by_run(self.conn, run_id)
+
+    # ── Higher-level queries ────────────────────────────────────────
+
+    def get_latest_snapshot(self, account_id: str) -> dict[str, Any] | None:
+        """Get the most recent portfolio snapshot."""
+        return repo.get_latest_snapshot(self.conn, account_id)
+
+    def get_latest_trade_date(self, account_id: str) -> str | None:
+        """Get latest trade_date across fills and snapshots."""
+        return repo.get_latest_trade_date(self.conn, account_id)
+
+    def list_accounts(self, account_type: str | None = None) -> list[dict[str, Any]]:
+        """List accounts, optionally filtered by type."""
+        return repo.list_accounts(self.conn, account_type=account_type)
+
+    def get_account_summary(self, account_id: str) -> dict[str, Any] | None:
+        """Return cash, positions, total_value, last_trade_date."""
+        return repo.get_account_summary(self.conn, account_id)
+
+    def get_ledger_summary(self, account_id: str | None = None) -> dict[str, Any]:
+        """Return aggregate order/fill/cash-event counts."""
+        return repo.get_ledger_summary(self.conn, account_id=account_id)
 
     # ── Internal ────────────────────────────────────────────────────
 

@@ -30,6 +30,55 @@ class MigrationReport:
         self.skipped_rows: list[dict[str, Any]] = []
         self.warnings: list[str] = []
 
+    def _write_markdown(self, path: Path) -> None:
+        """Write a detailed markdown report to path."""
+        lines = [
+            f"# Migration Report — {self.account_id}",
+            "",
+            f"- **Account ID:** {self.account_id}",
+            f"- **Strategy ID:** {self.strategy_id}",
+            f"- **Generated:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            "",
+            "## Mode: Snapshot-First",
+            "",
+            "This migration imports legacy shadow files using a **snapshot-first** approach:",
+            "",
+            "- **Cash** is seeded from `account.json` (initial_capital + adjustment)",
+            "- **Positions** are seeded from `positions.csv` — these become the current position snapshots",
+            "- **Orders + Fills** from `ledger.csv` are imported into historical tables (`orders`, `fills`) **only**",
+            "- Legacy fills are **not replayed** into `cash_ledger` or `position_ledger`",
+            "- Cash and position event tables reflect only the seeded state (INIT, MIGRATION_ADJUST, MIGRATION_INIT)",
+            "",
+            "## Summary",
+            "",
+            f"| Metric | Value |",
+            f"|---|---|",
+            f"| Initial Cash | ¥{self.total_cash:,.2f} |",
+            f"| Position Count | {self.position_count} |",
+            f"| Ledger Rows Parsed | {self.ledger_rows_parsed} |",
+            f"| Orders Migrated | {self.orders_migrated} |",
+            f"| Fills Migrated | {self.fills_migrated} |",
+        ]
+        if self.skipped_rows:
+            lines.extend([
+                "",
+                "## Skipped Rows",
+                "",
+            ])
+            for s in self.skipped_rows:
+                lines.append(f"- Row {s.get('row', '?')}: {s.get('reason', 'unknown')}")
+        if self.warnings:
+            lines.extend([
+                "",
+                "## Warnings",
+                "",
+            ])
+            for w in self.warnings:
+                lines.append(f"- {w}")
+        lines.append("")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("\n".join(lines), encoding="utf-8")
+
     def print_summary(self) -> None:
         print(f"\n{'=' * 50}")
         print(f"Migration Report — {self.account_id}")
@@ -268,5 +317,22 @@ class ShadowMigrator:
 
             if fills_batch or orders_batch:
                 print(f"  ✅ Orders: {report.orders_migrated}, Fills: {report.fills_migrated}")
+
+        # ── 4. Archive old shadow files ──
+        archived_suffix = ".archived"
+        for fname in ("account.json", "positions.csv", "ledger.csv"):
+            src = self.shadow_dir / fname
+            if src.exists():
+                dst = src.with_suffix(src.suffix + archived_suffix)
+                # Remove existing archive if present
+                if dst.exists():
+                    dst.unlink()
+                src.rename(dst)
+                print(f"  📦 Archived: {src.name} → {src.name}{archived_suffix}")
+
+        # ── 5. Generate migration report ──
+        report_path = self.shadow_dir / "migration_report.md"
+        report._write_markdown(report_path)
+        print(f"  📄 Report: {report_path}")
 
         return report

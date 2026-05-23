@@ -106,16 +106,7 @@ def _should_rebalance(trade_date: str) -> bool:
         try:
             from qsys.ledger.service import LedgerService
             service = LedgerService(LEDGER_DB_PATH)
-            acct = service.get_account(_shadow_account_id())
-            if acct:
-                last_trade_date = None  # Ledger doesn't store last trade date on account
-            # Use portfolio_snapshots to find last snapshot date
-            rows = service.conn.execute(
-                "SELECT trade_date FROM portfolio_snapshots WHERE account_id=? ORDER BY trade_date DESC LIMIT 1",
-                (_shadow_account_id(),),
-            ).fetchall()
-            for r in rows:
-                last_trade_date = r["trade_date"]
+            last_trade_date = service.get_latest_trade_date(_shadow_account_id())
             service.close()
         except Exception:
             pass
@@ -999,8 +990,15 @@ def run_postclose(trade_date: str, debug_run: bool = False,
                         )
                     sys.exit(1)
 
-        staging_exec_dir.mkdir(parents=True, exist_ok=True)
-        print(f"\n[3/4] Executing plan at OPEN price...")
+        # ── Write COMMITTING before ledger write (crash-safe boundary) ──
+        if not debug_run:
+            committing_path = _committing_marker(run_root)
+            if committing_path.exists():
+                print(f"  ❌ COMMITTING 标记已存在，疑似半提交状态。请人工检查。")
+                sys.exit(1)
+            committing_path.write_text("")
+            print(f"  📝 COMMITTING marker written — ledger write protected")
+
         try:
             artifacts = execute_alpha_v1_plan(
                 base_dir=".", plan_dir=str(plan_dir),
@@ -1013,15 +1011,18 @@ def run_postclose(trade_date: str, debug_run: bool = False,
                   f"cash={_fmt(artifacts.cash_after)}, "
                   f"turnover={_fmt(artifacts.turnover)}")
         except Exception as e:
+            # Clean up COMMITTING on failure so retry is possible
+            if not debug_run:
+                _cleanup_committing(run_root)
             print(f"  ❌ 执行失败: {e}")
             if not no_notify:
                 _send_notification(f"⛔ Alpha V1 Post-close {trade_date} FAILED\n{e}")
             sys.exit(1)
 
         if not debug_run:
-            print(f"  Committing to shadow account...")
+            print(f"  Committing artifacts...")
             _commit_execution(run_root, staging_exec_dir)
-            print(f"  ✅ Shadow account updated")
+            print(f"  ✅ Execution committed")
         else:
             print(f"  🔧 调试模式 — 不提交 shadow 账户")
 
@@ -1154,16 +1155,22 @@ def _load_artifacts_for_notification(trade_date: str, run_root: Path) -> ShadowR
     )
 
 
+def _cleanup_committing(run_root: Path) -> None:
+    """Remove COMMITTING marker on failure so retry is possible."""
+    committing_path = _committing_marker(run_root)
+    if committing_path.exists():
+        committing_path.unlink()
+        print(f"  🧹 COMMITTING marker cleaned up")
+
+
 def _commit_execution(run_root: Path, staging_dir: Path) -> None:
     exec_dir = _exec_dir(run_root)
     exec_dir.mkdir(parents=True, exist_ok=True)
-    # Check for COMMITTING (crash recovery)
+    # COMMITTING should already exist (written before execute_alpha_v1_plan)
     committing_path = _committing_marker(run_root)
-    if committing_path.exists():
-        print(f"  ❌ COMMITTING 标记已存在，疑似半提交状态。请人工检查。")
+    if not committing_path.exists():
+        print(f"  ❌ COMMITTING 标记不存在，疑似提交顺序错误。")
         sys.exit(1)
-    # Write COMMITTING before any write
-    committing_path.write_text("")
     try:
         # 1. Copy staging artifacts to execution/ (including before-state for force-rerun)
         for fname in ["account_after.json", "positions_after.csv", "execution_summary.json",
@@ -1173,11 +1180,10 @@ def _commit_execution(run_root: Path, staging_dir: Path) -> None:
                 shutil.copy2(str(src), str(exec_dir / fname))
         # 2. Rename COMMITTING → COMMITTED (atomic)
         committing_path.rename(_committed_marker(run_root))
-        print(f"  ✅ 执行已提交 (ledger source of truth): {exec_dir}")
+        print(f"  ✅ 执行已提交 (COMMITTED): {exec_dir}")
     except BaseException:
-        # Clean up COMMITTING on any failure (including SystemExit)
-        if committing_path.exists():
-            committing_path.unlink()
+        # Clean up COMMITTING on any failure
+        _cleanup_committing(run_root)
         raise
 
 

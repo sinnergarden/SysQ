@@ -56,6 +56,23 @@ class LedgerExporter:
 
         return created
 
+    TIME_COLUMNS = {
+        "orders": "created_at",
+        "fills": "fill_time",
+        "cash_ledger": "created_at",
+        "position_ledger": "created_at",
+        "positions": "updated_at",
+        "portfolio_snapshots": "created_at",
+        "strategy_runs": "started_at",
+    }
+
+    def _order_column(self, table: str) -> str:
+        return self.TIME_COLUMNS.get(table, "created_at")
+
+    def _columns(self, table: str) -> set[str]:
+        cursor = self.conn.execute(f"SELECT * FROM {table} LIMIT 0")
+        return {desc[0] for desc in cursor.description}
+
     def _query(
         self,
         table: str,
@@ -72,16 +89,13 @@ class LedgerExporter:
             where.append("trade_date = ?")
             params.append(trade_date)
 
+        order_col = self._order_column(table)
         sql = f"SELECT * FROM {table}"
         if where:
             sql += " WHERE " + " AND ".join(where)
-        sql += " ORDER BY created_at"
+        sql += f" ORDER BY {order_col}"
 
         return [dict(r) for r in self.conn.execute(sql, params).fetchall()]
-
-    def _columns(self, table: str) -> set[str]:
-        cursor = self.conn.execute(f"SELECT * FROM {table} LIMIT 0")
-        return {desc[0] for desc in cursor.description}
 
     @staticmethod
     def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:

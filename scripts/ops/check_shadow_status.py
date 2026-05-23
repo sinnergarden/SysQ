@@ -52,35 +52,26 @@ def _read_shadow_account(base_dir: Path) -> tuple[dict[str, Any], list[str]]:
         try:
             from qsys.ledger.service import LedgerService
             service = LedgerService(_LEDGER_DB_PATH)
-            # Find all shadow accounts
-            conn = service.conn
-            rows = conn.execute(
-                "SELECT account_id, initial_cash FROM accounts WHERE account_id LIKE 'shadow_%'"
-            ).fetchall()
-            if rows:
-                acct_id = rows[0]["account_id"]
-                cash = service.get_cash(acct_id)
-                positions = service.get_positions(acct_id)
-                total_mv = sum(
-                    float(p.get("market_value", 0) or 0) for p in positions
-                )
-                snapshot = conn.execute(
-                    "SELECT trade_date FROM portfolio_snapshots WHERE account_id=? ORDER BY trade_date DESC LIMIT 1",
-                    (acct_id,),
-                ).fetchone()
-                last_trade_date = snapshot["trade_date"] if snapshot else None
+            accounts = service.list_accounts(account_type="shadow")
+            if accounts:
+                acct_id = accounts[0]["account_id"]
+                summary = service.get_account_summary(acct_id)
+                last_trade = service.get_latest_trade_date(acct_id)
                 service.close()
-                return {
-                    "cash": cash,
-                    "available_cash": cash,
-                    "market_value": total_mv,
-                    "total_value": cash + total_mv,
-                    "position_count": len(positions),
-                    "last_run_id": None,
-                    "last_trade_date": last_trade_date,
-                    "source": "ledger",
-                    "account_id": acct_id,
-                }, []
+                if summary:
+                    return {
+                        "cash": summary["cash"],
+                        "available_cash": summary["cash"],
+                        "market_value": summary["market_value"],
+                        "total_value": summary["total_value"],
+                        "position_count": summary["position_count"],
+                        "last_run_id": None,
+                        "last_trade_date": last_trade,
+                        "source": "ledger",
+                        "account_id": acct_id,
+                    }, []
+            else:
+                service.close()
         except Exception:
             pass
 
@@ -97,18 +88,18 @@ def _read_shadow_ledger(base_dir: Path) -> tuple[dict[str, Any], list[str]]:
         try:
             from qsys.ledger.service import LedgerService
             service = LedgerService(_LEDGER_DB_PATH)
+            summary = service.get_ledger_summary()
+            # Get last run from fills
             conn = service.conn
-            fill_count = conn.execute("SELECT COUNT(*) FROM fills").fetchone()[0]
-            order_count = conn.execute("SELECT COUNT(*) FROM orders").fetchone()[0]
             last_row = conn.execute(
                 "SELECT run_id, trade_date FROM fills ORDER BY fill_id DESC LIMIT 1"
             ).fetchone()
             service.close()
             return {
-                "exists": True,
+                "exists": summary["fill_count"] > 0,
                 "source": "ledger",
-                "fill_count": fill_count,
-                "order_count": order_count,
+                "fill_count": summary["fill_count"],
+                "order_count": summary["order_count"],
                 "last_run_id": last_row["run_id"] if last_row else None,
                 "last_trade_date": last_row["trade_date"] if last_row else None,
             }, []

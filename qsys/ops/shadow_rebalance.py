@@ -764,6 +764,9 @@ def _write_execution_to_ledger(
     This is the single point where fills, orders, and snapshots
     enter the ledger as source of truth.
 
+    On success, calls service.finish_run() → status='completed'.
+    On failure, the run stays 'started' — caller can detect and handle.
+
     Run-idempotency rules:
     - If run_id already exists with status "completed": skip all writes (return early).
     - If run_id exists but not completed: re-open with force=True, then write.
@@ -798,68 +801,81 @@ def _write_execution_to_ledger(
             mode="postclose",
         )
 
-    # Record orders with deterministic IDs (run_id + symbol + side + index)
-    order_dicts = []
-    for i, o in enumerate(orders):
-        oid = f"ord_{run_id.replace('.', '_')}_{o['symbol']}_{o['side']}_{i}"
-        o["_oid"] = oid  # carried to fill loop via results references
-        order_dicts.append({
-            "order_id": oid,
-            "run_id": run_id,
-            "account_id": account_id,
-            "strategy_id": strategy_id,
-            "trade_date": trade_date,
-            "symbol": o["symbol"],
-            "side": "BUY" if o["side"] == "buy" else "SELL",
-            "order_type": o.get("order_type", "market"),
-            "quantity": int(o.get("amount", 0)),
-            "limit_price": o.get("price"),
-            "status": "filled",
-            "reason": "plan_execution",
-        })
-    service.record_orders(run_id, order_dicts, idempotent=True)
+    try:
+        # Record orders with deterministic IDs (run_id + symbol + side + index)
+        order_dicts = []
+        for i, o in enumerate(orders):
+            oid = f"ord_{run_id.replace('.', '_')}_{o['symbol']}_{o['side']}_{i}"
+            o["_oid"] = oid  # carried to fill loop via results references
+            order_dicts.append({
+                "order_id": oid,
+                "run_id": run_id,
+                "account_id": account_id,
+                "strategy_id": strategy_id,
+                "trade_date": trade_date,
+                "symbol": o["symbol"],
+                "side": "BUY" if o["side"] == "buy" else "SELL",
+                "order_type": o.get("order_type", "market"),
+                "quantity": int(o.get("amount", 0)),
+                "limit_price": o.get("price"),
+                "status": "filled",
+                "reason": "plan_execution",
+            })
+        service.record_orders(run_id, order_dicts, idempotent=True)
 
-    # Build fills from match results with deterministic order_id linkage
-    fill_dicts = []
-    for i, item in enumerate(results):
-        o = item["order"]
-        qty = int(item.get("filled_amount", o.get("amount", 0)) or 0)
-        if qty <= 0:
-            continue
-        price = float(item.get("deal_price", o.get("price", 0.0)) or 0.0)
-        fee = float(item.get("fee", 0.0) or 0.0)
-        gross = qty * price
-        side = "BUY" if o["side"] == "buy" else "SELL"
-        net = gross + fee if side == "BUY" else gross - fee
+        # Build fills from match results with deterministic order_id linkage
+        fill_dicts = []
+        for i, item in enumerate(results):
+            o = item["order"]
+            qty = int(item.get("filled_amount", o.get("amount", 0)) or 0)
+            if qty <= 0:
+                continue
+            price = float(item.get("deal_price", o.get("price", 0.0)) or 0.0)
+            fee = float(item.get("fee", 0.0) or 0.0)
+            gross = qty * price
+            side = "BUY" if o["side"] == "buy" else "SELL"
+            net = gross + fee if side == "BUY" else gross - fee
 
-        fill_dicts.append({
-            "fill_id": f"fil_{run_id.replace('.', '_')}_{o['symbol']}_{o['side']}_{i}",
-            "order_id": o["_oid"],
-            "run_id": run_id,
-            "account_id": account_id,
-            "strategy_id": strategy_id,
-            "trade_date": trade_date,
-            "symbol": o["symbol"],
-            "side": side,
-            "quantity": qty,
-            "price": price,
-            "gross_amount": gross,
-            "commission": fee,
-            "stamp_tax": 0.0,
-            "slippage": 0.0,
-            "net_amount": net,
-            "source": "simulation",
-        })
+            fill_dicts.append({
+                "fill_id": f"fil_{run_id.replace('.', '_')}_{o['symbol']}_{o['side']}_{i}",
+                "order_id": o["_oid"],
+                "run_id": run_id,
+                "account_id": account_id,
+                "strategy_id": strategy_id,
+                "trade_date": trade_date,
+                "symbol": o["symbol"],
+                "side": side,
+                "quantity": qty,
+                "price": price,
+                "gross_amount": gross,
+                "commission": fee,
+                "stamp_tax": 0.0,
+                "slippage": 0.0,
+                "net_amount": net,
+                "source": "simulation",
+            })
 
-    if fill_dicts:
-        service.apply_fills(run_id, fill_dicts, t_plus_one=True, idempotent=True)
+        if fill_dicts:
+            service.apply_fills(run_id, fill_dicts, t_plus_one=True, idempotent=True)
 
-    # Portfolio snapshot at close prices
-    prices_dict: dict[str, float] = {}
-    for _, row in positions_after.iterrows():
-        sym = str(row["instrument"])
-        prices_dict[sym] = close_prices.get(sym, float(row.get("last_price", 0)))
-    service.create_portfolio_snapshot(run_id, trade_date, prices=prices_dict)
+        # Portfolio snapshot at close prices
+        prices_dict: dict[str, float] = {}
+        for _, row in positions_after.iterrows():
+            sym = str(row["instrument"])
+            prices_dict[sym] = close_prices.get(sym, float(row.get("last_price", 0)))
+        service.create_portfolio_snapshot(run_id, trade_date, prices=prices_dict)
+
+        # Mark run as completed
+        service.finish_run(run_id, "completed")
+        print(f"  ✅ Ledger run {run_id} completed")
+    except BaseException:
+        # On failure, mark run as failed for observability
+        try:
+            service.finish_run(run_id, "failed")
+        except Exception:
+            pass
+        service.close()
+        raise
 
     service.close()
 
