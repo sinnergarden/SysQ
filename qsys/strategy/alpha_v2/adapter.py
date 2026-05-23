@@ -16,7 +16,10 @@ Design decisions
 - ``execute_plan`` reuses ``execute_alpha_v1_plan`` which is structurally
   generic over ``plan_dir`` (reads ``strategy_id``/``version`` from
   ``plan_meta.json``).  The cosmetic ``alpha_v1_execute_`` run_id prefix
-  in staging metadata is acceptable for a smoke strategy.
+  in staging metadata is a known cosmetic issue — it does not affect
+  correctness (the ledger commit uses a generic ``run_id`` via
+  ``_write_execution_to_ledger``).  A follow-up should extract a generic
+  execution helper from ``execute_alpha_v1_plan``.
 - No ``run_alpha_v2_daily.py`` — only ``run_daily.py --strategy alpha_v2``.
 """
 
@@ -133,9 +136,23 @@ class AlphaV2StrategyAdapter:
         return str(self._project_root / "data" / "trade.db")
 
     @property
-    def _shadow_dir(self) -> Path:
-        """Shadow directory for alpha_v2 (separate from alpha_v1's ``shadow/``)."""
+    def _shadow_base_dir(self) -> Path:
+        """Shadow root for alpha_v2 (separate from alpha_v1's ``shadow/``).
+
+        ``execute_alpha_v1_plan`` appends ``/shadow`` to this when reading
+        account state, so execution reads from ``shadow_alpha_v2/shadow/``.
+        """
         return self._project_root / "shadow_alpha_v2"
+
+    @property
+    def _shadow_state_dir(self) -> Path:
+        """Actual account state directory under ``_shadow_base_dir``.
+
+        ``execute_alpha_v1_plan`` resolves ``_shadow_base_dir / "shadow"``
+        internally, so plan and execution read from the same directory:
+        ``shadow_alpha_v2/shadow/``.
+        """
+        return self._shadow_base_dir / "shadow"
 
     # ── Identity ──────────────────────────────────────────────────────
 
@@ -318,7 +335,7 @@ class AlphaV2StrategyAdapter:
             except Exception:
                 pass
         if not last_trade_date:
-            shadow_account_path = self._shadow_dir / "account.json"
+            shadow_account_path = self._shadow_state_dir / "account.json"
             if shadow_account_path.exists():
                 try:
                     acct = json.loads(shadow_account_path.read_text())
@@ -366,7 +383,7 @@ class AlphaV2StrategyAdapter:
 
         trade_date = str(predictions["trade_date"].iloc[0])
 
-        account, prior_account, _ = _load_shadow_account(self._shadow_dir)
+        account, prior_account, _ = _load_shadow_account(self._shadow_state_dir)
         instruments = sorted(
             set(predictions["instrument"].astype(str))
             | set(account.positions.keys())
@@ -456,9 +473,12 @@ class AlphaV2StrategyAdapter:
     def execute_plan(self, context: Any) -> Any:
         """Execute plan via ``execute_alpha_v1_plan``.
 
-        Uses ``self._shadow_dir`` as ``base_dir`` so the function reads from
-        ``shadow_alpha_v2/shadow/`` (not alpha_v1's ``shadow/``), keeping
-        account state fully independent.
+        Uses ``self._shadow_base_dir`` so the function resolves
+        ``base_dir / "shadow"`` internally, reading from
+        ``shadow_alpha_v2/shadow/`` (not alpha_v1's ``shadow/``).
+        Plan side (``build_plan``) also uses ``_shadow_state_dir``
+        (which IS ``_shadow_base_dir / "shadow"``), so both sides
+        read the same account state.
         """
         from qsys.ops.shadow_rebalance import execute_alpha_v1_plan
 
@@ -466,7 +486,7 @@ class AlphaV2StrategyAdapter:
         staging_exec_dir = context.run_root / "execution" / "staging"
 
         artifacts = execute_alpha_v1_plan(
-            base_dir=str(self._shadow_dir),
+            base_dir=str(self._shadow_base_dir),
             plan_dir=str(plan_dir),
             execution_date=context.trade_date,
             output_dir=str(staging_exec_dir),
