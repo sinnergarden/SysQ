@@ -798,6 +798,15 @@ def run_preopen(trade_date: str, debug_run: bool = False,
         pred_path = PREDICTIONS_DIR / f"predictions_{trade_date}.csv"
     pred_df.to_csv(pred_path, index=False)
     print(f"  → {len(pred_df)} predictions saved: {pred_path}")
+    try:
+        from qsys.artifacts.adapters import adapt_predictions
+        from qsys.artifacts.writer import write_artifacts, sidecar_path
+        arts = list(adapt_predictions(str(pred_path), strategy_id=ALPHA_V1_CANDIDATE.strategy_id))
+        if arts:
+            write_artifacts(arts, sidecar_path(pred_path))
+        print(f"  → ADR-7 signal sidecar written ({len(arts)} rows)")
+    except Exception as e:
+        print(f"  ⚠ ADR-7 signal sidecar failed: {e}")
     top = pred_df.sort_values("score", ascending=False).head(5)
     top_picks = [(row["instrument"], row["score"]) for _, row in top.iterrows()]
     for inst, score in top_picks:
@@ -824,6 +833,17 @@ def run_preopen(trade_date: str, debug_run: bool = False,
                 predictions_path=str(pred_path), output_dir=str(run_root),
                 db_path=LEDGER_DB_PATH if not debug_run else None,
             )
+            try:
+                from qsys.artifacts.adapters import adapt_order_intents
+                from qsys.artifacts.writer import write_artifacts, sidecar_path
+                oi_path = _plan_dir(run_root) / "order_intents.csv"
+                if oi_path.exists():
+                    oi_arts = list(adapt_order_intents(str(oi_path), strategy_id=ALPHA_V1_CANDIDATE.strategy_id, account_id=_shadow_account_id()))
+                    if oi_arts:
+                        write_artifacts(oi_arts, sidecar_path(oi_path))
+                    print(f"  → ADR-7 order intent sidecar written ({len(oi_arts)} rows)")
+            except Exception as e:
+                print(f"  ⚠ ADR-7 order intent sidecar failed: {e}")
         except Exception as e:
             print(f"  ❌ 建仓计划失败: {e}")
             if not no_notify:
@@ -1035,6 +1055,32 @@ def run_postclose(trade_date: str, debug_run: bool = False,
                               strategy_id=ALPHA_V1_CANDIDATE.strategy_id,
                               trade_date=trade_date)
             print(f"  ✅ Execution committed")
+            try:
+                from qsys.artifacts.adapters import adapt_executions, build_run_manifest, read_execution_summary
+                from qsys.artifacts.writer import write_artifact, write_artifacts, sidecar_path
+                exec_dir = _exec_dir(run_root)
+                lr_csv = exec_dir / "ledger_rows.csv"
+                if lr_csv.exists():
+                    ex_arts = list(adapt_executions(str(lr_csv), strategy_id=ALPHA_V1_CANDIDATE.strategy_id, account_id=_shadow_account_id()))
+                    if ex_arts:
+                        write_artifacts(ex_arts, sidecar_path(lr_csv))
+                    print(f"  → ADR-7 execution sidecar written ({len(ex_arts)} rows)")
+                summary = read_execution_summary(exec_dir / "execution_summary.json")
+                manifest = build_run_manifest(
+                    run_id=summary.get("run_id", f"alpha_v1_execute_{trade_date}"),
+                    trade_date=trade_date, stage="postclose",
+                    strategy_id=ALPHA_V1_CANDIDATE.strategy_id,
+                    account_id=_shadow_account_id(),
+                    status="completed",
+                    output_artifacts=[
+                        {"path": sidecar_path(lr_csv).name, "type": "ExecutionArtifact"},
+                        {"path": "manifest.adr7.json", "type": "RunManifest"},
+                    ],
+                )
+                write_artifact(manifest, exec_dir / "manifest.adr7.json")
+                print(f"  → ADR-7 run manifest written")
+            except Exception as e:
+                print(f"  ⚠ ADR-7 execution sidecar failed: {e}")
         else:
             print(f"  🔧 调试模式 — 不提交 shadow 账户")
 
@@ -1062,6 +1108,27 @@ def run_postclose(trade_date: str, debug_run: bool = False,
                 f"请先运行: python scripts/ops/sync_csi800_daily.py --apply"
             )
         sys.exit(1)
+
+    try:
+        from qsys.artifacts.adapters import adapt_portfolio_snapshot
+        from qsys.artifacts.writer import write_artifact
+        exec_dir = _exec_dir(run_root)
+        exec_summary = {}
+        es_path = exec_dir / "execution_summary.json"
+        if es_path.exists():
+            exec_summary = json.loads(es_path.read_text()) or {}
+        mtm_path = run_root / "mtm" / "mtm_snapshot.json"
+        snapshot = adapt_portfolio_snapshot(
+            mtm_path, trade_date=trade_date,
+            account_id=_shadow_account_id(),
+            strategy_id=ALPHA_V1_CANDIDATE.strategy_id,
+            turnover=exec_summary.get("turnover", 0.0),
+        )
+        if snapshot:
+            write_artifact(snapshot, mtm_path.with_name(mtm_path.stem + ".adr7.json"))
+            print(f"  → ADR-7 portfolio snapshot sidecar written")
+    except Exception as e:
+        print(f"  ⚠ ADR-7 portfolio snapshot sidecar failed: {e}")
 
     # ── Notify ──
     if not no_notify:
