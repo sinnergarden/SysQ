@@ -273,6 +273,13 @@ class AlphaV1StrategyAdapter:
                 return False
         return True
 
+    @staticmethod
+    def _parse_date(raw: Any) -> str:
+        """Extract YYYY-MM-DD from a date cell that may be Timestamp or string."""
+        if isinstance(raw, pd.Timestamp):
+            return raw.strftime("%Y-%m-%d")
+        return str(raw).split(" ")[0]
+
     def build_plan(self, predictions: Any, target_dir: Any) -> bool:
         from qsys.ops.shadow_rebalance import build_alpha_v1_plan
 
@@ -283,10 +290,11 @@ class AlphaV1StrategyAdapter:
         pred_path = target_dir / "predictions_for_plan.csv"
         predictions.to_csv(pred_path, index=False)
 
+        trade_date = self._parse_date(predictions["trade_date"].iloc[0])
         build_alpha_v1_plan(
             base_dir=".",
-            trade_date=str(predictions["trade_date"].iloc[0]),
-            reference_date=str(predictions["trade_date"].iloc[0]),
+            trade_date=trade_date,
+            reference_date=trade_date,
             predictions_path=str(pred_path),
             output_dir=str(target_dir.parent),  # run_root
             db_path=self._ledger_db_path,
