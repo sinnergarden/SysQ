@@ -1,10 +1,35 @@
 strategy_id: alpha_v2
 display_name: Alpha V2 Smoke
+stage: candidate
+family: momentum
+owner: framework_team
 account_id: shadow_alpha_v2
 universe: csi300
 feature_set: alpha_v2_smoke
 model_version: alpha_v2_smoke_202606
 signal_version: momentum_20d_rank
+
+hypothesis: >
+  Momentum-based smoke strategy to validate DailyRunner runtime and
+  StrategyCandidate protocol compatibility.  Not intended for actual P&L.
+
+lifecycle:
+  created: 2026-05-10
+  stage_history:
+    - stage: research
+      at: 2026-05-10
+    - stage: candidate
+      at: 2026-05-18
+
+evaluation:
+  latest_eval_at: null
+  latest_status: null
+
+promotion_gates:
+  backtest_verified: false
+  contract_tests_pass: true
+  debug_run_pass: true
+  observation_days: 5
 
 paths:
   model_dir: experiments/alpha_v2_models/latest

@@ -22,7 +22,9 @@ class OrderGenerator:
         orders = [] # List of dict: {'symbol', 'amount', 'side', 'price'}
         
         # 1. Identify all involved symbols (Current holdings + Target)
-        all_symbols = set(account.positions.keys()) | set(target_weights.keys())
+        # Use sorted() for deterministic ordering — ``set`` iteration order
+        # depends on PYTHONHASHSEED and causes non-deterministic output.
+        all_symbols = sorted(set(account.positions.keys()) | set(target_weights.keys()))
         
         for sym in all_symbols:
             price = current_prices.get(sym)

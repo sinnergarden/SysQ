@@ -11,6 +11,15 @@
 > - [Data Interface Contract](../contracts/data-interface.md) — date
 >   semantics, data cutoff rules, market snapshot and feature frame
 >   contracts.
+>
+> **Lifecycle & Architecture** — additional context for strategy development:
+>
+> - [Strategy Lifecycle](../features/strategy-lifecycle.md) — research /
+>   candidate / production / rejected / archived stages and promotion gates.
+> - [StrategySpec vs StrategyAdapter](../architecture/strategy-spec-vs-adapter.md) —
+>   static spec vs executable adapter, and when each is needed.
+> - [DailyRunner vs BacktestRunner](../architecture/daily-runner-vs-backtest-runner.md) —
+>   production runtime vs historical evaluation.
 
 ## 1. When to Create a New Strategy
 
