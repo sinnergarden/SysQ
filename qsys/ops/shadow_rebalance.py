@@ -756,6 +756,7 @@ def _write_execution_to_ledger(
     market_value_after: float,
     total_value_after: float,
     positions_after: pd.DataFrame,
+    initial_capital: float = DEFAULT_INITIAL_CAPITAL,
 ) -> None:
     """Write execution results to SQLite ledger.
 
@@ -769,7 +770,7 @@ def _write_execution_to_ledger(
     trade_date = execution_date
 
     # Ensure account exists
-    service.create_account(account_id, "shadow", 1_000_000)
+    service.create_account(account_id, "shadow", initial_capital)
 
     # Start run (skip if already exists = idempotent for re-runs)
     try:
@@ -990,6 +991,7 @@ def execute_alpha_v1_plan(
             market_value_after=market_value_after,
             total_value_after=total_value_after,
             positions_after=positions_after,
+            initial_capital=float(prior_account.get("initial_capital", DEFAULT_INITIAL_CAPITAL)),
         )
 
     execution_summary = {
