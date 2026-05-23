@@ -10,6 +10,14 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any, Protocol, runtime_checkable
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import pandas as pd
+    from pathlib import Path
+
+    from qsys.ops.run_context import DailyRunContext
+
 
 class IStrategy(ABC):
     """Legacy strategy interface — backtest engine."""
@@ -24,12 +32,16 @@ class IStrategy(ABC):
 class StrategyCandidate(Protocol):
     """Runtime protocol for daily-ops strategy resolution.
 
-    Required properties every strategy candidate must expose to the
-    DailyRunner.  Optional lifecycle hooks (``on_preopen``,
-    ``on_postclose``, ``on_train``) are recognised via
-    ``hasattr(obj, hook_name)`` — they are documented below but
-    intentionally omitted from the protocol body so that
-    ``isinstance(obj, StrategyCandidate)`` does not require them.
+    This is a **runtime adapter interface** — every strategy adapter must
+    implement all members (``@runtime_checkable`` checks the full protocol
+    body). The DailyRunner calls these methods during preopen / postclose /
+    notify-only stages; no strategy-specific imports, strings, or path
+    conventions should leak into the runner.
+
+    Identity + config properties and lifecycle hook methods that the
+    DailyRunner calls during preopen / postclose / notify-only stages.
+    Every strategy adapter must implement all members (``@runtime_checkable``
+    checks the full protocol body).
     """
 
     # ── Identity ──────────────────────────────────────────────────────
@@ -39,6 +51,10 @@ class StrategyCandidate(Protocol):
 
     @property
     def account_id(self) -> str: ...
+
+    @property
+    def display_name(self) -> str:
+        """Human-readable name for notifications (e.g. 'Alpha V1')."""
 
     # ── Configuration ──────────────────────────────────────────────────
 
@@ -57,11 +73,79 @@ class StrategyCandidate(Protocol):
     @property
     def rebalance_policy(self) -> dict[str, Any]: ...
 
-    # ── Optional lifecycle hooks (not in protocol body) ──────────────
-    #
-    #   def on_preopen(self, context: Any) -> None:
-    #       """Called before pre-open inference."""
-    #   def on_postclose(self, context: Any) -> None:
-    #       """Called after post-close reconciliation."""
-    #   def on_train(self, context: Any) -> None:
-    #       """Called before training."""
+    # ── Data ───────────────────────────────────────────────────────────
+
+    def resolve_data_date(self, trade_date: str) -> str:
+        """Return nearest trading day with available data for *trade_date*."""
+
+    def get_stock_name(self, ts_code: str) -> str:
+        """Return human-readable name for a stock code."""
+
+    def load_model(self) -> None:
+        """Load strategy-specific model(s) — prints summary, stores internally."""
+
+    def fetch_data(self, data_date: str) -> Any:
+        """Fetch feature data for *data_date* — prints row count, returns opaque data."""
+
+    # ── Predict + Plan ─────────────────────────────────────────────────
+
+    def generate_predictions(self, data: Any) -> Any:
+        """Run inference on *data* using internally stored model — returns predictions DataFrame."""
+
+    def print_predictions_summary(self, predictions: Any) -> None:
+        """Print top picks summary to console (e.g. top 5 with scores)."""
+
+    def should_rebalance(self, trade_date: str) -> bool:
+        """Check whether rebalancing should occur (e.g. weekly frequency)."""
+
+    def build_plan(self, predictions: Any, target_dir: Any) -> bool:
+        """Build trading plan from predictions into *target_dir*.
+        Returns True if a plan was written, False if skipped.
+        """
+
+    def load_plan_instruments(self, plan_dir: Any) -> list[str]:
+        """Return instrument codes from the plan at *plan_dir*."""
+
+    def save_predictions(self, predictions: Any, run_root: Any, trade_date: str) -> None:
+        """Persist predictions to strategy-specific shared location."""
+
+    def fetch_open_prices(self, trade_date: str, instruments: list[str]) -> dict[str, float]:
+        """Fetch open prices for *instruments* on *trade_date*.
+        Returns dict[instrument → open_price].
+        """
+
+    # ── Execute + MTM ──────────────────────────────────────────────────
+
+    def execute_plan(self, context: Any) -> Any:
+        """Execute the trading plan — returns ShadowRebalanceArtifacts."""
+
+    def commit_execution(self, context: Any, staging_dir: Any) -> None:
+        """Commit execution artifacts from staging to production paths."""
+
+    def mark_to_market(self, context: Any) -> dict | None:
+        """Compute MTM snapshot — returns dict or None."""
+
+    def load_artifacts_for_notification(self, context: Any) -> Any | None:
+        """Load execution artifacts for postclose notification."""
+
+    # ── Notifications ──────────────────────────────────────────────────
+
+    def build_preopen_message(
+        self, context: Any, rebalance_skipped: bool, predictions: Any
+    ) -> str:
+        """Format preopen notification text."""
+
+    def build_postclose_message(
+        self,
+        context: Any,
+        mtm: dict | None = None,
+        artifacts: Any = None,
+        stale_check: dict | None = None,
+        execution_committed: bool = False,
+        execution_skipped: bool = False,
+        idempotent_skip: bool = False,
+    ) -> str:
+        """Format postclose notification text."""
+
+    def send_notification(self, text: str) -> None:
+        """Send *text* via Telegram (or configured channel)."""
