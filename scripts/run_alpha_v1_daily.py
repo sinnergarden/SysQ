@@ -422,6 +422,7 @@ def _try_mark_to_market(trade_date: str, output_dir: Path,
             acct = service.get_account(_shadow_account_id())
             if acct:
                 ledger_account = dict(acct)
+                ledger_account["cash"] = service.get_cash(_shadow_account_id())
                 ledger_positions = service.get_positions(_shadow_account_id())
                 ledger_rows = []
                 for p in ledger_positions:
@@ -523,6 +524,13 @@ def _try_mark_to_market(trade_date: str, output_dir: Path,
             priced_count += 1
             details.append((inst, _get_stock_name(inst), qty, cost, close, market_val - qty * cost))
         cash = float(account.get("cash", 0))
+        # Ledger accounts table has no "cash" column; set during init above
+        if cash == 0.0 and db_path and Path(db_path).exists():
+            try:
+                from qsys.ledger.service import LedgerService
+                cash = LedgerService(db_path).get_cash(_shadow_account_id())
+            except Exception:
+                pass
         initial_capital = float(account.get("initial_capital", 1_000_000))
         total_value = cash + total_market_value
         cumulative_pnl = total_value - initial_capital
@@ -996,6 +1004,7 @@ def run_postclose(trade_date: str, debug_run: bool = False,
             if committing_path.exists():
                 print(f"  ❌ COMMITTING 标记已存在，疑似半提交状态。请人工检查。")
                 sys.exit(1)
+            committing_path.parent.mkdir(parents=True, exist_ok=True)
             committing_path.write_text("")
             print(f"  📝 COMMITTING marker written — ledger write protected")
 

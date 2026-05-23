@@ -823,7 +823,9 @@ def _write_execution_to_ledger(
             })
         service.record_orders(run_id, order_dicts, idempotent=True)
 
-        # Build fills from match results with deterministic order_id linkage
+        # Build fills from match results with deterministic order_id linkage.
+        # order_id is recalculated (not from o["_oid"]) because after JSON
+        # serialization of ledger_payload.json the in-memory reference is lost.
         fill_dicts = []
         for i, item in enumerate(results):
             o = item["order"]
@@ -835,10 +837,11 @@ def _write_execution_to_ledger(
             gross = qty * price
             side = "BUY" if o["side"] == "buy" else "SELL"
             net = gross + fee if side == "BUY" else gross - fee
+            order_id = f"ord_{run_id.replace('.', '_')}_{o['symbol']}_{o['side']}_{i}"
 
             fill_dicts.append({
                 "fill_id": f"fil_{run_id.replace('.', '_')}_{o['symbol']}_{o['side']}_{i}",
-                "order_id": o["_oid"],
+                "order_id": order_id,
                 "run_id": run_id,
                 "account_id": account_id,
                 "strategy_id": strategy_id,

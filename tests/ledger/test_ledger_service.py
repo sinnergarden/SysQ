@@ -752,6 +752,21 @@ class TestCompletedRun:
         assert run["status"] == "completed"
         assert run["finished_at"] is not None
 
+    def test_finish_run_persists_after_close_reopen(self, db_path: str) -> None:
+        """finish_run commits the transaction; status survives close/reopen."""
+        svc = LedgerService(db_path)
+        svc.create_account(ACCT, "shadow", 1_000_000.0)
+        svc.start_run(RUN, "2026-05-23", STRAT, ACCT, "test")
+        svc.finish_run(RUN, "completed")
+        svc.close()
+
+        svc2 = LedgerService(db_path)
+        run = svc2.get_run(RUN)
+        assert run is not None
+        assert run["status"] == "completed"
+        assert run["finished_at"] is not None
+        svc2.close()
+
     def test_fill_after_completed_run(self, service: LedgerService) -> None:
         """Fills still work after run is completed (service doesn't auto-block)."""
         _start_run(service)
