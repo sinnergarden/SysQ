@@ -89,9 +89,10 @@ class TestResolveDataDatePrevious:
     def test_trading_day_returns_previous(self):
         assert resolve_data_date("2026-05-18", mode="previous") == "2026-05-15"
 
-    def test_weekend_returns_previous(self):
-        # 2026-05-18 Monday → previous is 2026-05-15
-        assert resolve_data_date("2026-05-18", mode="previous") == "2026-05-15"
+    def test_non_trading_day_returns_same_as_asof(self):
+        # 2026-05-17 Sunday → asof is 2026-05-15, which is already < trade_date,
+        # so previous also returns 2026-05-15.
+        assert resolve_data_date("2026-05-17", mode="previous") == "2026-05-15"
 
     def test_previous_of_first_date(self):
         with pytest.raises(ValueError, match="cannot resolve previous"):
@@ -102,8 +103,11 @@ class TestResolveDataDatePrevious:
 
 
 class TestResolvePreviousTradingDate:
-    def test_shorthand(self):
+    def test_shorthand_trading_day(self):
         assert resolve_previous_trading_date("2026-05-18") == "2026-05-15"
+
+    def test_shorthand_non_trading_day(self):
+        assert resolve_previous_trading_date("2026-05-17") == "2026-05-15"
 
 
 # ── Error cases ─────────────────────────────────────────────────────────

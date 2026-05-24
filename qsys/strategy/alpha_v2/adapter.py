@@ -9,17 +9,10 @@ Design decisions
 ----------------
 - No LightGBM, no dual 5d/20d model, no zscore blend.
 - Momentum signal: ``close_today / close_{lookback_days} - 1``.
-- ``build_plan`` reuses private helpers from ``qsys.ops.shadow_rebalance``
-  (``_build_target_weights``, ``_build_order_intents``, ``_fetch_market_snapshot``,
-  ``_load_shadow_account``).  These are strategy-agnostic implementation
-  details — they accept all parameters explicitly.
-- ``execute_plan`` reuses ``execute_alpha_v1_plan`` which is structurally
-  generic over ``plan_dir`` (reads ``strategy_id``/``version`` from
-  ``plan_meta.json``).  The cosmetic ``alpha_v1_execute_`` run_id prefix
-  in staging metadata is a known cosmetic issue — it does not affect
-  correctness (the ledger commit uses a generic ``run_id`` via
-  ``_write_execution_to_ledger``).  A follow-up should extract a generic
-  execution helper from ``execute_alpha_v1_plan``.
+- ``build_plan`` uses ``build_plan_from_predictions`` (``qsys.ops.plan_builder``),
+  the public composite API for plan construction.
+- ``execute_plan`` uses ``execute_shadow_plan`` (``qsys.ops.shadow_execution``)
+  with a generic ``run_id`` derived from the strategy and execution date.
 - No ``run_alpha_v2_daily.py`` — only ``run_daily.py --strategy alpha_v2``.
 """
 

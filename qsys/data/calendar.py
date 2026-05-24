@@ -107,6 +107,12 @@ def resolve_data_date(trade_date: str, *, mode: str = "asof") -> str:
         return cal[-1]
 
     # mode == "previous"
+    asof_date = cal[-1]
+    if asof_date < trade_date:
+        # trade_date is a non-trading day — asof already rolled back,
+        # and that is already the nearest date strictly before trade_date.
+        return asof_date
+    # trade_date is a trading day — asof == trade_date, so step back.
     if len(cal) < 2:
         raise ValueError(
             f"cannot resolve previous trading day for {trade_date}: "
