@@ -38,6 +38,19 @@ class TestBacktestRunnerInit:
         runner = BacktestRunner(artifact_mode="debug")
         assert runner.artifact_mode == "debug"
 
+    def test_default_execution_price_mode(self):
+        runner = BacktestRunner()
+        assert runner.execution_price_mode == "open"
+
+    def test_valid_execution_price_mode(self):
+        for mode in ("open", "close"):
+            runner = BacktestRunner(execution_price_mode=mode)
+            assert runner.execution_price_mode == mode
+
+    def test_invalid_execution_price_mode_raises(self):
+        with pytest.raises(ValueError, match="unsupported execution_price_mode"):
+            BacktestRunner(execution_price_mode="mid")
+
 
 # ── run_range validation ───────────────────────────────────────────────────────
 

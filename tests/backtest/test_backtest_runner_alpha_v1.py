@@ -21,6 +21,7 @@ import pytest
 
 from qsys.backtest.strategy_runner import (
     SUPPORTED_ARTIFACT_MODES,
+    SUPPORTED_EXECUTION_PRICE_MODES,
     SUPPORTED_MODES,
     BacktestRunner,
     _resolve_trading_dates,
@@ -65,6 +66,17 @@ def _make_rebalance_audit_csv(path: Path) -> None:
     ).to_csv(path / "rebalance_audit.csv", index=False)
 
 
+def _make_order_intents_csv(path: Path) -> None:
+    """Write a minimal order_intents.csv into *path*."""
+    pd.DataFrame(
+        {
+            "instrument": ["000001"],
+            "side": ["buy"],
+            "requested_qty": [100],
+        }
+    ).to_csv(path / "order_intents.csv", index=False)
+
+
 # ── Fixtures ─────────────────────────────────────────────────────────────
 
 
@@ -104,6 +116,7 @@ def plan_dir() -> Path:
     d = Path(tempfile.mkdtemp())
     _make_target_weights_csv(d)
     _make_rebalance_audit_csv(d)
+    _make_order_intents_csv(d)
     return d
 
 
@@ -156,6 +169,22 @@ class TestRunRangeValidation:
         for am in SUPPORTED_ARTIFACT_MODES:
             r = BacktestRunner(artifact_mode=am)
             assert r.artifact_mode == am
+
+    def test_default_execution_price_mode(self) -> None:
+        """Default ``execution_price_mode`` is ``"open"`` (DailyRunner-equiv)."""
+        r = BacktestRunner()
+        assert r.execution_price_mode == "open"
+
+    def test_supported_execution_price_modes(self) -> None:
+        """All values in ``SUPPORTED_EXECUTION_PRICE_MODES`` are accepted."""
+        for pm in SUPPORTED_EXECUTION_PRICE_MODES:
+            r = BacktestRunner(execution_price_mode=pm)
+            assert r.execution_price_mode == pm
+
+    def test_invalid_execution_price_mode_raises(self) -> None:
+        """Invalid ``execution_price_mode`` raises ``ValueError``."""
+        with pytest.raises(ValueError, match="unsupported execution_price_mode"):
+            BacktestRunner(execution_price_mode="vwap")
 
 
 # ── Daily-loop execution ─────────────────────────────────────────────────
@@ -240,10 +269,11 @@ class TestRunRangeExecution:
         ]
 
         # ── Positions after execution ────────────────────────────────
-        pos_df = pd.DataFrame(
-            {"instrument": ["000001"], "market_value": [1000.0]}
-        )
-        mock_positions.return_value = pos_df
+        # Before-state returns empty (fresh account), after-state returns 1000
+        mock_positions.side_effect = [
+            pd.DataFrame({"instrument": [], "market_value": []}),  # before
+            pd.DataFrame({"instrument": ["000001"], "market_value": [1000.0]}),  # after
+        ]
 
         # ── Execute ──────────────────────────────────────────────────
         result = runner.run_range(
@@ -490,6 +520,119 @@ class TestRunRangeExecution:
         passed_account = args[1]
         assert passed_account is custom_account, (
             f"Expected custom_account but got {passed_account}"
+        )
+
+    @patch("qsys.backtest.strategy_runner.positions_frame")
+    @patch("qsys.backtest.strategy_runner.MatchEngine")
+    @patch("qsys.backtest.strategy_runner.build_order_intents")
+    @patch("qsys.backtest.strategy_runner.fetch_market_snapshot")
+    @patch("qsys.backtest.strategy_runner._resolve_trading_dates")
+    def test_open_mode_fetches_open_prices(
+        self,
+        mock_resolve: MagicMock,
+        mock_fetch_snapshot: MagicMock,
+        mock_build_intents: MagicMock,
+        mock_match_engine_cls: MagicMock,
+        mock_positions: MagicMock,
+        spec: Any,
+        strategy: MagicMock,
+        predictions_df: pd.DataFrame,
+        plan_dir: Path,
+    ) -> None:
+        """In open mode, the first ``fetch_market_snapshot`` call uses ``price_col="open"``."""
+        open_runner = BacktestRunner(execution_price_mode="open")
+        mock_resolve.return_value = ["2026-01-02"]
+        strategy.generate_predictions_for_date.return_value = predictions_df
+        strategy.resolve_data_date.return_value = "2026-01-01"
+        strategy.build_plan_for_backtest.return_value = plan_dir
+
+        prices = {"000001": 10.0, "000002": 20.0, "000003": 30.0}
+        mock_fetch_snapshot.return_value = (
+            prices,
+            _make_market_status_df(list(prices)),
+        )
+        mock_build_intents.return_value = (
+            [{"symbol": "000001", "side": "buy", "amount": 100}],
+            pd.DataFrame(),
+            pd.DataFrame(),
+            1_000_000.0,
+            0.0,
+            1_000_000.0,
+        )
+        mock_matcher = MagicMock()
+        mock_match_engine_cls.return_value = mock_matcher
+        mock_matcher.match.return_value = []
+        mock_positions.return_value = pd.DataFrame(
+            {"instrument": [], "market_value": []}
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            open_runner.run_range(
+                strategy, spec, "2026-01-01", "2026-01-05",
+                output_dir=Path(tmp) / "bt_open",
+            )
+
+        # First call should use price_col="open"
+        first_call = mock_fetch_snapshot.call_args_list[0]
+        assert first_call.kwargs.get("price_col") == "open", (
+            f"Expected price_col='open' but got {first_call}"
+        )
+
+    @patch("qsys.backtest.strategy_runner.positions_frame")
+    @patch("qsys.backtest.strategy_runner.MatchEngine")
+    @patch("qsys.backtest.strategy_runner.build_order_intents")
+    @patch("qsys.backtest.strategy_runner.fetch_market_snapshot")
+    @patch("qsys.backtest.strategy_runner._resolve_trading_dates")
+    def test_close_mode_fetches_close_prices(
+        self,
+        mock_resolve: MagicMock,
+        mock_fetch_snapshot: MagicMock,
+        mock_build_intents: MagicMock,
+        mock_match_engine_cls: MagicMock,
+        mock_positions: MagicMock,
+        spec: Any,
+        strategy: MagicMock,
+        predictions_df: pd.DataFrame,
+        plan_dir: Path,
+    ) -> None:
+        """In close mode, ``fetch_market_snapshot`` is called without ``price_col``."""
+        close_runner = BacktestRunner(execution_price_mode="close")
+        mock_resolve.return_value = ["2026-01-02"]
+        strategy.generate_predictions_for_date.return_value = predictions_df
+        strategy.resolve_data_date.return_value = "2026-01-01"
+        strategy.build_plan_for_backtest.return_value = plan_dir
+
+        prices = {"000001": 10.0, "000002": 20.0, "000003": 30.0}
+        mock_fetch_snapshot.return_value = (
+            prices,
+            _make_market_status_df(list(prices)),
+        )
+        mock_build_intents.return_value = (
+            [{"symbol": "000001", "side": "buy", "amount": 100}],
+            pd.DataFrame(),
+            pd.DataFrame(),
+            1_000_000.0,
+            0.0,
+            1_000_000.0,
+        )
+        mock_matcher = MagicMock()
+        mock_match_engine_cls.return_value = mock_matcher
+        mock_matcher.match.return_value = []
+        mock_positions.return_value = pd.DataFrame(
+            {"instrument": [], "market_value": []}
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            close_runner.run_range(
+                strategy, spec, "2026-01-01", "2026-01-05",
+                output_dir=Path(tmp) / "bt_close",
+            )
+
+        # In close mode, fetch_market_snapshot is called once without price_col
+        mock_fetch_snapshot.assert_called_once()
+        call_kwargs = mock_fetch_snapshot.call_args[1]
+        assert "price_col" not in call_kwargs, (
+            f"Expected no price_col kwarg but got {call_kwargs}"
         )
 
 

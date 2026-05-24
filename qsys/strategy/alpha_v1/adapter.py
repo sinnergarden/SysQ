@@ -477,9 +477,13 @@ class AlphaV1StrategyAdapter:
         from qsys.ops.plan_builder import build_plan_from_predictions
 
         p = ALPHA_V1_CANDIDATE.portfolio
+        # Use data_date close prices for plan building (matching DailyRunner's
+        # preopen behaviour) — predictions["trade_date"] is the data_date.
+        data_date = self._parse_date(predictions["trade_date"].iloc[0])
         return build_plan_from_predictions(
             shadow_dir=Path("/tmp/_bt_shadow"),  # dummy — account provided
             trade_date=trade_date,
+            reference_date=data_date,
             predictions=predictions,
             output_dir=Path(output_dir),
             portfolio_fn=build_rank_weight_portfolio,
