@@ -52,6 +52,12 @@ BATCH_STAGES = {"candidate", "production"}
 SUPPORTED_MODES = {"preopen", "postclose", "train", "notify-only"}
 SUMMARY_FILENAME = "batch_summary.json"
 
+# Production safety gate
+ALLOW_PRODUCTION_WARNING = (
+    "Production batch requires --allow-production. "
+    "Production risk controls are not fully implemented."
+)
+
 
 def _summary_filename(stage: str, mode: str) -> str:
     """Return a stage/mode-specific summary filename so preopen/postclose/etc.
@@ -134,6 +140,7 @@ def run_batch(
     dry_run: bool = False,
     continue_on_error: bool = True,
     fail_fast: bool = False,
+    allow_production: bool = False,
 ) -> dict:
     """Execute a daily batch for all strategies matching *stage*.
 
@@ -166,6 +173,9 @@ def run_batch(
         failure.  Default ``True``.
     fail_fast : bool
         If ``True``, stop after the first failure.
+    allow_production : bool
+        If ``True``, allow production-stage dispatch.  Required when
+        *stage* is ``production``.
 
     Returns
     -------
@@ -185,6 +195,17 @@ def run_batch(
         raise ValueError(
             f"stage {stage!r} is not a daily batch stage; "
             f"expected one of {sorted(BATCH_STAGES)}"
+        )
+
+    # Production safety gate
+    if stage == "production" and not allow_production:
+        print(f"\n  ⛔ {ALLOW_PRODUCTION_WARNING}")
+        print()
+        finished_at = datetime.now()
+        return _build_summary(
+            stage=stage, mode=mode, trade_date=trade_date_resolved,
+            started_at=started_at, finished_at=finished_at,
+            status="blocked", strategy_results=[], output_root=output_root,
         )
 
     if fail_fast and continue_on_error:
@@ -517,6 +538,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-notify", action="store_true", default=False,
         help="Pass --no-notify to each strategy",
     )
+    parser.add_argument(
+        "--allow-production", action="store_true", default=False,
+        help="Allow production-stage dispatch (required for --stage production)",
+    )
     return parser
 
 
@@ -543,11 +568,12 @@ def main() -> None:
         dry_run=args.dry_run,
         continue_on_error=args.continue_on_error,
         fail_fast=args.fail_fast,
+        allow_production=args.allow_production,
     )
     print(json.dumps(summary, indent=2, ensure_ascii=False, default=str))
 
     # Exit code
-    if summary["status"] in ("failed", "partial_failed"):
+    if summary["status"] in ("failed", "partial_failed", "blocked"):
         sys.exit(1)
     sys.exit(0)
 

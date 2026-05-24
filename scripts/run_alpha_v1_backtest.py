@@ -15,6 +15,13 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 warnings.filterwarnings("ignore")
 
+from qsys.common.deprecation import print_legacy_entrypoint_warning  # noqa: E402
+
+print_legacy_entrypoint_warning(
+    "run_alpha_v1_backtest.py",
+    "python scripts/check_dr_bt_equivalence.py --strategy alpha_v1 ...",
+)
+
 import argparse
 import numpy as np
 import pandas as pd

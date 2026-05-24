@@ -125,3 +125,27 @@ executed.  **Not scheduled by daily batch.**
 
 Each transition creates a ``PromotionRecord`` that is appended to the
 strategy's promotion history file.
+
+---
+
+## Stage Validation
+
+Config validation per stage is available in
+``qsys/strategy/validators.py``:
+
+```bash
+python -c "
+from qsys.strategy.spec import load_strategy_spec
+from qsys.strategy.validators import validate_strategy_spec
+
+spec = load_strategy_spec('configs/strategies/alpha_v1.yaml')
+errors = validate_strategy_spec(spec)
+for e in errors:
+    print(f'  ✗ {e}')
+"
+```
+
+See:
+- [New Strategy Development Runbook](../runbooks/add-new-strategy.md)
+- [Candidate Observation Report Template](../templates/candidate-observation-report.md)
+- [Framework Stability Contract](../architecture/framework-stability-contract.md)

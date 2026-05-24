@@ -1,10 +1,10 @@
 [Unit]
-Description=Qsys Candidate Post-Close — weekday afternoons at 15:30
+Description=Qsys Candidate Post-Close — weekday evenings at 21:00
 RefuseManualStart=no
 
 [Timer]
 Description=Qsys Candidate Post-Close Timer
-OnCalendar=Mon..Fri 15:30:00
+OnCalendar=Mon..Fri 21:00:00
 Persistent=true
 RandomizedDelaySec=60
 

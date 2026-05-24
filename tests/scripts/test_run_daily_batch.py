@@ -132,6 +132,7 @@ class TestStageFilter:
             trade_date="2026-05-22",
             config_root=str(fake_config_dir),
             dry_run=True,
+            allow_production=True,
         )
         ids = {s["strategy_id"] for s in summary["strategies"]}
         assert ids == {"prod_p1"}
@@ -479,3 +480,43 @@ class TestEdgeCases:
                 f"line {lineno} appears to hardcode 'alpha_v1' in batch module: "
                 f"{line_text}"
             )
+
+
+class TestProductionGate:
+    def test_production_without_allow_production_is_blocked(self, fake_config_dir: Path):
+        """Production batch without --allow-production returns blocked status."""
+        summary = run_batch(
+            stage="production",
+            mode="preopen",
+            trade_date="2026-05-22",
+            config_root=str(fake_config_dir),
+            dry_run=True,
+            allow_production=False,
+        )
+        assert summary["status"] == "blocked"
+        assert summary["selected_count"] == 0
+
+    def test_production_with_allow_production_proceeds(self, fake_config_dir: Path):
+        """Production batch with --allow-production proceeds to dry-run."""
+        summary = run_batch(
+            stage="production",
+            mode="preopen",
+            trade_date="2026-05-22",
+            config_root=str(fake_config_dir),
+            dry_run=True,
+            allow_production=True,
+        )
+        assert summary["status"] == "dry_run"
+        assert summary["selected_count"] > 0
+
+    def test_candidate_does_not_require_allow_production(self, fake_config_dir: Path):
+        """Candidate batch works without --allow-production."""
+        summary = run_batch(
+            stage="candidate",
+            mode="preopen",
+            trade_date="2026-05-22",
+            config_root=str(fake_config_dir),
+            dry_run=True,
+        )
+        assert summary["status"] == "dry_run"
+        assert summary["selected_count"] > 0

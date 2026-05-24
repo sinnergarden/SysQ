@@ -74,12 +74,14 @@ python scripts/run_daily_batch.py \
 python scripts/run_daily_batch.py \
     --stage production \
     --mode preopen \
-    --trade-date 2026-05-22
+    --trade-date 2026-05-22 \
+    --allow-production
 ```
 
-> **Note**: Production execution requires additional risk controls not yet
-> implemented. Currently both candidate and production use the same dispatch
-> path via ``run_daily.py`` — separation is structural via stage filtering.
+> **⚠ Production requires ``--allow-production``.** Without this flag,
+> production-stage dispatch is blocked.  Production risk controls are not
+> yet fully implemented.  See
+> ``docs/architecture/framework-stability-contract.md``.
 
 ### Filtering
 
@@ -237,3 +239,12 @@ New ops should use ``run_daily.py`` or ``run_daily_batch.py``:
 
 These scripts are not removed to avoid breaking existing systemd schedules.
 Migration to ``run_daily_batch.py``-based systemd templates is the recommended path.
+
+---
+
+## See Also
+
+- [Framework Stability Contract](../architecture/framework-stability-contract.md)
+- [New Strategy Development Runbook](add-new-strategy.md)
+- [Semantic Guard Checks](semantic-checks.md)
+- [Strategy Lifecycle](../features/strategy-lifecycle.md)
