@@ -14,6 +14,7 @@ from qsys.strategy.spec import (
     is_runtime_stage,
     load_strategy_spec,
     load_strategy_specs,
+    load_strategy_specs_for_stage,
     spec_from_config,
     validate_stage,
 )
@@ -193,6 +194,43 @@ class TestLoadStrategySpecs:
         _write_yaml(sub, "s1.yaml", {"strategy_id": "s1"})
         specs = load_strategy_specs(tmp_path)
         assert len(specs) == 1
+
+
+# ── load_strategy_specs_for_stage ──────────────────────────────────────────────
+
+
+class TestLoadStrategySpecsForStage:
+    def test_selects_candidate(self, tmp_path: Path):
+        _write_yaml(tmp_path, "v1.yaml", {"strategy_id": "v1", "stage": "candidate"})
+        _write_yaml(tmp_path, "v2.yaml", {"strategy_id": "v2", "stage": "candidate"})
+        _write_yaml(tmp_path, "rx.yaml", {"strategy_id": "rx", "stage": "research"})
+        specs = load_strategy_specs_for_stage("candidate", tmp_path, registry_required=False)
+        assert len(specs) == 2
+        assert {s.strategy_id for s in specs} == {"v1", "v2"}
+
+    def test_excludes_research(self, tmp_path: Path):
+        _write_yaml(tmp_path, "rx.yaml", {"strategy_id": "rx", "stage": "research"})
+        specs = load_strategy_specs_for_stage("candidate", tmp_path, registry_required=False)
+        assert len(specs) == 0
+
+    def test_excludes_rejected_and_archived(self, tmp_path: Path):
+        _write_yaml(tmp_path, "rj.yaml", {"strategy_id": "rj", "stage": "rejected"})
+        _write_yaml(tmp_path, "ar.yaml", {"strategy_id": "ar", "stage": "archived"})
+        specs = load_strategy_specs_for_stage("candidate", tmp_path, registry_required=False)
+        assert len(specs) == 0
+
+    def test_research_stage_raises(self, tmp_path: Path):
+        """research is not a valid daily batch stage."""
+        with pytest.raises(ValueError, match="not a daily batch stage"):
+            load_strategy_specs_for_stage("research", tmp_path)
+
+    def test_registry_required_filters_unregistered(self, tmp_path: Path):
+        """With registry_required=True, unregistered strategies are excluded."""
+        _write_yaml(tmp_path, "unknown.yaml",
+                     {"strategy_id": "unknown_strat", "stage": "candidate"})
+        # unknown_strat is not in the registry
+        specs = load_strategy_specs_for_stage("candidate", tmp_path, registry_required=True)
+        assert len(specs) == 0
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────

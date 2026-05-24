@@ -31,6 +31,10 @@ It may or may not have a ``StrategyAdapter`` implementation.
 Research-stage strategies appear in the strategy catalog but do not produce
 daily artifacts, MTM snapshots, or ledger entries.
 
+**Not scheduled by daily batch.**  ``run_daily_batch.py --stage research`` is
+not supported.  Research strategies are evaluated manually or via
+``BacktestRunner``.
+
 ### Promotion gates → Candidate
 
 - [ ] Evaluation report exists
@@ -54,6 +58,7 @@ A **candidate** is a runtime-ready shadow strategy.  It has a full
 | Has ``StrategyAdapter`` | Yes |
 | Registered in ``qsys/strategy/registry.py`` | Yes |
 | Can run ``run_daily.py`` preopen/postclose/train | Yes |
+| Scheduled by ``run_daily_batch.py --stage candidate`` | Yes |
 | Has shadow account | Yes |
 | Writes artifacts, MTM, shadow ledger | Yes |
 | Sends Telegram notifications | Yes |
@@ -85,6 +90,7 @@ and a rollback plan.
 | Has ``StrategyAdapter`` | Yes |
 | Registered in registry | Yes |
 | Runs ``run_daily.py`` | Yes |
+| Scheduled by ``run_daily_batch.py --stage production`` | Yes |
 | Real-money / live account | Requires additional controls |
 
 **Production execution is not yet implemented in this framework.**
@@ -96,6 +102,7 @@ See the broker integration roadmap.
 
 A **rejected** strategy failed evaluation or promotion gates.
 It is retained in the catalog for auditability but is not runnable.
+**Not scheduled by daily batch.**
 
 ---
 
@@ -103,7 +110,7 @@ It is retained in the catalog for auditability but is not runnable.
 
 An **archived** strategy is a previously runnable strategy that has been
 retired.  Its artifacts and history are preserved but it is no longer
-executed.
+executed.  **Not scheduled by daily batch.**
 
 ---
 

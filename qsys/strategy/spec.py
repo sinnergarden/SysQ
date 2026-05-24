@@ -194,6 +194,63 @@ def load_strategy_spec(path: str | Path) -> StrategySpec:
     return spec_from_config(config, path=path)
 
 
+def load_strategy_specs_for_stage(
+    stage: str,
+    config_root: str | Path,
+    *,
+    registry_required: bool = True,
+) -> list[StrategySpec]:
+    """Load all ``StrategySpec``\\s under *config_root* matching *stage*.
+
+    Filters by lifecycle stage (``research``, ``candidate``, ``production``).
+    ``rejected`` and ``archived`` are always excluded from daily batch use.
+
+    When *registry_required* is ``True`` (default for candidate/production),
+    each spec's strategy_id must be loadable via the runtime registry.
+    Specs that fail registry validation are still returned but can be
+    detected via the ``registry_available`` flag in their metadata.
+
+    Parameters
+    ----------
+    stage : str
+        Lifecycle stage to filter by.
+    config_root : str | Path
+        Root directory containing strategy YAML files.
+    registry_required : bool
+        If ``True``, validates each spec against ``qsys.strategy.registry``.
+        Default ``True``.
+
+    Returns
+    -------
+    list[StrategySpec]
+        Matching specs, sorted by ``strategy_id``.
+    """
+    validate_stage(stage)
+    specs = load_strategy_specs(config_root)
+    batch_stages = {"candidate", "production"}
+    if stage not in batch_stages:
+        raise ValueError(
+            f"stage {stage!r} is not a daily batch stage; "
+            f"expected one of {sorted(batch_stages)}"
+        )
+
+    matched = [s for s in specs if s.stage == stage]
+
+    if registry_required:
+        from qsys.strategy.registry import get_strategy_class
+
+        filtered = []
+        for spec in matched:
+            try:
+                get_strategy_class(spec.strategy_id)
+                filtered.append(spec)
+            except ValueError:
+                continue
+        return filtered
+
+    return matched
+
+
 def load_strategy_specs(root: str | Path) -> list[StrategySpec]:
     """Load all ``StrategySpec``\\s from YAML files under *root*.
 

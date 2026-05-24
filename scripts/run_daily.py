@@ -189,6 +189,52 @@ def run_daily_main(argv: list[str] | None = None) -> None:
         runner.run_postclose(ctx, strategy)
 
 
+# ── Structured dispatch for batch runner ────────────────────────────────
+
+
+def run_daily_for_strategy(
+    *,
+    strategy_id: str,
+    mode: str,
+    trade_date: str | None = None,
+    debug_run: bool = False,
+    no_notify: bool = False,
+    output_dir: str | None = None,
+    force_rerun: bool = False,
+    reason: str | None = None,
+    notify_only: bool = False,
+    train_end_date: str | None = None,
+) -> dict:
+    """Dispatch DailyRunner for a single strategy, returning a status dict.
+
+    Structured wrapper around ``run_daily_main`` for use by the batch runner.
+    Returns a dict suitable for batch summary output.
+    """
+    argv = ["--strategy", strategy_id, "--mode", mode]
+    if trade_date:
+        argv.extend(["--trade-date", trade_date])
+    if debug_run:
+        argv.append("--debug-run")
+    if no_notify:
+        argv.append("--no-notify")
+    if output_dir:
+        argv.extend(["--output-dir", output_dir])
+    if force_rerun:
+        argv.append("--force-rerun")
+    if reason:
+        argv.extend(["--reason", reason])
+    if notify_only:
+        argv.append("--notify-only")
+    if train_end_date:
+        argv.extend(["--train-end-date", train_end_date])
+
+    try:
+        run_daily_main(argv)
+        return {"strategy_id": strategy_id, "status": "success", "error": None}
+    except Exception as exc:
+        return {"strategy_id": strategy_id, "status": "failed", "error": str(exc)}
+
+
 def main() -> None:
     run_daily_main()
 
