@@ -1,0 +1,12 @@
+[Unit]
+Description=Qsys Candidate Weekly Train — Monday mornings at 07:00
+RefuseManualStart=no
+
+[Timer]
+Description=Qsys Candidate Weekly Train Timer
+OnCalendar=Mon 07:00:00
+Persistent=true
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target

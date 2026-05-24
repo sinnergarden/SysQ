@@ -32,6 +32,18 @@ output.  Runs against real qlib data and model artifacts.
 
 Exit code 0 = pass.  Non-zero exit code on mismatch.
 
+## Batch runner checks
+
+```bash
+# Unit tests
+python -m pytest tests/scripts/test_run_daily_batch.py -q
+
+# Dry run — verify strategy selection without dispatching
+python scripts/run_daily_batch.py \
+    --stage candidate --mode preopen \
+    --trade-date 2026-05-22 --dry-run
+```
+
 ## When to run
 
 Before merging PRs that touch:
@@ -43,6 +55,9 @@ Before merging PRs that touch:
 - `qsys/ops/shadow_execution.py`
 - `qsys/trader/*`
 - `qsys/backtest/portfolio.py`
+- `scripts/run_daily.py`
+- `scripts/run_daily_batch.py`
+- `deploy/systemd/*`
 
 ## Known invariant: alpha_v1 weekly replay
 
