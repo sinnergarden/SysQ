@@ -9,17 +9,10 @@ Design decisions
 ----------------
 - No LightGBM, no dual 5d/20d model, no zscore blend.
 - Momentum signal: ``close_today / close_{lookback_days} - 1``.
-- ``build_plan`` reuses private helpers from ``qsys.ops.shadow_rebalance``
-  (``_build_target_weights``, ``_build_order_intents``, ``_fetch_market_snapshot``,
-  ``_load_shadow_account``).  These are strategy-agnostic implementation
-  details — they accept all parameters explicitly.
-- ``execute_plan`` reuses ``execute_alpha_v1_plan`` which is structurally
-  generic over ``plan_dir`` (reads ``strategy_id``/``version`` from
-  ``plan_meta.json``).  The cosmetic ``alpha_v1_execute_`` run_id prefix
-  in staging metadata is a known cosmetic issue — it does not affect
-  correctness (the ledger commit uses a generic ``run_id`` via
-  ``_write_execution_to_ledger``).  A follow-up should extract a generic
-  execution helper from ``execute_alpha_v1_plan``.
+- ``build_plan`` uses ``build_plan_from_predictions`` (``qsys.ops.plan_builder``),
+  the public composite API for plan construction.
+- ``execute_plan`` uses ``execute_shadow_plan`` (``qsys.ops.shadow_execution``)
+  with a generic ``run_id`` derived from the strategy and execution date.
 - No ``run_alpha_v2_daily.py`` — only ``run_daily.py --strategy alpha_v2``.
 """
 
@@ -33,6 +26,7 @@ from typing import Any
 import pandas as pd
 
 from qsys.model.training import TrainingResult
+from qsys.strategy.runtime_base import BaseStrategyAdapter
 
 
 def _now_str() -> str:
@@ -43,7 +37,7 @@ def _fmt(amount: float) -> str:
     return f"¥{amount / 1000:.2f}k"
 
 
-class AlphaV2StrategyAdapter:
+class AlphaV2StrategyAdapter(BaseStrategyAdapter):
     """Rule-based momentum strategy for framework validation."""
 
     def __init__(self, project_root: Path | None = None) -> None:
@@ -195,21 +189,6 @@ class AlphaV2StrategyAdapter:
         }
 
     # ── Data ────────────────────────────────────────────────────────────
-
-    def resolve_data_date(self, trade_date: str) -> str:
-        from qlib.data import D as qlib_D
-
-        from qsys.data.adapter import QlibAdapter
-
-        QlibAdapter().init_qlib()
-        cal = qlib_D.calendar(start_time="2020-01-01", end_time=trade_date)
-        if cal is None or len(cal) == 0:
-            print(f"  ⚠ qlib calendar has no trading day <= {trade_date}")
-            return trade_date
-        data_date = pd.Timestamp(cal[-1]).strftime("%Y-%m-%d")
-        if data_date != trade_date:
-            print(f"  ⚠ {trade_date} not a trading day, using {data_date}")
-        return data_date
 
     def get_stock_name(self, ts_code: str) -> str:
         if not self._stock_names_loaded:

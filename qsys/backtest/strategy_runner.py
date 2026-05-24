@@ -75,23 +75,12 @@ SUPPORTED_EXECUTION_PRICE_MODES = frozenset({"open", "close"})
 def _resolve_trading_dates(start_date: str, end_date: str) -> list[str]:
     """Resolve trading dates in [*start_date*, *end_date*] (inclusive).
 
-    Uses qlib calendar when available; falls back to ``pd.bdate_range``.
+    Delegates to ``qsys.data.calendar.get_trading_calendar`` which handles
+    qlib resolution with ``pd.bdate_range`` fallback.
     """
-    try:
-        from qlib.data import D as qlib_D
-        from qsys.data.adapter import QlibAdapter
+    from qsys.data.calendar import get_trading_calendar
 
-        QlibAdapter().init_qlib()
-        cal = qlib_D.calendar(start_time=start_date, end_time=end_date)
-        if cal is not None and len(cal) > 0:
-            return [pd.Timestamp(d).strftime("%Y-%m-%d") for d in cal]
-    except Exception:
-        pass
-    # Fallback: business days
-    return [
-        d.strftime("%Y-%m-%d")
-        for d in pd.bdate_range(start=start_date, end=end_date)
-    ]
+    return get_trading_calendar(start_date, end_date)
 
 
 class BacktestRunner:
@@ -292,7 +281,7 @@ class BacktestRunner:
             start_date=start_date,
             end_date=end_date,
             mode=self._mode,
-            rebalance_freq=rebalance_freq or "daily",
+            rebalance_freq=self._rebalance_freq,
             initial_capital=initial_capital,
             final_value=final_value,
             total_return=total_return,

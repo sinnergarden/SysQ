@@ -30,6 +30,22 @@ evaluation, and backtest must each state their data cutoff.
 - **Backtest**: Must explicitly model when each datum would have been observable.
   Using a date-ordered loop with expanding window is required.
 
+### Calendar semantics (``qsys.data.calendar``)
+
+Framework default: **asof** mode — a trading day resolves to itself; a
+non-trading day (weekend / holiday) rolls back to the previous trading day.
+
+| Mode | Semantics | Example |
+|------|-----------|---------|
+| ``"asof"`` (default) | Latest trading day ≤ *trade_date* | ``resolve_data_date("2026-05-18") == "2026-05-18"`` |
+| ``"previous"`` | Latest trading day < *trade_date* | ``resolve_data_date("2026-05-18", mode="previous") == "2026-05-15"`` |
+
+Strategies should **not** override ``resolve_data_date`` unless they have
+explicitly documented data-availability constraints that differ from the
+framework default (e.g. delayed data feed).  Use
+``BaseStrategyAdapter`` (from ``qsys.strategy.runtime_base``) to inherit
+the default implementation.
+
 ---
 
 ## 3. Market Snapshot Contract

@@ -16,6 +16,7 @@ import numpy as np
 import pandas as pd
 
 from qsys.strategy.alpha_v1.spec import ALPHA_V1_CANDIDATE
+from qsys.strategy.runtime_base import BaseStrategyAdapter
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────
@@ -41,7 +42,7 @@ def _robust_zscore_transform(
     return ((X.astype(np.float32) - center) / scale).clip(-3, 3).fillna(0.0)
 
 
-class AlphaV1StrategyAdapter:
+class AlphaV1StrategyAdapter(BaseStrategyAdapter):
     """Adapter exposing the alpha_v1 config singleton as a StrategyCandidate.
 
     Usage::
@@ -274,21 +275,6 @@ class AlphaV1StrategyAdapter:
             for _, row in df.iterrows():
                 self._stock_names[str(row["ts_code"])] = str(row["name"])
         self._stock_names_loaded = True
-
-    def resolve_data_date(self, trade_date: str) -> str:
-        from qlib.data import D as qlib_D
-
-        from qsys.data.adapter import QlibAdapter
-
-        QlibAdapter().init_qlib()
-        cal = qlib_D.calendar(start_time="2020-01-01", end_time=trade_date)
-        if cal is None or len(cal) == 0:
-            print(f"  ⚠ qlib 日历无 <= {trade_date} 的交易日")
-            return trade_date
-        data_date = pd.Timestamp(cal[-1]).strftime("%Y-%m-%d")
-        if data_date != trade_date:
-            print(f"  ⚠ {trade_date} 无数据，回退到 {data_date}")
-        return data_date
 
     def load_model(self) -> None:
         import lightgbm as lgb

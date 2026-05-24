@@ -86,7 +86,13 @@ def rebalance_policy(self) -> dict: ...
 
 ```python
 def resolve_data_date(self, trade_date: str) -> str:
-    """Return nearest trading day with available data."""
+    """Return nearest trading day with available data.
+
+    Default (``BaseStrategyAdapter``) provides asof semantics —
+    trading day resolves to itself, weekend/holiday rolls back.
+    Override only when the strategy has explicitly documented
+    data-availability constraints that differ from the default.
+    """
 
 def get_stock_name(self, ts_code: str) -> str:
     """Human-readable stock name (may fall back to ts_code)."""
@@ -545,3 +551,24 @@ Add to `qsys/strategy/registry.py`:
 from qsys.strategy.alpha_v2.adapter import AlphaV2StrategyAdapter
 register("alpha_v2", AlphaV2StrategyAdapter)
 ```
+
+---
+
+## BaseStrategyAdapter
+
+New strategy adapters should inherit from ``BaseStrategyAdapter``
+(``qsys.strategy.runtime_base``) to get default implementations for
+non-strategy-specific methods:
+
+```python
+from qsys.strategy.runtime_base import BaseStrategyAdapter
+
+class MyAdapter(BaseStrategyAdapter):
+    ...
+```
+
+``BaseStrategyAdapter`` provides:
+
+- ``resolve_data_date`` — asof calendar semantics (trading day → itself,
+  non-trading day → roll back).  Override only when the strategy has
+  documented data-availability constraints that differ from the default.
