@@ -358,7 +358,7 @@ class TestSummaryOutput:
                 output_root=str(tmp_path),
             )
 
-        summary_path = tmp_path / "2026-05-22" / "batch_summary.json"
+        summary_path = tmp_path / "2026-05-22" / "batch_candidate_preopen.json"
         assert summary_path.exists()
         loaded = json.loads(summary_path.read_text(encoding="utf-8"))
         assert loaded["stage"] == "candidate"
@@ -389,6 +389,22 @@ class TestBuildCommand:
     def test_no_notify_flag(self):
         cmd = _build_command("alpha_v1", "preopen", "2026-05-22", no_notify=True)
         assert "--no-notify" in cmd
+
+    def test_no_notify_not_default(self):
+        """--no-notify is NOT auto-appended when not explicitly passed."""
+        cmd = _build_command("alpha_v1", "preopen", "2026-05-22")
+        assert "--no-notify" not in cmd
+
+    def test_notify_only_mode_generates_valid_command(self):
+        """notify-only mode generates --mode preopen --notify-only --trade-date."""
+        cmd = _build_command("alpha_v1", "notify-only", "2026-05-22")
+        cmd_str = " ".join(cmd)
+        assert "run_daily.py" in cmd_str
+        assert "--mode" in cmd
+        assert "preopen" in cmd
+        assert "--notify-only" in cmd
+        assert "--trade-date" in cmd
+        assert "2026-05-22" in cmd
 
 
 class TestEdgeCases:

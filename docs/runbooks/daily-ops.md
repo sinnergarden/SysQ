@@ -117,8 +117,14 @@ python scripts/run_daily_batch.py \
 The batch runner writes a summary JSON to:
 
 ```
-<output_root>/<trade_date>/batch_summary.json
+<output_root>/<trade_date>/batch_<stage>_<mode>.json
 ```
+
+For example:
+
+- ``runs/2026-05-22/batch_candidate_preopen.json``
+- ``runs/2026-05-22/batch_candidate_postclose.json``
+- ``runs/2026-05-22/batch_production_preopen.json``
 
 Default output root: ``runs/`` (relative to project root).
 

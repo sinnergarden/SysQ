@@ -53,6 +53,12 @@ SUPPORTED_MODES = {"preopen", "postclose", "train", "notify-only"}
 SUMMARY_FILENAME = "batch_summary.json"
 
 
+def _summary_filename(stage: str, mode: str) -> str:
+    """Return a stage/mode-specific summary filename so preopen/postclose/etc.
+    summaries on the same trade_date do not overwrite each other."""
+    return f"batch_{stage}_{mode}.json"
+
+
 # ── Helpers ─────────────────────────────────────────────────────────────
 
 
@@ -86,14 +92,18 @@ def _build_command(
         sys.executable or "python",
         str(PROJECT_ROOT / "scripts" / "run_daily.py"),
         "--strategy", strategy_id,
-        "--mode", mode,
     ]
+
+    # notify-only is a flag, not a mode — build a valid run_daily.py command
+    if mode == "notify-only":
+        cmd.extend(["--mode", "preopen", "--notify-only"])
+    else:
+        cmd.extend(["--mode", mode])
+
     if mode != "train":
         cmd.extend(["--trade-date", trade_date])
     if debug_run:
         cmd.append("--debug-run")
-    else:
-        cmd.append("--no-notify")
     if no_notify:
         cmd.append("--no-notify")
     if output_root:
@@ -389,7 +399,7 @@ def run_batch(
     )
 
     # Write summary to disk
-    write_summary(summary, output_root, trade_date_resolved)
+    write_summary(summary, output_root, trade_date_resolved, stage, mode)
 
     return summary
 
@@ -429,14 +439,19 @@ def _build_summary(
     return summary
 
 
-def write_summary(summary: dict, output_root: str | None, trade_date: str) -> Path:
-    """Write the batch summary JSON to disk."""
+def write_summary(summary: dict, output_root: str | None, trade_date: str,
+                  stage: str, mode: str) -> Path:
+    """Write the batch summary JSON to disk.
+
+    The filename includes stage and mode so preopen / postclose / etc.
+    summaries on the same trade_date do not overwrite each other.
+    """
     if output_root:
         out_dir = Path(output_root) / trade_date
     else:
         out_dir = Path(PROJECT_ROOT) / "runs" / trade_date
     out_dir.mkdir(parents=True, exist_ok=True)
-    path = out_dir / SUMMARY_FILENAME
+    path = out_dir / _summary_filename(stage, mode)
     path.write_text(
         json.dumps(summary, indent=2, ensure_ascii=False, default=str),
         encoding="utf-8",
