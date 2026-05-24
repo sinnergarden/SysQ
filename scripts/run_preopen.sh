@@ -2,6 +2,14 @@
 # systemd pre-open wrapper (08:00 Mon-Fri)
 # 盘前: 生成交易计划 → 21:30 CSI800 数据同步 → 22:00 postclose 开盘价执行 + 收盘价 MTM
 set -euo pipefail
+
+echo "============================================================"
+echo "  ⚠ DEPRECATED: run_preopen.sh"
+echo "  This is a legacy compatibility entrypoint."
+echo "  Prefer:"
+echo "    python scripts/run_daily_batch.py --stage candidate --mode preopen"
+echo "============================================================"
+
 cd "$(cd "$(dirname "$0")/.." && pwd)"
 
 PYTHON="/home/liuming/.openclaw/workspace/.mamba/envs/dl/bin/python"

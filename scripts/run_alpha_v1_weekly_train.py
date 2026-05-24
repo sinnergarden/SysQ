@@ -38,6 +38,13 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 warnings.filterwarnings("ignore")
 
+from qsys.common.deprecation import print_legacy_entrypoint_warning  # noqa: E402
+
+print_legacy_entrypoint_warning(
+    "run_alpha_v1_weekly_train.py",
+    "python scripts/run_daily.py --strategy alpha_v1 --mode train",
+)
+
 # ── 加载 .env（Telegram 凭据）────────────────────────────────────────
 
 _ENV_FILE = Path("/home/liuming/.openclaw/.env")

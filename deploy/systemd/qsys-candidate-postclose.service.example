@@ -1,14 +1,21 @@
 [Unit]
 Description=Qsys Candidate Post-Close — batch dispatch all candidate strategies
+Documentation=docs/runbooks/daily-ops.md
 After=network-online.target
 Wants=network-online.target
-Documentation=docs/runbooks/daily-ops.md
 
 [Service]
 Type=oneshot
+# User=your_user
 WorkingDirectory=/path/to/SysQ
 # EnvironmentFile=-/path/to/SysQ/.env
-ExecStart=/usr/bin/env bash -lc 'cd /path/to/SysQ && python scripts/run_daily_batch.py --stage candidate --mode postclose --trade-date auto --output-root runs --no-notify'
+# Environment=HTTPS_PROXY=http://proxy:port
+# Environment=HTTP_PROXY=http://proxy:port
+ExecStart=/path/to/python scripts/run_daily_batch.py \
+    --stage candidate \
+    --mode postclose \
+    --trade-date auto \
+    --output-root runs
 StandardOutput=append:/var/log/qsys/candidate-postclose.log
 StandardError=append:/var/log/qsys/candidate-postclose.log
 

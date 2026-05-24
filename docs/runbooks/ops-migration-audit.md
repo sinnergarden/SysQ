@@ -63,7 +63,14 @@ dispatch via `run_daily.py` / `run_daily_batch.py`.
 
 ---
 
-## Status Legend
+## Framework Dispatch Status
+
+Stage-aware framework dispatch via ``run_daily.py`` / ``run_daily_batch.py`` is
+**effectively complete** (PR #96, PR #97).  Legacy scripts remain as deprecated
+compatibility entrypoints with visible warnings.  New ops must use the framework
+entrypoints.
+
+---
 
 - ✅ **Done** — migrated / implemented
 - ⏳ **Pending** — acknowledged, update planned

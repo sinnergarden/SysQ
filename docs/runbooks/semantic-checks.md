@@ -2,6 +2,23 @@
 
 Executable invariant checks that validate strategy and backtest correctness.
 
+## Aggregate check (recommended)
+
+```bash
+# Quick — local tests only (no DR=BT)
+python scripts/check_framework_stability.py --quick
+
+# Full — includes DR=BT equivalence and batch dry-run
+python scripts/check_framework_stability.py --full
+```
+
+This is the preferred single command for pre-merge validation.
+Output: ``/tmp/qsys_framework_stability/framework_stability_check.json``
+
+See: ``docs/architecture/framework-stability-contract.md``
+
+---
+
 ## Unit tests
 
 ```bash
