@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import unittest
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -34,8 +35,21 @@ class TestBacktestRunnerInit:
         assert runner.artifact_mode == "summary"
 
     def test_custom_artifact_mode(self):
-        runner = BacktestRunner(artifact_mode="full")
-        assert runner.artifact_mode == "full"
+        runner = BacktestRunner(artifact_mode="debug")
+        assert runner.artifact_mode == "debug"
+
+    def test_default_execution_price_mode(self):
+        runner = BacktestRunner()
+        assert runner.execution_price_mode == "open"
+
+    def test_valid_execution_price_mode(self):
+        for mode in ("open", "close"):
+            runner = BacktestRunner(execution_price_mode=mode)
+            assert runner.execution_price_mode == mode
+
+    def test_invalid_execution_price_mode_raises(self):
+        with pytest.raises(ValueError, match="unsupported execution_price_mode"):
+            BacktestRunner(execution_price_mode="mid")
 
 
 # ── run_range validation ───────────────────────────────────────────────────────
@@ -47,14 +61,45 @@ class FakeSpec:
 
 
 class FakeStrategyWithHook:
-    """A fake strategy that implements generate_predictions_for_date."""
+    """A fake strategy that implements backtest hooks."""
 
     def __init__(self) -> None:
         self.calls: list[str] = []
+        self.strategy_id = "test_strat"
+        self.model_version = "1.0"
 
-    def generate_predictions_for_date(self, date_str: str) -> dict | None:
-        self.calls.append(date_str)
-        return {"date": date_str, "score": 0.5}
+    def resolve_data_date(self, trade_date: str) -> str:
+        return trade_date
+
+    def generate_predictions_for_date(self, trade_date: str, *,
+                                       data_date: str | None = None) -> pd.DataFrame:
+        self.calls.append(trade_date)
+        return pd.DataFrame({
+            "instrument": ["000001.SZ", "000002.SZ"],
+            "score": [0.5, 0.3],
+            "trade_date": trade_date,
+        })
+
+    def build_plan_for_backtest(self, predictions: pd.DataFrame, account: Any,
+                                trade_date: str, output_dir: Path) -> Path:
+        """Write minimal plan artifacts so _run_one_day can read them."""
+        plan_dir = Path(output_dir) / "plan"
+        plan_dir.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame({
+            "instrument": ["000001.SZ", "000002.SZ"],
+            "target_weight": [0.6, 0.4],
+        }).to_csv(plan_dir / "target_weights.csv", index=False)
+        pd.DataFrame(columns=[
+            "trade_date", "instrument", "side", "target_weight",
+            "current_weight", "target_value", "current_value",
+            "diff_value", "requested_qty", "reason",
+        ]).to_csv(plan_dir / "order_intents.csv", index=False)
+        pd.DataFrame(columns=[
+            "trade_date", "instrument", "score", "target_weight",
+            "current_weight", "target_value", "current_value",
+            "diff_value", "requested_qty", "action", "reason",
+        ]).to_csv(plan_dir / "rebalance_audit.csv", index=False)
+        return plan_dir
 
 
 class TestRunRange:
@@ -77,7 +122,21 @@ class TestRunRange:
         runner = BacktestRunner()
         strategy = FakeStrategyWithHook()
         spec = FakeSpec()
-        result = runner.run_range(strategy, spec, "2026-01-01", "2026-01-05")
+        dates = ["2026-01-01", "2026-01-02", "2026-01-03", "2026-01-04", "2026-01-05"]
+        # Mock external dependencies
+        with (
+            unittest.mock.patch("qsys.backtest.strategy_runner._resolve_trading_dates") as mock_rtd,
+            unittest.mock.patch("qsys.backtest.strategy_runner.fetch_market_snapshot") as mock_fetch,
+            unittest.mock.patch("qsys.backtest.strategy_runner.build_order_intents") as mock_boi,
+            unittest.mock.patch("qsys.backtest.strategy_runner.MatchEngine") as mock_me,
+            unittest.mock.patch("qsys.backtest.strategy_runner.positions_frame") as mock_pf,
+        ):
+            mock_rtd.return_value = dates
+            mock_fetch.return_value = ({"000001.SZ": 10.0, "000002.SZ": 20.0}, MagicMock())
+            mock_boi.return_value = ([], pd.DataFrame(), pd.DataFrame(), 1_000_000.0, 0.0, 1_000_000.0)
+            mock_me.return_value.match.return_value = []
+            mock_pf.return_value = pd.DataFrame(columns=["instrument", "market_value"])
+            result = runner.run_range(strategy, spec, "2026-01-01", "2026-01-05")
         assert result.status == "completed"
         assert len(strategy.calls) >= 3  # business days in range
 

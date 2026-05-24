@@ -182,6 +182,8 @@ def write_execution_to_ledger(
 
         fill_dicts = []
         for i, item in enumerate(results):
+            if item.get("status") != "filled":
+                continue
             o = item["order"]
             qty = int(item.get("filled_amount", o.get("amount", 0)) or 0)
             if qty <= 0:
@@ -213,6 +215,8 @@ def write_execution_to_ledger(
             })
 
         if fill_dicts:
+            # T+1 settlement: yesterday's positions are fully available today.
+            service.roll_available_positions(account_id, execution_date)
             service.apply_fills(resolved_run_id, fill_dicts, t_plus_one=True, idempotent=True)
 
         prices_dict: dict[str, float] = {}
@@ -257,17 +261,18 @@ def _load_account_from_ledger(
         qty = int(p["quantity"])
         if qty <= 0:
             continue
-        avail = int(p["available_quantity"])
+        # T+1 has settled by the next trading day — all positions are sellable.
+        # The ledger's ``available_quantity`` reflects same-day T+1 lock only.
         cost = float(p["avg_cost"])
         account.positions[sym] = Position(
             symbol=sym,
             total_amount=qty,
-            sellable_amount=max(avail, 0),
+            sellable_amount=qty,
             avg_cost=cost,
         )
         pos_rows.append({
             "instrument": sym, "quantity": qty,
-            "sellable_quantity": avail, "cost_price": cost,
+            "sellable_quantity": qty, "cost_price": cost,
             "last_price": float(p.get("last_price", 0)),
             "market_value": float(p.get("market_value", qty * cost)),
         })
@@ -405,6 +410,11 @@ def execute_shadow_plan(
         "initial_capital": float(prior_account.get("initial_capital", DEFAULT_INITIAL_CAPITAL)) if prior_account else DEFAULT_INITIAL_CAPITAL,
     }
     write_json(output_dir / "account_after.json", account_after)
+
+    # Update shadow state for DailyRunner state persistence across days
+    if not debug_run:
+        write_json(shadow_dir / "account.json", account_after)
+        positions_after.to_csv(shadow_dir / "positions.csv", index=False)
 
     ledger_rows = []
     for item in results:

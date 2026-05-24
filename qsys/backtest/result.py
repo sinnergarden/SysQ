@@ -37,3 +37,4 @@ class BacktestRunResult:
     artifacts: dict[str, str] = field(default_factory=dict)
     status: str = "success"
     notes: str | None = None
+    daily_summary: list[dict[str, Any]] = field(default_factory=list)

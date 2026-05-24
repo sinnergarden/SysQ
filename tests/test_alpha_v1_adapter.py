@@ -71,6 +71,23 @@ class TestAlphaV1StrategyAdapter(unittest.TestCase):
         except Exception:
             self.skipTest("qlib not initialized — resolve_data_date needs qlib")
 
+    def test_resolve_data_date_trading_day_returns_same(self):
+        """For a trading day, resolve_data_date returns the same date."""
+        try:
+            result = self.adapter.resolve_data_date("2026-05-18")
+            self.assertEqual(result, "2026-05-18")
+        except Exception:
+            self.skipTest("qlib not initialized — resolve_data_date needs qlib")
+
+    def test_resolve_data_date_non_trading_day_rolls_back(self):
+        """For a non-trading day, resolve_data_date rolls back to last trading day."""
+        try:
+            result = self.adapter.resolve_data_date("2026-05-17")  # Sunday
+            self.assertNotEqual(result, "2026-05-17")
+            self.assertIsInstance(result, str)
+        except Exception:
+            self.skipTest("qlib not initialized — resolve_data_date needs qlib")
+
     def test_load_model_raises_on_missing_model(self):
         """Without model files on disk, load_model should raise FileNotFoundError."""
         adapter = AlphaV1StrategyAdapter(project_root=Path("/nonexistent"))

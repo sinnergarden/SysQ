@@ -108,17 +108,17 @@ def _load_account_from_ledger(
         qty = int(p["quantity"])
         if qty <= 0:
             continue
-        avail = int(p["available_quantity"])
+        # T+1 has settled by the next trading day — all positions are sellable.
         cost = float(p["avg_cost"])
         account.positions[sym] = Position(
             symbol=sym,
             total_amount=qty,
-            sellable_amount=max(avail, 0),
+            sellable_amount=qty,
             avg_cost=cost,
         )
         pos_rows.append({
             "instrument": sym, "quantity": qty,
-            "sellable_quantity": avail, "cost_price": cost,
+            "sellable_quantity": qty, "cost_price": cost,
             "last_price": float(p.get("last_price", 0)),
             "market_value": float(p.get("market_value", qty * cost)),
         })
