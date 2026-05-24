@@ -292,7 +292,7 @@ class BacktestRunner:
             start_date=start_date,
             end_date=end_date,
             mode=self._mode,
-            rebalance_freq=rebalance_freq or "daily",
+            rebalance_freq=self._rebalance_freq,
             initial_capital=initial_capital,
             final_value=final_value,
             total_return=total_return,

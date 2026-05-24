@@ -76,7 +76,17 @@ class StrategyCandidate(Protocol):
     # ── Data ───────────────────────────────────────────────────────────
 
     def resolve_data_date(self, trade_date: str) -> str:
-        """Return nearest trading day with available data for *trade_date*."""
+        """Return nearest trading day with available data for *trade_date*.
+
+        Default semantic is **asof**: a trading day resolves to itself;
+        a non-trading day (weekend/holiday) rolls back to the previous
+        trading day.
+
+        Strategies should only override this when they have explicitly
+        documented data-availability constraints that differ from the
+        framework default.  Use :class:`~qsys.strategy.runtime_base.BaseStrategyAdapter`
+        to inherit the default implementation.
+        """
 
     def get_stock_name(self, ts_code: str) -> str:
         """Return human-readable name for a stock code."""

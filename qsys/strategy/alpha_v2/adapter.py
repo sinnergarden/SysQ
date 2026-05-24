@@ -33,6 +33,7 @@ from typing import Any
 import pandas as pd
 
 from qsys.model.training import TrainingResult
+from qsys.strategy.runtime_base import BaseStrategyAdapter
 
 
 def _now_str() -> str:
@@ -43,7 +44,7 @@ def _fmt(amount: float) -> str:
     return f"¥{amount / 1000:.2f}k"
 
 
-class AlphaV2StrategyAdapter:
+class AlphaV2StrategyAdapter(BaseStrategyAdapter):
     """Rule-based momentum strategy for framework validation."""
 
     def __init__(self, project_root: Path | None = None) -> None:
@@ -195,21 +196,6 @@ class AlphaV2StrategyAdapter:
         }
 
     # ── Data ────────────────────────────────────────────────────────────
-
-    def resolve_data_date(self, trade_date: str) -> str:
-        from qlib.data import D as qlib_D
-
-        from qsys.data.adapter import QlibAdapter
-
-        QlibAdapter().init_qlib()
-        cal = qlib_D.calendar(start_time="2020-01-01", end_time=trade_date)
-        if cal is None or len(cal) == 0:
-            print(f"  ⚠ qlib calendar has no trading day <= {trade_date}")
-            return trade_date
-        data_date = pd.Timestamp(cal[-1]).strftime("%Y-%m-%d")
-        if data_date != trade_date:
-            print(f"  ⚠ {trade_date} not a trading day, using {data_date}")
-        return data_date
 
     def get_stock_name(self, ts_code: str) -> str:
         if not self._stock_names_loaded:

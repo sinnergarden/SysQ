@@ -109,3 +109,42 @@ Prediction:       per-day infer ──►  batched predict
 Execution:        sequential    ──►  sequential (same)
 Artifacts:        full per-day  ──►  summary only
 ```
+
+---
+
+## Semantic guard layer
+
+Architecture boundaries (public API modules, ``PlanBuilder`` / ``MarketSnapshot`` /
+``ShadowExecution``) prevent **structural errors** — wrong imports, leaked private
+helpers.  They do **not** prevent **semantic errors** — incorrect logic inside
+methods.
+
+The semantic guard layer closes that gap with executable invariant checks:
+
+| Guard | What it catches | How to run |
+|-------|----------------|------------|
+| ``resolve_data_date`` unit tests | Date mis-resolution (e.g. stepping back from a trading day) | ``pytest tests/data/test_calendar.py -q`` |
+| Adapter contract tests | Strategy adapter deviating from framework date semantics | ``pytest tests/contracts/test_strategy_calendar_contract.py -q`` |
+| DR=BT equivalence check | BacktestRunner output diverging from DailyRunner | ``python scripts/check_dr_bt_equivalence.py --strategy alpha_v1 --rebalance-freq weekly ...`` |
+
+### When to run semantic checks
+
+After changes touching:
+
+- ``qsys/data/calendar.py``
+- ``qsys/strategy/*/adapter.py``
+- ``qsys/backtest/*``
+- ``qsys/ops/plan_builder.py``
+- ``qsys/ops/shadow_execution.py``
+- ``qsys/trader/*``
+- ``qsys/backtest/portfolio.py``
+
+### Known invariant: alpha_v1 weekly replay
+
+For ``alpha_v1`` weekly rebalance over 2026-05-16 .. 2026-05-22 with
+1,000,000 initial capital and an empty start:
+
+- BacktestRunner (open mode) final ``total_value``: **1,019,341.33**
+- Unless intentionally changed and documented.
+
+See ``scripts/check_dr_bt_equivalence.py`` for the automated check.
