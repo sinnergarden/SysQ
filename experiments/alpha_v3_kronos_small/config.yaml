@@ -1,0 +1,86 @@
+experiment:
+  name: "alpha_v3_kronos_small"
+  description: "Kronos-small zero-shot alpha signal experiment"
+  created_at: "2026-05-24"
+
+model:
+  name: "NeoQuasar/Kronos-small"
+  tokenizer: "NeoQuasar/Kronos-Tokenizer-base"
+  mode: "zero_shot"
+  device: "cuda"
+  dtype: "float16"
+
+data:
+  universe: "csi800"
+  start_date: "2024-01-01"
+  end_date: null
+  lookback: 90
+  fields:
+    open: "$open"
+    high: "$high"
+    low: "$low"
+    close: "$close"
+    volume: "$volume"
+    amount: "$amount"
+    factor: "$factor"
+
+prediction:
+  horizons: [5]
+  pred_len: 5
+  batch_size: 128
+
+signals:
+  output_dir: "outputs"
+  score_cols:
+    # ── Kronos raw ──
+    - "kronos_ret_5d_zscore"
+    # ── Kronos smoothed ──
+    - "kronos_ret_5d_zscore_sma30"
+    - "kronos_ret_5d_zscore_sma40"
+    - "kronos_ret_5d_zscore_sma50"
+    # ── Momentum baseline ──
+    - "momentum_20d_zscore"
+    # ── Momentum + Kronos risk filter (exclude bottom decile) ──
+    - "momentum_20d_zscore_rf10"
+    # ── Blended signals (Kronos + Momentum) ──
+    - "blend_70mom20d_30kronos"
+    - "blend_50mom20d_50kronos"
+    - "blend_70mom20d_30kronossma30"
+    - "blend_50mom20d_50kronossma30"
+  smoothing:
+    enabled: true
+    alphas: [0.3, 0.4, 0.5]
+  momentum:
+    enabled: true
+    windows: [5, 20]
+  risk_filter:
+    enabled: true
+    filter_pcts: [0.1]
+    base_col: "momentum_20d_zscore"
+    risk_col: "kronos_ret_5d"
+  blend:
+    enabled: true
+    blends:
+      - ["momentum_20d_zscore", "kronos_ret_5d_zscore", 0.7]
+      - ["momentum_20d_zscore", "kronos_ret_5d_zscore", 0.5]
+      - ["momentum_20d_zscore", "kronos_ret_5d_zscore_sma30", 0.7]
+      - ["momentum_20d_zscore", "kronos_ret_5d_zscore_sma30", 0.5]
+
+backtest:
+  portfolio:
+    top_n: 20
+    buffer_hold: 60
+    buffer_buy: 40
+    single_stock_cap: 0.07
+    rebalance_freq: "weekly"
+  cost:
+    commission: 0.0003
+    stamp_duty: 0.001
+    slippage: 0.001
+    min_commission: 5.0
+
+pipeline:
+  smoke_test: true
+  smoke_end_date: "2024-09-30"
+  allow_synthetic: true
+  skip_on_model_failure: true
