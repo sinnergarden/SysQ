@@ -69,6 +69,14 @@ class FakeStrategy:
         self._record("resolve_data_date")
         return trade_date
 
+    def resolve_preopen_data_date(self, trade_date: str) -> str:
+        self._record("resolve_preopen_data_date")
+        return trade_date
+
+    def resolve_postclose_data_date(self, trade_date: str) -> str:
+        self._record("resolve_postclose_data_date")
+        return trade_date
+
     def get_stock_name(self, ts_code: str) -> str:
         return ts_code
 
@@ -354,7 +362,7 @@ class TestDailyRunnerOrchestration(unittest.TestCase):
         self.runner.run_preopen(ctx, strategy)
 
         expected_order = [
-            "resolve_data_date",
+            "resolve_preopen_data_date",
             "load_model",
             "fetch_data",
             "generate_predictions",
