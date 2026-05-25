@@ -26,15 +26,11 @@ from typing import Any
 import pandas as pd
 
 from qsys.model.training import TrainingResult
+from qsys.ops.notify_format import (
+    format_postclose_message,
+    format_preopen_message,
+)
 from qsys.strategy.runtime_base import BaseStrategyAdapter
-
-
-def _now_str() -> str:
-    return datetime.now().strftime("%H:%M:%S")
-
-
-def _fmt(amount: float) -> str:
-    return f"¥{amount / 1000:.2f}k"
 
 
 class AlphaV2StrategyAdapter(BaseStrategyAdapter):
@@ -440,6 +436,8 @@ class AlphaV2StrategyAdapter(BaseStrategyAdapter):
             mtm = try_mark_to_market(
                 context.trade_date,
                 output_dir=context.run_root,
+                account_path=self._shadow_state_dir / "account.json",
+                positions_path=self._shadow_state_dir / "positions.csv",
                 db_path=self._ledger_db_path,
                 project_root=context.project_root,
                 shadow_account_id=self.account_id,
@@ -474,24 +472,17 @@ class AlphaV2StrategyAdapter(BaseStrategyAdapter):
         self, context: Any, rebalance_skipped: bool, predictions: Any,
     ) -> str:
         predictions = pd.DataFrame(predictions)
-        top = predictions.sort_values("score", ascending=False).head(5)
-        lines = [
-            f"✅ {self.display_name} Pre-open {context.trade_date}",
-            f"Time: {_now_str()}",
-            "",
-            "📈 Top Picks (Momentum)",
-        ]
-        for i, (_, row) in enumerate(top.iterrows(), 1):
-            name = self.get_stock_name(row["instrument"])
-            lines.append(f"  {i}. {row['instrument']} {name}  score={row['score']:.4f}")
-        lines += [
-            "",
-            f"Strategy: {self.display_name} | Universe: {self.universe}",
-            f"Signal: {self.signal_version} | Top {self._top_n}",
-        ]
-        if rebalance_skipped:
-            lines.append("⏭  Weekly rebalance already done — skip")
-        return "\n".join(lines)
+        return format_preopen_message(
+            display_name=self.display_name,
+            trade_date=context.trade_date,
+            predictions_df=predictions,
+            plan_dir=Path(context.run_root) / "plan",
+            rebalance_skipped=rebalance_skipped,
+            universe=self.universe,
+            prediction_count=len(predictions),
+            rebalance_freq=self._rebalance_freq,
+            get_stock_name=self.get_stock_name,
+        )
 
     def build_postclose_message(
         self,
@@ -503,58 +494,35 @@ class AlphaV2StrategyAdapter(BaseStrategyAdapter):
         execution_skipped: bool = False,
         idempotent_skip: bool = False,
     ) -> str:
-        lines = [
-            f"📊 {self.display_name} Post-close {context.trade_date}",
-            f"Time: {_now_str()}",
-            "",
-        ]
-        if context.debug_run:
-            lines.append("🔧 Debug mode — shadow account unchanged")
-            lines.append("")
-        if execution_committed and not execution_skipped:
-            lines.append("✅ Execution: completed\n")
-        elif execution_committed and execution_skipped:
-            lines.append("✅ Execution: no plan to execute\n")
-        elif context.debug_run:
-            lines.append("🔧 Execution: debug mode, not committed\n")
-        if artifacts:
-            lines.append(f"🏦 Execution Summary (at OPEN)")
-            mv = artifacts.total_value_after - artifacts.cash_after
-            lines.append(
-                f"  Turnover: {_fmt(artifacts.turnover)}  "
-                f"Filled: {artifacts.filled_count}/{artifacts.order_count}  "
-                f"Total: {_fmt(artifacts.total_value_after)}  "
-                f"Cash: {_fmt(artifacts.cash_after)}  MV: {_fmt(mv)}"
-            )
-            lines.append("")
-        if mtm:
-            cum = mtm["cumulative_pnl"]
-            daily = mtm["daily_pnl"]
-            lines.append(f"💰 Mark-to-Market (at CLOSE)")
-            lines.append(f"  Cumulative PnL: {_fmt(cum)} ({mtm['cumulative_pnl_pct']:+.2f}%)")
-            lines.append(f"  Daily PnL: {_fmt(daily)}")
-            lines.append(f"  Total: {_fmt(mtm['total_value'])}  "
-                         f"Cash: {_fmt(mtm['cash'])}  "
-                         f"Holdings: {mtm.get('priced_count', 0)} stocks")
-        else:
-            lines.append("⚠ MTM unavailable")
-        return "\n".join(lines)
+        self.get_stock_name("")  # ensure cache loaded
+        return format_postclose_message(
+            display_name=self.display_name,
+            trade_date=context.trade_date,
+            debug_run=context.debug_run,
+            execution_committed=execution_committed,
+            execution_skipped=execution_skipped,
+            idempotent_skip=idempotent_skip,
+            stale_check=stale_check,
+            artifacts=artifacts,
+            mtm=mtm,
+            get_stock_name=self.get_stock_name,
+        )
 
     def send_notification(self, text: str) -> None:
         from qsys.ops.telegram import send_telegram_message
 
         print(f"\n{'─' * 50}")
-        print("📱 Telegram notification:")
+        print("📱 Telegram 通知:")
         print(text)
         print(f"{'─' * 50}\n")
         result = send_telegram_message(text)
         status = result.get("status", "unknown")
         if status == "skipped":
-            print(f"  ⚠ Telegram not configured: {result.get('message', '')}")
+            print(f"  ⚠ Telegram 未配置: {result.get('message', '')}")
         elif status == "failed":
-            print(f"  ❌ Telegram send failed: {result.get('error', '')}")
+            print(f"  ❌ Telegram 发送失败: {result.get('error', '')}")
         else:
-            print(f"  ✅ Telegram sent")
+            print(f"  ✅ Telegram 已发送")
 
     # ── Training ──────────────────────────────────────────────────────────
 

@@ -242,21 +242,78 @@ def try_mark_to_market(
                     )
                 if ledger_rows:
                     ledger_df = pd.DataFrame(ledger_rows)
-                else:
-                    ledger_account = None
+                # else: keep ledger_account (with cash) even without positions
+                #       — avoids cross-strategy fallback to wrong shadow/ dir
             service.close()
         except Exception:
             pass
 
-    if positions_path is None and ledger_df is None:
-        positions_path = project_root / "shadow" / "positions.csv"
-    if account_path is None and ledger_account is None:
-        account_path = project_root / "shadow" / "account.json"
+    # ── Helper: find previous MTM snapshot (strategy-aware) ──────────────
+
+    def _resolve_prev_snapshot(
+        prev_date: str | None,
+    ) -> dict | None:
+        """Load previous day's MTM snapshot from strategy-specific path first,
+        then fall back to the hardcoded production path."""
+        if prev_date is None:
+            return None
+        # Derive prev path from current output_dir by replacing date
+        prev_path = Path(
+            str(output_dir).replace(trade_date, prev_date, 1)
+        ) / "mtm" / "mtm_snapshot.json"
+        if prev_path.exists():
+            return load_mtm_snapshot(prev_path)
+        return load_prod_mtm_snapshot(prev_date, project_root=project_root)
 
     if ledger_account is not None and ledger_df is not None:
         positions = ledger_df
         account = ledger_account
+        use_ledger = True
+    elif ledger_account is not None:
+        # Account exists in ledger but no positions — return cash-only snapshot
+        # instead of falling back to another strategy's shadow files.
+        cash = float(ledger_account.get("cash", 0))
+        if cash == 0.0 and db_path and Path(db_path).exists():
+            try:
+                from qsys.ledger.service import LedgerService
+                cash = LedgerService(db_path).get_cash(shadow_account_id)
+            except Exception:
+                pass
+        initial_capital = float(
+            ledger_account.get("initial_capital") or
+            ledger_account.get("initial_cash", 1_000_000)
+        )
+        total_value = cash
+        cumulative_pnl = total_value - initial_capital
+        cumulative_pnl_pct = round(cumulative_pnl / initial_capital * 100, 2) if initial_capital > 0 else 0.0
+        # Ensure qlib is initialized for prev_trading_day to work
+        try:
+            QlibAdapter().init_qlib()
+        except Exception:
+            pass
+        prev_date = prev_trading_day(trade_date)
+        if prev_date is not None:
+            prev_snap = _resolve_prev_snapshot(prev_date)
+            if prev_snap is not None:
+                daily_pnl = total_value - float(prev_snap["total_value"])
+            else:
+                daily_pnl = cumulative_pnl
+        else:
+            daily_pnl = cumulative_pnl
+        snapshot = {
+            "cash": cash, "market_value": 0.0,
+            "total_value": total_value, "initial_capital": initial_capital,
+            "cumulative_pnl": cumulative_pnl, "cumulative_pnl_pct": cumulative_pnl_pct,
+            "daily_pnl": daily_pnl,
+            "priced_count": 0, "total_positions": 0, "details": [],
+        }
+        save_mtm_snapshot(output_dir, snapshot)
+        return snapshot
     else:
+        if positions_path is None and ledger_df is None:
+            positions_path = project_root / "shadow" / "positions.csv"
+        if account_path is None and ledger_account is None:
+            account_path = project_root / "shadow" / "account.json"
         if not positions_path or not positions_path.exists():
             return None
         if not account_path or not account_path.exists():
@@ -349,7 +406,10 @@ def try_mark_to_market(
                 cash = LedgerService(db_path).get_cash(shadow_account_id)
             except Exception:
                 pass
-        initial_capital = float(account.get("initial_capital", 1_000_000))
+        initial_capital = float(
+            account.get("initial_capital") or
+            account.get("initial_cash", 1_000_000)
+        )
         total_value = cash + total_market_value
         cumulative_pnl = total_value - initial_capital
         cumulative_pnl_pct = (
@@ -357,9 +417,7 @@ def try_mark_to_market(
         )
         prev_date = prev_trading_day(trade_date)
         if prev_date is not None:
-            prev_snap = load_prod_mtm_snapshot(
-                prev_date, project_root=project_root
-            )
+            prev_snap = _resolve_prev_snapshot(prev_date)
             if prev_snap is not None:
                 daily_pnl = total_value - float(prev_snap["total_value"])
             else:

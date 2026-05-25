@@ -15,18 +15,12 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from qsys.ops.notify_format import (
+    format_postclose_message,
+    format_preopen_message,
+)
 from qsys.strategy.alpha_v1.spec import ALPHA_V1_CANDIDATE
 from qsys.strategy.runtime_base import BaseStrategyAdapter
-
-
-# ── Helpers ──────────────────────────────────────────────────────────────
-
-def _now_str() -> str:
-    return datetime.now().strftime("%H:%M:%S")
-
-
-def _fmt(amount: float) -> str:
-    return f"¥{amount/1000:.2f}k"
 
 
 def _cs_zscore(s: pd.Series) -> pd.Series:
@@ -587,6 +581,8 @@ class AlphaV1StrategyAdapter(BaseStrategyAdapter):
             mtm = try_mark_to_market(
                 context.trade_date,
                 output_dir=context.run_root,
+                account_path=self._project_root / "shadow" / "account.json",
+                positions_path=self._project_root / "shadow" / "positions.csv",
                 db_path=self._ledger_db_path if not context.debug_run else None,
                 project_root=context.project_root,
                 shadow_account_id=self.account_id,
@@ -654,64 +650,18 @@ class AlphaV1StrategyAdapter(BaseStrategyAdapter):
         self, context: Any, rebalance_skipped: bool, predictions: Any
     ) -> str:
         predictions = pd.DataFrame(predictions)
-        top = predictions.sort_values("score", ascending=False).head(5)
-        top_picks = [(row["instrument"], row["score"]) for _, row in top.iterrows()]
         run_root = Path(context.run_root)
-        plan_dir = run_root / "plan"
-
-        lines = [
-            f"✅ Alpha V1 Pre-open {context.trade_date}",
-            f"Time: {_now_str()}",
-            "", "📈 推荐股票",
-        ]
-        for i, (inst, score) in enumerate(top_picks[:5], 1):
-            name = self.get_stock_name(inst)
-            lines.append(f"  {i}. {inst} {name}  score={score:.4f}")
-
-        # Show existing plan details if available
-        intents_path = plan_dir / "order_intents.csv"
-        has_existing_plan = intents_path.exists()
-        if has_existing_plan:
-            try:
-                orders_df = pd.read_csv(intents_path)
-                # Merge scores from predictions
-                scores_df = predictions[["instrument", "score"]]
-                orders_df = orders_df.merge(scores_df, on="instrument", how="left")
-                orders_df["score"] = orders_df["score"].fillna(0.0)
-                buys = orders_df[orders_df["side"] == "buy"].sort_values("score", ascending=False)
-                sells = orders_df[orders_df["side"] == "sell"].sort_values("score", ascending=False)
-                lines += ["", "📋 计划交易（以 OPEN 价执行）", ""]
-                if not buys.empty:
-                    lines.append(f"  计划买入 ({len(buys)}):")
-                    lines.append(f"    {'代码':<12} {'名称':<8} {'买入金额':<12} 手数  score")
-                    for _, row in buys.iterrows():
-                        name = self.get_stock_name(row["instrument"])
-                        diff_val = float(row.get("diff_value", 0))
-                        qty = int(row.get("requested_qty", 0))
-                        lines.append(f"    {row['instrument']:<12} {name:<8} +{_fmt(diff_val):<10} {qty//100}手  {row['score']:.4f}")
-                if not sells.empty:
-                    lines.append(f"  计划卖出 ({len(sells)}):")
-                    lines.append(f"    {'代码':<12} {'名称':<8} {'卖出金额':<12} 手数  score")
-                    for _, row in sells.iterrows():
-                        name = self.get_stock_name(row["instrument"])
-                        diff_val = float(row.get("diff_value", 0))
-                        qty = int(row.get("requested_qty", 0))
-                        lines.append(f"    {row['instrument']:<12} {name:<8} -{_fmt(abs(diff_val)):<10} {qty//100}手  {row['score']:.4f}")
-                    lines.append("")
-            except Exception as e:
-                lines.append(f"  ⚠ 无法读取交易计划详情: {e}")
-
-        if rebalance_skipped and not has_existing_plan:
-            lines += ["", "⏭ 本周已调仓，跳过重复交易"]
-
-        lines += [
-            "",
-            f"策略: {ALPHA_V1_CANDIDATE.display_name} | 频率: {ALPHA_V1_CANDIDATE.portfolio.rebalance_freq}",
-            f"Universe: {self.UNIVERSE} | 预测: {len(predictions)}只",
-        ]
-        if has_existing_plan:
-            lines += ["", "📝 注: 计划不执行交易，待 21:30 数据同步后 postclose 以开盘价执行"]
-        return "\n".join(lines)
+        return format_preopen_message(
+            display_name=self.display_name,
+            trade_date=context.trade_date,
+            predictions_df=predictions,
+            plan_dir=run_root / "plan",
+            rebalance_skipped=rebalance_skipped,
+            universe=self.UNIVERSE,
+            prediction_count=len(predictions),
+            rebalance_freq=ALPHA_V1_CANDIDATE.portfolio.rebalance_freq,
+            get_stock_name=self.get_stock_name,
+        )
 
     def build_postclose_message(
         self,
@@ -724,77 +674,18 @@ class AlphaV1StrategyAdapter(BaseStrategyAdapter):
         idempotent_skip: bool = False,
     ) -> str:
         self.get_stock_name("")  # ensure cache loaded
-        lines = [
-            f"📊 Alpha V1 Post-close {context.trade_date}",
-            f"Time: {_now_str()}", "",
-        ]
-        if context.debug_run:
-            lines.append("🔧 调试模式 — 不修改 shadow 账户")
-            lines.append("")
-        if execution_committed and not execution_skipped:
-            if idempotent_skip:
-                lines += ["✅ 执行状态: 已完成（执行记录已存在）", ""]
-            else:
-                lines += ["✅ 执行状态: 已完成", ""]
-        elif execution_committed and execution_skipped:
-            lines += ["✅ 执行状态: 无计划需执行", ""]
-        elif context.debug_run:
-            lines += ["🔧 执行状态: 调试模式，未提交 shadow 账户", ""]
-        if stale_check:
-            sc = stale_check
-            status_icon = {"passed": "✅", "blocked": "⛔", "skipped": "⏭", "skipped_low_overlap": "⏭"}
-            lines.append(
-                f"📡 数据陈旧检查: {status_icon.get(sc.get('status', ''), '❓')} "
-                f"一致={sc.get('identical_count', 0)}/{sc.get('checked_count', 0)} "
-                f"({sc.get('identical_ratio', 0)*100:.0f}%)"
-            )
-            if sc.get("examples"):
-                for ex in sc["examples"]:
-                    lines.append(f"    {ex}")
-            lines.append("")
-        if artifacts:
-            lines.append(f"🏦 执行摘要（按 {context.trade_date} 开盘价）")
-            lines.append(
-                f"  成交额: {_fmt(artifacts.turnover)}  买入委托: {artifacts.order_count} "
-                f"成交: {artifacts.filled_count}  未成交: {artifacts.rejected_count}"
-            )
-            mv = artifacts.total_value_after - artifacts.cash_after
-            lines.append(
-                f"  Total: {_fmt(artifacts.total_value_after)}  "
-                f"Cash: {_fmt(artifacts.cash_after)}  MV: {_fmt(mv)}"
-            )
-            lines.append("")
-        if mtm:
-            cum_pnl_str = f"+{_fmt(mtm['cumulative_pnl'])}" if mtm['cumulative_pnl'] >= 0 else _fmt(mtm['cumulative_pnl'])
-            daily_str = f"+{_fmt(mtm['daily_pnl'])}" if mtm['daily_pnl'] >= 0 else _fmt(mtm['daily_pnl'])
-            lines.append(f"💰 Mark-to-Market（按 {context.trade_date} 收盘价）")
-            lines.append(f"  累计 PnL: {cum_pnl_str} ({mtm['cumulative_pnl_pct']:+.2f}%)")
-            lines.append(f"  当日 PnL: {daily_str}")
-            lines.append(f"  Total: {_fmt(mtm['total_value'])}  Cash: {_fmt(mtm['cash'])}")
-            pos_before = mtm.get('positions_before_count', 0)
-            pos_after = mtm.get('priced_count', 0)
-            if pos_before > 0:
-                lines.append(f"  Position: {_fmt(mtm['market_value'])}  Holdings: {pos_after}只（原有{pos_before} + 新增{pos_after - pos_before}）")
-            else:
-                lines.append(f"  Position: {_fmt(mtm['market_value'])}  Holdings: {pos_after}只")
-            top3 = mtm['details'][:3]
-            bot3 = mtm['details'][-3:] if len(mtm['details']) >= 3 else mtm['details']
-            if top3:
-                lines.append("")
-                lines.append("📈 当日收益 Top 3")
-                for inst, name, qty, cost, close, pnl_val in top3:
-                    s = f"+{_fmt(pnl_val)}" if pnl_val >= 0 else _fmt(pnl_val)
-                    lines.append(f"  {inst} {name}  {s}  {qty//100}手  {cost:.2f}→{close:.2f}")
-            if bot3 and bot3 != top3:
-                lines.append("")
-                lines.append("📉 当日收益 Bottom 3")
-                for inst, name, qty, cost, close, pnl_val in bot3:
-                    s = f"+{_fmt(pnl_val)}" if pnl_val >= 0 else _fmt(pnl_val)
-                    lines.append(f"  {inst} {name}  {s}  {qty//100}手  {cost:.2f}→{close:.2f}")
-        else:
-            lines.append("⚠ Mark-to-Market 不可用")
-            lines.append("收盘价数据未就绪（数据同步可能未完成）。")
-        return "\n".join(lines)
+        return format_postclose_message(
+            display_name=self.display_name,
+            trade_date=context.trade_date,
+            debug_run=context.debug_run,
+            execution_committed=execution_committed,
+            execution_skipped=execution_skipped,
+            idempotent_skip=idempotent_skip,
+            stale_check=stale_check,
+            artifacts=artifacts,
+            mtm=mtm,
+            get_stock_name=self.get_stock_name,
+        )
 
     def send_notification(self, text: str) -> None:
         from qsys.ops.telegram import send_telegram_message

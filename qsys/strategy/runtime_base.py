@@ -22,12 +22,17 @@ class BaseStrategyAdapter:
     """
 
     def resolve_data_date(self, trade_date: str) -> str:
-        """Default: asof semantics — trading date resolves to itself.
+        """Default: previous-close semantics — use data from the last trading day.
 
         Delegates to :func:`qsys.data.calendar.resolve_data_date` with
-        ``mode='asof'``.  Override only when the strategy has documented
-        data-availability constraints that differ from the framework default.
+        ``mode='previous'``.  This ensures preopen predictions use only data
+        that was observable before market open on *trade_date*, making replay
+        runs consistent with production runs regardless of when the daily data
+        sync ran.
+
+        Override only when a strategy has documented data-availability
+        constraints that differ from this default.
         """
         from qsys.data.calendar import resolve_data_date
 
-        return resolve_data_date(trade_date, mode="asof")
+        return resolve_data_date(trade_date, mode="previous")

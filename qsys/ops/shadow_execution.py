@@ -249,8 +249,14 @@ def _load_account_from_ledger(
     # Deferred import to avoid circular dependency at module level
     from qsys.ledger.service import LedgerService as _LS
 
-    cash = service.get_cash(account_id)
-    positions = service.get_positions(account_id)
+    # Check if the account exists in ledger — if not, use initial capital as cash
+    acct_row = service.get_account(account_id)
+    if acct_row is None:
+        cash = initial_capital
+        positions = []
+    else:
+        cash = service.get_cash(account_id)
+        positions = service.get_positions(account_id)
 
     account = Account(init_cash=initial_capital)
     account.cash = cash
