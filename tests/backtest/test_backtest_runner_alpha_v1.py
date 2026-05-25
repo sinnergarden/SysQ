@@ -94,7 +94,7 @@ def strategy() -> MagicMock:
     s = MagicMock()
     s.generate_predictions_for_date = MagicMock()
     s.build_plan_for_backtest = MagicMock()
-    s.resolve_data_date = MagicMock(return_value="2026-01-01")
+    s.resolve_preopen_data_date = MagicMock(return_value="2026-01-01")
     return s
 
 
@@ -206,7 +206,7 @@ class TestRunRangeExecution:
         """Strategy returning empty predictions yields ``"no_predictions"``."""
         mock_resolve.return_value = ["2026-01-02", "2026-01-03"]
         strategy.generate_predictions_for_date.return_value = pd.DataFrame()
-        strategy.resolve_data_date.return_value = "2026-01-01"
+        strategy.resolve_preopen_data_date.return_value = "2026-01-01"
 
         result = runner.run_range(
             strategy, spec, "2026-01-01", "2026-01-05"
@@ -241,7 +241,7 @@ class TestRunRangeExecution:
 
         # ── Strategy hooks ───────────────────────────────────────────
         strategy.generate_predictions_for_date.return_value = predictions_df
-        strategy.resolve_data_date.return_value = "2026-01-01"
+        strategy.resolve_preopen_data_date.return_value = "2026-01-01"
         strategy.build_plan_for_backtest.return_value = plan_dir
 
         # ── Market snapshot ──────────────────────────────────────────
@@ -300,6 +300,7 @@ class TestRunRangeExecution:
         assert day["total_value_before"] == 1_000_000.0
 
         # Check the strategy hooks were called correctly
+        strategy.resolve_preopen_data_date.assert_called_once_with("2026-01-02")
         strategy.generate_predictions_for_date.assert_called_once_with(
             "2026-01-02", data_date="2026-01-01"
         )
@@ -326,7 +327,7 @@ class TestRunRangeExecution:
         """When ``output_dir`` is provided, summary files are written."""
         mock_resolve.return_value = ["2026-01-02"]
         strategy.generate_predictions_for_date.return_value = predictions_df
-        strategy.resolve_data_date.return_value = "2026-01-01"
+        strategy.resolve_preopen_data_date.return_value = "2026-01-01"
         strategy.build_plan_for_backtest.return_value = plan_dir
 
         prices = {"000001": 10.0, "000002": 20.0, "000003": 30.0}
@@ -400,7 +401,7 @@ class TestRunRangeExecution:
 
         mock_resolve.return_value = ["2026-01-02"]
         strategy.generate_predictions_for_date.return_value = predictions_df
-        strategy.resolve_data_date.return_value = "2026-01-01"
+        strategy.resolve_preopen_data_date.return_value = "2026-01-01"
         strategy.build_plan_for_backtest.return_value = plan_dir
 
         prices = {"000001": 10.0, "000002": 20.0, "000003": 30.0}
@@ -477,7 +478,7 @@ class TestRunRangeExecution:
         """Pre-configured ``Account`` is passed through to the daily loop."""
         mock_resolve.return_value = ["2026-01-02"]
         strategy.generate_predictions_for_date.return_value = predictions_df
-        strategy.resolve_data_date.return_value = "2026-01-01"
+        strategy.resolve_preopen_data_date.return_value = "2026-01-01"
         strategy.build_plan_for_backtest.return_value = plan_dir
 
         prices = {"000001": 10.0, "000002": 20.0, "000003": 30.0}
@@ -543,7 +544,7 @@ class TestRunRangeExecution:
         open_runner = BacktestRunner(execution_price_mode="open")
         mock_resolve.return_value = ["2026-01-02"]
         strategy.generate_predictions_for_date.return_value = predictions_df
-        strategy.resolve_data_date.return_value = "2026-01-01"
+        strategy.resolve_preopen_data_date.return_value = "2026-01-01"
         strategy.build_plan_for_backtest.return_value = plan_dir
 
         prices = {"000001": 10.0, "000002": 20.0, "000003": 30.0}
@@ -599,7 +600,7 @@ class TestRunRangeExecution:
         close_runner = BacktestRunner(execution_price_mode="close")
         mock_resolve.return_value = ["2026-01-02"]
         strategy.generate_predictions_for_date.return_value = predictions_df
-        strategy.resolve_data_date.return_value = "2026-01-01"
+        strategy.resolve_preopen_data_date.return_value = "2026-01-01"
         strategy.build_plan_for_backtest.return_value = plan_dir
 
         prices = {"000001": 10.0, "000002": 20.0, "000003": 30.0}
@@ -739,7 +740,7 @@ class TestRunRangeEdgeCases:
     ) -> None:
         """Strategy returning ``None`` predictions is treated as no_predictions."""
         mock_resolve.return_value = ["2026-01-02"]
-        strategy.resolve_data_date.return_value = "2026-01-01"
+        strategy.resolve_preopen_data_date.return_value = "2026-01-01"
         strategy.generate_predictions_for_date.return_value = None
 
         result = runner.run_range(strategy, spec, "2026-01-01", "2026-01-05")
@@ -776,7 +777,7 @@ class TestRunRangeEdgeCases:
         """When ``fetch_market_snapshot`` raises, the day gets a descriptive status."""
         mock_resolve.return_value = ["2026-01-02"]
         strategy.generate_predictions_for_date.return_value = predictions_df
-        strategy.resolve_data_date.return_value = "2026-01-01"
+        strategy.resolve_preopen_data_date.return_value = "2026-01-01"
         strategy.build_plan_for_backtest.return_value = plan_dir
 
         with patch(

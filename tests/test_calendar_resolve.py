@@ -77,6 +77,14 @@ class TestBaseAdapterResolvePreopenDataDate(unittest.TestCase):
         except Exception:
             self.skipTest("qlib calendar unavailable")
 
+    def test_preopen_2026_05_26_returns_2026_05_25(self):
+        """Preopen for today (Tuesday) returns Monday."""
+        try:
+            result = self.adapter.resolve_preopen_data_date("2026-05-26")
+            self.assertEqual(result, "2026-05-25")
+        except Exception:
+            self.skipTest("qlib calendar unavailable")
+
 
 class TestBaseAdapterResolvePostcloseDataDate(unittest.TestCase):
     """resolve_postclose_data_date — asof semantics (same as resolve_data_date)."""
@@ -89,6 +97,14 @@ class TestBaseAdapterResolvePostcloseDataDate(unittest.TestCase):
         try:
             result = self.adapter.resolve_postclose_data_date("2026-05-18")
             self.assertEqual(result, "2026-05-18")
+        except Exception:
+            self.skipTest("qlib calendar unavailable")
+
+    def test_postclose_2026_05_26_returns_self(self):
+        """Postclose for today (Tuesday) returns itself."""
+        try:
+            result = self.adapter.resolve_postclose_data_date("2026-05-26")
+            self.assertEqual(result, "2026-05-26")
         except Exception:
             self.skipTest("qlib calendar unavailable")
 
@@ -139,6 +155,17 @@ class TestStrategiesUsePreopenDataDate(unittest.TestCase):
             self.assertEqual(dd, "2026-05-25")
         except Exception:
             self.skipTest("qlib calendar unavailable")
+
+    def test_v1_generate_predictions_defaults_to_preopen_data_date(self):
+        """generate_predictions_for_date with no data_date uses resolve_preopen_data_date."""
+        from unittest.mock import patch
+        from qsys.strategy.alpha_v1.adapter import AlphaV1StrategyAdapter
+
+        adapter = AlphaV1StrategyAdapter()
+        with patch.object(adapter, "resolve_preopen_data_date", return_value="2026-05-25") as mock_resolve:
+            with patch.object(adapter, "fetch_data", return_value=None):
+                adapter.generate_predictions_for_date("2026-05-26")
+        mock_resolve.assert_called_once_with("2026-05-26")
 
 
 if __name__ == "__main__":

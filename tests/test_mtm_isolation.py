@@ -3,6 +3,10 @@
 When the ledger has an account with cash but zero positions, MTM should return
 a cash-only snapshot rather than falling back to another strategy's shadow
 files.
+
+This protects every strategy (including alpha_v2) from incorrectly reading
+another strategy's (e.g. alpha_v1's) shadow/account.json or shadow/positions.csv
+when its own positions are empty.
 """
 from __future__ import annotations
 

@@ -71,6 +71,9 @@ class FakeStrategyWithHook:
     def resolve_data_date(self, trade_date: str) -> str:
         return trade_date
 
+    def resolve_preopen_data_date(self, trade_date: str) -> str:
+        return trade_date
+
     def generate_predictions_for_date(self, trade_date: str, *,
                                        data_date: str | None = None) -> pd.DataFrame:
         self.calls.append(trade_date)
