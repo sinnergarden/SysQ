@@ -1,6 +1,5 @@
 [Unit]
-Description=Qsys Pre-Open — batch dispatch all candidate strategies
-Documentation=docs/runbooks/daily-ops.md
+Description=Qsys Pre-Open Pipeline (signal → plan → shadow sim)
 After=network-online.target
 Wants=network-online.target
 
@@ -11,11 +10,7 @@ Environment=PYTHONPATH=/home/liuming/.openclaw/workspace/SysQ
 Environment=HTTPS_PROXY=http://172.31.144.1:12334
 Environment=HTTP_PROXY=http://172.31.144.1:12334
 EnvironmentFile=/home/liuming/.openclaw/.env
-ExecStart=/home/liuming/.openclaw/.mamba/envs/dl/bin/python scripts/run_daily_batch.py \
-    --stage candidate \
-    --mode preopen \
-    --trade-date auto \
-    --output-root runs
+ExecStart=/home/liuming/.openclaw/workspace/SysQ/scripts/run_preopen.sh
 StandardOutput=append:/home/liuming/.openclaw/logs/preopen.log
 StandardError=append:/home/liuming/.openclaw/logs/preopen.log
 
