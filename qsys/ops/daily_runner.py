@@ -83,7 +83,7 @@ class DailyRunner:
 
         # [1/4] Resolve data date + load model
         print("\n[1/4] Resolving date & loading model...")
-        data_date = strategy.resolve_data_date(ctx.trade_date)
+        data_date = strategy.resolve_preopen_data_date(ctx.trade_date)
         strategy.load_model()  # prints model info internally
         print(f"  Data date: {data_date}")
 

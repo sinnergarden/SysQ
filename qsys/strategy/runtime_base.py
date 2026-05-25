@@ -22,17 +22,35 @@ class BaseStrategyAdapter:
     """
 
     def resolve_data_date(self, trade_date: str) -> str:
-        """Default: previous-close semantics — use data from the last trading day.
+        """Calendar asof semantics — the most recent trading date up to
+        and including *trade_date*.
 
         Delegates to :func:`qsys.data.calendar.resolve_data_date` with
-        ``mode='previous'``.  This ensures preopen predictions use only data
-        that was observable before market open on *trade_date*, making replay
-        runs consistent with production runs regardless of when the daily data
-        sync ran.
+        ``mode='asof'``.  Use ``resolve_preopen_data_date`` instead when
+        constructing features for preopen prediction, to avoid leaking
+        data that was not observable before market open on *trade_date*.
+        """
+        from qsys.data.calendar import resolve_data_date
 
-        Override only when a strategy has documented data-availability
-        constraints that differ from this default.
+        return resolve_data_date(trade_date, mode="asof")
+
+    def resolve_preopen_data_date(self, trade_date: str) -> str:
+        """Previous-close semantics — the last trading day strictly before
+        *trade_date*.
+
+        Preopen predictions must use data from the most recently completed
+        trading day, not the as-of date, to avoid leaking future data when
+        replaying historical preopen runs after the daily data sync has run.
         """
         from qsys.data.calendar import resolve_data_date
 
         return resolve_data_date(trade_date, mode="previous")
+
+    def resolve_postclose_data_date(self, trade_date: str) -> str:
+        """Postclose data date — identical to calendar-asof semantics.
+
+        Returns the most recent trading day up to and including *trade_date*.
+        Equivalent to ``resolve_data_date`` (asof), provided as a named
+        counterpart to ``resolve_preopen_data_date`` for symmetry.
+        """
+        return self.resolve_data_date(trade_date)

@@ -323,8 +323,8 @@ class BacktestRunner:
           Legacy ``run_shadow_rebalance``-equivalent: execute and MTM
           both use T close prices.
         """
-        # Resolve data date (last trading day with observable data)
-        data_date = strategy.resolve_data_date(trade_date)
+        # Resolve data date (previous trading day — preopen semantics)
+        data_date = strategy.resolve_preopen_data_date(trade_date)
 
         # ── Rebalance frequency check ───────────────────────────────
         # For weekly rebalance, only execute on the first trading day of

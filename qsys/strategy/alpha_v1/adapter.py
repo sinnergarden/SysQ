@@ -433,7 +433,7 @@ class AlphaV1StrategyAdapter(BaseStrategyAdapter):
         ``load_model``, ``fetch_data``, ``generate_predictions``.
         ``load_model`` is idempotent (cached in ``_loaded_models``).
         """
-        dd = data_date or self.resolve_data_date(trade_date)
+        dd = data_date or self.resolve_preopen_data_date(trade_date)
         if not self._loaded_models:
             self.load_model()
         data = self.fetch_data(dd)

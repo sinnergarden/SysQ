@@ -88,6 +88,21 @@ class StrategyCandidate(Protocol):
         to inherit the default implementation.
         """
 
+    def resolve_preopen_data_date(self, trade_date: str) -> str:
+        """Return the last trading day strictly before *trade_date*.
+
+        Preopen predictions must use data from the most recently completed
+        trading day, not the as-of date, to avoid leaking forward data when
+        replaying historical preopen runs after the daily data sync.
+        """
+
+    def resolve_postclose_data_date(self, trade_date: str) -> str:
+        """Return the as-of trading day for postclose processing.
+
+        Identical to ``resolve_data_date`` (asof).  Exists as a named
+        counterpart to ``resolve_preopen_data_date`` for symmetry.
+        """
+
     def get_stock_name(self, ts_code: str) -> str:
         """Return human-readable name for a stock code."""
 
