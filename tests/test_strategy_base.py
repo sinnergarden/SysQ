@@ -66,6 +66,12 @@ class _BaseValidCandidate:
     def resolve_data_date(self, trade_date: str) -> str:
         return trade_date
 
+    def resolve_preopen_data_date(self, trade_date: str) -> str:
+        return trade_date
+
+    def resolve_postclose_data_date(self, trade_date: str) -> str:
+        return trade_date
+
     def get_stock_name(self, ts_code: str) -> str:
         return ts_code
 

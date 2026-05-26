@@ -37,9 +37,8 @@ class AlphaV2StrategyAdapter(BaseStrategyAdapter):
     """Rule-based momentum strategy for framework validation."""
 
     def __init__(self, project_root: Path | None = None) -> None:
+        super().__init__()
         self._project_root = project_root or Path(__file__).resolve().parents[3]
-        self._stock_names: dict[str, str] = {}
-        self._stock_names_loaded = False
 
         # Config overrides (set by from_config)
         self._config_display_name: str | None = None
@@ -186,19 +185,6 @@ class AlphaV2StrategyAdapter(BaseStrategyAdapter):
 
     # ── Data ────────────────────────────────────────────────────────────
 
-    def get_stock_name(self, ts_code: str) -> str:
-        if not self._stock_names_loaded:
-            self._load_stock_names()
-        return self._stock_names.get(ts_code, ts_code)
-
-    def _load_stock_names(self) -> None:
-        path = self._project_root / "data" / "stock_names.csv"
-        if path.exists():
-            df = pd.read_csv(path)
-            for _, row in df.iterrows():
-                self._stock_names[str(row["ts_code"])] = str(row["name"])
-        self._stock_names_loaded = True
-
     def load_model(self) -> None:
         """Rule-based momentum — no ML model to load."""
         print(f"  Alpha V2 Smoke: rule-based momentum (lookback={self._lookback_days}d)")
@@ -286,11 +272,6 @@ class AlphaV2StrategyAdapter(BaseStrategyAdapter):
         print(f"  Predictions: {len(result)} instruments")
         return result
 
-    def print_predictions_summary(self, predictions: Any) -> None:
-        top = predictions.sort_values("score", ascending=False).head(5)
-        for i, (_, row) in enumerate(top.iterrows(), 1):
-            print(f"    #{i} {row['instrument']}  score={row['score']:.4f}")
-
     def should_rebalance(self, trade_date: str) -> bool:
         """Weekly rebalance check — independent implementation."""
         if self._rebalance_freq != "weekly":
@@ -323,13 +304,7 @@ class AlphaV2StrategyAdapter(BaseStrategyAdapter):
                 return False
         return True
 
-    def save_predictions(self, predictions: Any, run_root: Any, trade_date: str) -> None:
-        """Save predictions to the alpha_v2 shared predictions directory."""
-        shared_dir = self._predictions_dir
-        shared_dir.mkdir(parents=True, exist_ok=True)
-        path = shared_dir / f"predictions_{trade_date}.csv"
-        predictions.to_csv(path, index=False)
-        print(f"  → {len(predictions)} predictions saved: {path}")
+    # ── Execute + MTM ──────────────────────────────────────────────────
 
     def build_plan(self, predictions: Any, target_dir: Any) -> bool:
         """Build trading plan using config-driven portfolio parameters."""
@@ -351,40 +326,6 @@ class AlphaV2StrategyAdapter(BaseStrategyAdapter):
             portfolio_method="equal_weight_momentum",
         )
         return True
-
-    def load_plan_instruments(self, plan_dir: Any) -> list[str]:
-        intents_path = Path(plan_dir) / "order_intents.csv"
-        if not intents_path.exists():
-            return []
-        try:
-            df = pd.read_csv(intents_path)
-            return sorted(set(df["instrument"].astype(str)))
-        except Exception:
-            return []
-
-    def fetch_open_prices(self, trade_date: str, instruments: list[str]) -> dict[str, float]:
-        from qsys.data.adapter import QlibAdapter
-
-        adapter = QlibAdapter()
-        adapter.init_qlib()
-        market = adapter.get_features(
-            instruments, ["$open"],
-            start_time=trade_date, end_time=trade_date,
-        )
-        if market is None or market.empty:
-            return {}
-        if isinstance(market.index, pd.MultiIndex):
-            market = market.swaplevel().sort_index()
-        frame = market.reset_index()
-        frame = frame[frame["datetime"].astype(str).str.startswith(trade_date)]
-        if frame.empty:
-            return {}
-        frame = frame.sort_values(["instrument", "datetime"]).drop_duplicates(
-            subset=["instrument"], keep="last"
-        )
-        return frame.set_index("instrument")["$open"].astype(float).to_dict()
-
-    # ── Execute + MTM ──────────────────────────────────────────────────
 
     def execute_plan(self, context: Any) -> Any:
         """Execute plan via ``execute_shadow_plan`` with generic run_id."""
@@ -507,22 +448,6 @@ class AlphaV2StrategyAdapter(BaseStrategyAdapter):
             mtm=mtm,
             get_stock_name=self.get_stock_name,
         )
-
-    def send_notification(self, text: str) -> None:
-        from qsys.ops.telegram import send_telegram_message
-
-        print(f"\n{'─' * 50}")
-        print("📱 Telegram 通知:")
-        print(text)
-        print(f"{'─' * 50}\n")
-        result = send_telegram_message(text)
-        status = result.get("status", "unknown")
-        if status == "skipped":
-            print(f"  ⚠ Telegram 未配置: {result.get('message', '')}")
-        elif status == "failed":
-            print(f"  ❌ Telegram 发送失败: {result.get('error', '')}")
-        else:
-            print(f"  ✅ Telegram 已发送")
 
     # ── Training ──────────────────────────────────────────────────────────
 
