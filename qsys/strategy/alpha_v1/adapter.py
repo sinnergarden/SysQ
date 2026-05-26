@@ -46,9 +46,8 @@ class AlphaV1StrategyAdapter(BaseStrategyAdapter):
     """
 
     def __init__(self, project_root: Path | None = None) -> None:
+        super().__init__()
         self._project_root = project_root or Path(__file__).resolve().parents[3]
-        self._stock_names: dict[str, str] = {}
-        self._stock_names_loaded = False
         self._loaded_models: dict = {}
         self._clean_features: list[str] = []
         # Optional overrides set by ``from_config``
@@ -257,19 +256,6 @@ class AlphaV1StrategyAdapter(BaseStrategyAdapter):
 
     # ── Data ────────────────────────────────────────────────────────────
 
-    def get_stock_name(self, ts_code: str) -> str:
-        if not self._stock_names_loaded:
-            self._load_stock_names()
-        return self._stock_names.get(ts_code, ts_code)
-
-    def _load_stock_names(self) -> None:
-        path = self._project_root / "data" / "stock_names.csv"
-        if path.exists():
-            df = pd.read_csv(path)
-            for _, row in df.iterrows():
-                self._stock_names[str(row["ts_code"])] = str(row["name"])
-        self._stock_names_loaded = True
-
     def load_model(self) -> None:
         import lightgbm as lgb
 
@@ -476,54 +462,6 @@ class AlphaV1StrategyAdapter(BaseStrategyAdapter):
             portfolio_method="rank_weight_buffer",
             account=account,
         )
-
-    def load_plan_instruments(self, plan_dir: Any) -> list[str]:
-        intents_path = Path(plan_dir) / "order_intents.csv"
-        if not intents_path.exists():
-            return []
-        try:
-            df = pd.read_csv(intents_path)
-            return sorted(set(df["instrument"].astype(str)))
-        except Exception:
-            return []
-
-    def save_predictions(self, predictions: Any, run_root: Any, trade_date: str) -> None:
-        """Save predictions to the alpha_v1 shared predictions directory."""
-        shared_dir = self._project_root / "experiments" / "alpha_v1_shadow_predictions"
-        shared_dir.mkdir(parents=True, exist_ok=True)
-        path = shared_dir / f"predictions_{trade_date}.csv"
-        predictions.to_csv(path, index=False)
-        print(f"  → {len(predictions)} predictions saved: {path}")
-
-    def fetch_open_prices(self, trade_date: str, instruments: list[str]) -> dict[str, float]:
-        """Fetch open prices via qlib for the given instruments."""
-        from qsys.data.adapter import QlibAdapter
-
-        adapter = QlibAdapter()
-        adapter.init_qlib()
-        market = adapter.get_features(
-            instruments, ["$open"],
-            start_time=trade_date, end_time=trade_date,
-        )
-        if market is None or market.empty:
-            return {}
-        if isinstance(market.index, pd.MultiIndex):
-            market = market.swaplevel().sort_index()
-        frame = market.reset_index()
-        frame = frame[frame["datetime"].astype(str).str.startswith(trade_date)]
-        if frame.empty:
-            return {}
-        frame = frame.sort_values(["instrument", "datetime"]).drop_duplicates(
-            subset=["instrument"], keep="last"
-        )
-        prices = frame.set_index("instrument")["$open"].astype(float).to_dict()
-        return prices
-
-    def print_predictions_summary(self, predictions: Any) -> None:
-        """Print top-5 predictions to console."""
-        top = predictions.sort_values("score", ascending=False).head(5)
-        for i, (_, row) in enumerate(top.iterrows(), 1):
-            print(f"    #{i} {row['instrument']}  score={row['score']:.4f}")
 
     # ── Execute + MTM ──────────────────────────────────────────────────
 
