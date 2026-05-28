@@ -1,4 +1,12 @@
-"""Generic rank-weighted capped portfolio builder."""
+"""Generic rank-weighted capped portfolio builder.
+
+PR108 introduces ``qsys.strategy.allocation`` as the canonical allocation
+boundary.  This module is retained as a compatibility wrapper for existing
+backtest callers.  New code should use
+``qsys.strategy.allocation.rank_weight.build_rank_weight_targets``.
+
+TODO(PR109/PR110): Migrate existing callers and remove this compatibility shim.
+"""
 from __future__ import annotations
 
 import pandas as pd
