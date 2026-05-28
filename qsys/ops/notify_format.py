@@ -227,7 +227,11 @@ def format_postclose_message(
             if mtm["daily_pnl"] >= 0
             else fmt_amount(mtm["daily_pnl"])
         )
-        lines.append(f"💰 Mark-to-Market（按 {trade_date} 收盘价）")
+        data_date = mtm.get("data_date", trade_date) if mtm else trade_date
+        if data_date != trade_date:
+            lines.append(f"💰 Mark-to-Market（按 {data_date} 收盘价，数据日期）")
+        else:
+            lines.append(f"💰 Mark-to-Market（按 {trade_date} 收盘价）")
         lines.append(f"  累计 PnL: {cum_pnl_str} ({mtm['cumulative_pnl_pct']:+.2f}%)")
         lines.append(f"  当日 PnL: {daily_str}")
         lines.append(f"  Total: {fmt_amount(mtm['total_value'])}  Cash: {fmt_amount(mtm['cash'])}")
