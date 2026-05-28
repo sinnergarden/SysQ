@@ -210,6 +210,11 @@ def try_mark_to_market(
         Function ``str -> str`` that maps instrument codes to display
         names.  Defaults to identity.
     """
+    # Resolve data date with asof semantics (latest trading date with available data)
+    from qsys.data.calendar import resolve_data_date
+
+    data_date = resolve_data_date(trade_date, mode="asof")
+
     # Load from ledger when available
     ledger_account: dict | None = None
     ledger_df = None
@@ -291,7 +296,7 @@ def try_mark_to_market(
             QlibAdapter().init_qlib()
         except Exception:
             pass
-        prev_date = prev_trading_day(trade_date)
+        prev_date = prev_trading_day(data_date)
         if prev_date is not None:
             prev_snap = _resolve_prev_snapshot(prev_date)
             if prev_snap is not None:
@@ -301,6 +306,7 @@ def try_mark_to_market(
         else:
             daily_pnl = cumulative_pnl
         snapshot = {
+            "trade_date": trade_date, "data_date": data_date,
             "cash": cash, "market_value": 0.0,
             "total_value": total_value, "initial_capital": initial_capital,
             "cumulative_pnl": cumulative_pnl, "cumulative_pnl_pct": cumulative_pnl_pct,
@@ -340,8 +346,8 @@ def try_mark_to_market(
             market = adapter.get_features(
                 instruments,
                 ["$close"],
-                start_time=trade_date,
-                end_time=trade_date,
+                start_time=data_date,
+                end_time=data_date,
             )
             if market is None or market.empty:
                 return None
@@ -349,7 +355,7 @@ def try_mark_to_market(
                 market = market.copy()
                 frame = market.reset_index()
                 frame = frame[
-                    frame.iloc[:, 1].astype(str).str.startswith(trade_date)
+                    frame.iloc[:, 1].astype(str).str.startswith(data_date)
                 ]
             else:
                 frame = market.reset_index()
@@ -415,7 +421,7 @@ def try_mark_to_market(
         cumulative_pnl_pct = (
             cumulative_pnl / initial_capital * 100 if initial_capital > 0 else 0.0
         )
-        prev_date = prev_trading_day(trade_date)
+        prev_date = prev_trading_day(data_date)
         if prev_date is not None:
             prev_snap = _resolve_prev_snapshot(prev_date)
             if prev_snap is not None:
@@ -428,6 +434,8 @@ def try_mark_to_market(
             return None
         details.sort(key=lambda x: x[5], reverse=True)
         snapshot = {
+            "trade_date": trade_date,
+            "data_date": data_date,
             "cash": cash,
             "market_value": total_market_value,
             "total_value": total_value,
