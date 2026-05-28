@@ -78,6 +78,10 @@ class ResearchPaths:
     def signal_manifest(self, signal_id: str, signal_run_id: str) -> Path:
         return self.signal_dir(signal_id, signal_run_id) / "manifest.json"
 
+    def signal_eval_dir(self, signal_id: str, signal_run_id: str, label_id: str) -> Path:
+        _sanitize_segment(label_id, "label_id")
+        return self.signal_dir(signal_id, signal_run_id) / "eval" / label_id
+
     # ── Models ──────────────────────────────────────────────────────────
 
     def model_dir(self, model_id: str, model_version: str) -> Path:
