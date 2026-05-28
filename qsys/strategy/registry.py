@@ -59,7 +59,9 @@ def create_strategy(
 # ── Register built-in strategies ─────────────────────────────────────────────
 
 from qsys.strategy.alpha_v1.adapter import AlphaV1StrategyAdapter  # noqa: E402
+from qsys.strategy.alpha_v1_research.adapter import AlphaV1ResearchAdapter  # noqa: E402
 from qsys.strategy.alpha_v2.adapter import AlphaV2StrategyAdapter  # noqa: E402
 
 register("alpha_v1", AlphaV1StrategyAdapter)
+register("alpha_v1_research", AlphaV1ResearchAdapter)
 register("alpha_v2", AlphaV2StrategyAdapter)

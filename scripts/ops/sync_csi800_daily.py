@@ -47,25 +47,30 @@ from qsys.utils.logger import log
 
 
 def _resolve_target_date(end_date: str | None) -> str:
-    """Resolve target date: last completed trading day, or explicit date."""
+    """Resolve target date: latest trading day up to today, or explicit date."""
     if end_date:
         return end_date.replace("-", "")
 
-    # Use stored calendar from meta.db
+    today_str = datetime.now().strftime("%Y%m%d")
+
+    # Use local trade_cal (data source ground truth, not qlib)
     try:
         cal = StockDataStore().get_calendar()
         if cal is not None and not cal.empty and "is_open" in cal.columns and "cal_date" in cal.columns:
             open_days = sorted(cal[cal["is_open"] == 1]["cal_date"].astype(str).tolist())
-            today_str = datetime.now().strftime("%Y%m%d")
-            past = [d for d in open_days if d < today_str]
-            if past:
-                return past[-1]
+            candidate = [d for d in open_days if d <= today_str]
+            if candidate:
+                latest = candidate[-1]
+                # 如果 calendar 中最晚日期明显早于 today（跨年情况），
+                # 用 today 本身，让 pre_check 根据实际数据决定是否拉取
+                if latest < today_str[:4]:
+                    return today_str
+                return latest
     except Exception as e:
         log.warning(f"Failed to resolve target date via calendar: {e}")
 
-    # Fallback: yesterday
-    from datetime import timedelta
-    return (datetime.now() - timedelta(days=1)).strftime("%Y%m%d")
+    # Fallback: today — pre_check will decide whether data needs fetching
+    return today_str
 
 
 def _check_stock_data_status(store: StockDataStore, codes: list[str], target_dt: str) -> dict:

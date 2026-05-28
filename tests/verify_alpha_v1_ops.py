@@ -185,9 +185,10 @@ def verify_signal_trade_dates(trade_date: str) -> None:
 def verify_force_rerun_validation() -> None:
     """Check that --force-rerun without --reason is rejected."""
     import subprocess
-    script = PROJECT_ROOT / "scripts" / "run_alpha_v1_daily.py"
+    script = PROJECT_ROOT / "scripts" / "run_daily.py"
     result = subprocess.run(
-        [sys.executable, str(script), "--trade-date", "2026-05-18",
+        [sys.executable, str(script), "--strategy", "alpha_v1",
+         "--trade-date", "2026-05-18",
          "--mode", "postclose", "--force-rerun"],
         capture_output=True, text=True, cwd=str(PROJECT_ROOT),
     )
@@ -202,9 +203,10 @@ def verify_force_rerun_validation() -> None:
 def verify_notify_only_validation() -> None:
     """Check that --notify-only doesn't require trade_date. (OK)"""
     import subprocess
-    script = PROJECT_ROOT / "scripts" / "run_alpha_v1_daily.py"
+    script = PROJECT_ROOT / "scripts" / "run_daily.py"
     result = subprocess.run(
-        [sys.executable, str(script), "--notify-only", "--help"],
+        [sys.executable, str(script), "--strategy", "alpha_v1",
+         "--notify-only", "--help"],
         capture_output=True, text=True, cwd=str(PROJECT_ROOT),
     )
     _pass("--notify-only 被 argparse 接受")

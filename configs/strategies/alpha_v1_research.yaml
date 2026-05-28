@@ -1,0 +1,37 @@
+# Alpha V1 Research — parameterized variant for backtest research
+strategy_id: alpha_v1_research
+display_name: Alpha V1 Research
+stage: research
+family: ml
+owner: quant_research
+account_id: shadow_alpha_v1_research
+universe: csi300
+feature_set: alpha_v1
+model_version: alpha_v1_candidate_202605
+signal_version: research_variant
+
+paths:
+  model_dir: experiments/alpha_v1_models/latest
+  predictions_dir: experiments/alpha_v1_shadow_predictions
+  ledger_db: data/trade.db
+
+portfolio:
+  top_n: 20
+  buffer_hold: 60
+  buffer_buy: 40
+  single_stock_cap: 0.07
+  rebalance_freq: weekly
+
+label:
+  horizons: [5, 20]
+  type: forward_return
+
+training:
+  train_days: 504
+  test_days: 5
+  step_days: 5
+  model_type: lightgbm_dual
+
+feature:
+  feature_set: alpha_v1
+  schema_version: current

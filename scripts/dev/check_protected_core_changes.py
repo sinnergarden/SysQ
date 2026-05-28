@@ -28,7 +28,7 @@ PROTECTED_CORE_PATTERNS: list[str] = [
     "qsys/trader/matcher.py",
     "qsys/ops/run_archive/",
     "qsys/broker/",
-    "scripts/run_alpha_v1_daily.py",
+    "scripts/run_daily.py",
     "scripts/ops/",
 ]
 

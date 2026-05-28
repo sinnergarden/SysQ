@@ -12,6 +12,7 @@ def build_rank_weight_portfolio(
     buffer_hold: int = 60,
     buffer_buy: int = 40,
     single_stock_cap: float = 0.07,
+    **kwargs,
 ) -> dict[str, float]:
     """Build a rank-weighted portfolio with buffer rules and single-stock cap.
 

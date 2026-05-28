@@ -99,7 +99,7 @@ def resolve_data_date(trade_date: str, *, mode: str = "asof") -> str:
     if mode not in ("asof", "previous"):
         raise ValueError(f"unsupported calendar mode {mode!r}; expected 'asof' or 'previous'")
 
-    cal = get_trading_calendar("2020-01-01", trade_date)
+    cal = get_trading_calendar("2000-01-01", trade_date)
     if not cal:
         raise ValueError(f"no trading dates available up to {trade_date}")
 

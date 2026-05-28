@@ -106,7 +106,7 @@ class BacktestEngine:
     def run(
         self,
         frame: pd.DataFrame,
-        signal_lookup: dict[tuple[str, str], float],
+        signal_lookup: dict[tuple[str, str], float | tuple],
         rebalance_dates: set,
         portfolio_fn: Callable,
         *,
@@ -231,15 +231,23 @@ class BacktestEngine:
             if date not in rebalance_dates:
                 continue
 
-            inst_scores = {}
+            inst_scores: dict[str, float] = {}
+            signal_info: dict[str, dict] = {}
             for _, r in today.iterrows():
                 key = (date_str, r["instrument"])
                 val = signal_lookup.get(key)
-                if val is not None and not (isinstance(val, float) and np.isnan(val)):
-                    inst_scores[r["instrument"]] = float(val)
+                if val is not None:
+                    if isinstance(val, (tuple, list)):
+                        z5_v, z20_v, blended_v = val
+                        if not np.isnan(blended_v):
+                            inst_scores[r["instrument"]] = float(blended_v)
+                            signal_info[r["instrument"]] = {"z5": float(z5_v), "z20": float(z20_v)}
+                    elif not (isinstance(val, float) and np.isnan(val)):
+                        inst_scores[r["instrument"]] = float(val)
             if not inst_scores:
                 continue
             scores = pd.Series(inst_scores).dropna()
+            scores.name = date_str
             if len(scores) < 5:
                 continue
 
@@ -250,6 +258,7 @@ class BacktestEngine:
                 buffer_hold=buffer_hold,
                 buffer_buy=buffer_buy,
                 single_stock_cap=single_stock_cap,
+                signal_info=signal_info if signal_info else None,
             )
             if not target_weights:
                 continue
