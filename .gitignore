@@ -25,3 +25,7 @@ backfill_checkpoint.json*
 .trae/
 .tmp/
 home/
+
+# Runtime state
+shadow/
+shadow_*/
