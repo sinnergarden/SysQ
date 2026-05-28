@@ -1,0 +1,11 @@
+expression_id: expr_alpha_v1_identity
+output_signal_id: alpha_v1_score_identity
+output_signal_run_id: expr_smoke_20260518_20260525_identity
+inputs:
+  - alias: alpha
+    signal_id: alpha_v1_score
+    signal_run_id: smoke_20260518_20260525
+    score_column: score
+expression: "1.0 * alpha"
+postprocess:
+  daily_zscore: false
