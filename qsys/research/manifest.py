@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
+from datetime import datetime
 import json
 from pathlib import Path
 from typing import Any
@@ -14,6 +15,76 @@ from qsys.research.schemas import (
     ManifestObject,
     ManifestValidationError,
 )
+
+
+# ── Research Run Manifest ──────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class RunManifest:
+    """Immutable lineage manifest for a research run.
+
+    Tracks all provenance metadata needed to reproduce a run from stored
+    artifacts.  Written as ``manifest.json`` at the run root.
+    """
+
+    run_id: str
+    run_name: str
+    created_at: str  # ISO-8601
+
+    # Lineage
+    model_id: str | None = None
+    feature_set_id: str | None = None
+    label_id: str | None = None
+
+    # Optional metadata
+    description: str | None = None
+    tags: dict[str, str] = field(default_factory=dict)
+    params: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        _require_non_empty_string(self.run_id, "run_id")
+        _require_non_empty_string(self.run_name, "run_name")
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> RunManifest:
+        return cls(**{k: v for k, v in payload.items() if k in _RUN_MANIFEST_FIELDS})
+
+    @classmethod
+    def from_json(cls, text: str) -> RunManifest:
+        return cls.from_dict(json.loads(text))
+
+    def to_json(self) -> str:
+        return json.dumps(self.to_dict(), indent=2, ensure_ascii=False)
+
+
+_RUN_MANIFEST_FIELDS = frozenset(RunManifest.__dataclass_fields__)
+
+
+def write_run_manifest(manifest: RunManifest, run_dir: Path) -> Path:
+    """Write *manifest* as ``manifest.json`` into *run_dir*.
+
+    Returns the path to the written file.
+    """
+    path = run_dir / "manifest.json"
+    path.write_text(manifest.to_json(), encoding="utf-8")
+    return path
+
+
+def load_run_manifest(run_dir: Path) -> RunManifest:
+    """Load ``manifest.json`` from *run_dir*."""
+    path = run_dir / "manifest.json"
+    if not path.exists():
+        raise FileNotFoundError(f"Manifest not found: {path}")
+    return RunManifest.from_json(path.read_text(encoding="utf-8"))
+
+
+def _require_non_empty_string(value: str, field_name: str) -> None:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field_name} must be a non-empty string, got {value!r}")
 
 
 @dataclass

@@ -26,13 +26,23 @@ from qsys.research.mainline import (
 )
 from qsys.research.manifest import (
     FactorManifestRegistry,
+    RunManifest,
     load_factor_bundle,
     load_factor_definition,
     load_factor_registry,
     load_factor_variant,
+    load_run_manifest,
     parse_factor_bundle,
     parse_factor_definition,
     parse_factor_variant,
+    write_run_manifest,
+)
+from qsys.research.paths import (
+    get_research_root,
+    make_run_id,
+    resolve_artifact_path,
+    resolve_run_dir,
+    set_research_root,
 )
 from qsys.research.schemas import FactorBundle, FactorDefinition, FactorVariant, ManifestValidationError
 from qsys.research.spec import ExperimentSpec, ResearchSpec, TransactionCostAssumptions
@@ -45,6 +55,9 @@ __all__ = [
     "FactorDefinition",
     "FactorVariant",
     "FactorManifestRegistry",
+    "RunManifest",
+    "write_run_manifest",
+    "load_run_manifest",
     "MainlineObjectSpec",
     "DecisionRecord",
     "PromotionStatus",
@@ -55,6 +68,11 @@ __all__ = [
     "BUNDLE_ID_TO_MAINLINE_OBJECT",
     "LEGACY_FEATURE_SET_ALIAS_TO_MAINLINE_OBJECT",
     "MODEL_NAME_TO_MAINLINE_OBJECT",
+    "get_research_root",
+    "set_research_root",
+    "resolve_run_dir",
+    "resolve_artifact_path",
+    "make_run_id",
     "load_factor_bundle",
     "load_factor_definition",
     "load_factor_registry",
