@@ -1091,6 +1091,38 @@ class TestAlphaV1ExistingGenerator:
         assert (thu_rows["data_date"] == "2026-05-04").all(), \
             f"After-holiday data_date should be Mon May 4, got: {thu_rows['data_date'].unique()}"
 
+    def test_fallback_unavailable_calendar_monday_to_friday(self) -> None:
+        """When calendar unavailable, fallback resolves Monday -> previous Friday."""
+        from qsys.research.generators.alpha_v1_existing import AlphaV1ExistingGenerator
+
+        class MockAdapter:
+            def generate_predictions_for_date(self, trade_date, data_date=None):
+                return pd.DataFrame({
+                    "instrument": ["000001.SZ"],
+                    "score": [0.5],
+                })
+
+        gen = AlphaV1ExistingGenerator(adapter_factory=lambda project_root=None: MockAdapter())
+        # Monkeypatch get_trading_calendar to fail entirely
+        def _broken_cal(*args, **kwargs):
+            raise RuntimeError("calendar unavailable")
+
+        with patch("qsys.data.calendar.get_trading_calendar", side_effect=_broken_cal):
+            result = gen.generate(
+                train_start="", train_end="",
+                predict_start="2026-06-15", predict_end="2026-06-16",  # Mon, Tue
+                signal_id="a", signal_run_id="r",
+            )
+        # Monday June 15 -> previous business day is Friday June 12
+        mon_rows = result[result["trade_date"] == "2026-06-15"]
+        assert len(mon_rows) > 0
+        assert (mon_rows["data_date"] == "2026-06-12").all(), \
+            f"Fallback Monday data_date should be Friday, got: {mon_rows['data_date'].unique()}"
+        # No same-day or future data_date
+        for _, row in result.iterrows():
+            assert row["data_date"] < row["trade_date"], \
+                f"data_date {row['data_date']} >= trade_date {row['trade_date']}"
+
 
 # ── Signal Combination tests ───────────────────────────────────────────
 

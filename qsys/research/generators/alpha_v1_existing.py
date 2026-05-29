@@ -59,21 +59,26 @@ def _build_prev_trading_date_lookup(
     except Exception:
         pass
 
-    # Fallback: simple business-day logic
-    lookup = {}
-    dt = datetime.strptime(predict_start, "%Y-%m-%d")
-    end_dt = datetime.strptime(predict_end, "%Y-%m-%d")
-    # Build a set of business days in the range
-    bdays = []
-    cur = dt
-    while cur <= end_dt + timedelta(days=30):
+    # Fallback: business-day context before predict_start
+    _start_dt = datetime.strptime(predict_start, "%Y-%m-%d")
+    _end_dt = datetime.strptime(predict_end, "%Y-%m-%d")
+
+    # Generate business days from 30 BD before predict_start to predict_end
+    # so the earliest trade_date gets a valid previous business day
+    _lookback_start = _start_dt - timedelta(days=60)
+    bdays: list[str] = []
+    cur = _lookback_start
+    while cur <= _end_dt:
         if cur.weekday() < 5:
             bdays.append(cur.strftime("%Y-%m-%d"))
         cur += timedelta(days=1)
+
+    lookup: dict[str, str] = {}
     for i, d in enumerate(bdays):
         if i > 0:
             lookup[d] = bdays[i - 1]
         else:
+            # Earliest in fallback
             _dt = datetime.strptime(d, "%Y-%m-%d")
             _prev = _dt - timedelta(days=1)
             while _prev.weekday() >= 5:
