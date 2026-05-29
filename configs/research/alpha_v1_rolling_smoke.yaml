@@ -1,0 +1,26 @@
+experiment_id: alpha_v1_rolling_smoke
+title: "alpha_v1 rolling smoke (v1)"
+description: "Rolling research smoke using alpha_v1-compatible prediction hook."
+
+calendar:
+  start_date: "2026-05-01"
+  end_date: "2026-05-31"
+  train_window_days: 252
+  predict_window_days: 5
+  step_days: 5
+
+signal:
+  signal_id: alpha_v1_score
+  signal_run_id: rolling_alpha_v1_202605
+  score_column: score
+
+labels:
+  - label_id: forward_return_5d
+
+backtests:
+  - strategy_template_id: rank_weight_top20
+    allocation_method: rank_weight
+    top_n: 20
+    initial_capital: 1000000
+    rebalance_freq: weekly
+    artifact_mode: summary
