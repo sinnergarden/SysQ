@@ -103,6 +103,51 @@ class TestRunFromSignalCache:
         assert mf["model_mode"] == "cached_signal"
         assert mf["rolling_train"] is False
         assert mf["signal_id"] == "test_sig"
+        assert isinstance(mf["trading_dates"], list)
+        assert mf["trading_day_count"] == 2
+        assert mf["execution_timing"] == "preopen"
+        assert mf["signal_trade_date_semantics"] == "intended_execution_date"
+
+    def test_metrics_written(self, tmp_path: Path) -> None:
+        import json
+        out = tmp_path / "bt_metrics"
+        _run_bt(tmp_path, fixture_dates=2, fixture_inst=10,
+                signal_id="test_sig", signal_run_id="test_run",
+                start_date="2026-06-15", end_date="2026-06-16",
+                output_dir=out)
+        m = json.loads((out / "metrics.json").read_text())
+        assert m["initial_capital"] > 0
+        assert "final_value" in m
+        assert "total_return" in m
+        assert m["trading_day_count"] == 2
+
+    def test_lookahead_violation_fails(self, tmp_path: Path) -> None:
+        """Signal with data_date >= trade_date should raise."""
+        store = SignalStore(str(tmp_path))
+        good = pd.DataFrame({
+            "trade_date": ["2026-06-15", "2026-06-16"],
+            "data_date": ["2026-06-12", "2026-06-12"],
+            "instrument": ["000001.SZ", "000001.SZ"],
+            "signal_id": ["s", "s"], "signal_run_id": ["r", "r"], "score": [1.0, 1.0],
+        })
+        # Add a violation row on 06-16
+        bad_row = pd.DataFrame({
+            "trade_date": ["2026-06-16"], "data_date": ["2026-06-16"],
+            "instrument": ["000002.SZ"], "signal_id": ["s"], "signal_run_id": ["r"], "score": [2.0],
+        })
+        frame = pd.concat([good, bad_row], ignore_index=True)
+        store.save_signal_run("s", "r", frame, check_no_lookahead=False, overwrite=True)
+        runner = BacktestRunner()
+        with pytest.raises(ValueError, match="Signal lookahead violation"):
+            runner.run_from_signal_cache(
+                signal_id="s", signal_run_id="r",
+                start_date="2026-06-15", end_date="2026-06-16",
+                initial_capital=100000.0,
+                output_dir=tmp_path / "bt_look", overwrite=True,
+                research_root=str(tmp_path),
+                commission=0.0, stamp_duty=0.0, min_commission=0.0, slippage=0.0,
+                rebalance_freq="daily",
+            )
 
     def test_overwrite_false_protects(self, tmp_path: Path) -> None:
         out = tmp_path / "bt_overwrite"
@@ -147,6 +192,8 @@ class TestRunFromSignalCache:
                 runner_kwargs={"artifact_mode": "debug"})
         assert (out / "daily" / "2026-06-15" / "signal.csv").exists()
         assert (out / "daily" / "2026-06-15" / "target_weights.csv").exists()
+        assert (out / "daily" / "2026-06-15" / "mtm_snapshot.json").exists()
+        assert (out / "daily" / "2026-06-15" / "execution_summary.json").exists()
 
     def test_empty_signal_date_returns_empty_day(self, tmp_path: Path) -> None:
         result = _run_bt(tmp_path, fixture_dates=1, fixture_inst=5,

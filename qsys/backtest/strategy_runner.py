@@ -690,6 +690,14 @@ class BacktestRunner:
             )
 
         # ── Build run/backtest IDs ────────────────────────────────────────
+        # Cached signal semantics:
+        # - signal.trade_date = intended_execution_date
+        # - signal.data_date must be <= previous_trading_day(trade_date)
+        # - allocation happens before open of trade_date
+        # - execution on trade_date at open (or close depending on price mode)
+        # - MTM on trade_date at close
+        # This matches shadow/preopen-equivalent semantics, NOT the old
+        # BacktestEngine's next-open pending-order convention.
         hash_input = f"{strategy_template_id}_{signal_id}_{signal_run_id}_{allocation_method}_{top_n}_{max_weight}_{single_stock_cap}_{buffer_hold}_{buffer_buy}_{commission}_{stamp_duty}_{min_commission}_{slippage}_{rebalance_freq}_{start_date}_{end_date}_{initial_capital}"  # noqa: E501
         short_hash = hashlib.sha256(hash_input.encode()).hexdigest()[:8]
         strategy_run_id = f"{strategy_template_id}__{signal_id}__{signal_run_id}__{short_hash}"
@@ -778,6 +786,17 @@ class BacktestRunner:
                 self._last_trade_date = trade_date
                 continue
 
+            # 2b. No-lookahead check on loaded signal
+            if "data_date" in day_signal.columns and "trade_date" in day_signal.columns:
+                _violations = day_signal[day_signal["data_date"] >= trade_date]
+                if len(_violations) > 0:
+                    _examples = _violations.head(3)[["trade_date", "data_date", "instrument"]].to_dict(orient="records")
+                    raise ValueError(
+                        f"Signal lookahead violation at {trade_date}: "
+                        f"{len(_violations)} rows have data_date >= trade_date. "
+                        f"Examples: {_examples}"
+                    )
+
             # 3. Build target_weights via buffer-aware rank-weight allocation
             # Replicate original build_rank_weight_portfolio logic:
             #   - buffer_hold: keep existing positions if rank <= buffer_hold
@@ -786,17 +805,19 @@ class BacktestRunner:
             day_sorted["rank"] = range(1, len(day_sorted) + 1)
             held = set(account.positions.keys())
 
-            # Keep current holdings within buffer hold threshold
+            # Use instrument as index to match old build_rank_weight_portfolio logic
+            day_lookup = day_sorted.set_index("instrument")
+
             keep = {}
             for inst in held:
-                if inst in day_sorted.index and day_sorted.loc[inst, "rank"] <= buffer_hold:
-                    keep[inst] = day_sorted.loc[inst, score_column]
+                if inst in day_lookup.index and day_lookup.loc[inst, "rank"] <= buffer_hold:
+                    keep[inst] = day_lookup.loc[inst, score_column]
 
             remaining = max(0, top_n - len(keep))
             buys = []
             if remaining > 0:
-                for _, row in day_sorted.iterrows():
-                    inst = row["instrument"]
+                for _, row in day_lookup.iterrows():
+                    inst = row.name
                     if inst in held:
                         continue
                     if row["rank"] > buffer_buy:
@@ -838,7 +859,7 @@ class BacktestRunner:
             targets = pd.DataFrame({
                 "instrument": list(ws.keys()),
                 "target_weight": [ws[k] for k in ws],
-                "rank": [int(day_sorted[day_sorted["instrument"] == k]["rank"].values[0]) for k in ws],
+                "rank": [int(day_lookup.loc[k, "rank"]) for k in ws],
                 "allocation_method": allocation_method,
                 "trade_date": trade_date,
             })
@@ -933,9 +954,17 @@ class BacktestRunner:
                 day_dir.mkdir(parents=True, exist_ok=True)
                 day_signal.to_csv(day_dir / "signal.csv", index=False)
                 targets.to_csv(day_dir / "target_weights.csv", index=False)
-                pd.DataFrame(day_result, index=[0]).to_csv(
-                    day_dir / "execution_summary.csv", index=False,
-                )
+                if len(orders) > 0:
+                    pd.DataFrame(orders).to_csv(day_dir / "order_intents.csv", index=False)
+                from qsys.utils.json_io import write_json as _wj
+                _wj(day_dir / "mtm_snapshot.json", {
+                    "trade_date": trade_date,
+                    "cash_after": cash_after,
+                    "market_value_after": mv_after,
+                    "total_value_after": tv_after,
+                    "position_count": len(account.positions),
+                })
+                _wj(day_dir / "execution_summary.json", day_result)
 
         # ── Compute final metrics ─────────────────────────────────────────
         final_mv = account.get_market_value({})
@@ -968,13 +997,16 @@ class BacktestRunner:
             "end_date": end_date,
             "effective_start_date": trading_dates[0] if trading_dates else None,
             "effective_end_date": trading_dates[-1] if trading_dates else None,
-            "trading_dates": len(trading_dates),
+            "trading_dates": trading_dates,
+            "trading_day_count": len(trading_dates),
             "initial_capital": initial_capital,
             "final_value": final_value,
             "total_return": total_return,
             "model_mode": "cached_signal",
             "rolling_train": False,
             "execution_price": self._execution_price_mode,
+            "execution_timing": "preopen",
+            "signal_trade_date_semantics": "intended_execution_date",
             "mtm_price": "close",
             "commission_bp": commission,
             "stamp_duty_bp": stamp_duty,
@@ -991,6 +1023,28 @@ class BacktestRunner:
                 output_dir / "daily_summary.csv", index=False,
             )
 
+        # metrics.json
+        _order_total = sum(d.get("order_count", 0) for d in daily_summaries)
+        _filled_total = sum(d.get("filled_count", 0) for d in daily_summaries)
+        _rejected_total = sum(d.get("rejected_count", 0) for d in daily_summaries)
+        _turnover_total = sum(d.get("turnover", 0) for d in daily_summaries)
+        _trade_days = len([d for d in daily_summaries if d.get("order_count", 0) > 0])
+        metrics = {
+            "initial_capital": initial_capital,
+            "final_value": final_value,
+            "total_return": total_return,
+            "trading_day_count": len(trading_dates),
+            "trading_day_count_with_orders": _trade_days,
+            "order_count_total": _order_total,
+            "filled_count_total": _filled_total,
+            "rejected_count_total": _rejected_total,
+            "avg_order_per_day": round(_order_total / max(len(trading_dates), 1), 2),
+            "turnover_total": round(_turnover_total, 2),
+            "avg_turnover": round(_turnover_total / max(_trade_days, 1), 2),
+        }
+        with_standard_metadata(metrics)
+        write_manifest(output_dir / "metrics.json", metrics)
+
         result = BacktestRunResult(
             strategy_id=strategy_template_id,
             backtest_id=backtest_id,
@@ -1005,6 +1059,7 @@ class BacktestRunner:
             daily_summary=daily_summaries,
             artifacts={
                 "manifest": str(output_dir / "manifest.json"),
+                "metrics": str(output_dir / "metrics.json"),
                 "daily_summary": str(output_dir / "daily_summary.csv") if daily_summaries else "",
             },
             notes=f"cached-signal backtest over {len(trading_dates)} trading dates; "
