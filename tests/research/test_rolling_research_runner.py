@@ -1065,6 +1065,32 @@ class TestAlphaV1ExistingGenerator:
         for _, row in result.iterrows():
             assert row["data_date"] < row["trade_date"]
 
+    def test_holiday_gap_maps_to_actual_prev_trading_day(self) -> None:
+        """Trade date after holiday maps to actual previous trading day."""
+        from qsys.research.generators.alpha_v1_existing import AlphaV1ExistingGenerator
+
+        class MockAdapter:
+            def generate_predictions_for_date(self, trade_date, data_date=None):
+                return pd.DataFrame({
+                    "instrument": ["000001.SZ"],
+                    "score": [0.5],
+                })
+
+        gen = AlphaV1ExistingGenerator(adapter_factory=lambda project_root=None: MockAdapter())
+        # Calendar: Monday May 4 -> Thursday May 7 (Tue/Wed are holidays)
+        # Thursday May 7 should have data_date = Monday May 4, not Wednesday May 6
+        mock_cal = ["2026-05-04", "2026-05-07", "2026-05-08"]
+        with patch("qsys.data.calendar.get_trading_calendar", return_value=mock_cal):
+            result = gen.generate(
+                train_start="", train_end="",
+                predict_start="2026-05-07", predict_end="2026-05-08",
+                signal_id="a", signal_run_id="r",
+            )
+        # Thursday May 7 -> previous trading day is Monday May 4
+        thu_rows = result[result["trade_date"] == "2026-05-07"]
+        assert (thu_rows["data_date"] == "2026-05-04").all(), \
+            f"After-holiday data_date should be Mon May 4, got: {thu_rows['data_date'].unique()}"
+
 
 # ── Signal Combination tests ───────────────────────────────────────────
 
@@ -1312,6 +1338,160 @@ class TestSignalCombine:
         exp_dir = paths.experiment_dir("exp_test")
         csv_path = exp_dir / "cross_signal_index.csv"
         assert csv_path.exists()
+
+    def test_equal_weight_same_weight(self, tmp_path):
+        """equal_weight with two 0.5 inputs blends correctly."""
+        from qsys.research.signal_combine import CombineSpec, CombineInput, combine_signals
+        from qsys.signal.store import SignalStore
+        from qsys.research.paths import ResearchPaths
+
+        store = SignalStore(str(tmp_path))
+        paths = ResearchPaths(str(tmp_path))
+        dates = ["2026-05-18"]
+        insts = ["A.SZ"]
+
+        rows_a = [{"trade_date": "2026-05-18", "data_date": "2026-05-15",
+                    "instrument": "A.SZ", "signal_id": "sa", "signal_run_id": "ra", "score": 1.0}]
+        rows_b = [{"trade_date": "2026-05-18", "data_date": "2026-05-15",
+                    "instrument": "A.SZ", "signal_id": "sb", "signal_run_id": "rb", "score": 0.5}]
+        store.save_signal_run("sa", "ra", pd.DataFrame(rows_a), overwrite=True)
+        store.save_signal_run("sb", "rb", pd.DataFrame(rows_b), overwrite=True)
+
+        spec = CombineSpec(
+            combine_id="eq_same",
+            combine_type="equal_weight",
+            inputs=[
+                CombineInput(source_signal_id="sa", source_signal_run_id="ra", weight=0.5),
+                CombineInput(source_signal_id="sb", source_signal_run_id="rb", weight=0.5),
+            ],
+        )
+        result = combine_signals(
+            spec, output_signal_id="eq", output_signal_run_id="eq_r",
+            signal_store=store, research_paths=paths, overwrite=True,
+        )
+        assert len(result) == 1
+        # equal_weight: (1.0 + 0.5) / 2 = 0.75
+        assert abs(result["score"].iloc[0] - 0.75) < 1e-10
+
+    def test_confirm_filter(self, tmp_path):
+        """confirm_filter works when primary/secondary have same weight."""
+        from qsys.research.signal_combine import CombineSpec, CombineInput, combine_signals
+        from qsys.signal.store import SignalStore
+        from qsys.research.paths import ResearchPaths
+
+        store = SignalStore(str(tmp_path))
+        paths = ResearchPaths(str(tmp_path))
+
+        # Primary score = 1.0, secondary > 0 -> score stays 1.0
+        # Primary score = 1.0, secondary <= 0 -> score = 0.5
+        rows_a = [{"trade_date": "2026-05-18", "data_date": "2026-05-15",
+                    "instrument": "A.SZ", "signal_id": "p", "signal_run_id": "pr", "score": 1.0},
+                  {"trade_date": "2026-05-19", "data_date": "2026-05-18",
+                    "instrument": "A.SZ", "signal_id": "p", "signal_run_id": "pr", "score": 1.0}]
+        rows_b = [{"trade_date": "2026-05-18", "data_date": "2026-05-15",
+                    "instrument": "A.SZ", "signal_id": "s", "signal_run_id": "sr", "score": 2.0},  # > 0 -> confirm
+                  {"trade_date": "2026-05-19", "data_date": "2026-05-18",
+                    "instrument": "A.SZ", "signal_id": "s", "signal_run_id": "sr", "score": -1.0}]  # <= 0 -> penalize
+        store.save_signal_run("p", "pr", pd.DataFrame(rows_a), overwrite=True)
+        store.save_signal_run("s", "sr", pd.DataFrame(rows_b), overwrite=True)
+
+        spec = CombineSpec(
+            combine_id="cf_test",
+            combine_type="confirm_filter",
+            inputs=[
+                CombineInput(source_signal_id="p", source_signal_run_id="pr", weight=1.0),
+                CombineInput(source_signal_id="s", source_signal_run_id="sr", weight=1.0),
+            ],
+        )
+        result = combine_signals(
+            spec, output_signal_id="cf", output_signal_run_id="cf_r",
+            signal_store=store, research_paths=paths, overwrite=True,
+        )
+        assert len(result) == 2
+        # Day 1: secondary > 0 -> score = primary = 1.0
+        # Day 2: secondary <= 0 -> score = primary * 0.5 = 0.5
+        day1 = result[result["trade_date"] == "2026-05-18"]
+        day2 = result[result["trade_date"] == "2026-05-19"]
+        assert abs(day1["score"].iloc[0] - 1.0) < 1e-10
+        assert abs(day2["score"].iloc[0] - 0.5) < 1e-10
+
+    def test_inner_join_drops_non_overlapping(self, tmp_path):
+        """Inner join only keeps intersection of instruments."""
+        from qsys.research.signal_combine import CombineSpec, CombineInput, combine_signals
+        from qsys.signal.store import SignalStore
+        from qsys.research.paths import ResearchPaths
+
+        store = SignalStore(str(tmp_path))
+        paths = ResearchPaths(str(tmp_path))
+
+        dates = ["2026-05-18"]
+        rows_a = [{"trade_date": d, "data_date": "2026-05-15", "instrument": "A.SZ",
+                    "signal_id": "sa", "signal_run_id": "ra", "score": 0.5} for d in dates]
+        rows_a += [{"trade_date": d, "data_date": "2026-05-15", "instrument": "B.SZ",
+                     "signal_id": "sa", "signal_run_id": "ra", "score": 0.3} for d in dates]
+        rows_b = [{"trade_date": d, "data_date": "2026-05-15", "instrument": "A.SZ",
+                    "signal_id": "sb", "signal_run_id": "rb", "score": 0.7} for d in dates]
+        # B.SZ is only in signal_a, not in signal_b
+
+        store.save_signal_run("sa", "ra", pd.DataFrame(rows_a), overwrite=True)
+        store.save_signal_run("sb", "rb", pd.DataFrame(rows_b), overwrite=True)
+
+        spec = CombineSpec(
+            combine_id="inner_test",
+            combine_type="equal_weight",
+            inputs=[
+                CombineInput(source_signal_id="sa", source_signal_run_id="ra", weight=1.0),
+                CombineInput(source_signal_id="sb", source_signal_run_id="rb", weight=1.0),
+            ],
+        )
+        result = combine_signals(
+            spec, output_signal_id="inner", output_signal_run_id="inner_r",
+            signal_store=store, research_paths=paths, overwrite=True,
+        )
+        # Only A.SZ should survive inner join
+        instruments = result["instrument"].unique()
+        assert list(instruments) == ["A.SZ"]
+        assert len(result) == 1
+
+    def test_manifest_records_dropped_by_join(self, tmp_path):
+        """Manifest records input_row_counts, output_row_count, dropped_by_join."""
+        from qsys.research.signal_combine import CombineSpec, CombineInput, combine_signals
+        from qsys.signal.store import SignalStore
+        from qsys.research.paths import ResearchPaths
+        import json
+
+        store = SignalStore(str(tmp_path))
+        paths = ResearchPaths(str(tmp_path))
+
+        rows_a = [{"trade_date": "2026-05-18", "data_date": "2026-05-15",
+                    "instrument": "A.SZ", "signal_id": "sa", "signal_run_id": "ra", "score": 0.5}]
+        rows_b = [{"trade_date": "2026-05-18", "data_date": "2026-05-15",
+                    "instrument": "A.SZ", "signal_id": "sb", "signal_run_id": "rb", "score": 0.7}]
+        store.save_signal_run("sa", "ra", pd.DataFrame(rows_a), overwrite=True)
+        store.save_signal_run("sb", "rb", pd.DataFrame(rows_b), overwrite=True)
+
+        spec = CombineSpec(
+            combine_id="drop_test",
+            combine_type="equal_weight",
+            inputs=[
+                CombineInput(source_signal_id="sa", source_signal_run_id="ra", weight=1.0),
+                CombineInput(source_signal_id="sb", source_signal_run_id="rb", weight=1.0),
+            ],
+        )
+        combine_signals(
+            spec, output_signal_id="drop", output_signal_run_id="drop_r",
+            signal_store=store, research_paths=paths, overwrite=True,
+        )
+
+        sig_dir = paths.signal_dir("drop", "drop_r")
+        mf_path = sig_dir / "combination_manifest.json"
+        assert mf_path.exists()
+        mf = json.loads(mf_path.read_text())
+        assert "input_row_counts" in mf
+        assert "output_row_count" in mf
+        assert "dropped_by_join" in mf
+        assert "join_policy" in mf
+        assert mf["join_policy"] == "inner"
 
 
 class TestMatrixWithCombinations:

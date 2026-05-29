@@ -26,13 +26,60 @@ def _resolve_adapter(project_root: Path | None = None) -> Any:
     return AlphaV1StrategyAdapter(project_root=project_root)
 
 
-def _previous_trading_day(trade_date: str) -> str:
-    """Simple weekday fallback for data_date."""
-    dt = datetime.strptime(trade_date, "%Y-%m-%d")
-    prev = dt - timedelta(days=1)
-    while prev.weekday() >= 5:
-        prev -= timedelta(days=1)
-    return prev.strftime("%Y-%m-%d")
+def _build_prev_trading_date_lookup(
+    predict_start: str, predict_end: str,
+) -> dict[str, str]:
+    """Build a lookup from trade_date to previous actual trading day.
+
+    Uses qsys.data.calendar.get_trading_calendar with enough context
+    before predict_start to resolve the previous trading day.
+    Falls back to simple business-day logic if calendar unavailable.
+    """
+    try:
+        from qsys.data.calendar import get_trading_calendar
+        # Go back well before predict_start to get previous trading day context
+        extended_start = (
+            datetime.strptime(predict_start, "%Y-%m-%d") - timedelta(days=30)
+        ).strftime("%Y-%m-%d")
+        cal = get_trading_calendar(extended_start, predict_end)
+        if cal:
+            cal_set = set(cal)
+            lookup: dict[str, str] = {}
+            for i, d in enumerate(cal):
+                if i > 0:
+                    lookup[d] = cal[i - 1]
+                else:
+                    # Earliest in calendar — use business-day fallback
+                    _dt = datetime.strptime(d, "%Y-%m-%d")
+                    _prev = _dt - timedelta(days=1)
+                    while _prev.weekday() >= 5:
+                        _prev -= timedelta(days=1)
+                    lookup[d] = _prev.strftime("%Y-%m-%d")
+            return lookup
+    except Exception:
+        pass
+
+    # Fallback: simple business-day logic
+    lookup = {}
+    dt = datetime.strptime(predict_start, "%Y-%m-%d")
+    end_dt = datetime.strptime(predict_end, "%Y-%m-%d")
+    # Build a set of business days in the range
+    bdays = []
+    cur = dt
+    while cur <= end_dt + timedelta(days=30):
+        if cur.weekday() < 5:
+            bdays.append(cur.strftime("%Y-%m-%d"))
+        cur += timedelta(days=1)
+    for i, d in enumerate(bdays):
+        if i > 0:
+            lookup[d] = bdays[i - 1]
+        else:
+            _dt = datetime.strptime(d, "%Y-%m-%d")
+            _prev = _dt - timedelta(days=1)
+            while _prev.weekday() >= 5:
+                _prev -= timedelta(days=1)
+            lookup[d] = _prev.strftime("%Y-%m-%d")
+    return lookup
 
 
 @dataclass
@@ -93,6 +140,9 @@ class AlphaV1ExistingGenerator:
                     cal.append(dt.strftime("%Y-%m-%d"))
                 dt += timedelta(days=1)
 
+        # Build data_date lookup using full trading calendar
+        prev_td_lookup = _build_prev_trading_date_lookup(predict_start, predict_end)
+
         adapter = self._get_adapter()
         all_rows: list[dict[str, Any]] = []
 
@@ -107,7 +157,15 @@ class AlphaV1ExistingGenerator:
             if pred_df is None or pred_df.empty:
                 continue
 
-            dd = _previous_trading_day(td)
+            dd = prev_td_lookup.get(td)
+            if dd is None:
+                # Absolute fallback
+                _dt = datetime.strptime(td, "%Y-%m-%d")
+                _prev = _dt - timedelta(days=1)
+                while _prev.weekday() >= 5:
+                    _prev -= timedelta(days=1)
+                dd = _prev.strftime("%Y-%m-%d")
+
             for _, row in pred_df.iterrows():
                 all_rows.append({
                     "trade_date": td,

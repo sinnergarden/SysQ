@@ -82,6 +82,10 @@ def build_combine_spec_from_config(
     )
 
 
+_DEFAULT_JOIN_POLICY = "inner"
+_SUPPORTED_JOIN_POLICIES = {"inner", "outer_zero_fill"}
+
+
 def combine_signals(
     spec: CombineSpec,
     *,
@@ -90,16 +94,45 @@ def combine_signals(
     signal_store: SignalStore,
     research_paths: ResearchPaths,
     overwrite: bool = False,
+    join_policy: str | None = None,
 ) -> pd.DataFrame:
     """Combine multiple SignalRuns into one derived SignalRun.
 
     Loads each input SignalRun, joins by (trade_date, data_date, instrument),
     computes combined score, saves as a new SignalRun.
 
+    Parameters
+    ----------
+    spec:
+        Combination specification.
+    output_signal_id:
+        Signal ID for the output.
+    output_signal_run_id:
+        Signal run ID for the output.
+    signal_store:
+        SignalStore instance for loading/saving.
+    research_paths:
+        ResearchPaths instance for path resolution.
+    overwrite:
+        Allow overwriting existing SignalRun.
+    join_policy:
+        Join policy for combining signals. Default "inner":
+        only rows covered by ALL input signals are combined.
+        "outer_zero_fill": outer join with fillna(0) for missing scores.
+
     Returns the combined DataFrame.
     """
+    if join_policy is None:
+        join_policy = _DEFAULT_JOIN_POLICY
+    if join_policy not in _SUPPORTED_JOIN_POLICIES:
+        raise ValueError(
+            f"Unsupported join_policy: {join_policy!r}. "
+            f"Supported: {sorted(_SUPPORTED_JOIN_POLICIES)}"
+        )
+
+    input_row_counts: list[int] = []
     frames: list[pd.DataFrame] = []
-    for inp in spec.inputs:
+    for idx, inp in enumerate(spec.inputs):
         df = signal_store.load_signal_run(
             inp.source_signal_id, inp.source_signal_run_id,
         )
@@ -108,45 +141,52 @@ def combine_signals(
                 f"Combine: empty SignalRun for {inp.source_signal_id}/"
                 f"{inp.source_signal_run_id}"
             )
-        df = df.rename(columns={"score": f"score_{inp.weight}"})
-        df["_weight"] = inp.weight
+        input_row_counts.append(len(df))
+        df = df.rename(columns={"score": f"score_{idx}"})
         frames.append(df)
 
-    # Full outer join on (trade_date, data_date, instrument)
+    # Join on (trade_date, data_date, instrument)
+    how = "inner" if join_policy == "inner" else "outer"
     combined = frames[0]
     for f in frames[1:]:
         combined = pd.merge(
             combined, f,
             on=["trade_date", "data_date", "instrument"],
-            how="outer",
+            how=how,
             suffixes=("", "_right"),
         )
 
-    # Gather weighted scores
-    weight_cols = [c for c in combined.columns if c.startswith("score_")]
-    if not weight_cols:
+    # Clean up any _right columns from duplicate merge keys
+    right_cols = [c for c in combined.columns if c.endswith("_right")]
+    combined = combined.drop(columns=right_cols, errors="ignore")
+
+    score_cols = sorted(
+        [c for c in combined.columns if c.startswith("score_") and c[len("score_"):].isdigit()],
+        key=lambda x: int(x.split("_")[1]),
+    )
+    if not score_cols:
         raise ValueError("Combine: no score columns after join")
 
-    total_weight = sum(spec.inputs[i].weight for i in range(len(spec.inputs)))
+    max_rows = max(len(f) for f in frames)
+    dropped_by_join = max_rows - len(combined)
+
+    total_weight = sum(inp.weight for inp in spec.inputs)
+    n_inputs = len(spec.inputs)
 
     if spec.combine_type == "linear_blend":
         combined["score"] = sum(
-            combined[f"score_{inp.weight}"].fillna(0.0) * inp.weight
-            for inp in spec.inputs
+            combined[score_cols[i]].fillna(0.0) * spec.inputs[i].weight
+            for i in range(n_inputs)
         ) / total_weight
     elif spec.combine_type == "equal_weight":
-        n = len(spec.inputs)
         combined["score"] = sum(
-            combined[f"score_{inp.weight}"].fillna(0.0)
-            for inp in spec.inputs
-        ) / n
+            combined[score_cols[i]].fillna(0.0)
+            for i in range(n_inputs)
+        ) / n_inputs
     elif spec.combine_type == "confirm_filter":
-        # score = primary_score where secondary_score > 0 else primary * 0.5
-        primary_inp = spec.inputs[0]
-        secondary_inp = spec.inputs[1] if len(spec.inputs) > 1 else None
-        primary_col = f"score_{primary_inp.weight}"
-        if secondary_inp:
-            secondary_col = f"score_{secondary_inp.weight}"
+        primary_col = score_cols[0]
+        if len(score_cols) > 1:
+            secondary_col = score_cols[1]
             combined["score"] = combined[primary_col].fillna(0.0).where(
                 combined[secondary_col].fillna(0.0) > 0,
                 combined[primary_col].fillna(0.0) * 0.5,
@@ -157,14 +197,14 @@ def combine_signals(
         raise ValueError(f"Unknown combine type: {spec.combine_type}")
 
     # Drop helper columns
-    drop_cols = [c for c in combined.columns if c.startswith("score_") or c == "_weight"]
+    drop_cols = [c for c in combined.columns if c.startswith("score_")]
     combined = combined.drop(columns=drop_cols, errors="ignore")
 
     # Fill required columns
     combined["signal_id"] = output_signal_id
     combined["signal_run_id"] = output_signal_run_id
 
-    # Save SignalRun
+    # Build manifest
     input_refs = [
         {
             "signal_id": inp.source_signal_id,
@@ -180,21 +220,25 @@ def combine_signals(
             "artifact_type": "combined_signal_run",
             "combine_id": spec.combine_id,
             "combine_type": spec.combine_type,
+            "join_policy": join_policy,
             "inputs": input_refs,
         },
         overwrite=overwrite,
     )
 
-    # Write cross_signal_manifest.json in the signal output dir
+    # Write combination_manifest.json
     sig_dir = research_paths.signal_dir(output_signal_id, output_signal_run_id)
     manifest = with_standard_metadata({
         "artifact_type": "signal_combination",
         "combine_id": spec.combine_id,
         "combine_type": spec.combine_type,
+        "join_policy": join_policy,
         "inputs": input_refs,
         "output_signal_id": output_signal_id,
         "output_signal_run_id": output_signal_run_id,
-        "row_count": len(combined),
+        "input_row_counts": input_row_counts,
+        "output_row_count": len(combined),
+        "dropped_by_join": dropped_by_join,
         "date_range": {
             "start": str(combined["trade_date"].min()),
             "end": str(combined["trade_date"].max()),
