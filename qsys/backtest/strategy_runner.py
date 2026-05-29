@@ -637,9 +637,6 @@ class BacktestRunner:
         score_column: str = "score",
         top_n: int = 20,
         max_weight: float | None = None,
-        single_stock_cap: float = 0.07,
-        buffer_hold: int = 60,
-        buffer_buy: int = 40,
         commission: float = 0.0003,
         stamp_duty: float = 0.001,
         min_commission: float = 5.0,
@@ -694,7 +691,7 @@ class BacktestRunner:
         # - signal.trade_date = intended_execution_date
         # - allocation before open, execution at open, MTM at close
         # - Preopen-equivalent, NOT BacktestEngine next-open convention
-        hash_input = f"{strategy_template_id}_{signal_id}_{signal_run_id}_{allocation_method}_{top_n}_{max_weight}_{single_stock_cap}_{buffer_hold}_{buffer_buy}_{commission}_{stamp_duty}_{min_commission}_{slippage}_{rebalance_freq}_{start_date}_{end_date}_{initial_capital}"  # noqa: E501
+        hash_input = f"{strategy_template_id}_{signal_id}_{signal_run_id}_{allocation_method}_{top_n}_{max_weight}_{commission}_{stamp_duty}_{min_commission}_{slippage}_{rebalance_freq}_{start_date}_{end_date}_{initial_capital}"  # noqa: E501
         short_hash = hashlib.sha256(hash_input.encode()).hexdigest()[:8]
         strategy_run_id = f"{strategy_template_id}__{signal_id}__{signal_run_id}__{short_hash}"
         backtest_id = f"bt_{start_date}_{end_date}_{short_hash}"
@@ -782,89 +779,34 @@ class BacktestRunner:
                 self._last_trade_date = trade_date
                 continue
 
-            # 2b. No-lookahead check
+            # 2b. No-lookahead check (preopen semantics: data_date < trade_date)
             if "data_date" in day_signal.columns and "trade_date" in day_signal.columns:
-                _v = day_signal[day_signal["data_date"] >= trade_date]
+                # Normalize to YYYY-MM-DD string (handles pd.Timestamp, datetime64)
+                day_signal["_dd"] = pd.to_datetime(day_signal["data_date"]).dt.strftime("%Y-%m-%d")
+                day_signal["_td"] = pd.to_datetime(day_signal["trade_date"]).dt.strftime("%Y-%m-%d")
+                _v = day_signal[day_signal["_dd"] >= day_signal["_td"]]
                 if len(_v) > 0:
-                    _ex = _v.head(3)[["trade_date", "data_date", "instrument"]].to_dict(orient="records")
+                    _ex = _v.head(3)[["trade_date", "data_date"]].to_dict(orient="records")
                     raise ValueError(
                         f"Signal lookahead violation at {trade_date}: "
                         f"{len(_v)} rows have data_date >= trade_date. "
                         f"Examples: {_ex}"
                     )
+                day_signal.drop(columns=["_dd", "_td"], inplace=True)
 
-            # 3. Build target_weights via buffer-aware rank-weight allocation
-            # Replicate original build_rank_weight_portfolio logic:
-            #   - buffer_hold: keep existing positions if rank <= buffer_hold
-            #   - buffer_buy:  only buy new positions if rank <= buffer_buy
-            day_sorted = day_signal.sort_values(score_column, ascending=False).copy()
-            day_sorted["rank"] = range(1, len(day_sorted) + 1)
-            held = set(account.positions.keys())
-
-            # Keep current holdings within buffer hold threshold
-            keep = {}
-            for inst in held:
-                if inst in day_sorted.index and day_sorted.loc[inst, "rank"] <= buffer_hold:
-                    keep[inst] = day_sorted.loc[inst, score_column]
-
-            remaining = max(0, top_n - len(keep))
-            buys = []
-            if remaining > 0:
-                for _, row in day_sorted.iterrows():
-                    inst = row["instrument"]
-                    if inst in held:
-                        continue
-                    if row["rank"] > buffer_buy:
-                        continue
-                    buys.append(inst)
-                    if len(buys) >= remaining:
-                        break
-
-            selected = list(keep.keys()) + buys
-            if not selected:
-                daily_summaries.append(self._empty_day(
-                    trade_date, trade_date, account, "no_selection"
-                ))
-                self._last_trade_date = trade_date
-                continue
-
-            # Sort by score descending for deterministic weights (same as original)
-            _score_lookup = dict(zip(day_signal["instrument"], day_signal[score_column]))
-            selected.sort(key=lambda s: _score_lookup.get(s, 0.0), reverse=True)
-
-            # Linear rank weight (same as original)
-            n_sel = len(selected)
-            tr = sum(range(1, n_sel + 1))
-            ws = {}
-            effective_cap = max_weight if max_weight is not None else single_stock_cap
-            for ri, s in enumerate(selected):
-                raw_w = (n_sel - ri) / tr
-                if effective_cap and raw_w > effective_cap:
-                    ws[s] = effective_cap
-                else:
-                    ws[s] = raw_w
-
-            # Normalize to sum=1
-            wt = sum(ws.values())
-            if wt > 0:
-                ws = {k: v / wt for k, v in ws.items()}
-
-            # Build targets DataFrame for metadata
-            targets = pd.DataFrame({
-                "instrument": list(ws.keys()),
-                "target_weight": [ws[k] for k in ws],
-                "rank": [int(day_sorted[day_sorted["instrument"] == k]["rank"].values[0]) for k in ws],
-                "allocation_method": allocation_method,
-                "trade_date": trade_date,
-            })
-            targets["score"] = [_score_lookup.get(k, 0.0) for k in ws]
-            from qsys.strategy.allocation.schema import add_metadata_columns
-            targets = add_metadata_columns(
-                targets, allocation_method=allocation_method,
-                strategy_id=strategy_template_id, signal_id=signal_id,
+            # 3. Build target_weights via allocation boundary
+            targets = build_rank_weight_targets(
+                day_signal,
+                trade_date=trade_date,
+                score_column=score_column,
+                top_n=top_n,
+                max_weight=max_weight,
+                normalize=True,
+                allocation_method=allocation_method,
+                strategy_id=strategy_template_id,
+                signal_id=signal_id,
                 signal_run_id=signal_run_id,
             )
-
             # 4. Resolve execution prices
             instruments = sorted(set(targets["instrument"]) | set(account.positions.keys()))
 
@@ -982,8 +924,6 @@ class BacktestRunner:
             "allocation_method": allocation_method,
             "allocation_params": {
                 "top_n": top_n, "max_weight": max_weight,
-                "single_stock_cap": single_stock_cap,
-                "buffer_hold": buffer_hold, "buffer_buy": buffer_buy,
             },
             "start_date": start_date,
             "end_date": end_date,
@@ -1037,7 +977,7 @@ class BacktestRunner:
             start_date=start_date,
             end_date=end_date,
             mode="cached_signal",
-            rebalance_freq="daily",
+            rebalance_freq=rebalance_freq,
             initial_capital=initial_capital,
             final_value=final_value,
             total_return=total_return,
@@ -1051,7 +991,7 @@ class BacktestRunner:
             notes=f"cached-signal backtest over {len(trading_dates)} trading dates; "
                   f"signal_id={signal_id}; signal_run_id={signal_run_id}; "
                   f"top_n={top_n}; max_weight={max_weight}; "
-                  f"single_stock_cap={single_stock_cap}; rebalance_freq={rebalance_freq}; "
+                  f"rebalance_freq={rebalance_freq}; "
                   f"slippage={slippage}",
         )
 

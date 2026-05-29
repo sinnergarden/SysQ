@@ -40,9 +40,6 @@ def main() -> None:
     parser.add_argument("--score-column", default="score")
     parser.add_argument("--top-n", type=int, default=20)
     parser.add_argument("--max-weight", type=float, default=None)
-    parser.add_argument("--single-stock-cap", type=float, default=0.07)
-    parser.add_argument("--buffer-hold", type=int, default=60)
-    parser.add_argument("--buffer-buy", type=int, default=40)
     parser.add_argument("--commission", type=float, default=0.0003)
     parser.add_argument("--stamp-duty", type=float, default=0.001)
     parser.add_argument("--min-commission", type=float, default=5.0)
@@ -63,9 +60,6 @@ def main() -> None:
         score_column=args.score_column,
         top_n=args.top_n,
         max_weight=args.max_weight,
-        single_stock_cap=args.single_stock_cap,
-        buffer_hold=args.buffer_hold,
-        buffer_buy=args.buffer_buy,
         commission=args.commission,
         stamp_duty=args.stamp_duty,
         min_commission=args.min_commission,

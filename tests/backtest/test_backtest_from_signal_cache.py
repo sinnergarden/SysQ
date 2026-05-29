@@ -107,6 +107,18 @@ class TestRunFromSignalCache:
         assert mf["signal_trade_date_semantics"] == "intended_execution_date"
         assert isinstance(mf["trading_dates"], list)
         assert mf["trading_day_count"] == 2
+        assert mf["rebalance_freq"] == "daily"
+
+    def test_weekly_rebalance_in_result(self, tmp_path: Path) -> None:
+        import json
+        out = tmp_path / "bt_weekly"
+        result = _run_bt(tmp_path, fixture_dates=4, fixture_inst=10,
+                          signal_id="test_sig", signal_run_id="test_run",
+                          start_date="2026-06-15", end_date="2026-06-18",
+                          rebalance_freq="weekly", output_dir=out)
+        assert result.rebalance_freq == "weekly"
+        mf = json.loads((out / "manifest.json").read_text())
+        assert mf["rebalance_freq"] == "weekly"
 
     def test_metrics_written(self, tmp_path: Path) -> None:
         import json
