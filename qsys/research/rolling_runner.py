@@ -135,6 +135,7 @@ class FixtureSignalGenerator:
         signal_run_id: str,
     ) -> pd.DataFrame:
         import numpy as np
+        import pandas as pd
         from datetime import datetime, timedelta
 
         # Resolve full trading calendar and predict date range
@@ -147,29 +148,32 @@ class FixtureSignalGenerator:
             pass
 
         if not _all_dates:
-            from datetime import datetime, timedelta
-            _all_dates = sorted({(
-                datetime.strptime(predict_start, "%Y-%m-%d") + timedelta(days=i)
-            ).strftime("%Y-%m-%d") for i in range(
-                (datetime.strptime(predict_end, "%Y-%m-%d") -
-                 datetime.strptime(predict_start, "%Y-%m-%d")).days + 1
-            )})
+            # Fallback: business days only, never weekend
+            _bdate_range = pd.bdate_range(start=predict_start, end=predict_end)
+            # Extend backward by 10 business days so the earliest trade_date
+            # still gets a valid previous business day as data_date
+            _extended_start = pd.bdate_range(
+                end=predict_start, periods=11, inclusive="left"
+            )
+            _all_dates = sorted(
+                set(d.strftime("%Y-%m-%d") for d in _extended_start)
+                | set(d.strftime("%Y-%m-%d") for d in _bdate_range)
+            )
 
         _predict_dates = [d for d in _all_dates if predict_start <= d <= predict_end]
 
-        # Build lookup: trade_date -> previous trading day
+        # Build lookup: trade_date -> previous business/trading day
         _prev_map: dict[str, str] = {}
         for i, d in enumerate(_all_dates):
-            _prev_map[d] = (
-                _all_dates[i - 1] if i > 0
-                else (datetime.strptime(d, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
+            _prev_map[d] = _all_dates[i - 1] if i > 0 else (
+                (pd.Timestamp(d) - pd.tseries.offsets.BDay(1)).strftime("%Y-%m-%d")
             )
 
         rng = np.random.default_rng(self._seed)
         rows = []
         for td in _predict_dates:
             prev = _prev_map.get(td,
-                (datetime.strptime(td, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d"))
+                (pd.Timestamp(td) - pd.tseries.offsets.BDay(1)).strftime("%Y-%m-%d"))
             for ii in range(self._n_inst):
                 rows.append({
                     "trade_date": td,

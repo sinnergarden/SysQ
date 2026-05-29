@@ -110,6 +110,25 @@ class TestFixtureSignalGenerator:
         # This should not raise ValueError
         _check_no_lookahead_on_frame(df)
 
+    def test_fallback_monday_to_friday(self) -> None:
+        """When qsys calendar is unavailable, fallback uses business days."""
+        gen = FixtureSignalGenerator(n_instruments=3)
+        # Monday 2026-06-15, monkeypatch get_trading_calendar to fail
+        def _broken_cal(*args, **kwargs):
+            raise RuntimeError("calendar unavailable")
+        with patch("qsys.data.calendar.get_trading_calendar", side_effect=_broken_cal):
+            df = gen.generate(
+                train_start="", train_end="",
+                predict_start="2026-06-15", predict_end="2026-06-16",
+                signal_id="s", signal_run_id="r",
+            )
+        # Monday trade_date should have friday data_date in fallback too
+        monday_rows = df[df["trade_date"] == "2026-06-15"]
+        assert (monday_rows["data_date"] == "2026-06-12").all(), \
+            f"Fallback Monday->Friday failed, got: {monday_rows['data_date'].unique()}"
+        from qsys.signal.store import _check_no_lookahead_on_frame
+        _check_no_lookahead_on_frame(df)
+
     def test_seed_controls_reproducibility(self) -> None:
         gen_a = FixtureSignalGenerator(n_instruments=3, seed=42)
         gen_b = FixtureSignalGenerator(n_instruments=3, seed=42)
