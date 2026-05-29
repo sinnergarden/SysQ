@@ -259,6 +259,10 @@ class RollingResearchConfig:
     strategies: list[dict[str, Any]] = field(default_factory=list)
     # each strategy: strategy_id, strategy_template_id, top_n, ...
 
+    # ── v2 signal combinations ──────────────────────────────────────────
+    signal_combinations: list[dict[str, Any]] = field(default_factory=list)
+    # each combination: combine_id, type, inputs
+
     @classmethod
     def from_file(cls, path: Path) -> RollingResearchConfig:
         """Load config from YAML or JSON file."""
@@ -282,6 +286,7 @@ class RollingResearchConfig:
         generators = payload.get("generators", [])
         transforms = payload.get("signal_transforms", [])
         strategies = payload.get("strategies", [])
+        signal_combinations = payload.get("signal_combinations", [])
         return cls(
             experiment_id=payload.get("experiment_id", "rolling_run"),
             title=payload.get("title"),
@@ -293,6 +298,7 @@ class RollingResearchConfig:
             generators=generators,
             transforms=transforms,
             strategies=strategies,
+            signal_combinations=signal_combinations,
         )
 
 
@@ -302,7 +308,10 @@ class RollingResearchConfig:
 def _create_generator_from_config(gen_config: dict) -> RollingSignalGenerator:
     """Create a generator instance from a config dict.
 
-    Supports ``type: fixture`` only in this PR.
+    Supported types:
+    - ``fixture`` — deterministic fixture (tests/CI)
+    - ``alpha_v1_existing`` — existing alpha_v1 prediction adapter
+    - ``technical_composite`` — OHLCV-derived composite signal
     """
     gen_type = gen_config.get("type", "fixture")
     params = gen_config.get("params", {})
@@ -310,6 +319,19 @@ def _create_generator_from_config(gen_config: dict) -> RollingSignalGenerator:
         return FixtureSignalGenerator(
             n_instruments=params.get("n_instruments", 100),
             seed=params.get("seed", 42),
+        )
+    if gen_type == "alpha_v1_existing":
+        from qsys.research.generators.alpha_v1_existing import AlphaV1ExistingGenerator
+        return AlphaV1ExistingGenerator()
+    if gen_type == "technical_composite":
+        from qsys.research.generators.technical_composite import TechnicalCompositeV1Generator
+        return TechnicalCompositeV1Generator(
+            momentum_short=params.get("momentum_short", 20),
+            momentum_long=params.get("momentum_long", 60),
+            reversal_days=params.get("reversal_days", 5),
+            volatility_days=params.get("volatility_days", 20),
+            volume_short=params.get("volume_short", 5),
+            volume_long=params.get("volume_long", 20),
         )
     raise ValueError(f"Unknown generator type: {gen_type!r}")
 
@@ -786,6 +808,158 @@ class RollingResearchRunner:
                     backtest_id=_bid,
                 )
 
+        # ── 5a. Signal combinations (cross-signal) ────────────────────
+        combine_count = 0
+        combined_signal_run_ids: list[str] = []
+        if config.signal_combinations:
+            from qsys.research.signal_combine import (
+                CombineSpec,
+                build_combine_spec_from_config,
+                combine_signals,
+                build_cross_signal_index,
+            )
+
+            # Build signal_id_map and signal_run_id_map from jobs
+            signal_id_map: dict[str, str] = {}
+            signal_run_id_map: dict[str, str] = {}
+            for job in jobs:
+                key = f"{job.generator_id}__{job.transform_id}"
+                signal_id_map[key] = job.signal_id
+                signal_run_id_map[key] = job.signal_run_id
+
+            combine_specs: list[CombineSpec] = []
+            combined_output_ids: list[str] = []
+            combined_output_run_ids: list[str] = []
+
+            for comb_cfg in config.signal_combinations:
+                spec = build_combine_spec_from_config(
+                    comb_cfg, signal_id_map, signal_run_id_map,
+                )
+                combine_specs.append(spec)
+
+                out_sig_id = (
+                    config.signal.get("signal_id", "matrix_signal")
+                    + f"__{spec.combine_id}"
+                )
+                cal = config.calendar
+                out_run_id = (
+                    f"rolling__{config.experiment_id}__{spec.combine_id}"
+                    f"__{cal.get('start_date', '')}_{cal.get('end_date', '')}"
+                )
+                combined_output_ids.append(out_sig_id)
+                combined_output_run_ids.append(out_run_id)
+
+                # Run combination
+                combined_df = combine_signals(
+                    spec,
+                    output_signal_id=out_sig_id,
+                    output_signal_run_id=out_run_id,
+                    signal_store=self._signal_store,
+                    research_paths=self._paths,
+                    overwrite=overwrite_signal,
+                )
+
+                # Evaluate combined signal
+                for lcfg in config.labels:
+                    evaluator.evaluate(
+                        signal_id=out_sig_id,
+                        signal_run_id=out_run_id,
+                        label_id=lcfg["label_id"],
+                        score_column=config.signal.get("score_column", "score"),
+                        overwrite=overwrite_eval,
+                    )
+                    eval_count += 1
+
+                # Backtest combined signal against all strategies
+                bt_refs_combined: list[tuple[str, str]] = []
+                for scfg in config.strategies:
+                    bt_result = bt_runner.run_from_signal_cache(
+                        signal_id=out_sig_id,
+                        signal_run_id=out_run_id,
+                        start_date=scfg.get("start_date", cal.get("start_date")),
+                        end_date=scfg.get("end_date", cal.get("end_date")),
+                        initial_capital=scfg.get("initial_capital", 1_000_000.0),
+                        top_n=scfg.get("top_n", 20),
+                        max_weight=scfg.get("max_weight"),
+                        strategy_template_id=scfg.get(
+                            "strategy_template_id", "rank_weight_top20"
+                        ),
+                        allocation_method=scfg.get("allocation_method", "rank_weight"),
+                        rebalance_freq=scfg.get("rebalance_freq", "weekly"),
+                        artifact_mode=scfg.get("artifact_mode", "summary"),
+                        overwrite=overwrite_backtest,
+                        research_root=str(self.root),
+                    )
+
+                    if not hasattr(bt_result, "artifacts") or not bt_result.artifacts:
+                        raise RuntimeError("BacktestRunResult missing artifacts dict")
+                    _mf_path = bt_result.artifacts.get("manifest")
+                    if not _mf_path or not Path(_mf_path).exists():
+                        raise RuntimeError(
+                            f"Backtest manifest not found: {_mf_path}"
+                        )
+                    import json as _j
+                    _mf = _j.loads(Path(_mf_path).read_text())
+                    _sid = _mf.get("strategy_run_id")
+                    _bid = _mf.get("backtest_id")
+                    if not _sid or not _bid:
+                        raise RuntimeError(
+                            f"Backtest manifest missing strategy_run_id or "
+                            f"backtest_id in {_mf_path}"
+                        )
+                    bt_refs_combined.append((_sid, _bid))
+                    all_bt_refs.append((out_sig_id, out_run_id, _sid, _bid))
+                    bt_count += 1
+
+                    job_rows.append({
+                        "generator_id": spec.combine_id,
+                        "transform_id": "combined",
+                        "strategy_id": scfg.get(
+                            "strategy_id", scfg.get("strategy_template_id", "")
+                        ),
+                        "signal_id": out_sig_id,
+                        "signal_run_id": out_run_id,
+                        "strategy_template_id": scfg.get(
+                            "strategy_template_id", ""
+                        ),
+                        "top_n": scfg.get("top_n", ""),
+                        "backtest_id": _bid,
+                        "strategy_run_id": _sid,
+                        "status": "completed",
+                    })
+
+                # Register combined signal in experiment index
+                self._experiment_index.add_signal_run(
+                    config.experiment_id,
+                    signal_id=out_sig_id,
+                    signal_run_id=out_run_id,
+                )
+                for lcfg in config.labels:
+                    self._experiment_index.add_signal_eval(
+                        config.experiment_id,
+                        signal_id=out_sig_id,
+                        signal_run_id=out_run_id,
+                        label_id=lcfg["label_id"],
+                    )
+                for _sid, _bid in bt_refs_combined:
+                    self._experiment_index.add_backtest_run(
+                        config.experiment_id,
+                        strategy_run_id=_sid,
+                        backtest_id=_bid,
+                    )
+
+                combine_count += 1
+                combined_signal_run_ids.append(out_run_id)
+
+            # Write cross_signal_index.csv
+            build_cross_signal_index(
+                combine_specs,
+                combined_output_ids,
+                combined_output_run_ids,
+                self._paths,
+                config.experiment_id,
+            )
+
         # ── 5. Rebuild indexes ──
         self._experiment_index.rebuild_indexes(config.experiment_id)
 
@@ -825,6 +999,7 @@ class RollingResearchRunner:
             "experiment_id": config.experiment_id,
             "generator_count": len(config.generators),
             "transform_count": len(config.transforms),
+            "combination_count": len(config.signal_combinations),
             "strategy_count": len(config.strategies),
             "job_count": len(jobs),
             "window_count": len(windows),
@@ -845,9 +1020,11 @@ class RollingResearchRunner:
             "window_count": len(windows),
             "generator_count": len(config.generators),
             "transform_count": len(config.transforms),
+            "combination_count": len(config.signal_combinations),
             "strategy_count": len(config.strategies),
             "job_count": len(jobs),
-            "signal_run_count": len(jobs),
+            "signal_run_count": len(jobs) + combine_count,
+            "combined_signal_run_count": combine_count,
             "signal_eval_count": eval_count,
             "backtest_count": bt_count,
             "output_dir": str(exp_dir),

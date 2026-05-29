@@ -1,0 +1,70 @@
+experiment_id: real_cross_matrix_smoke
+title: "Real Cross Matrix Smoke"
+description: |
+  Real generator + cross-signal matrix pressure test.
+  Validates Framework Stable 2.0 with real data-derived signals.
+
+calendar:
+  start_date: "2026-05-18"
+  end_date: "2026-05-22"
+  train_window_days: 100
+  predict_window_days: 2
+  step_days: 2
+
+signal:
+  signal_id: real_cross
+  score_column: score
+
+generators:
+  - generator_id: alpha_v1
+    type: alpha_v1_existing
+    params: {}
+
+  - generator_id: tech_comp
+    type: technical_composite
+    params:
+      momentum_short: 20
+      momentum_long: 60
+      reversal_days: 5
+      volatility_days: 20
+      volume_short: 5
+      volume_long: 20
+
+signal_transforms:
+  - transform_id: raw
+    type: identity
+
+  - transform_id: daily_zscore
+    type: daily_zscore
+
+signal_combinations:
+  - combine_id: blend_alpha_tech_70_30
+    type: linear_blend
+    inputs:
+      - source_generator_id: alpha_v1
+        source_transform_id: daily_zscore
+        weight: 0.7
+      - source_generator_id: tech_comp
+        source_transform_id: daily_zscore
+        weight: 0.3
+
+strategies:
+  - strategy_id: top20
+    strategy_template_id: rank_weight_top20
+    allocation_method: rank_weight
+    top_n: 20
+    initial_capital: 1000000
+    rebalance_freq: weekly
+    artifact_mode: summary
+
+  - strategy_id: top50_capped
+    strategy_template_id: rank_weight_top50_capped
+    allocation_method: rank_weight
+    top_n: 50
+    max_weight: 0.03
+    initial_capital: 1000000
+    rebalance_freq: weekly
+    artifact_mode: summary
+
+labels:
+  - label_id: forward_return_5d
