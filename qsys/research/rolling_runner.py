@@ -1,8 +1,10 @@
-"""RollingResearchRunner v1 — rolling research pipeline for Framework Stable 2.0.
+"""RollingResearchRunner v2 — rolling research pipeline with matrix experiment support.
 
-Orchestrates:
-  rolling windows → signal generator → SignalStore → SignalEvaluator
-  → BacktestRunner.run_from_signal_cache → ExperimentIndex
+v1: single-path rolling research (signal → eval → backtest → index).
+v2: matrix experiment (generators × signal_transforms × strategies).
+
+Both modes share rolling windows, SignalStore, SignalEvaluator,
+BacktestRunner, and ExperimentIndex.
 """
 
 from __future__ import annotations
@@ -118,8 +120,9 @@ class FixtureSignalGenerator:
     Returns random-shaped signals that are valid for SignalStore.
     """
 
-    def __init__(self, n_instruments: int = 100) -> None:
+    def __init__(self, n_instruments: int = 100, seed: int = 42) -> None:
         self._n_inst = n_instruments
+        self._seed = seed
 
     def generate(
         self,
@@ -141,7 +144,7 @@ class FixtureSignalGenerator:
             pass
 
         from datetime import datetime, timedelta
-        rng = np.random.default_rng(42)
+        rng = np.random.default_rng(self._seed)
         rows = []
         for d in sorted(cal):
             prev = (datetime.strptime(d, "%Y-%m-%d") - timedelta(days=2)).strftime("%Y-%m-%d")
@@ -157,7 +160,7 @@ class FixtureSignalGenerator:
         return pd.DataFrame(rows)
 
 
-# ── RollingResearchRunner ──────────────────────────────────────────────
+# ── Config dataclasses ─────────────────────────────────────────────────
 
 
 @dataclass
@@ -177,8 +180,32 @@ class BacktestConfig:
 
 
 @dataclass
+class SignalTransformConfig:
+    """Configuration for a single signal transform."""
+    transform_id: str
+    type: str
+
+
+@dataclass
+class MatrixJob:
+    """One cell in the matrix: a (generator, transform) pair with strategy configs.
+
+    Each job produces one SignalRun (shared across all strategies).
+    """
+    generator_id: str
+    transform_id: str
+    strategy_configs: list[dict[str, Any]]
+    signal_id: str
+    signal_run_id: str
+
+
+@dataclass
 class RollingResearchConfig:
-    """Full configuration for a rolling research run."""
+    """Full configuration for a rolling research run.
+
+    v1 single-signal mode: set ``signal`` (and optionally ``backtests``).
+    v2 matrix mode: set ``generators``, ``signal_transforms``, and ``strategies``.
+    """
 
     experiment_id: str
     title: str | None = None
@@ -194,7 +221,17 @@ class RollingResearchConfig:
     # each label: label_id
 
     backtests: list[dict[str, Any]] = field(default_factory=list)
-    # each backtest: strategy_template_id, top_n, max_weight, ...
+    # each backtest: strategy_template_id, top_n, max_weight, ...  (v1 only)
+
+    # ── v2 matrix fields ───────────────────────────────────────────────
+    generators: list[dict[str, Any]] = field(default_factory=list)
+    # each generator: generator_id, type, params
+
+    transforms: list[dict[str, Any]] = field(default_factory=list)
+    # each transform: transform_id, type  (mapped from signal_transforms in YAML)
+
+    strategies: list[dict[str, Any]] = field(default_factory=list)
+    # each strategy: strategy_id, strategy_template_id, top_n, ...
 
     @classmethod
     def from_file(cls, path: Path) -> RollingResearchConfig:
@@ -216,6 +253,9 @@ class RollingResearchConfig:
         sig = payload.get("signal", {})
         labels = payload.get("labels", [])
         backtests = payload.get("backtests", [])
+        generators = payload.get("generators", [])
+        transforms = payload.get("signal_transforms", [])
+        strategies = payload.get("strategies", [])
         return cls(
             experiment_id=payload.get("experiment_id", "rolling_run"),
             title=payload.get("title"),
@@ -224,7 +264,112 @@ class RollingResearchConfig:
             signal=sig,
             labels=labels,
             backtests=backtests,
+            generators=generators,
+            transforms=transforms,
+            strategies=strategies,
         )
+
+
+# ── Generator factory ──────────────────────────────────────────────────
+
+
+def _create_generator_from_config(gen_config: dict) -> RollingSignalGenerator:
+    """Create a generator instance from a config dict.
+
+    Supports ``type: fixture`` only in this PR.
+    """
+    gen_type = gen_config.get("type", "fixture")
+    params = gen_config.get("params", {})
+    if gen_type == "fixture":
+        return FixtureSignalGenerator(
+            n_instruments=params.get("n_instruments", 100),
+            seed=params.get("seed", 42),
+        )
+    raise ValueError(f"Unknown generator type: {gen_type!r}")
+
+
+# ── Signal transforms ─────────────────────────────────────────────────
+
+
+def apply_signal_transform(
+    frame: pd.DataFrame,
+    transform_config: SignalTransformConfig | dict[str, Any],
+) -> pd.DataFrame:
+    """Apply a signal transform to a predictions DataFrame.
+
+    Parameters
+    ----------
+    frame:
+        DataFrame with at least columns ``trade_date``, ``score``.
+    transform_config:
+        Transform specification with ``transform_id`` and ``type``.
+
+    Returns
+    -------
+    pd.DataFrame
+        Frame with the same columns plus ``score_raw`` and ``transform_id``.
+        Column ``score`` is replaced with the transformed values.
+    """
+    if isinstance(transform_config, dict):
+        transform_config = SignalTransformConfig(**transform_config)
+
+    result = frame.copy()
+    result["score_raw"] = frame["score"]
+    result["transform_id"] = transform_config.transform_id
+
+    if transform_config.type == "identity":
+        result["score"] = frame["score"].copy()
+    elif transform_config.type == "daily_zscore":
+        def _safe_zscore(scores: pd.Series) -> pd.Series:
+            std = scores.std(ddof=0)
+            if pd.isna(std) or std == 0.0:
+                return pd.Series(0.0, index=scores.index)
+            return (scores - scores.mean()) / std
+
+        result["score"] = result.groupby("trade_date", group_keys=False)["score"].transform(
+            _safe_zscore
+        )
+    else:
+        raise ValueError(f"Unknown signal transform type: {transform_config.type!r}")
+
+    return result
+
+
+# ── Matrix job builder ────────────────────────────────────────────────
+
+
+def build_matrix_jobs(config: RollingResearchConfig) -> list[MatrixJob]:
+    """Expand a matrix config into individual (generator, transform) jobs.
+
+    Each job carries the full list of strategy configs so that generation
+    and transform are performed once and backtests are run per strategy.
+    """
+    base_signal_id = config.signal.get("signal_id", "matrix_signal")
+    experiment_id = config.experiment_id
+    cal = config.calendar
+    start = cal.get("start_date", "")
+    end = cal.get("end_date", "")
+
+    jobs: list[MatrixJob] = []
+    for gen_cfg in config.generators:
+        gen_id = gen_cfg["generator_id"]
+        for tf_cfg in config.transforms:
+            tf_id = tf_cfg["transform_id"]
+            signal_id = f"{base_signal_id}__{gen_id}__{tf_id}"
+            signal_run_id = (
+                f"rolling__{experiment_id}__{gen_id}__{tf_id}__{start}_{end}"
+            )
+            jobs.append(MatrixJob(
+                generator_id=gen_id,
+                transform_id=tf_id,
+                strategy_configs=config.strategies,
+                signal_id=signal_id,
+                signal_run_id=signal_run_id,
+            ))
+    return jobs
+
+
+# ── RollingResearchRunner ──────────────────────────────────────────────
 
 
 class RollingResearchRunner:
@@ -260,7 +405,8 @@ class RollingResearchRunner:
             Rolling research configuration.
         signal_generator:
             Callable for per-window signal generation.  When ``None``,
-            uses ``FixtureSignalGenerator``.
+            uses ``FixtureSignalGenerator`` (v1) or config-driven
+            generators (v2 matrix).
         overwrite_signal:
             Allow overwriting existing SignalRun.
         overwrite_eval:
@@ -300,7 +446,18 @@ class RollingResearchRunner:
         exp_dir.mkdir(parents=True, exist_ok=True)
         window_df.to_csv(exp_dir / "rolling_windows.csv", index=False)
 
-        # ── 2. Generate predictions per window ──
+        # ── Dispatch: v2 matrix vs v1 single ──
+        if config.generators:
+            return self._run_matrix(
+                config, windows,
+                signal_generator=signal_generator,
+                overwrite_signal=overwrite_signal,
+                overwrite_eval=overwrite_eval,
+                overwrite_backtest=overwrite_backtest,
+                overwrite_experiment=overwrite_experiment,
+            )
+
+        # ── v1 single-signal path (unchanged) ──
         signal_id = config.signal.get("signal_id", "rolling_signal")
         signal_run_id = config.signal.get("signal_run_id", "rolling_run")
         gen = signal_generator or FixtureSignalGenerator()
@@ -426,6 +583,244 @@ class RollingResearchRunner:
             "signal_run_id": signal_run_id,
             "window_count": len(windows),
             "prediction_row_count": len(predictions),
+            "signal_eval_count": eval_count,
+            "backtest_count": bt_count,
+            "output_dir": str(exp_dir),
+        }
+
+    # ── v2: matrix experiment ──────────────────────────────────────────
+
+    def _run_matrix(
+        self,
+        config: RollingResearchConfig,
+        windows: list[RollingWindow],
+        *,
+        signal_generator: RollingSignalGenerator | None = None,
+        overwrite_signal: bool = False,
+        overwrite_eval: bool = False,
+        overwrite_backtest: bool = False,
+        overwrite_experiment: bool = False,
+    ) -> dict[str, Any]:
+        """Matrix experiment: generators × transforms × strategies."""
+        from qsys.research.evaluation import SignalEvaluator
+        from qsys.backtest.strategy_runner import BacktestRunner
+
+        exp_dir = self._paths.experiment_dir(config.experiment_id)
+
+        # ── 1. Create experiment index ──
+        self._experiment_index.create(
+            ExperimentSpec(
+                experiment_id=config.experiment_id,
+                title=config.title,
+                description=config.description,
+            ),
+            overwrite=overwrite_experiment,
+        )
+
+        # ── 2. Build matrix jobs ──
+        jobs = build_matrix_jobs(config)
+        explicit_generator = signal_generator is not None
+
+        # ── 3. Generate raw predictions once per generator ──
+        evaluator = SignalEvaluator(str(self.root))
+        bt_runner = BacktestRunner()
+
+        raw_predictions: dict[str, pd.DataFrame] = {}
+        eval_count = 0
+        bt_count = 0
+        all_bt_refs: list[tuple[str, str, str, str]] = []
+
+        for gen_cfg in config.generators:
+            gen_id = gen_cfg["generator_id"]
+            gen = signal_generator if explicit_generator else _create_generator_from_config(gen_cfg)
+
+            all_preds: list[pd.DataFrame] = []
+            for w in windows:
+                pred = gen.generate(
+                    train_start=w.train_start,
+                    train_end=w.train_end,
+                    predict_start=w.predict_start,
+                    predict_end=w.predict_end,
+                    signal_id="__internal__",
+                    signal_run_id="__internal__",
+                )
+                all_preds.append(pred)
+            raw_predictions[gen_id] = pd.concat(all_preds, ignore_index=True)
+
+        # ── 4. For each job: transform → save → eval → backtest → index ──
+        job_rows: list[dict[str, Any]] = []
+
+        for job in jobs:
+            raw = raw_predictions[job.generator_id]
+
+            # Find transform config
+            tf_cfg = next(
+                (t for t in config.transforms if t["transform_id"] == job.transform_id),
+                None,
+            )
+            if tf_cfg is None:
+                raise ValueError(f"Transform config not found: {job.transform_id}")
+
+            # Apply transform
+            transformed = apply_signal_transform(raw, tf_cfg)
+            transformed["signal_id"] = job.signal_id
+            transformed["signal_run_id"] = job.signal_run_id
+
+            # Save SignalRun
+            self._signal_store.save_signal_run(
+                job.signal_id, job.signal_run_id, transformed,
+                manifest={
+                    "model_mode": "rolling_matrix",
+                    "window_count": len(windows),
+                    "generator_id": job.generator_id,
+                    "transform_id": job.transform_id,
+                    "train_window_days": config.calendar.get("train_window_days"),
+                    "predict_window_days": config.calendar.get("predict_window_days"),
+                },
+                overwrite=overwrite_signal,
+            )
+
+            # Evaluate all labels
+            for lcfg in config.labels:
+                evaluator.evaluate(
+                    signal_id=job.signal_id,
+                    signal_run_id=job.signal_run_id,
+                    label_id=lcfg["label_id"],
+                    score_column=config.signal.get("score_column", "score"),
+                    overwrite=overwrite_eval,
+                )
+                eval_count += 1
+
+            # Run backtest for each strategy
+            bt_refs_for_job: list[tuple[str, str]] = []
+            for scfg in job.strategy_configs:
+                bt_result = bt_runner.run_from_signal_cache(
+                    signal_id=job.signal_id,
+                    signal_run_id=job.signal_run_id,
+                    start_date=scfg.get("start_date", config.calendar.get("start_date")),
+                    end_date=scfg.get("end_date", config.calendar.get("end_date")),
+                    initial_capital=scfg.get("initial_capital", 1_000_000.0),
+                    top_n=scfg.get("top_n", 20),
+                    max_weight=scfg.get("max_weight"),
+                    strategy_template_id=scfg.get("strategy_template_id", "rank_weight_top20"),
+                    allocation_method=scfg.get("allocation_method", "rank_weight"),
+                    rebalance_freq=scfg.get("rebalance_freq", "weekly"),
+                    artifact_mode=scfg.get("artifact_mode", "summary"),
+                    overwrite=overwrite_backtest,
+                    research_root=str(self.root),
+                )
+
+                # Extract backtest IDs from manifest
+                if not hasattr(bt_result, "artifacts") or not bt_result.artifacts:
+                    raise RuntimeError("BacktestRunResult missing artifacts dict")
+                _mf_path = bt_result.artifacts.get("manifest")
+                if not _mf_path or not Path(_mf_path).exists():
+                    raise RuntimeError(f"Backtest manifest not found: {_mf_path}")
+                _mf = json.loads(Path(_mf_path).read_text())
+                _sid = _mf.get("strategy_run_id")
+                _bid = _mf.get("backtest_id")
+                if not _sid or not _bid:
+                    raise RuntimeError(
+                        f"Backtest manifest missing strategy_run_id or backtest_id in {_mf_path}"
+                    )
+                bt_refs_for_job.append((_sid, _bid))
+                all_bt_refs.append((job.signal_id, job.signal_run_id, _sid, _bid))
+                bt_count += 1
+
+                job_rows.append({
+                    "generator_id": job.generator_id,
+                    "transform_id": job.transform_id,
+                    "strategy_id": scfg.get("strategy_id", scfg.get("strategy_template_id", "")),
+                    "signal_id": job.signal_id,
+                    "signal_run_id": job.signal_run_id,
+                    "strategy_template_id": scfg.get("strategy_template_id", ""),
+                    "top_n": scfg.get("top_n", ""),
+                    "backtest_id": _bid,
+                    "strategy_run_id": _sid,
+                    "status": "completed",
+                })
+
+            # Register signal run and evals in experiment index
+            self._experiment_index.add_signal_run(
+                config.experiment_id,
+                signal_id=job.signal_id,
+                signal_run_id=job.signal_run_id,
+            )
+            for lcfg in config.labels:
+                self._experiment_index.add_signal_eval(
+                    config.experiment_id,
+                    signal_id=job.signal_id,
+                    signal_run_id=job.signal_run_id,
+                    label_id=lcfg["label_id"],
+                )
+            for _sid, _bid in bt_refs_for_job:
+                self._experiment_index.add_backtest_run(
+                    config.experiment_id,
+                    strategy_run_id=_sid,
+                    backtest_id=_bid,
+                )
+
+        # ── 5. Rebuild indexes ──
+        self._experiment_index.rebuild_indexes(config.experiment_id)
+
+        # ── 6. Write matrix_jobs.csv ──
+        job_cols = [
+            "generator_id", "transform_id", "strategy_id",
+            "signal_id", "signal_run_id",
+            "strategy_template_id", "top_n",
+            "backtest_id", "strategy_run_id", "status",
+        ]
+        job_df = pd.DataFrame(job_rows, columns=job_cols)
+        job_df.to_csv(exp_dir / "matrix_jobs.csv", index=False)
+
+        # ── 7. Rolling research manifest ──
+        signal_runs_summary = [
+            {
+                "generator_id": j.generator_id,
+                "transform_id": j.transform_id,
+                "signal_id": j.signal_id,
+                "signal_run_id": j.signal_run_id,
+            }
+            for j in jobs
+        ]
+        bt_refs_summary = [
+            {
+                "signal_id": sid,
+                "signal_run_id": srid,
+                "strategy_run_id": srid2,
+                "backtest_id": bid,
+            }
+            for sid, srid, srid2, bid in all_bt_refs
+        ]
+        manifest = with_standard_metadata({
+            "artifact_type": "rolling_research",
+            "mode": "matrix",
+            "experiment_id": config.experiment_id,
+            "generator_count": len(config.generators),
+            "transform_count": len(config.transforms),
+            "strategy_count": len(config.strategies),
+            "job_count": len(jobs),
+            "window_count": len(windows),
+            "signal_runs": signal_runs_summary,
+            "backtest_refs": bt_refs_summary,
+            "labels": config.labels,
+            "date_range": {
+                "start": config.calendar.get("start_date"),
+                "end": config.calendar.get("end_date"),
+            },
+        })
+        write_manifest(exp_dir / "rolling_research_manifest.json", manifest)
+
+        return {
+            "status": "passed",
+            "experiment_id": config.experiment_id,
+            "mode": "matrix",
+            "window_count": len(windows),
+            "generator_count": len(config.generators),
+            "transform_count": len(config.transforms),
+            "strategy_count": len(config.strategies),
+            "job_count": len(jobs),
+            "signal_run_count": len(jobs),
             "signal_eval_count": eval_count,
             "backtest_count": bt_count,
             "output_dir": str(exp_dir),

@@ -1,0 +1,56 @@
+experiment_id: rolling_matrix_smoke
+title: "Rolling matrix smoke (2×2×2 fixture)"
+description: |
+  Matrix experiment smoke test using fixture generators.
+  2 generators × 2 signal transforms × 2 strategies = 8 rolling paths.
+
+calendar:
+  start_date: "2026-05-18"
+  end_date: "2026-05-22"
+  train_window_days: 100
+  predict_window_days: 2
+  step_days: 2
+
+signal:
+  signal_id: matrix_smoke
+  score_column: score
+
+generators:
+  - generator_id: fixture_a
+    type: fixture
+    params:
+      n_instruments: 100
+      seed: 42
+
+  - generator_id: fixture_b
+    type: fixture
+    params:
+      n_instruments: 100
+      seed: 7
+
+signal_transforms:
+  - transform_id: raw
+    type: identity
+
+  - transform_id: daily_zscore
+    type: daily_zscore
+
+strategies:
+  - strategy_id: top20
+    strategy_template_id: rank_weight_top20
+    allocation_method: rank_weight
+    top_n: 20
+    initial_capital: 1000000
+    rebalance_freq: weekly
+    artifact_mode: summary
+
+  - strategy_id: top50
+    strategy_template_id: rank_weight_top50
+    allocation_method: rank_weight
+    top_n: 50
+    initial_capital: 1000000
+    rebalance_freq: weekly
+    artifact_mode: summary
+
+labels:
+  - label_id: forward_return_5d
