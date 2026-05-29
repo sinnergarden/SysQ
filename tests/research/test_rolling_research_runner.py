@@ -73,6 +73,43 @@ class TestFixtureSignalGenerator:
             assert list(df.columns[:6]) == ["trade_date", "data_date", "instrument", "signal_id", "signal_run_id", "score"]
             assert df["signal_id"].iloc[0] == "test"
 
+    def test_data_date_is_prev_trading_day(self) -> None:
+        """Monday trade_date -> previous Friday data_date, never weekend."""
+        gen = FixtureSignalGenerator(n_instruments=3)
+        # Monday 2026-06-15 with full trading calendar context
+        mock_cal = [
+            "2026-06-12",  # Friday
+            "2026-06-15",  # Monday
+            "2026-06-16",  # Tuesday
+        ]
+        with patch("qsys.data.calendar.get_trading_calendar", return_value=mock_cal):
+            df = gen.generate(
+                train_start="", train_end="",
+                predict_start="2026-06-15", predict_end="2026-06-15",
+                signal_id="s", signal_run_id="r",
+            )
+        # All data_date should be Friday 2026-06-12
+        assert (df["data_date"] == "2026-06-12").all(), \
+            f"Monday data_date should be Friday, got: {df['data_date'].unique()}"
+
+    def test_passes_no_lookahead(self) -> None:
+        """Generated fixture signal passes SignalStore no-lookahead validation."""
+        from qsys.signal.store import _check_no_lookahead_on_frame
+        gen = FixtureSignalGenerator(n_instruments=5)
+        mock_cal = [
+            "2026-06-12",  # Friday
+            "2026-06-15",  # Monday
+            "2026-06-16",  # Tuesday
+        ]
+        with patch("qsys.data.calendar.get_trading_calendar", return_value=mock_cal):
+            df = gen.generate(
+                train_start="", train_end="",
+                predict_start="2026-06-15", predict_end="2026-06-16",
+                signal_id="no_lookahead", signal_run_id="test",
+            )
+        # This should not raise ValueError
+        _check_no_lookahead_on_frame(df)
+
     def test_seed_controls_reproducibility(self) -> None:
         gen_a = FixtureSignalGenerator(n_instruments=3, seed=42)
         gen_b = FixtureSignalGenerator(n_instruments=3, seed=42)
@@ -702,6 +739,7 @@ class TestMatrixExperiment:
 
         manifest = json.loads(mf_path.read_text())
         assert manifest["mode"] == "matrix"
+        assert manifest.get("matrix_purpose") == "framework_boundary_smoke"
         assert manifest["generator_count"] == 2
         assert manifest["transform_count"] == 2
         assert manifest["strategy_count"] == 2

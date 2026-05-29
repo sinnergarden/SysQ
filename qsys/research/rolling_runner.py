@@ -135,22 +135,44 @@ class FixtureSignalGenerator:
         signal_run_id: str,
     ) -> pd.DataFrame:
         import numpy as np
+        from datetime import datetime, timedelta
 
-        cal = [predict_start, predict_end]
+        # Resolve full trading calendar and predict date range
+        _all_dates: list[str] = []
+        _predict_dates: list[str] = []
         try:
             from qsys.data.calendar import get_trading_calendar
-            cal = get_trading_calendar(predict_start, predict_end)
+            _all_dates = sorted(get_trading_calendar("2000-01-01", predict_end) or [])
         except Exception:
             pass
 
-        from datetime import datetime, timedelta
+        if not _all_dates:
+            from datetime import datetime, timedelta
+            _all_dates = sorted({(
+                datetime.strptime(predict_start, "%Y-%m-%d") + timedelta(days=i)
+            ).strftime("%Y-%m-%d") for i in range(
+                (datetime.strptime(predict_end, "%Y-%m-%d") -
+                 datetime.strptime(predict_start, "%Y-%m-%d")).days + 1
+            )})
+
+        _predict_dates = [d for d in _all_dates if predict_start <= d <= predict_end]
+
+        # Build lookup: trade_date -> previous trading day
+        _prev_map: dict[str, str] = {}
+        for i, d in enumerate(_all_dates):
+            _prev_map[d] = (
+                _all_dates[i - 1] if i > 0
+                else (datetime.strptime(d, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
+            )
+
         rng = np.random.default_rng(self._seed)
         rows = []
-        for d in sorted(cal):
-            prev = (datetime.strptime(d, "%Y-%m-%d") - timedelta(days=2)).strftime("%Y-%m-%d")
+        for td in _predict_dates:
+            prev = _prev_map.get(td,
+                (datetime.strptime(td, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d"))
             for ii in range(self._n_inst):
                 rows.append({
-                    "trade_date": d,
+                    "trade_date": td,
                     "data_date": prev,
                     "instrument": f"000{ii:04d}.SZ",
                     "signal_id": signal_id,
@@ -795,6 +817,7 @@ class RollingResearchRunner:
         manifest = with_standard_metadata({
             "artifact_type": "rolling_research",
             "mode": "matrix",
+            "matrix_purpose": "framework_boundary_smoke",
             "experiment_id": config.experiment_id,
             "generator_count": len(config.generators),
             "transform_count": len(config.transforms),
