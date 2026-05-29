@@ -47,6 +47,7 @@ Usage
 
 from __future__ import annotations
 
+import hashlib
 import json
 import tempfile
 from datetime import datetime
@@ -59,6 +60,8 @@ from qsys.backtest.result import BacktestRunResult
 from qsys.ops.market_snapshot import fetch_market_snapshot
 from qsys.ops.plan_builder import build_order_intents
 from qsys.ops.shadow_execution import positions_frame
+from qsys.signal.store import SignalStore
+from qsys.strategy.allocation.rank_weight import build_rank_weight_targets
 from qsys.trader.account import Account
 from qsys.trader.matcher import MatchEngine
 
@@ -615,11 +618,385 @@ class BacktestRunner:
         }
         write_json(output_path / "backtest_result.json", summary)
 
-        # Write daily summary CSV
         if result.daily_summary:
             pd.DataFrame(result.daily_summary).to_csv(
                 output_path / "daily_summary.csv", index=False,
             )
+
+    # ── PR109: cached-signal backtest ─────────────────────────────────────
+
+    def run_from_signal_cache(
+        self,
+        *,
+        signal_id: str,
+        signal_run_id: str,
+        start_date: str,
+        end_date: str,
+        initial_capital: float = 10_000_000.0,
+        allocation_method: str = "rank_weight",
+        score_column: str = "score",
+        top_n: int = 20,
+        max_weight: float | None = None,
+        commission: float = 0.0003,
+        stamp_duty: float = 0.001,
+        min_commission: float = 5.0,
+        slippage: float = 0.001,
+        rebalance_freq: str = "weekly",
+        strategy_template_id: str = "rank_weight_top20",
+        output_dir: Path | None = None,
+        artifact_mode: str = "summary",
+        overwrite: bool = False,
+        research_root: str | Path = "data/research",
+    ) -> BacktestRunResult:
+        """Backtest from a saved SignalRun (no model inference).
+
+        Parameters
+        ----------
+        signal_id, signal_run_id:
+            Identifies the saved SignalRun in SignalStore.
+        start_date, end_date:
+            Date range (YYYY-MM-DD), inclusive.
+        initial_capital:
+            Starting capital.
+        allocation_method:
+            Allocation method (``rank_weight`` only).
+        score_column:
+            Column used for ranking.
+        top_n:
+            Number of positions to hold.
+        max_weight:
+            Optional per-stock weight cap.
+        strategy_template_id:
+            Template identifier (stored in manifest).
+        output_dir:
+            Output directory.  When ``None``, constructed under
+            ``data/research/backtests/`` or a tmp dir.
+        artifact_mode:
+            ``"summary"`` or ``"debug"``.
+        overwrite:
+            When ``False``, raise ``FileExistsError`` if output dir exists.
+
+        Returns
+        -------
+        BacktestRunResult
+        """
+        self._artifact_mode = artifact_mode
+        if start_date > end_date:
+            raise ValueError(
+                f"start_date {start_date!r} is after end_date {end_date!r}"
+            )
+
+        # ── Build run/backtest IDs ────────────────────────────────────────
+        # Cached signal semantics:
+        # - signal.trade_date = intended_execution_date
+        # - allocation before open, execution at open, MTM at close
+        # - Preopen-equivalent, NOT BacktestEngine next-open convention
+        hash_input = f"{strategy_template_id}_{signal_id}_{signal_run_id}_{allocation_method}_{top_n}_{max_weight}_{commission}_{stamp_duty}_{min_commission}_{slippage}_{rebalance_freq}_{start_date}_{end_date}_{initial_capital}"  # noqa: E501
+        short_hash = hashlib.sha256(hash_input.encode()).hexdigest()[:8]
+        strategy_run_id = f"{strategy_template_id}__{signal_id}__{signal_run_id}__{short_hash}"
+        backtest_id = f"bt_{start_date}_{end_date}_{short_hash}"
+
+        # ── Resolve output path ───────────────────────────────────────────
+        if output_dir is None:
+            output_dir = Path("data/research/backtests") / strategy_run_id / backtest_id
+        output_dir = Path(output_dir)
+        if output_dir.exists() and not overwrite:
+            raise FileExistsError(
+                f"Backtest output dir exists: {output_dir} (use overwrite=True)"
+            )
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        # ── Resolve trading dates ─────────────────────────────────────────
+        trading_dates = _resolve_trading_dates(start_date, end_date)
+        trading_dates = [d for d in trading_dates if start_date <= d <= end_date]
+        if not trading_dates:
+            raise ValueError(f"No trading dates in range [{start_date}, {end_date}]")
+
+        # ── Signal store ──────────────────────────────────────────────────
+        signal_store = SignalStore(str(research_root))
+
+        # ── Account ───────────────────────────────────────────────────────
+        account = Account(init_cash=initial_capital)
+
+        # ── Daily loop ────────────────────────────────────────────────────
+        daily_summaries: list[dict[str, Any]] = []
+        daily_debug_dir = output_dir / "daily" if artifact_mode == "debug" else None
+        self._last_prices = {}
+        self._last_trade_date = None
+
+        for trade_date in trading_dates:
+            # 1. Weekly rebalance check
+            if rebalance_freq == "weekly" and self._last_trade_date is not None:
+                from datetime import datetime as _dt
+
+                last_iso = _dt.strptime(self._last_trade_date, "%Y-%m-%d").date().isocalendar()
+                this_iso = _dt.strptime(trade_date, "%Y-%m-%d").date().isocalendar()
+                if (last_iso[0], last_iso[1]) == (this_iso[0], this_iso[1]):
+                    # Same ISO week — MTM at close, skip trading
+                    if account.positions:
+                        insts = list(account.positions.keys())
+                        try:
+                            if self._execution_price_mode == "open":
+                                mtm_prices, _ = fetch_market_snapshot(trade_date, insts, price_col="close")
+                            else:
+                                mtm_prices, _ = fetch_market_snapshot(trade_date, insts)
+                            self._last_prices = mtm_prices
+                            pos_frame = positions_frame(account, mtm_prices)
+                            mv = float(pos_frame["market_value"].sum()) if not pos_frame.empty else 0.0
+                            tv = float(account.cash + mv)
+                        except Exception:
+                            daily_summaries.append(self._empty_day(
+                                trade_date, trade_date, account, "no_market_data"
+                            ))
+                            self._last_trade_date = trade_date
+                            continue
+                    else:
+                        mv = 0.0
+                        tv = float(account.cash)
+                    self._last_trade_date = trade_date
+                    daily_summaries.append({
+                        "trade_date": trade_date,
+                        "execution_price_mode": self._execution_price_mode,
+                        "cash_before": float(account.cash),
+                        "market_value_before": mv,
+                        "total_value_before": tv,
+                        "cash_after": float(account.cash),
+                        "market_value_after": mv,
+                        "total_value_after": tv,
+                        "order_count": 0, "buy_count": 0, "sell_count": 0,
+                        "filled_count": 0, "rejected_count": 0, "turnover": 0.0,
+                        "position_count": len(account.positions),
+                        "status": "weekly_rebalance_skip",
+                    })
+                    continue
+
+            # 2. Load signal for this date
+            day_signal = signal_store.load_signal_for_date(signal_id, signal_run_id, trade_date)
+            if day_signal.empty:
+                daily_summaries.append(self._empty_day(
+                    trade_date, trade_date, account, "no_signal_data"
+                ))
+                self._last_trade_date = trade_date
+                continue
+
+            # 2b. No-lookahead check (preopen semantics: data_date < trade_date)
+            if "data_date" in day_signal.columns and "trade_date" in day_signal.columns:
+                # Normalize to YYYY-MM-DD string (handles pd.Timestamp, datetime64)
+                day_signal["_dd"] = pd.to_datetime(day_signal["data_date"]).dt.strftime("%Y-%m-%d")
+                day_signal["_td"] = pd.to_datetime(day_signal["trade_date"]).dt.strftime("%Y-%m-%d")
+                _v = day_signal[day_signal["_dd"] >= day_signal["_td"]]
+                if len(_v) > 0:
+                    _ex = _v.head(3)[["trade_date", "data_date"]].to_dict(orient="records")
+                    raise ValueError(
+                        f"Signal lookahead violation at {trade_date}: "
+                        f"{len(_v)} rows have data_date >= trade_date. "
+                        f"Examples: {_ex}"
+                    )
+                day_signal.drop(columns=["_dd", "_td"], inplace=True)
+
+            # 3. Build target_weights via allocation boundary
+            targets = build_rank_weight_targets(
+                day_signal,
+                trade_date=trade_date,
+                score_column=score_column,
+                top_n=top_n,
+                max_weight=max_weight,
+                normalize=True,
+                allocation_method=allocation_method,
+                strategy_id=strategy_template_id,
+                signal_id=signal_id,
+                signal_run_id=signal_run_id,
+            )
+            # 4. Resolve execution prices
+            instruments = sorted(set(targets["instrument"]) | set(account.positions.keys()))
+
+            try:
+                if self._execution_price_mode == "open":
+                    exec_prices, market_status = fetch_market_snapshot(
+                        trade_date, instruments, price_col="open",
+                    )
+                    mtm_prices, _ = fetch_market_snapshot(
+                        trade_date, instruments, price_col="close",
+                    )
+                else:
+                    exec_prices, market_status = fetch_market_snapshot(trade_date, instruments)
+                    mtm_prices = exec_prices
+            except Exception as exc:
+                daily_summaries.append(self._empty_day(
+                    trade_date, trade_date, account, f"no_market_data: {exc}"
+                ))
+                continue
+
+            # 4. Before-state
+            pos_before = positions_frame(account, mtm_prices)
+            cash_before = float(account.cash)
+            mv_before = float(pos_before["market_value"].sum()) if not pos_before.empty else 0.0
+            tv_before = cash_before + mv_before
+
+            # 5. Build order intents and execute with costs
+            orders, _, _, _, _, _ = build_order_intents(
+                account, day_signal, targets.set_index("instrument")["target_weight"].to_dict(),
+                exec_prices, trade_date,
+            )
+
+            matcher = MatchEngine(
+                commission=commission, stamp_duty=stamp_duty,
+                min_commission=min_commission, slippage=slippage,
+            )
+            results = matcher.match(orders, account, market_status, exec_prices)
+            account.settlement()
+
+            # 6. After-state (MTM)
+            self._last_prices = mtm_prices
+            pos_after = positions_frame(account, mtm_prices)
+            mv_after = float(pos_after["market_value"].sum()) if not pos_after.empty else 0.0
+            cash_after = float(account.cash)
+            tv_after = cash_after + mv_after
+            self._last_trade_date = trade_date
+
+            # 7. Record daily result
+            buy_count = sum(1 for o in orders if o["side"] == "buy")
+            sell_count = sum(1 for o in orders if o["side"] == "sell")
+            filled_count = sum(1 for r in results if r["status"] == "filled")
+            rejected_count = sum(1 for r in results if r["status"] == "rejected")
+            turnover = float(sum(
+                float(r.get("filled_amount", 0)) * float(r.get("deal_price", 0.0))
+                for r in results if r["status"] == "filled"
+            ))
+
+            day_result = {
+                "trade_date": trade_date,
+                "execution_price_mode": self._execution_price_mode,
+                "cash_before": cash_before,
+                "market_value_before": mv_before,
+                "total_value_before": tv_before,
+                "cash_after": cash_after,
+                "market_value_after": mv_after,
+                "total_value_after": tv_after,
+                "order_count": len(orders),
+                "buy_count": buy_count,
+                "sell_count": sell_count,
+                "filled_count": filled_count,
+                "rejected_count": rejected_count,
+                "turnover": turnover,
+                "position_count": len(account.positions),
+                "status": "success",
+            }
+            daily_summaries.append(day_result)
+
+            # 8. Debug artifacts
+            if daily_debug_dir:
+                day_dir = daily_debug_dir / trade_date
+                day_dir.mkdir(parents=True, exist_ok=True)
+                day_signal.to_csv(day_dir / "signal.csv", index=False)
+                targets.to_csv(day_dir / "target_weights.csv", index=False)
+                if len(orders) > 0:
+                    pd.DataFrame(orders).to_csv(day_dir / "order_intents.csv", index=False)
+                from qsys.utils.json_io import write_json as _wj
+                _wj(day_dir / "mtm_snapshot.json", {
+                    "trade_date": trade_date, "cash_after": cash_after,
+                    "market_value_after": mv_after, "total_value_after": tv_after,
+                    "position_count": len(account.positions),
+                })
+                _wj(day_dir / "execution_summary.json", day_result)
+
+        # ── Compute final metrics ─────────────────────────────────────────
+        final_mv = account.get_market_value({})
+        if daily_summaries:
+            last = daily_summaries[-1]
+            final_value = last.get("total_value_after", account.cash + final_mv)
+        else:
+            final_value = account.cash + final_mv
+
+        total_return = (final_value / initial_capital) - 1.0 if initial_capital > 0 else 0.0
+
+        # ── Write manifest ────────────────────────────────────────────────
+        from qsys.research.manifest import with_standard_metadata, write_manifest
+
+        manifest = with_standard_metadata({
+            "artifact_type": "backtest_run",
+            "backtest_id": backtest_id,
+            "strategy_run_id": strategy_run_id,
+            "strategy_template_id": strategy_template_id,
+            "signal_id": signal_id,
+            "signal_run_id": signal_run_id,
+            "score_column": score_column,
+            "allocation_method": allocation_method,
+            "allocation_params": {
+                "top_n": top_n, "max_weight": max_weight,
+            },
+            "start_date": start_date,
+            "end_date": end_date,
+            "effective_start_date": trading_dates[0] if trading_dates else None,
+            "effective_end_date": trading_dates[-1] if trading_dates else None,
+            "trading_dates": trading_dates,
+            "trading_day_count": len(trading_dates),
+            "initial_capital": initial_capital,
+            "final_value": final_value,
+            "total_return": total_return,
+            "model_mode": "cached_signal",
+            "rolling_train": False,
+            "execution_price": self._execution_price_mode,
+            "execution_timing": "preopen",
+            "signal_trade_date_semantics": "intended_execution_date",
+            "mtm_price": "close",
+            "commission_bp": commission,
+            "stamp_duty_bp": stamp_duty,
+            "min_commission": min_commission,
+            "slippage": slippage,
+            "rebalance_freq": rebalance_freq,
+            "data_cutoff_policy": "preopen_previous",
+        })
+        write_manifest(output_dir / "manifest.json", manifest)
+
+        # ── Write daily_summary + metrics ─────────────────────────────────
+        if daily_summaries:
+            pd.DataFrame(daily_summaries).to_csv(
+                output_dir / "daily_summary.csv", index=False,
+            )
+
+        # metrics.json
+        _ot = sum(d.get("order_count", 0) for d in daily_summaries)
+        _ft = sum(d.get("filled_count", 0) for d in daily_summaries)
+        _rt = sum(d.get("rejected_count", 0) for d in daily_summaries)
+        _tt = sum(d.get("turnover", 0) for d in daily_summaries)
+        _td = len([d for d in daily_summaries if d.get("order_count", 0) > 0])
+        _m = {
+            "initial_capital": initial_capital, "final_value": final_value,
+            "total_return": total_return, "trading_day_count": len(trading_dates),
+            "trading_day_count_with_orders": _td,
+            "order_count_total": _ot, "filled_count_total": _ft,
+            "rejected_count_total": _rt, "avg_order_per_day": round(_ot / max(len(trading_dates), 1), 2),
+            "turnover_total": round(_tt, 2), "avg_turnover": round(_tt / max(_td, 1), 2),
+        }
+        write_manifest(output_dir / "metrics.json", with_standard_metadata(_m))
+
+        result = BacktestRunResult(
+            strategy_id=strategy_template_id,
+            backtest_id=backtest_id,
+            start_date=start_date,
+            end_date=end_date,
+            mode="cached_signal",
+            rebalance_freq=rebalance_freq,
+            initial_capital=initial_capital,
+            final_value=final_value,
+            total_return=total_return,
+            status="completed",
+            daily_summary=daily_summaries,
+            artifacts={
+                "manifest": str(output_dir / "manifest.json"),
+                "daily_summary": str(output_dir / "daily_summary.csv") if daily_summaries else "",
+                "metrics": str(output_dir / "metrics.json"),
+            },
+            notes=f"cached-signal backtest over {len(trading_dates)} trading dates; "
+                  f"signal_id={signal_id}; signal_run_id={signal_run_id}; "
+                  f"top_n={top_n}; max_weight={max_weight}; "
+                  f"rebalance_freq={rebalance_freq}; "
+                  f"slippage={slippage}",
+        )
+
+        self._write_summary(result, output_dir)
+        return result
 
 
 # ── Legacy compatibility ───────────────────────────────────────────────────────
