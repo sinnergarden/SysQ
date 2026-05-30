@@ -40,11 +40,11 @@
 
 | 模式 | 目标命令 | 当前状态 |
 |------|---------|---------|
-| Preopen | `python scripts/run_daily.py --strategy <id> --mode preopen --trade-date <date>` | 可用，未接入 systemd |
-| Postclose | `python scripts/run_daily.py --strategy <id> --mode postclose --trade-date <date>` | 可用，未接入 systemd |
+| Preopen | `python scripts/run_daily.py --strategy <id> --mode preopen --trade-date <date>` (或 `--trade-date auto`) | 可用，未接入 systemd |
+| Postclose | `python scripts/run_daily.py --strategy <id> --mode postclose --trade-date <date>` (或 `--trade-date auto`) | 可用，未接入 systemd |
 | Batch preopen | `python scripts/run_daily_batch.py --stage candidate --mode preopen --trade-date <date>` | 可用，未接入 systemd |
 | Batch postclose | `python scripts/run_daily_batch.py --stage candidate --mode postclose --trade-date <date>` | 可用，未接入 systemd |
-| Train | `python scripts/run_daily.py --strategy <id> --mode train` | 可用，未接入 systemd |
+| Train | `python scripts/run_daily.py --strategy <id> --mode train [--no-notify]` | 可用，未接入 systemd |
 
 在 systemd 尚未切换前，本文档不会把目标入口宣称为生产事实。
 
@@ -57,7 +57,9 @@
 | Dry-run postclose | `python scripts/run_daily.py --strategy alpha_v1 --mode postclose --trade-date YYYY-MM-DD --debug-run --no-notify` |
 | Notify only (from existing artifacts) | `python scripts/run_daily.py --strategy alpha_v1 --notify-only --trade-date YYYY-MM-DD` |
 
+`--trade-date` 支持 `auto`（等同于 `$(date +%Y-%m-%d)`），方便 systemd ExecStart 省略 shell 展开。
 `--debug-run` 不修改 shadow/account.json / positions.csv / ledger.csv。`run_daily_batch.py` 另有 `--dry-run` 仅打印将要调度的策略而不执行。
+`--no-notify` 跳过 Telegram 通知（debug-run 默认行为，也可手动指定）。
 
 ---
 
@@ -167,7 +169,8 @@ flowchart TD
 ### Expected outputs
 
 ```
-daily/{date}/pre_open/signals/
+daily/{date}/pre_open/signals/signal_basket_{data_date}.csv  ← 多策略合并信号
+daily/{date}/pre_open/signals/                              ← 单策略信号
 daily/{date}/pre_open/plans/
 daily/{date}/pre_open/order_intents/
 daily/{date}/pre_open/manifests/
@@ -337,8 +340,8 @@ python scripts/run_daily_trading.py --date T-1 --execution_date YYYY-MM-DD
 # 目标入口（dry-run 模式，不写 shadow）
 python scripts/run_daily.py --strategy alpha_v1 --mode preopen --trade-date YYYY-MM-DD --debug-run --no-notify
 
-# 目标入口（正式运行）
-python scripts/run_daily.py --strategy alpha_v1 --mode preopen --trade-date YYYY-MM-DD
+# 目标入口（正式运行，--trade-date auto 自动取今天）
+python scripts/run_daily.py --strategy alpha_v1 --mode preopen --trade-date auto
 
 # Batch 模式
 python scripts/run_daily_batch.py --stage candidate --mode preopen --trade-date YYYY-MM-DD --dry-run
@@ -353,8 +356,8 @@ python scripts/run_post_close.py --date YYYY-MM-DD --real_sync /path/to/sync/fil
 # 目标入口（dry-run）
 python scripts/run_daily.py --strategy alpha_v1 --mode postclose --trade-date YYYY-MM-DD --debug-run --no-notify
 
-# 目标入口（正式运行）
-python scripts/run_daily.py --strategy alpha_v1 --mode postclose --trade-date YYYY-MM-DD
+# 目标入口（正式运行，--trade-date auto 自动取今天）
+python scripts/run_daily.py --strategy alpha_v1 --mode postclose --trade-date auto
 ```
 
 ### 检查 ledger
@@ -377,6 +380,31 @@ bash scripts/notify_telegram.sh "测试消息"
 
 # 仅重新发送通知（不执行交易）
 python scripts/run_daily.py --strategy alpha_v1 --notify-only --trade-date YYYY-MM-DD
+```
+
+### 产检检查（Checkers）
+
+```bash
+# 检查 order intents 字段完整性
+python scripts/checks/check_order_intents.py --path daily/<date>/pre_open/order_intents/<file>.json
+
+# 检查 postclose 对账结果
+python scripts/checks/check_reconciliation_result.py --path daily/<date>/post_close/reconciliation_result.json
+
+# 检查 portfolio snapshot 完整性
+python scripts/checks/check_portfolio_snapshot.py --path daily/<date>/post_close/portfolio_snapshot.csv
+
+# 检查 daily read model
+python scripts/checks/check_daily_read_model.py --path daily/<date>/post_close/daily_ops_digest_*.json
+
+# 检查 signal schema
+python scripts/checks/check_signal_schema.py --path daily/<date>/pre_open/signals/<file>.csv
+
+# 检查实验索引（strict 模式）
+python scripts/checks/check_experiment_index.py --experiment-id <id> --strict
+
+# 路径状态审计（只读，不写任何状态）
+python scripts/ops/audit_state_paths.py
 ```
 
 ---
