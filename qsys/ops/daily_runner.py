@@ -125,7 +125,10 @@ class DailyRunner:
 
         sig_dir = self._daily_signal_dir(ctx)
         sig_dir.mkdir(parents=True, exist_ok=True)
-        save_signal_basket(basket, output_dir=sig_dir.parent, signal_date=data_date)
+        try:
+            save_signal_basket(basket, output_dir=sig_dir.parent, signal_date=data_date)
+        except PermissionError:
+            print(f"  ⚠ 无法写入 signal_basket（权限），跳过")
 
     # ── Preopen ─────────────────────────────────────────────────────────
 
@@ -267,8 +270,9 @@ class DailyRunner:
 
         plan_dir = self.plan_dir(ctx)
 
-        # Debug: fall back to production plan dir
-        if ctx.debug_run and not (plan_dir / "order_intents.csv").exists():
+        # Debug: fall back to production plan dir ONLY if no preopen ran
+        preopen_ran = (plan_dir / "plan_meta.json").exists()
+        if not preopen_ran:
             prod_root = ctx.project_root / "experiments" / f"{ctx.strategy_id}_daily" / ctx.trade_date
             prod_plan = prod_root / "plan"
             if (prod_plan / "order_intents.csv").exists():
@@ -384,6 +388,9 @@ class DailyRunner:
             sys.exit(1)
 
         self._write_portfolio_snapshot_sidecar(ctx, mtm)
+
+        # ── Reconciliation result ──
+        self._write_reconciliation_result(ctx, has_plan=has_plan)
 
         # ── Notify ──
         if not ctx.no_notify:
@@ -695,3 +702,35 @@ class DailyRunner:
                 print(f"  → ADR-7 portfolio snapshot sidecar written")
         except Exception as e:
             print(f"  ⚠ ADR-7 portfolio snapshot sidecar failed: {e}")
+
+    @staticmethod
+    def _write_reconciliation_result(
+        ctx: DailyRunContext, *, has_plan: bool
+    ) -> None:
+        """Write reconciliation result as a sidecar JSON.
+
+        In debug/shadow mode with no broker snapshot, status=skipped.
+        """
+        rec_dir = ctx.run_root / "reconciliation"
+        rec_dir.mkdir(parents=True, exist_ok=True)
+
+        if ctx.debug_run:
+            status, reason = "skipped", "debug_run_no_broker_snapshot"
+        elif not has_plan:
+            status, reason = "skipped", "no_plan_no_execution"
+        else:
+            status, reason = "skipped", "no_broker_snapshot_available"
+
+        result = {
+            "execution_date": ctx.trade_date,
+            "strategy_id": ctx.strategy_id,
+            "run_id": f"{ctx.strategy_id}_postclose_{ctx.trade_date}",
+            "status": status,
+            "reason": reason,
+            "position_gap": 0,
+            "cash_gap": 0.0,
+        }
+        path = rec_dir / "reconciliation_result.json"
+        import json as _json
+        _json.dump(result, path.open("w"), indent=2, ensure_ascii=False)
+        print(f"  ✅ Reconciliation: status={result['status']} (reason={result['reason']})")

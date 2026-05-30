@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Validate reconciliation result CSVs (summary + positions + real_trades).
+"""Validate reconciliation result CSVs + JSON.
 
 Checks the three CSV files produced by postclose reconciliation:
   - reconcile_summary_<date>.csv
   - reconcile_positions_<date>.csv
   - reconcile_real_trades_<date>.csv
+
+Also checks the JSON reconciliation_result.json produced by DailyRunner.
 
 Read-only. Outputs JSON summary to stdout.
 """
@@ -20,6 +22,8 @@ REQUIRED_SUMMARY_COLS = {"metric", "real", "shadow", "diff"}
 REQUIRED_POSITION_COLS = {"symbol", "real_amount", "shadow_amount", "amount_diff",
                           "real_market_value", "shadow_market_value", "market_value_diff"}
 REQUIRED_TRADES_COLS = {"symbol", "side", "amount", "price"}
+REQUIRED_JSON_KEYS = {"execution_date", "strategy_id", "status", "reason",
+                      "position_gap", "cash_gap"}
 
 
 def _check_csv(path: Path, required_cols: set[str], label: str, result: dict) -> int:
@@ -47,6 +51,24 @@ def _check_csv(path: Path, required_cols: set[str], label: str, result: dict) ->
     return len(df)
 
 
+def _check_json(path: Path, result: dict) -> None:
+    """Check JSON reconciliation result fields."""
+    try:
+        data = json.loads(path.read_text())
+    except Exception as e:
+        result["errors"].append(f"{path.name}: unreadable: {e}")
+        return
+    if not isinstance(data, dict):
+        result["errors"].append(f"{path.name}: not a dict")
+        return
+    missing = REQUIRED_JSON_KEYS - set(data.keys())
+    if missing:
+        result["errors"].append(f"{path.name}: missing keys: {sorted(missing)}")
+    valid_statuses = {"matched", "skipped", "warning", "blocked"}
+    if data.get("status") not in valid_statuses:
+        result["warnings"].append(f"{path.name}: unusual status: {data.get('status')}")
+
+
 def check_reconciliation_result(dir_path: Path) -> dict:
     result = {
         "status": "passed",
@@ -68,8 +90,15 @@ def check_reconciliation_result(dir_path: Path) -> dict:
         result["errors"].append("path is not a directory")
         return result
 
+    # Check JSON result first
+    json_path = dir_path / "reconciliation_result.json"
+    if json_path.exists():
+        _check_json(json_path, result)
+        result["files_found"].append(json_path.name)
+
+    # Check CSV files
     csv_files = sorted(dir_path.glob("reconcile_*.csv"))
-    result["files_found"] = [f.name for f in csv_files]
+    result["files_found"].extend(f.name for f in csv_files)
 
     for f in csv_files:
         if "summary" in f.name:
@@ -82,7 +111,7 @@ def check_reconciliation_result(dir_path: Path) -> dict:
     if result["errors"]:
         result["status"] = "failed"
     elif not result["files_found"]:
-        result["warnings"].append("no reconcile_*.csv files found in directory")
+        result["warnings"].append("no reconciliation result files found in directory")
 
     return result
 
