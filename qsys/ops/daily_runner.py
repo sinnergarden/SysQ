@@ -62,6 +62,71 @@ class DailyRunner:
     def mtm_dir(ctx: DailyRunContext) -> Path:
         return ctx.run_root / "mtm"
 
+    @staticmethod
+    def _daily_signal_dir(ctx: DailyRunContext) -> Path:
+        """Path to daily/<trade_date>/pre_open/signals/ (legacy contract path)."""
+        return ctx.project_root / "daily" / ctx.trade_date / "pre_open" / "signals"
+
+    def _save_signal_basket(
+        self, predictions: pd.DataFrame, ctx: DailyRunContext, data_date: str
+    ) -> None:
+        """Write a signal_basket CSV to the daily artifact path.
+
+        Uses the adapter-generated predictions (same scores as notification).
+        This ensures the archived signal_basket matches what was actually
+        traded — fixing the historical bug where ``run_daily_trading.py``
+        wrote corrupted scores from a different model chain (Qlib .pkl).
+
+        The signal_basket is the canonical artifact consumed by downstream
+        checkers and archived for audit.
+        """
+        if predictions is None or predictions.empty:
+            return
+
+        from qsys.live.signal_monitoring import save_signal_basket
+
+        valid = predictions.copy()
+        valid["score_rank"] = valid["score"].rank(ascending=False).astype(int)
+
+        # Attempt price lookup — degraded state is acceptable
+        price_by_sym: dict[str, float] = {}
+        try:
+            from qsys.data.adapter import QlibAdapter
+            prices = QlibAdapter().get_features(
+                predictions["instrument"].unique().tolist(),
+                ["$close", "$factor"],
+                start_time=data_date, end_time=data_date,
+            )
+            if prices is not None and not prices.empty:
+                norm = prices.copy()
+                if isinstance(norm.index, pd.MultiIndex):
+                    norm.index = norm.index.get_level_values(-1)
+                norm = norm.groupby(level=0).last()
+                price_by_sym = norm["$close"].to_dict()
+        except Exception:
+            pass
+        valid["price"] = valid["instrument"].map(price_by_sym)
+
+        basket = pd.DataFrame({
+            "symbol": valid["instrument"],
+            "score": valid["score"].astype(float),
+            "score_rank": valid["score_rank"],
+            "weight": 0.0,
+            "price": valid["price"].astype(float),
+            "signal_date": data_date,
+            "execution_date": ctx.trade_date,
+            "price_basis_date": data_date,
+            "price_basis_field": "close",
+            "price_basis_label": f"close@{data_date} -> next-session signal basket",
+            "model_name": ctx.strategy_id,
+            "model_path": str(ctx.project_root / "experiments" / f"{ctx.strategy_id}_models" / "latest"),
+            "universe": "csi300",
+        }).sort_values("score_rank").reset_index(drop=True)
+
+        sig_dir = self._daily_signal_dir(ctx)
+        sig_dir.mkdir(parents=True, exist_ok=True)
+        save_signal_basket(basket, output_dir=sig_dir.parent, signal_date=data_date)
+
     # ── Preopen ─────────────────────────────────────────────────────────
 
     def run_preopen(
@@ -115,6 +180,9 @@ class DailyRunner:
         pred_path = run_root / "predictions" / f"predictions_{ctx.trade_date}.csv"
         pred_path.parent.mkdir(parents=True, exist_ok=True)
         predictions.to_csv(pred_path, index=False)
+
+        # Save signal_basket to daily artifact path (contract: daily/<date>/pre_open/signals/)
+        self._save_signal_basket(predictions, ctx, data_date)
 
         # Strategy-specific prediction persistence (e.g. shared predictions dir)
         try:
