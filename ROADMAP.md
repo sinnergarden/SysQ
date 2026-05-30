@@ -95,6 +95,7 @@ SysQ 已完成从脚本集合到准生产 daily ops 系统的关键转变。SQLi
 - 增加 Builder / Reviewer / Operator 三种 agent 角色定义。
 - Builder 可在 research 层自由修改；Reviewer 检查 protected core 和 artifact contract；Operator 执行 daily pipeline 不修改代码。
 - alpha_v1 分类为 Shadow Baseline，非自由研究沙盒。
+- 增加文档路径规范：跨文档引用统一用相对仓库根路径，禁止 `file://` 绝对路径。
 
 #### 5. Templates
 - 提供 research report template 和 candidate promotion checklist。
@@ -102,14 +103,14 @@ SysQ 已完成从脚本集合到准生产 daily ops 系统的关键转变。SQLi
 
 ### 完成判定
 
-- [ ] ADR-005 (Protected Core Boundary) 已采纳
-- [ ] ADR-006 (Strategy Lifecycle) 已采纳
-- [ ] ADR-007 (Artifact Contract) 已采纳
-- [ ] docs/schema/ 产物契约文档已就绪
-- [ ] AGENTS.md 已按 Phase 1.5 更新
-- [ ] alpha_v1 已明确分类为 Shadow Baseline
-- [ ] Research 报告模板 + 候选晋升检查清单可用
-- [ ] Protected core 变更检查脚本可用
+- [x] ADR-005 (Protected Core Boundary) 已采纳
+- [x] ADR-006 (Strategy Lifecycle) 已采纳
+- [x] ADR-007 (Artifact Contract) 已采纳
+- [x] docs/schema/ 产物契约文档已就绪
+- [x] AGENTS.md 已按 Phase 1.5 更新
+- [x] alpha_v1 已明确分类为 Shadow Baseline
+- [x] Research 报告模板 + 候选晋升检查清单可用
+- [ ] Protected core 变更检查脚本可用（`scripts/dev/check_protected_core_changes.py` 已创建，待集成 CI）
 
 ---
 
@@ -155,7 +156,7 @@ SysQ 已完成从脚本集合到准生产 daily ops 系统的关键转变。SQLi
 - [x] 固化辅评估窗口：`2026 YTD`
 - [x] 固化 strict eval 默认参数：`top_k=5`
 - [ ] 普通 backtest 输出统一 report 与 artifact 契约
-- [ ] rolling backtest 的窗口、步长、汇总指标落地
+- [x] rolling backtest 的窗口、步长、汇总指标落地（RollingResearchRunner v2 matrix mode）
 - [ ] strict eval / backtest / rolling backtest 的统一汇总视图
 
 ### 3. feature set 收束与 readiness 观测
@@ -242,9 +243,11 @@ SysQ 已完成从脚本集合到准生产 daily ops 系统的关键转变。SQLi
 - 保持与现有 `run_train / run_backtest / run_strict_eval / daily ops / unified schema` 的衔接，不先推翻旧入口。
 
 完成判定：
-- repo 内有一份可直接指导开发的 `research framework v1` 文档，明确核心抽象、字段、枚举值、产物协议与 UI 对接要求。
-- 文档能支持后续最小实现 PR，不再需要先靠聊天重新解释“研究框架第一版”到底做什么。
-- 开发边界清晰：研究框架第一版只收口骨架、配置与产物契约，不混入大规模架构重写或复杂交易细则。
+- [x] repo 内有一份可直接指导开发的 `research framework v1` 文档（`docs/features/research_framework_v1.md`），明确核心抽象、字段、枚举值、产物协议与 UI 对接要求。
+- [x] 开发边界清晰：研究框架第一版只收口骨架、配置与产物契约，不混入大规模架构重写或复杂交易细则。
+- [x] RollingResearchRunner v2 (matrix mode) 已落地：generator/transform/strategy 独立可换，+ 信号组合层。
+- [ ] 文档能支持后续最小实现 PR，不再需要先靠聊天重新解释”研究框架第一版”到底做什么。
+- [ ] full ExperimentSpec / ResearchSpec 的稳定序列化与 UI 对接。
 
 这一版不做：
 - 不继续围绕单个策略做深度 debug。

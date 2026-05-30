@@ -34,7 +34,7 @@
 - JSON/CSV 写入统一使用 `qsys/utils/json_io.py` 导出的 `write_json()` / `atomic_write_json()` / `write_csv()`。
 - 禁止在模块内自行定义 `_write_json` / `_write_csv`。
 - 需 JSON 读取时使用 `qsys/utils/json_io.py` 的 `load_json()`。
-  - `error`：流程失败或结果不可信
+- 日志级别：`info` 记录关键流程节点，`warning` 记录可恢复异常，`error` 记录流程失败或结果不可信。
 - 日志内容应包含日期、账户名、symbol 或文件路径中的至少一个上下文字段。
 
 ## 配置规范

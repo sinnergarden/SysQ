@@ -141,6 +141,10 @@ Qsys 按用途分为三层运行域：
 - `scripts/run_train.py`
 - `scripts/run_backtest.py`
 - `scripts/run_strict_eval.py`
+- `scripts/research/run_rolling_research.py` — Rolling research runner（v1 single-signal, v2 matrix mode）
+- `qsys/research/rolling_runner.py` — 核心编排器
+- `qsys/research/generators/` — 信号生成器（fixture、alpha_v1_existing、technical_composite）
+- `qsys/research/signal_combine.py` — 信号组合（linear_blend、equal_weight、confirm_filter）
 - `qsys/feature/library.py`
 - `qsys/model/`
 - `qsys/backtest.py`
@@ -151,6 +155,7 @@ Qsys 按用途分为三层运行域：
 - training summary
 - backtest summary
 - strict evaluation result
+- rolling research manifest + 实验索引（matrix_jobs.csv、signal_eval_index.csv、backtest_index.csv）
 
 ### 3.3 Promotion pipeline
 

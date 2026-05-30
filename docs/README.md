@@ -20,6 +20,19 @@
 - `ops/POST_CLOSE_SOP.md`
 - `ops/READINESS.md`
 
+## 更多文档目录
+
+- `contracts/` — Agent 操作契约、策略边界契约、数据接口契约、时间语义契约等
+- `schema/` — 产物 schema 定义（run manifest、signal artifact、execution artifact etc.）
+- `research/` — 研究记录、特征 gap 分析、回测报告
+- `runbooks/` — 日常运维、策略上线、语义检查等操作手册
+- `architecture/` — 框架稳定契约、DailyRunner vs BacktestRunner 对比等
+- `audits/` — 代码边界审计、合规审计等
+- `templates/` — PR 证据模板、研究报告模板、候选晋升检查清单
+- `adr/` — 架构决策记录
+- `features/` — 功能文档
+- `ops/` — 运营 SOP
+
 ## ADR 与 FEATURES 的关系
 
 - `docs/features/*.md` 回答：**这次具体要做什么**。
@@ -47,7 +60,7 @@
 - 变更跨模块依赖方向。
 - 变更公共 API 设计原则。
 - 引入长期约束（例如统一数据源策略、持久化策略、交易规则基线）。
-- 一个决策会影响多个后续功能。
+- 发现一个决策会影响多个后续功能，除补 ADR 外，同时在 `docs/DECISIONS.md` 中添加索引。
 
 ## 推荐工作流
 
