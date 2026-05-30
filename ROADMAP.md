@@ -1,97 +1,139 @@
 # ROADMAP
 
-本文档描述 SysQ 的阶段目标和关键结果。系统设计见 [ARCHITECTURE.md](docs/ARCHITECTURE.md)，操作协议见 [AGENTS.md](AGENTS.md)。
+本文档只回答三个问题：
 
----
+1. 当前最重要的收束方向是什么；
+2. 每个阶段做到什么算完成；
+3. 哪些事情暂时不做。
 
-## Phase 0 — Foundation（已完成）
-
-最小闭环已跑通，框架稳定化基本收尾。
-
-**关键结果**：
-- 数据链路：raw → qlib → train → backtest → daily cross-sectional predict 已跑通
-- Ledger 主线：SQLite ledger 主线已建立，目标是取代 JSON/CSV 与 legacy account store；当前仍处于迁移收束期
-- 框架治理：ADR-005（Protected Core）、ADR-006（Strategy Lifecycle）、ADR-007（Artifact Contract）已采纳，AGENTS 协议已发布
-- 研究管线：RollingResearchRunner v2 matrix mode 已落地，signal generator / transform / combination 独立可换
-- 文档体系：ARCHITECTURE、AGENTS、ROADMAP、features/、adr/ 分层就绪
+系统设计见 `docs/ARCHITECTURE.md`，操作协议见 `AGENTS.md`。
 
 ---
 
 ## Current Focus
 
-- **第一优先级**：Daily Operations Hardening——入口收束、ledger 统一、systemd 切换。
-- **第二优先级**：Research Pipeline Productization——统一评估口径，建设 Research Analytics。
-- **第三优先级**：Promotion & Production Automation——前两者稳定后推进。
+当前只优先推进三条主线：
+
+1. **Daily Operations Hardening**
+   - 入口收束；
+   - ledger 统一；
+   - systemd 切换；
+   - 最小只读 Ops UI。
+
+2. **Research Pipeline Productization**
+   - 统一评估口径；
+   - Research Analytics / DuckDB；
+   - Research UI；
+   - 实验结果可比较。
+
+3. **Promotion & Production Preparation**
+   - Candidate/Shadow dashboard；
+   - MiniQMT 只读桥接；
+   - execution / reconciliation contract。
+
+除非用户明确要求，agent 不应主动推进 Current Focus 之外的大功能。
 
 ---
 
-## Phase 1 — Daily Operations Hardening（进行中）
+## Phase 0 — Foundation（已完成）
 
-**目标**：生产主链路收束，从"能跑"进化到"可运营"。
+目标：最小闭环跑通，系统从脚本集合进入框架化阶段。
 
-| 关键结果 | 优先级 |
-|---------|--------|
-| Old entry（`run_preopen.sh` / `run_daily_trading.py`）切换为 `run_daily.py` + `run_daily_batch.py` | 高 |
-| systemd 指向新入口，废弃 shell wrapper | 高 |
-| 三态存储（`trade.db` + `real_account.db` + `shadow/`）统一为单一 ledger SOT | 高 |
-| 最小 Ops UI：展示数据 readiness、latest data date、daily plan、shadow 状态、ledger 状态、postclose report | 中 |
-| BacktestEngine 与 DailyRunner 执行语义（撮合、成本、持仓演算）靠拢 | 中 |
-| 明确空 plan、账户异常、数据不齐时的处理策略 | 中 |
-| `order_intents` 产物契约定稿，作为 WSL → MiniQMT bridge 的固定输入 | 中 |
+完成结果：
 
-UI 先只读，不写 ledger，不下单，不改策略。目标是让日常运维从"翻文件/看命令输出"变成"有一个稳定 dashboard"。
+- raw → qlib → train → backtest → daily predict 已跑通；
+- SQLite ledger 主线已建立，但 legacy account store 与 shadow files 仍在迁移收束期；
+- RollingResearchRunner v2 matrix mode 已落地；
+- Protected Core、Strategy Lifecycle、Artifact Contract 已有 ADR；
+- ARCHITECTURE / AGENTS / ROADMAP 已形成 current truth 主导航。
 
 ---
 
-## Phase 2 — Research Pipeline Productization（进行中）
+## Phase 1 — Daily Operations Hardening（当前主攻）
 
-**目标**：研究结果可公平比较、可对接 Candidate 评估。
+目标：让 daily ops 从"能跑"变成"每天可检查、可回滚、可维护"。
 
-| 关键结果 | 优先级 |
-|---------|--------|
-| rolling 默认参数（训练窗、测试窗、滚动步长）固化 | 高 |
-| strict eval / backtest / rolling backtest 口径一致，输出统一对比面板 | 高 |
-| Research Analytics 层（DuckDB）用于 IC/RankIC/实验索引横向查询 | 中 |
-| Research UI：展示 backtest 结果、IC/RankIC、signal comparison、model improvement、experiment index | 中 |
-| ExperimentSpec / ResearchSpec 稳定序列化 | 中 |
-| extended feature set 消融研究：baseline / 资金流 / PIT / 估值 / 组合增量 | 低 |
+关键结果：
 
-Research UI 消费 experiments / research analytics / DuckDB，不直接影响 production state。
+| 结果 | 完成判定 |
+|---|---|
+| 入口收束 | systemd 不再依赖 legacy shell wrapper，主链路使用 `run_daily.py` / `run_daily_batch.py` |
+| Ledger 统一 | `trade.db` 成为唯一账户状态 SOT，`real_account.db` 和 `shadow/` 不再作为写入事实源 |
+| Daily artifact 稳定 | preopen / postclose 每日产物路径稳定，关键报告可重建 |
+| 最小 Ops UI | 可只读查看 data readiness、latest date、daily plan、shadow/ledger 状态、postclose report |
+| 异常处理明确 | 空 plan、账户异常、数据不齐、MTM 异常有明确阻断或降级策略 |
 
----
+本阶段不做：
 
-## Phase 3 — Promotion & Production Automation（规划中）
-
-**目标**：模型晋级自动化，回滚可审计。
-
-| 关键结果 | 优先级 |
-|---------|--------|
-| 重训后自动跑 strict eval + rolling backtest + baseline 对比 | 高 |
-| 晋级、上线、回滚留下最小审计轨迹 | 高 |
-| Candidate/Shadow dashboard：展示连续 shadow 表现、持仓、换手、回撤、reconciliation gap | 中 |
-| MiniQMT bridge 最小可用：支持账户/持仓/委托/成交读取 | 中 |
-| 订单生命周期对象定稿：pending / partial_fill / filled / canceled / rejected | 中 |
-| 定义 WSL → Windows 执行结果回流契约，替代手工 CSV | 低 |
-
-在进入实盘前，必须能通过 dashboard 看清候选策略是否稳定。
+- 无人值守实盘下单；
+- 大规模 UI 复杂交互；
+- 新增无约束入口脚本。
 
 ---
 
-## Phase 4 — Observability & Automation（规划中）
+## Phase 2 — Research Pipeline Productization
 
-**目标**：系统可观测性增强，高频流程沉淀为可复用命令。
+目标：让研究结果可横向比较、可复现、可进入 Candidate 评估。
 
-| 关键结果 | 优先级 |
-|---------|--------|
-| Daily ops monitoring：数据 readiness、plan diff、MTM 异常、reconciliation 告警 | 中 |
-| Production / broker monitoring：broker sync、position gap、cash gap、reconciliation result | 中 |
-| Workflow / plugin layer 首发：`preopen-plan`、`feature-audit`、`rolling-eval` 三个 command | 低 |
-| 长任务进度表达结构化：阶段 / 关键数字 / 产物位置，低噪音 | 低 |
+关键结果：
+
+| 结果 | 完成判定 |
+|---|---|
+| 评估口径统一 | strict eval / backtest / rolling research 指标口径一致 |
+| Research Analytics | signal、label、IC、RankIC、experiment index 可通过 DuckDB 或等价查询层检索 |
+| Research UI | 可比较模型版本、信号组合、IC/RankIC、回测表现 |
+| ResearchSpec 稳定 | 实验配置可序列化、可复跑、可索引 |
+| feature set 观察 | baseline / extended / 资金流 / PIT / 估值增量可解释 |
+
+本阶段不做：
+
+- 自动晋级 production；
+- 复杂多资产框架；
+- 为了实验方便绕过数据泄露检查。
 
 ---
 
-## 不做
+## Phase 3 — Promotion & Production Preparation
 
-- 在 broker bridge、ledger、reconciliation、manual approval 未稳定前，不做无人值守自动实盘下单
-- 不做跨市场多资产统一引擎
-- 不为了"看起来先进"而继续无约束增加脚本入口
+目标：让 Candidate/Shadow 到小资金 Production 的路径可审计、可回滚。
+
+关键结果：
+
+| 结果 | 完成判定 |
+|---|---|
+| Candidate gate | 重训后可自动跑 strict eval + rolling backtest + baseline 对比 |
+| Shadow dashboard | 可持续查看 shadow 表现、持仓、换手、回撤、reconciliation gap |
+| MiniQMT 只读桥接 | 可读取账户、持仓、委托、成交 |
+| 执行结果回流 | WSL ← Windows 的 execution result contract 稳定 |
+| 回滚轨迹 | 晋级、上线、回滚有最小审计记录 |
+
+本阶段不做：
+
+- 无人值守自动下单；
+- 未经人工确认的真实交易；
+- 未经 dashboard 验证的策略上线。
+
+---
+
+## Phase 4 — Automation & Advanced Observability
+
+目标：把高频流程沉淀为可复用命令，增强告警和自动化。
+
+关键结果：
+
+| 结果 | 完成判定 |
+|---|---|
+| Daily ops monitoring | readiness、plan diff、MTM、reconciliation 有稳定告警 |
+| Broker monitoring | broker sync、position gap、cash gap 可观测 |
+| Workflow commands | `preopen-plan`、`feature-audit`、`rolling-eval` 可复用 |
+| 长任务状态 | 阶段、关键数字、产物位置结构化输出 |
+
+---
+
+## Global Non-goals
+
+- 不做无人值守自动实盘下单，除非 broker bridge、ledger、reconciliation、manual approval 全部稳定；
+- 不做跨市场多资产统一引擎；
+- 不为了"看起来先进"新增入口脚本；
+- 不把 UI 做成交易操作台，早期 UI 只读；
+- 不让 Research artifact 直接进入 Production。
