@@ -1,287 +1,507 @@
 # CONTRACTS
 
-本文档定义 SysQ 中 Research、Daily Ops、Monitoring、UI 共同依赖的数据接口边界。
+本文档定义 SysQ 模块之间的数据接口与职责边界。
 
-系统地图见 `docs/ARCHITECTURE.md`，artifact 字段级 schema 见 `docs/schema/`。
+- `docs/ARCHITECTURE.md` 说明系统地图（两条主链路、分层、过渡态）；
+- **本文档说明模块之间通过哪些数据对象交互**；
+- `docs/schema/` 说明部分 artifact 的字段级结构；
+- 代码 API / dataclass / DB schema 是最终实现。
 
 ---
 
-## 1. 设计原则
+## 1. What is a Contract
 
-- **Contract 描述长期接口边界**，不是阶段性 feature spec。普通字段补充走 PR review；改变接口语义、生命周期或跨模块边界时应补 ADR。
-- `docs/ARCHITECTURE.md` 讲系统地图（两条主链路、分层、过渡态）；**本文讲数据如何在模块间流动**（谁生产、谁消费、粒度、不变量）。
-- `docs/schema/` 是 artifact 字段级 schema（SignalArtifact、OrderIntentArtifact 等）；本文只讲更高层的 producer / consumer / grain / invariant。
-- **UI 和 monitoring 只读** —— 不写 ledger，不下单，不改策略。
-- **不把目标态写成当前事实**。当前尚未完成的迁移路径必须在文档中标注。
+**Contract** = 模块边界协议 / 逻辑接口协议。描述两个或多个模块之间的数据对象是什么、谁生产、谁消费、不可违反什么规则。
+
+**Runtime artifact** = 每次运行产生的文件、DB record、parquet、CSV、JSON、report。Contract 不直接产生文件，但 runtime artifact 应符合 contract。
+
+**Validator / audit** = 检查 runtime artifact 是否符合 contract 的工具。可未来实现，contract 本身不依赖 validator。
+
+层次关系：
+
+```
+ARCHITECTURE.md    → 系统地图、模块职责、过渡态
+CONTRACTS.md       → 模块之间通过什么数据对象交互、边界在哪
+docs/schema/       → 部分 artifact 的字段级 schema
+代码实现           → 最终保证（dataclass、DB schema、API params）
+```
+
+---
+
+## 2. Global Rules
+
+- **UI / monitoring 只读**——不写 ledger，不下单，不改策略。
+- **Research artifact 不能直接进入 Production**。
 - **Legacy path 只能作为 compatibility**，不扩展新依赖。
-- **字段只写第一版最小稳定字段**，不是全量字段大全。后续逐步演进。
+- **不把目标态写成当前事实**。当前迁移中的路径必须在文档中标注。
+- **Contract-backed runtime artifacts** 一旦被 downstream、UI、monitoring 或 promotion 流程消费，不得随意删除、重命名或改变语义。清理旧产物前必须确认 consumer、迁移路径和回滚方式。
+- **修改 contract**：普通字段补充走 PR review；改变接口语义、生命周期或跨模块边界时应补 ADR。
+- 以下对象不能被当作临时文件随意清理：
 
-### Write / Read Boundary
-
-| Contract | Producer | Consumer | UI / Monitoring 可写？ |
-|----------|----------|----------|----------------------|
-| Data Readiness | data sync pipeline、readiness check | DailyRunner、train、backtest、UI、monitoring | ❌ 只读 |
-| Signal | Predictor、RollingResearchRunner、DailyRunner | BacktestEngine、SignalEvaluator、ExperimentIndex、UI | ❌ 只读 |
-| Research Analytics | RollingResearchRunner、SignalEvaluator、BacktestEngine、ExperimentIndex | Research UI、promotion review、monitoring | ❌ 只读 |
-| Daily Ops Read Model | DailyRunner、postclose pipeline、report generator | Ops UI、monitoring、notification | ❌ 只读 |
-| Portfolio State | LedgerService、Execution Backend、broker reconciliation | DailyRunner、UI、monitoring、broker bridge | ❌ 只读 |
-
----
-
-
-
-## 2. Contract Index
-
-| Contract | 定位 |
-|----------|------|
-| Data Readiness Contract | 数据是否可用于 train / backtest / preopen 的判断口径 |
-| Signal Contract | signal / prediction 在研究、回测、preopen、UI 之间的基本口径 |
-| Research Analytics Contract | Research Analytics 层的边界：IC/RankIC、实验索引、横向比较 |
-| Daily Ops Read Model Contract | UI / monitoring 只读 daily ops 状态的 read model |
-| Portfolio State Contract | 账户、持仓、成交、组合状态的核心语义 |
+  ```
+  daily/{date}/
+  experiments/
+  data/audit/
+  research analytics index
+  approved model manifest
+  ledger snapshots
+  ```
 
 ---
 
-## 3. Data Readiness Contract
+## 3. Contract Map
 
-### Purpose
-
-判断某个 target_date 的数据是否可用于 train / backtest / preopen / UI / monitoring。
-
-### Producers / Consumers
-
-- **Producers**：data sync pipeline（`scripts/ops/sync_csi800_daily.py` + `qsys/` 内模块）、readiness check、future monitoring job。
-- **Consumers**：DailyRunner preopen、model train / refresh、backtest / rolling research、Ops UI、monitoring、daily report。
-
-### Storage / Transport
-
-JSON report、daily evidence artifact、`data/audit/`、future UI read model。不强行指定未实现 DB 表。
-
-### Grain
-
-```
-per target_date / per data domain (raw / qlib / calendar / instrument) / per universe
-```
-
-### Required Fields
-
-`target_date`, `calendar_date`, `latest_raw_date`, `latest_qlib_date`, `universe_id`, `is_trading_day`, `raw_ready`, `qlib_ready`, `calendar_ready`, `instrument_ready`, `missing_rate`, `status` (ready/degraded/blocked), `blocking_scope` (train/backtest/preopen/postclose/all), `reason`, `generated_at`, `run_id`。
-
-### Invariants
-
-- 盘前推荐必须基于 T-1 已收盘数据。
-- 数据不满足 minimum readiness 时不得生成假推荐。
-- readiness 要区分 **ready / degraded / blocked**：degraded 可继续但必须写入报告，blocked 必须阻断对应流程。
-- readiness 不能只看文件存在，还要看日期、coverage、calendar、universe。
-
-### UI / Monitoring
-
-Ops UI 展示：latest raw date、latest qlib date、missing rate、blocking reason、最近一次 sync run。
-Monitoring 基于 blocked / degraded 触发告警。
-
-### Current Legacy Compatibility
-
-当前 readiness 检查分散在多个入口脚本中（`run_daily_trading.py`、`run_post_close.py`），无统一 readiness store。迁移期间各入口可各自检查，但不扩张新依赖。
+| Contract | Producer | Consumer | Grain | Primary Use | Write Owner |
+|---|---|---|---|---|---|
+| Data Readiness | data sync、readiness check | DailyRunner、train、backtest、UI | per target_date / per data_domain / per universe | 判断数据是否满足执行要求 | data sync pipeline |
+| Universe | data sync、universe build | Research、Backtest、Signal、UI | per universe_id / per date | 定义可用股票池 | data sync pipeline |
+| Feature | feature engineering | Model training、Prediction | per feature_set_id / per as_of_date / per instrument | 模型和信号的数值输入 | research pipeline |
+| Label | label generation | Model training、Signal evaluation | per label_id / per label_date / per instrument | 训练目标和评估口径 | research pipeline |
+| Model | training pipeline | Predictor、DailyRunner | per model_id / per model_version | 可复用的模型 artifact | training pipeline |
+| Prediction / Signal | Predictor、Research、DailyRunner | BacktestEngine、SignalEvaluator、allocation | per strategy_id + signal_id + signal_date + instrument | 预测强度或排序 | Predictor / DailyRunner |
+| Signal Expression | research / combination layer | Predictor、allocation | per expression_id | 多 signal 变换组合 | research |
+| Strategy Allocation | allocation engine、DailyRunner | Order Intent generation | per strategy_id + rebalance_date | signal → target portfolio | DailyRunner |
+| Order Intent | DailyRunner / allocation | Execution bridge | per execution_date + strategy_id | 想交易什么 | DailyRunner |
+| Execution | Execution Backend、broker | Ledger、postclose | per execution_id | 实际或模拟成交 | Execution Backend |
+| Portfolio State / Ledger | LedgerService、postclose | DailyRunner、UI、monitoring | per account_id + execution_date + instrument | 账户状态与执行流水 SOT | LedgerService |
+| Reconciliation | postclose reconciliation job | Monitoring、UI | per account_id + execution_date | 内部 vs 外部状态对账 | reconciliation job |
+| Research Analytics | Research pipeline、BacktestEngine | Research UI、promotion review | per experiment / per run / per signal+label | IC/RankIC/实验比较 | research pipeline |
+| Daily Ops Read Model | DailyRunner、postclose、report gen | Ops UI、monitoring | per execution_date + strategy_id | UI 只读展示 daily 状态 | DailyRunner |
+| Promotion Evidence | candidate promotion pipeline | Production approval | per candidate / per strategy | 晋级证据审计轨迹 | promotion pipeline |
 
 ---
 
-## 4. Signal Contract
+## 4. Data & Universe Contracts
 
-### Purpose
+### 4.1 Data Readiness Contract
 
-定义某个 strategy / signal / model 在 signal_date 对 instrument 产生的 score / rank。
+**Purpose**: 定义数据可用性验证结果，作为 gate / audit stamp，判断某个 target_date / data_domain / universe 是否满足 train、backtest、preopen、postclose 的执行要求。
 
-### Producers / Consumers
+**Boundary**: 只回答"数据是否就绪"，不承载行情数据本身。
 
-- **Producers**：Predictor、RollingResearchRunner、DailyRunner preopen、StrategyCandidate adapter、signal expression / combination layer。
-- **Consumers**：BacktestEngine、SignalEvaluator、ExperimentIndex、DailyRunner preopen、Research UI、Ops UI、Candidate/Shadow dashboard。
+**Producers**: data sync pipeline（`scripts/ops/sync_csi800_daily.py`）、readiness check。
 
-### Storage / Transport
+**Consumers**: DailyRunner preopen（判断是否能生成 plan）、DailyRunner postclose（判断是否能做 MTM / reconciliation）、model train / refresh、backtest / rolling research gate、Ops UI、monitoring、daily report。
 
-SignalStore、experiments artifact、parquet/CSV、DuckDB research analytics store、daily preopen signal artifact。不假设唯一存储介质。
+**Grain**: `per target_date / per data_domain (raw / qlib / calendar / instrument) / per universe`
 
-### Grain
+**Minimal Fields**: `target_date`, `data_domain`, `universe_id`, `latest_raw_date`, `latest_qlib_date`, `status` (ready / degraded / blocked), `blocking_scope` (train / backtest / preopen / postclose / all), `missing_rate`, `reason`, `run_id`, `generated_at`
 
-```
-strategy_id + signal_id + signal_date + instrument
-```
+**Invariants**:
+- preopen 必须基于 T-1 已收盘数据。
+- blocked 不得生成假推荐，必须阻断对应流程。
+- degraded 可继续但必须写入报告。
+- readiness 不能只看文件存在，还要看日期、coverage、calendar。
 
-模型预测可追溯：`model_id / model_version / feature_set / run_id`。
+**Not Responsible For**:
+- 不承载行情数据本身。
+- 不计算 feature。
+- 不生成 signal。
+- 不生成订单。
 
-### Required Fields
+### 4.2 Universe Contract
 
-`strategy_id`, `signal_id`, `signal_date`, `instrument`, `score`, `universe_id`, `run_id`, `model_id`, `model_version`, `feature_set`, `signal_expression`, `is_oos`, `generated_at`。
+**Purpose**: 定义某个日期、某个 universe_id 下的可用股票池。IC / RankIC / 回测结果是否可比，强依赖 universe。
 
-`rank` 不是必须物化的字段。rank 可由 score + universe 在消费时派生；若物化，必须记录 ranking universe 和排序方向 `rank_direction`（如 ascending / descending）。
+**Boundary**: 只定义股票池 membership 和过滤规则，不决定权重。
 
-用于 evaluation 的 signal 必须能关联 `label_id` / `horizon`，可直接通过字段携带或通过 run_id 追溯。
+**Producers**: data sync pipeline、universe build job。
 
-### Invariants
+**Consumers**: Research、BacktestEngine、SignalEvaluator、DailyRunner preopen、UI。
 
-- `signal_date` 是信号来源日期，不是执行日期。
+**Grain**: `per universe_id / per date`
+
+**Minimal Fields / Concepts**: `universe_id`, `date`, instrument list, `membership_source`, `tradable_flag`, suspension / ST / limit-up-down filtering policy, `generated_at`, `run_id`
+
+**Invariants**:
+- signal、label、IC、RankIC、backtest 必须记录或可追溯 universe_id。
+- 不同 universe 的结果不可直接横向比较，除非明确声明。
+- tradable universe 与 research universe 可以不同，但必须命名清楚。
+
+**Not Responsible For**:
+- 不负责生成 feature。
+- 不决定 portfolio 权重。
+- 不负责成交判断。
+
+---
+
+## 5. Research Input Contracts
+
+### 5.1 Feature Contract
+
+**Purpose**: 定义 feature set 如何被 research / model / signal 复用。Feature 是模型和信号的输入，不直接代表可交易信号。
+
+**Boundary**: 只描述 feature 的身份、口径、覆盖和 PIT 约束，不定义 label 或模型。
+
+**Producers**: feature engineering pipeline（`qsys/` 内特征计算模块）。
+
+**Consumers**: model training、Prediction、signal research。
+
+**Grain**: `per feature_set_id / per as_of_date / per instrument`
+
+**Minimal Fields / Concepts**: `feature_set_id`, `feature_version`, `as_of_date`, `instrument`, `feature_names`, `coverage`, missing policy, PIT flag, normalization policy, `run_id`
+
+**Invariants**:
+- feature 必须避免未来数据泄露。
+- PIT / 非 PIT 必须明确标注。
+- `feature_set_id` 和 version 必须可追溯。
+- coverage 和 missing policy 必须可观察。
+
+**Not Responsible For**:
+- 不定义 label。
+- 不定义模型训练方式。
+- 不直接决定买卖。
+
+### 5.2 Label Contract
+
+**Purpose**: 定义训练、评估和 IC / RankIC 计算所用的 label / forward return 口径。IC / RankIC 本质是 F(signal, label)，不能只有 signal contract 没有 label contract。
+
+**Boundary**: 只定义 label 口径和约束，不生成 signal，不定义 portfolio。
+
+**Producers**: label generation pipeline。
+
+**Consumers**: model training、SignalEvaluator、Research Analytics (IC/RankIC)、ExperimentIndex。
+
+**Grain**: `per label_id / per label_date / per instrument`
+
+**Minimal Fields**: `label_id`, `label_date`, `instrument`, `label_value`, `horizon`, `shift`, `return_type`, `price_basis`, `universe_id`, `generated_at`, `run_id`
+
+**Optional Concepts**: winsorized_value, normalized_value, industry_neutral_value, vol_adjusted_value, missing_reason
+
+**Invariants**:
+- `label_date` 必须清晰定义。
+- `horizon` 和 `shift` 必须显式记录。
+- 禁止未来数据泄露。
+- 用于 IC / RankIC 的 label 必须能和 signal_date 对齐。
+- 不同 `label_id` 的 IC / RankIC 不可直接混比，除非 horizon / shift / universe / price_basis 一致。
+- label 可以缺失，但缺失必须可解释。
+
+**Not Responsible For**:
+- 不生成 signal。
+- 不定义 portfolio。
+- 不负责成交。
+
+---
+
+## 6. Model & Signal Contracts
+
+### 6.1 Model Contract
+
+**Purpose**: 定义一个可复用模型 artifact 的身份、训练口径和可追溯信息。
+
+**Boundary**: 只描述模型的来源和认证状态，不直接生成订单或写 portfolio state。
+
+**Producers**: training pipeline（`qsys/research/`、RollingResearchRunner）。
+
+**Consumers**: Predictor、DailyRunner preopen、Research UI。
+
+**Grain**: `per model_id / per model_version`
+
+**Minimal Fields / Concepts**: `model_id`, `model_version`, `train_start`, `train_end`, `feature_set_id`, `label_id`, `universe_id`, `algorithm`, hyperparams summary, `artifact_path`, `approved_stage` (research / candidate / production), `run_id`
+
+**Invariants**:
+- daily ops 不认"最新模型目录"，只认显式 approved manifest。
+- model 必须追溯 `feature_set` 和 `label`。
+- 训练区间必须和 evaluation 区间分离。
+- Candidate / Production 模型必须有固定版本，不能指向"最新"。
+
+**Not Responsible For**:
+- 不直接生成订单。
+- 不直接写 portfolio state。
+- 不代表 signal 一定可交易。
+
+### 6.2 Prediction / Signal Contract
+
+**Purpose**: 定义某个 strategy / model 在 signal_date 对 instrument 产生的预测强度或排序。
+
+**Boundary**: Prediction 是模型原始输出；Signal 是经过标准化、组合或变换后的值。当前共用同一 contract，但语义上可区分。
+
+**Producers**: Predictor、RollingResearchRunner、DailyRunner preopen、signal expression layer。
+
+**Consumers**: BacktestEngine、SignalEvaluator、ExperimentIndex、allocation engine、Research UI、Ops UI。
+
+**Grain**: `per strategy_id + signal_id + signal_date + instrument`
+
+**Minimal Fields**: `strategy_id`, `signal_id`, `signal_date`, `instrument`, `score`, `universe_id`, `run_id`, `model_id`, `model_version`, `feature_set`, `signal_expression`, `is_oos`, `generated_at`
+
+**Rank**: 不是必须物化的字段。可由 score + universe 在消费时派生；若物化，必须记录 ranking universe 和 `rank_direction`（ascending / descending）。
+
+**Label relation**: 用于 evaluation 的 signal 必须能关联 `label_id` / `horizon`，可直接通过字段或通过 run_id 追溯。
+
+**Invariants**:
+- `signal_date` 是信号来源日期，不是 `execution_date`。
 - daily preopen 消费的 signal 必须基于最近已收盘数据。
-- research signal 必须标记是否 OOS。
-- signal 必须可追溯 run_id / model / feature set / expression。
 - 不允许把 in-sample training signal 当成 Candidate/Shadow 可交易 signal。
-- signal contract 不负责下单，只表达排序或预测强度。
+- signal contract 不负责下单，只表达预测强度或排序。
 
-### UI / Monitoring
+**Not Responsible For**:
+- 不负责 label 计算。
+- 不负责 portfolio allocation。
+- 不负责成交。
 
-Research UI：signal distribution、coverage、IC/RankIC 关联、model version 对比。
-Ops UI：当日 strategy signal、top/bottom、missing instruments、signal freshness、是否进入 plan。
+### 6.3 Signal Expression / Combination Contract
 
-### Current Legacy Compatibility
+**Purpose**: 定义多个 signal 如何被变换和组合（如 raw(signal1) + 0.2 × zscore(signal2)）。
 
-当前 alpha_v1 signal 通过 `run_alpha_v1_daily.py` 产生，写 `daily/{date}/pre_open/signals/`。新信号路径（`StrategyCandidate` → `DailyRunner`）尚未完全就绪。迁移期间旧路径不扩张新依赖。
+**Boundary**: 底层可拆为 generator / transform / combination；用户研究侧优先通过 expression / config abstraction 使用。
 
----
+**Producers**: research / combination layer。
 
-## 5. Research Analytics Contract
+**Consumers**: Predictor、allocation engine、Research UI。
 
-### Purpose
+**Grain**: `per expression_id`
 
-支持 signal / label / IC / RankIC / backtest summary / experiment index 的横向查询和比较。
+**Minimal Concepts**: `expression_id`, `input_signals`, `transform_chain`, `weights`, normalization scope, `universe_id`, `run_id`
 
-### Producers / Consumers
+**Invariants**:
+- 组合信号必须可追溯输入 signal。
+- zscore / rank / neutralization 等变换必须记录 scope。
+- 不同 transform scope 下的 signal 不可直接混比。
 
-- **Producers**：RollingResearchRunner、SignalEvaluator、BacktestEngine、ExperimentIndex builder、research report generator。
-- **Consumers**：Research UI、strategy development SOP、Candidate promotion review、model comparison、monitoring / regression check。
-
-### Storage / Transport
-
-DuckDB 是适合的 research analytics store。parquet / CSV / JSON index 可作为过渡介质。**它不替代 ledger，不参与 broker execution，不存真实账户状态。**
-
-### Grain
-
-```
-per experiment / per run / per signal_id + date / per model_version / per strategy_id / per evaluation window
-```
-
-### Required Fields
-
-`experiment_id`, `run_id`, `strategy_id`, `signal_id`, `model_version`, `feature_set`, `label_id`, `eval_start`, `eval_end`, `metrics`, `artifact_paths`, `created_at`。
-
-Metrics 第一版：IC、RankIC、ICIR、group_return、long_short_return、turnover、max_drawdown、annual_return、cost_assumption。
-
-### Invariants
-
-- research analytics 是只读分析层。
-- 不写 production ledger。
-- 不直接触发交易。
-- 指标必须能追溯 run_id 和 artifact_paths。
-- comparison 必须记录 eval window 和 cost assumption。
-- label 必须有 horizon 和 shift 语义，防止未来数据泄露。
-
-### UI / Monitoring
-
-Research UI：experiment list、signal comparison、model comparison、IC/RankIC trend、backtest summary、feature coverage、regression alert。
-
-### Current Legacy Compatibility
-
-当前 research 结果分散在 `experiments/` 目录中。迁移期间 CSV 继续有效，逐步统一到 DuckDB 查询视图。
+**Not Responsible For**:
+- 不定义交易规则。
+- 不写订单。
+- 不写账户状态。
 
 ---
 
-## 6. Daily Ops Read Model Contract
+## 7. Strategy & Order Contracts
 
-### Purpose
+### 7.1 Strategy Allocation Contract
 
-定义 Ops UI 和 monitoring 应如何只读展示 daily 状态，避免 UI 到处读 raw 文件、ledger、shadow、experiments。
+**Purpose**: 定义 signal 如何转成 target portfolio / target weights。
 
-### Producers / Consumers
+**Boundary**: Allocation 只决定目标组合，不代表真实成交。
 
-- **Producers**：DailyRunner、preopen pipeline、postclose pipeline、report generator、ledger readonly view、broker reconciliation job。
-- **Consumers**：Ops UI、daily monitoring、notification、human operator、Candidate/Shadow dashboard。
+**Producers**: allocation engine、DailyRunner preopen。
 
-### Storage / Transport
+**Consumers**: Order Intent generation、backtest comparison、shadow comparison。
 
-daily report JSON（已有 `daily_ops_digest_*.json`）、daily evidence artifact、readonly API（未来）、generated UI read model（未来）、ledger readonly view（未来）。
+**Grain**: `per strategy_id + rebalance_date`
 
-### Grain
+**Minimal Concepts**: `strategy_id`, `allocation_id`, `rebalance_date`, `input_signal_id`, `target_universe`, `target_weights`, `top_k`, `max_position_weight`, `turnover_limit`, `cash_buffer`, risk constraints, `run_id`
 
-```
-execution_date + strategy_id + account_id + run_id
-```
+**Invariants**:
+- allocation 只决定目标权重，不代表真实成交。
+- 约束条件必须记录，否则回测和 daily ops 不可比。
+- allocation 应可在 backtest / shadow / production 之间复用语义。
 
-### Required Fields
+**Not Responsible For**:
+- 不负责撮合。
+- 不负责成交。
+- 不写 ledger。
 
-`execution_date`, `strategy_id`, `stage` (candidate / production), `execution_mode` (shadow / broker / simulated / manual), `run_id`, `data_readiness_status`, `model_freshness_status`, `plan_status`, `order_intent_count`, `expected_turnover`, `account_snapshot_status`, `postclose_status`, `reconciliation_status`, `blocking`, `reason`, `artifact_paths`, `generated_at`。
+### 7.2 Order Intent Contract
 
-### Invariants
+**Purpose**: 定义 target portfolio / rebalance decision 生成的订单意图，即"想交易什么"。
 
-- UI read model **只读**。
-- UI 不写 ledger。
-- UI 不下单。
-- UI 不改策略。
-- UI 不绕过 DailyRunner。
-- UI 不直接依赖 legacy shadow files 作为长期接口。
-- blocking 状态必须清晰，阻止性异常必须显式传递。
-- 所有展示项必须能回跳 artifact path 或 run_id。
+**Boundary**: OrderIntent 是计划输入，不是成交结果，不是账户状态 SOT。
 
-### UI / Monitoring
+**Producers**: DailyRunner preopen / allocation engine。
 
-Ops UI：data readiness、latest data date、daily plan、order intents、shadow/production status、ledger snapshot、postclose report、reconciliation gap、blocking reason。
-Monitoring：blocked alert、stale data alert、reconciliation gap alert、model freshness alert、empty plan alert。
+**Consumers**: execution bridge (WSL→Windows)、postclose comparison、shadow simulation、UI。
 
-### Current Legacy Compatibility
+**Grain**: `per execution_date + strategy_id + instrument`
 
-当前 daily ops 产物由旧入口（`run_daily_trading.py`、`run_post_close.py`、`run_alpha_v1_daily.py`）生成，写 `daily/{date}/`。新入口未接入 systemd，无独立 read model。迁移期间 UI 原型可直接消费旧产物 JSON/CSV，但不扩张新依赖。
+**Minimal Concepts**: `order_intent_id`, `strategy_id`, `execution_date`, `instrument`, `side`, `target_qty` / `target_weight`, `estimated_price`, `reason`, `source_signal_id`, `allocation_id`, `run_id`
+
+**Invariants**:
+- order intent 必须可追溯到 signal / allocation。
+- order intent 不等于 fill。
+- UI 可展示 order intent，不能直接提交真实订单。
+
+**Not Responsible For**:
+- 不代表成交。
+- 不修改 portfolio state。
+- 不做 broker reconciliation。
 
 ---
 
-## 7. Portfolio State Contract
+## 8. Execution & Portfolio Contracts
 
-### Purpose
+### 8.1 Execution Contract
 
-定义账户、持仓、成交、快照、组合状态的语义边界。
+**Purpose**: 定义 order intent 如何被 simulated execution 或 broker execution 转换为 fills / execution report。
 
-### Producers / Consumers
+**Boundary**: Execution 不决定目标仓位，只执行 order intent。
 
-- **Producers**：LedgerService、DailyRunner postclose、Execution Backend、broker reconciliation job、legacy live/account path、migration script。
-- **Consumers**：DailyRunner preopen（只读）、postclose reconciliation、Ops UI、Candidate/Shadow dashboard、risk/exposure monitor、broker bridge。
+**Producers**: Execution Backend（simulated）、broker bridge（real）。
 
-### Storage / Transport
+**Consumers**: LedgerService、postclose pipeline、reconciliation、UI。
 
-*"DB"不是架构语义本身。SQLite、JSON、CSV 只是介质。架构上真正重要的是状态语义。*
+**Grain**: `per execution_id`
 
-| 对象 | 介质 | 语义 | 当前角色 | 目标角色 |
-|------|------|------|---------|---------|
-| Account State / Execution Ledger | SQLite `data/trade.db` | 账户、持仓、订单、成交、快照的结构化状态 | 新主线 | 唯一 SOT |
-| Legacy Account Store | SQLite `data/meta/real_account.db` | 旧 live/account 路径使用的账户状态 | active legacy | 迁移后只读/移除 |
-| Legacy Shadow Files | JSON/CSV `shadow/` | 旧 alpha / shadow ops 兼容状态 | active compatibility | 只读或移除 |
-| Daily Evidence | files `daily/{date}/post_close/` | 盘后证据 | 当前有效 | 当前有效 |
-| Broker Snapshot | external | 外部状态快照 | 外部源 | 外部源 |
+**Minimal Concepts**: `execution_id`, `order_intent_id`, `execution_mode` (simulated / broker / manual), `order_status` (pending / partial_fill / filled / canceled / rejected), `fill_qty`, `fill_price`, `fee`, `executed_at`, `broker_order_id`, `run_id`
 
-### Grain
+**Invariants**:
+- simulated execution 和 broker execution 应共享核心状态语义。
+- execution 不决定 target weights，只执行 order intent。
+- partial_fill / rejected / canceled 必须显式表达。
+- execution result 是 postclose / ledger commit 的输入。
 
-```
-account_id + strategy_id + execution_date + snapshot_time + instrument / order / fill
-```
+**Not Responsible For**:
+- 不生成 signal。
+- 不决定 target weights。
+- 不负责长期 portfolio accounting。
 
-### Required Concepts
+### 8.2 Portfolio State / Ledger Contract
 
-`AccountSnapshot`、`PositionSnapshot`、`OrderIntent`（计划输入，不是账户状态 SOT）、`ExecutionFill`、`CashEvent`、`PortfolioSnapshot`、`ReconciliationResult`。
+**Purpose**: 定义账户、持仓、成交、现金、快照等状态对象的语义边界。不要求每笔交易生成独立文档；交易仍由 LedgerService 以 SQLite transaction 方式提交。
 
-### Minimal Fields
+**Boundary**: 只定义状态语义和写入边界，不生成交易计划，不计算 signal。
 
-`account_id`, `strategy_id`, `execution_date`, `snapshot_time`, `cash`, `market_value`, `total_asset`, `instrument`, `quantity`, `available_quantity`, `cost_basis`, `last_price`, `order_id`, `fill_id`, `side`, `fill_qty`, `fill_price`, `fee`, `run_id`, `source_run_id`（派生来源）。
+**Producers**: LedgerService、DailyRunner postclose、Execution Backend、broker reconciliation job。
 
-### Invariants
+**Consumers**: DailyRunner preopen（只读）、postclose reconciliation、Ops UI、risk monitor。
 
+**Grain**: `per account_id + strategy_id + execution_date + instrument`
+
+**Minimal Concepts**: `AccountSnapshot`, `PositionSnapshot`, `ExecutionFill`, `CashEvent`, `PortfolioSnapshot`, `ReconciliationResult`。`OrderIntent` 是计划输入，不是账户状态 SOT。
+
+**Minimal Fields**: `account_id`, `strategy_id`, `execution_date`, `snapshot_time`, `cash`, `market_value`, `total_asset`, `instrument`, `quantity`, `available_quantity`, `cost_basis`, `last_price`, `order_id`, `fill_id`, `side`, `fill_qty`, `fill_price`, `fee`, `run_id`, `source_run_id`
+
+**Invariants**:
 - `data/trade.db` 是目标账户状态与执行流水 SOT。
 - preopen 只能读取已确认的上一状态。
 - postclose 才能提交 execution / portfolio snapshot。
 - broker snapshot 与内部 ledger 的差异必须通过 reconciliation 暴露。
-- legacy account store 和 shadow files 不得扩展新依赖。
-- 删除 legacy store 前必须完成 consumer 切换、数据迁移和回归验证。
+- `data/meta/real_account.db` 和 `shadow/` 是 legacy compatibility，不得扩展新依赖。
 - 不允许策略 adapter 直接写生产账户状态。
-- 所有状态变更必须可追溯 run_id 或 source_run_id。
+- 所有状态变更必须可追溯 `run_id` 或 `source_run_id`。
 
-### UI / Monitoring
+**Not Responsible For**:
+- 不生成交易计划。
+- 不计算 signal。
+- 不做 research analytics。
 
-UI 只读：cash、positions、available quantity、daily return、turnover、position gap、cash gap、reconciliation result、account state freshness。
-Monitoring：account stale、position mismatch、cash mismatch、abnormal turnover、missing fill、unexpected empty portfolio。
+### 8.3 Reconciliation Contract
 
-### Current Legacy Compatibility
+**Purpose**: 定义内部 ledger 与 broker / execution report / shadow state 之间如何对账。
 
-当前三态共存：`data/trade.db`（新主线）、`data/meta/real_account.db`（旧 live/account 路径默认）、`shadow/`（JSON/CSV 文件）。旧入口仍写后两者。迁移完成前不删除、不扩张新依赖。迁移前必须完成 schema 对齐、数据迁移、consumer 切换和回归验证。
+**Boundary**: 只暴露 gap，不自动修正。
+
+**Producers**: postclose reconciliation job。
+
+**Consumers**: Monitoring、Ops UI、notification。
+
+**Grain**: `per account_id + execution_date`
+
+**Minimal Concepts**: `reconciliation_id`, `account_id`, `strategy_id`, `execution_date`, `internal_snapshot`, `external_snapshot`, `position_gap`, `cash_gap`, `missing_fill`, `status` (matched / warning / blocked), `reason`, `run_id`
+
+**Invariants**:
+- production / broker mode 下 reconciliation 是 postclose 的核心 gate。
+- gap 必须显式展示，不得被 UI 隐藏。
+- blocked reconciliation 阻断流程。
+- reconciliation 不直接修正账户，修正必须走明确流程。
+
+**Not Responsible For**:
+- 不自动修改 ledger。
+- 不自动下单。
+- 不决定策略晋级。
+
+---
+
+## 9. Research Analytics Contract
+
+**Purpose**: 支持 signal / label / IC / RankIC / backtest summary / experiment index 的横向查询和比较。
+
+**Boundary**: 只读分析层，不替代 ledger，不参与 broker execution，不存真实账户状态。
+
+**Producers**: RollingResearchRunner、SignalEvaluator、BacktestEngine、ExperimentIndex builder。
+
+**Consumers**: Research UI（目标态）、strategy development、Candidate promotion review、model comparison、regression check。
+
+**Storage**: DuckDB 是适合的 research analytics store。parquet / CSV / JSON index 可作为过渡介质。
+
+**Grain**: `per experiment / per run / per signal_id + label_id + eval_window`
+
+**Minimal Fields**: `experiment_id`, `run_id`, `strategy_id`, `signal_id`, `label_id`, `horizon`, `shift`, `universe_id`, `model_version`, `feature_set`, `eval_start`, `eval_end`, `metrics`, `artifact_paths`, `created_at`
+
+**Metrics 第一版**: IC、RankIC、ICIR、group_return、long_short_return、turnover、max_drawdown、annual_return、cost_assumption
+
+**Invariants**:
+- IC / RankIC / ICIR 必须记录 `signal_id`、`label_id`、`horizon`、`shift`、eval_window、`universe_id`。
+- 不同实验比较必须记录 cost assumption。
+- 不写 production ledger。
+- 不直接触发交易。
+- 指标必须可追溯 `run_id` 和 `artifact_paths`。
+
+**Not Responsible For**:
+- 不负责训练模型。
+- 不负责下单。
+- 不负责账户状态。
+
+---
+
+## 10. Daily Ops / UI Read Model Contract
+
+**Purpose**: 定义 Ops UI 和 monitoring 如何只读展示 daily 状态，避免 UI 到处读 raw 文件、ledger、shadow、experiments。
+
+**Boundary**: 只负责展示，不写 ledger，不下单，不改策略，不绕过 DailyRunner。
+
+**Producers**: DailyRunner、preopen pipeline、postclose pipeline、report generator、ledger readonly view。
+
+**Consumers**: Ops UI、monitoring、notification、human operator。
+
+**Storage**: daily report JSON（已有 `daily_ops_digest_*.json`）、daily evidence artifact。未来可演进为独立 read model。
+
+**Grain**: `per execution_date + strategy_id + account_id + run_id`
+
+**Minimal Fields**: `execution_date`, `strategy_id`, `stage` (candidate / production), `execution_mode` (shadow / broker / simulated / manual), `run_id`, `data_readiness_status`, `model_freshness_status`, `plan_status`, `order_intent_count`, `expected_turnover`, `account_snapshot_status`, `postclose_status`, `reconciliation_status`, `blocking`, `reason`, `artifact_paths`, `generated_at`
+
+**Invariants**:
+- UI read model **只读**。
+- UI 不写 ledger，不下单，不改策略。
+- UI 不绕过 DailyRunner。
+- UI 不直接依赖 legacy shadow files 作为长期接口。
+- blocking 状态必须清晰，阻止性异常必须显式传递。
+- 所有展示项必须能回跳 artifact path 或 `run_id`。
+
+**Not Responsible For**:
+- 不负责实际交易。
+- 不负责修正账户。
+- 不负责改变策略配置。
+
+---
+
+## 11. Promotion Evidence Contract
+
+**Purpose**: 定义一个策略从 Research 进入 Candidate/Shadow，再进入 Production 前需要保留的最小证据和审计轨迹。
+
+**Boundary**: 只定义晋级所需的证据集合，不自动晋级，不替代人工判断。
+
+**Producers**: candidate promotion pipeline、research report generator。
+
+**Consumers**: Production approval process、audit。
+
+**Grain**: `per candidate / per strategy_id`
+
+**Minimal Concepts**: `candidate_id`, `strategy_id`, `research_run_ids`, signal_eval_summary, backtest_summary, cost_assumption, baseline_comparison, shadow_run_summary (如有), risk_notes, artifact_paths, `approval_status`, `approved_by`, `approved_at`
+
+**Invariants**:
+- Research 结果不能直接进入 Production。
+- Candidate/Shadow 必须有可复现的 OOS signal evaluation 和 backtest evidence。
+- Production approval 必须有人类确认。
+- 晋级、上线、回滚都必须留下最小审计轨迹。
+
+**Not Responsible For**:
+- 不自动晋级。
+- 不自动下单。
+- 不替代人工判断。
+
+---
+
+## 12. Global Invariants
+
+以下规则跨所有 contract：
+
+- **UI / monitoring 只读**——不写 ledger，不下单，不改策略。
+- **Research artifact 不能直接进入 Production**。
+- **Candidate/Shadow 必须可追溯** signal、label、model、feature、backtest 和 daily evidence。
+- **Production 不认"最新模型目录"**，只认显式 approved manifest。
+- **`data/meta/real_account.db` 和 `shadow/` 只作为 legacy compatibility**，不扩展新依赖。
+- **`data/trade.db` 是目标 Account State / Execution Ledger SOT**。
+- **所有跨阶段对象必须可追溯 `run_id`**。
+- **不同 universe / label horizon / cost assumption 下的指标不可直接混比**。
+- **Contract-backed runtime artifacts** 不得随意删除、重命名或改变语义。清理前必须确认 consumer 和回滚方式。
+- **修改 contract**：普通字段走 PR review；改变接口语义、生命周期或跨模块边界时应补 ADR。
