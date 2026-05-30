@@ -37,7 +37,13 @@ def _load_csv(path: Path) -> list[dict] | None:
         return None
 
 
-def check_experiment_index(exp_dir: Path) -> dict:
+def check_experiment_index(exp_dir: Path, strict: bool = False) -> dict:
+    # Always initialise all row containers so cross-reference code never
+    # references an undefined variable.
+    sri_rows: list[dict] = []
+    sei_rows: list[dict] = []
+    bti_rows: list[dict] = []
+
     result = {
         "status": "passed",
         "experiment_id": exp_dir.name,
@@ -68,73 +74,124 @@ def check_experiment_index(exp_dir: Path) -> dict:
         try:
             manifest = json.loads(manifest_path.read_text())
             result["experiment_id"] = manifest.get("experiment_id", exp_dir.name)
+            if strict and "experiment_id" not in manifest:
+                result["errors"].append("strict: manifest missing experiment_id")
         except (json.JSONDecodeError, Exception):
             result["warnings"].append("manifest.json: unreadable or invalid JSON")
 
     # Check signal_run_index.csv
     sri_path = exp_dir / "signal_run_index.csv"
     if sri_path.exists():
-        rows = _load_csv(sri_path)
-        if rows is None:
+        loaded = _load_csv(sri_path)
+        if loaded is None:
             result["errors"].append("signal_run_index.csv: unreadable")
         else:
-            result["signal_run_count"] = len(rows)
-            if rows:
-                cols = set(rows[0].keys())
+            sri_rows = loaded
+            result["signal_run_count"] = len(sri_rows)
+            if sri_rows:
+                cols = set(sri_rows[0].keys())
                 missing = SIGNAL_RUN_COLS - cols
                 if missing:
                     result["signal_run_missing_cols"] = sorted(missing)
+                    if strict:
+                        result["errors"].append(f"strict: signal_run_index missing cols: {sorted(missing)}")
+    else:
+        if strict:
+            result["errors"].append("strict: signal_run_index.csv missing")
 
     # Check signal_eval_index.csv
     sei_path = exp_dir / "signal_eval_index.csv"
     if sei_path.exists():
-        rows = _load_csv(sei_path)
-        if rows is None:
+        loaded = _load_csv(sei_path)
+        if loaded is None:
             result["errors"].append("signal_eval_index.csv: unreadable")
         else:
-            result["signal_eval_count"] = len(rows)
-            if rows:
-                cols = set(rows[0].keys())
+            sei_rows = loaded
+            result["signal_eval_count"] = len(sei_rows)
+            if sei_rows:
+                cols = set(sei_rows[0].keys())
                 missing = SIGNAL_EVAL_COLS - cols
                 if missing:
                     result["signal_eval_missing_cols"] = sorted(missing)
+                    if strict:
+                        result["errors"].append(f"strict: signal_eval_index missing cols: {sorted(missing)}")
+    else:
+        if strict:
+            result["errors"].append("strict: signal_eval_index.csv missing")
 
     # Check backtest_index.csv
     bti_path = exp_dir / "backtest_index.csv"
     if bti_path.exists():
-        rows = _load_csv(bti_path)
-        if rows is None:
+        loaded = _load_csv(bti_path)
+        if loaded is None:
             result["errors"].append("backtest_index.csv: unreadable")
         else:
-            result["backtest_count"] = len(rows)
-            if rows:
-                cols = set(rows[0].keys())
+            bti_rows = loaded
+            result["backtest_count"] = len(bti_rows)
+            if bti_rows:
+                cols = set(bti_rows[0].keys())
                 missing = BACKTEST_COLS - cols
                 if missing:
                     result["backtest_missing_cols"] = sorted(missing)
+                    if strict:
+                        result["errors"].append(f"strict: backtest_index missing cols: {sorted(missing)}")
+    else:
+        if strict:
+            result["errors"].append("strict: backtest_index.csv missing")
+
+    # -- strict-only checks ------------------------------------------------
+    if strict:
+        # Empty artifact path
+        for row in sri_rows:
+            if not row.get("path", ""):
+                result["errors"].append("strict: signal_run has empty artifact path")
+        for row in sei_rows:
+            if not row.get("path", ""):
+                result["errors"].append("strict: signal_eval has empty artifact path")
+        for row in bti_rows:
+            if not row.get("path", ""):
+                result["errors"].append("strict: backtest has empty artifact path")
+
+        # Zero-row eval or backtest index
+        if result["signal_eval_count"] == 0:
+            result["errors"].append("strict: signal_eval_index is empty")
+        if result["backtest_count"] == 0:
+            result["errors"].append("strict: backtest_index is empty")
+
+        # Missing critical metadata in manifest
+        if manifest_path.exists():
+            try:
+                manifest = json.loads(manifest_path.read_text())
+                for key in ("experiment_id", "created_at"):
+                    if key not in manifest:
+                        result["errors"].append(f"strict: manifest missing {key}")
+            except Exception:
+                result["errors"].append("strict: manifest unreadable for metadata check")
+    # ----------------------------------------------------------------------
 
     # Cross-reference: signal_run_ids in eval should exist in run index
     if sri_path.exists() and sei_path.exists():
-        sri_rows = _load_csv(sri_path) or []
-        sei_rows = _load_csv(sei_path) or []
         run_ids = {(r.get("signal_id", ""), r.get("signal_run_id", "")) for r in sri_rows}
         for r in sei_rows:
             key = (r.get("signal_id", ""), r.get("signal_run_id", ""))
             if key not in run_ids and key != ("", ""):
-                result["warnings"].append(
-                    f"signal_eval references signal_run not in index: {key[0]}:{key[1]}"
-                )
+                msg = f"signal_eval references signal_run not in index: {key[0]}:{key[1]}"
+                if strict:
+                    result["errors"].append(msg)
+                else:
+                    result["warnings"].append(msg)
 
     # Cross-reference: signal_run_ids in backtest should exist in run index
     if sri_path.exists() and bti_path.exists():
-        bti_rows = _load_csv(bti_path) or []
-        run_ids = {(r.get("signal_id", ""), r.get("signal_run_id", "")) for r in (sri_rows or [])}
+        run_ids = {(r.get("signal_id", ""), r.get("signal_run_id", "")) for r in sri_rows}
         for r in bti_rows:
             key = (r.get("signal_id", ""), r.get("signal_run_id", ""))
             if key not in run_ids and key != ("", ""):
-                result["warnings"].append(
-                    f"backtest references signal_run not in index: {key[0]}:{key[1]}"
-                )
+                msg = f"backtest references signal_run not in index: {key[0]}:{key[1]}"
+                if strict:
+                    result["errors"].append(msg)
+                else:
+                    result["warnings"].append(msg)
 
     # Determine overall status
     if result["missing_files"] or result["errors"]:
@@ -150,6 +207,7 @@ def main() -> None:
         description="Validate experiment index directory structure"
     )
     parser.add_argument("--path", required=True, help="Experiment directory path")
+    parser.add_argument("--strict", action="store_true", help="Enable strict validation mode")
     args = parser.parse_args()
 
     path = Path(args.path)
@@ -162,7 +220,7 @@ def main() -> None:
         print(json.dumps(result, indent=2))
         sys.exit(1)
 
-    result = check_experiment_index(path)
+    result = check_experiment_index(path, strict=args.strict)
     print(json.dumps(result, indent=2))
     sys.exit(0 if result["status"] in ("passed", "degraded") else 1)
 
