@@ -123,12 +123,19 @@ class DailyRunner:
             "universe": "csi300",
         }).sort_values("score_rank").reset_index(drop=True)
 
-        sig_dir = self._daily_signal_dir(ctx)
-        sig_dir.mkdir(parents=True, exist_ok=True)
-        try:
+        # debug-run: write to run_root/signals/ (no evidence left in daily/)
+        # production: write to daily/<date>/pre_open/signals/ (contract path)
+        if ctx.debug_run:
+            sig_dir = ctx.run_root / "signals"
+            sig_dir.mkdir(parents=True, exist_ok=True)
             save_signal_basket(basket, output_dir=sig_dir.parent, signal_date=data_date)
-        except PermissionError:
-            print(f"  ⚠ 无法写入 signal_basket（权限），跳过")
+        else:
+            try:
+                sig_dir = self._daily_signal_dir(ctx)
+                sig_dir.mkdir(parents=True, exist_ok=True)
+                save_signal_basket(basket, output_dir=sig_dir.parent, signal_date=data_date)
+            except PermissionError:
+                print(f"  ⚠ 无法写入 signal_basket 到 daily/（权限），跳过")
 
     # ── Preopen ─────────────────────────────────────────────────────────
 

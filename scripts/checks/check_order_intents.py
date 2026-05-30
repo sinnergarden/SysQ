@@ -79,7 +79,10 @@ def check_order_intents(path: Path) -> dict:
 
         est_val = intent.get("est_value")
         if est_val is not None:
-            result["total_amount"] += float(est_val)
+            try:
+                result["total_amount"] += float(est_val)
+            except (TypeError, ValueError):
+                result["errors"].append(f"intent[{i}] est_value non-numeric: {est_val!r}")
 
     if result["errors"]:
         result["status"] = "failed"

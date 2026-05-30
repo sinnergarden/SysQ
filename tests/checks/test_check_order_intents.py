@@ -64,3 +64,19 @@ class TestCheckOrderIntents:
         r = check_order_intents(p)
         assert r["status"] == "failed"
         assert "unreadable" in r["errors"][0]
+
+    def test_non_numeric_est_value_fails(self, tmp_path: Path) -> None:
+        d = {
+            "artifact_type": "order_intents",
+            "execution_date": "2026-05-22",
+            "account_name": "shadow",
+            "intents": [
+                {"intent_id": "i1", "symbol": "000001.SZ", "side": "buy",
+                 "amount": 100, "price": 10.0, "est_value": "abc", "status": "planned"}
+            ],
+        }
+        p = tmp_path / "bad_est.json"
+        p.write_text(json.dumps(d))
+        r = check_order_intents(p)
+        assert r["status"] == "failed"
+        assert any("est_value" in e and "abc" in e for e in r["errors"])
