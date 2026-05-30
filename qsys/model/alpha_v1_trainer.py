@@ -100,11 +100,14 @@ class AlphaV1Trainer:
                 message=f"Training script not found: {train_script}",
             )
 
-        # Build args — pass --end-date if available from config
+        # Build args
         args = [sys.executable, train_script]
         end_date = self._config.get("training", {}).get("end_date")
         if end_date:
             args.extend(["--end-date", end_date])
+        no_notify = getattr(ctx, "no_notify", False)
+        if no_notify:
+            args.append("--no-notify")
 
         print(f"  🚀 Launching: {' '.join(args)}")
         print(f"  CWD: {self._project_root}")

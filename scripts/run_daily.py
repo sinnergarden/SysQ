@@ -60,7 +60,7 @@ def build_parser() -> argparse.ArgumentParser:
         default="preopen",
         help="运行模式",
     )
-    parser.add_argument("--trade-date", help="交易日期 YYYY-MM-DD")
+    parser.add_argument("--trade-date", help="交易日期 YYYY-MM-DD 或 auto（默认 auto）")
     parser.add_argument(
         "--debug-run",
         action="store_true",
@@ -97,8 +97,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     if args.mode == "train":
         if args.force_rerun:
             print("⚠ --force-rerun 对 train 模式无意义，忽略")
-    elif not args.trade_date:
-        parser.error(f"--trade-date 是 {args.mode} 模式的必填参数")
+    elif not args.trade_date or args.trade_date == "auto":
+        from datetime import datetime
+        args.trade_date = datetime.now().strftime("%Y-%m-%d")
     return args
 
 

@@ -247,6 +247,8 @@ def main() -> None:
                         help="End date for training data (default: last trading day)")
     parser.add_argument("--version", type=str, default=None,
                         help="Model version tag (default: auto YYYYMMDD)")
+    parser.add_argument("--no-notify", action="store_true",
+                        help="Skip Telegram notification")
     args = parser.parse_args()
 
     # Resolve end date
@@ -363,14 +365,17 @@ def main() -> None:
 
     msg_text = "\n".join(msg_lines)
     print(f"\n[Telegram]")
-    try:
-        result = send_telegram_message(msg_text)
-        if result.get("status") == "success":
-            print("  Telegram sent successfully")
-        else:
-            print(f"  Telegram skipped: {result.get('error', 'unknown')}")
-    except Exception as e:
-        print(f"  Telegram failed: {e}")
+    if not args.no_notify:
+        try:
+            result = send_telegram_message(msg_text)
+            if result.get("status") == "success":
+                print("  Telegram sent successfully")
+            else:
+                print(f"  Telegram skipped: {result.get('error', 'unknown')}")
+        except Exception as e:
+            print(f"  Telegram failed: {e}")
+    else:
+        print("  Telegram skipped (--no-notify)")
 
     # 6. Summary
     total_time = time.time() - t_start
