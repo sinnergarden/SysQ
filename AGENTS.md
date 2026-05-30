@@ -124,7 +124,7 @@
 
 ## 架构边界
 
-- 分层、模块职责与依赖规则见 [ARCHITECTURE.md](file:///Users/liuming/Documents/trae_projects/SysQ/docs/ARCHITECTURE.md)。
+- 分层、模块职责与依赖规则见 [ARCHITECTURE.md](docs/ARCHITECTURE.md)。
 - `qsys` 为核心业务层，`scripts` 为入口编排层，`tests` 为验证层。
 - 入口脚本不承载复杂业务，复杂逻辑应下沉到 `qsys`。
 
@@ -155,6 +155,8 @@ python -m unittest discover tests
 - 改动 `qsys/live`：`python -m unittest tests/test_live_trading.py`
 - 改动 `qsys/data`：`python -m unittest tests/test_data_quality.py`
 - 改动核心 API：`python -m unittest tests/test_core_api_contracts.py`
+- 改动 `qsys/research/`：`python -m unittest tests/research/`
+- 改动 `scripts/research/`：`python -m unittest tests/research/`
 
 ## 回答问题时的输出方式
 
@@ -163,6 +165,7 @@ python -m unittest discover tests
 - 对风险和假设显式说明，不隐含前提。
 - 对提交建议提供可直接复制的命令。
 - 涉及删除或重命名文件时，先列影响范围再执行。
+- 文档中引用其他文件时，统一使用**相对于仓库根目录的路径**（如 `docs/ARCHITECTURE.md`），禁止使用 `file://` 绝对路径。
 
 输出格式建议：
 
@@ -176,7 +179,7 @@ python -m unittest discover tests
 
 ## Phase 1.5 — Framework Stabilization
 
-详见 [ROADMAP.md](ROADMAP.md) Phase 1.5 和 ADR-005~007。
+详见 [ROADMAP.md](ROADMAP.md) Phase 1.5 和 ADR-005~007。（决策记录索引见 [DECISIONS.md](docs/DECISIONS.md)。）
 
 ### 当前状态
 
@@ -201,16 +204,19 @@ SysQ 处于 **Phase 1.5 Framework Stabilization**。SQLite ledger 已是影子/�
 - `tests/` — 测试（非 Protected Core 对应测试）
 - `docs/` — 文档（非 Protected Core 部分）
 
-**不得默认修改**（参见 ADR-005 Protected Core Boundary）：
+**不得默认修改**（参见 ADR-005 Protected Core Boundary，完整列表见 [docs/adr/005-protected-core-boundary.md](docs/adr/005-protected-core-boundary.md)）：
 
+- `qsys/data/` — 数据接入、数据健康检查
 - `qsys/ledger/` — 账本核心
 - `qsys/backtest/` — 回测引擎
 - `qsys/trader/matcher.py` — 成交匹配引擎
 - `qsys/trader/account.py` — 账户抽象
+- `qsys/ops/run_archive/` — 运行归档与产物管理
 - `scripts/run_alpha_v1_daily.py` — Daily ops 主入口
 - 生产 DAG 与 systemd timer 配置
 - Broker bridge（`qsys/broker/`）
 - 执行配置与运行清单
+- 生产报告脚本（如 `scripts/ops/check_shadow_status.py`）
 
 #### Reviewer Agent
 

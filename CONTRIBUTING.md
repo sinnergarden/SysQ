@@ -5,7 +5,7 @@
 ## 开发流程
 
 1. 在本地拉取最新代码并创建分支。
-2. 先阅读 [AGENTS.md](file:///Users/liuming/Documents/trae_projects/SysQ/AGENTS.md) 与 [ARCHITECTURE.md](file:///Users/liuming/Documents/trae_projects/SysQ/docs/ARCHITECTURE.md)。
+2. 先阅读 [AGENTS.md](AGENTS.md) 与 [ARCHITECTURE.md](docs/ARCHITECTURE.md)。
 3. 若是新功能，先创建 `docs/features/<feature_name>.md`。
 4. 做小步修改，避免一次混入多个目标。
 5. 为非平凡改动补充测试与文档。
@@ -84,7 +84,7 @@ python -m compileall qsys scripts tests
 
 当行为发生变化时，至少更新以下之一：
 
-- [README.md](file:///Users/liuming/Documents/trae_projects/SysQ/README.md)
-- [RUNBOOK.md](file:///Users/liuming/Documents/trae_projects/SysQ/docs/RUNBOOK.md)
-- [TESTING.md](file:///Users/liuming/Documents/trae_projects/SysQ/docs/TESTING.md)
+- [README.md](README.md)
+- [RUNBOOK.md](docs/RUNBOOK.md)
+- [TESTING.md](docs/TESTING.md)
 - 对应 ADR 文档

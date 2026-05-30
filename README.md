@@ -13,7 +13,7 @@ SysQ 是一个面向 A 股场景的系统化量化交易代码库，覆盖数据
 - 已具备基础训练与推理链路，核心入口可运行。
 - 已具备每日交易主流程，包含模型新鲜度检查、影子模拟和计划生成。
 - 已建立核心测试集与文档体系，正在收敛首次稳定提交。
-- 当前重点见 [ROADMAP.md](file:///Users/liuming/Documents/trae_projects/SysQ/ROADMAP.md)。
+- 当前重点见 [ROADMAP.md](ROADMAP.md)。
 
 当前已知约束：
 
@@ -82,20 +82,20 @@ SysQ/
 
 建议按以下顺序阅读：
 
-1. [README.md](file:///Users/liuming/Documents/trae_projects/SysQ/README.md)
-2. [AGENTS.md](file:///Users/liuming/Documents/trae_projects/SysQ/AGENTS.md)
-3. [ARCHITECTURE.md](file:///Users/liuming/Documents/trae_projects/SysQ/docs/ARCHITECTURE.md)
-4. [STYLEGUIDE.md](file:///Users/liuming/Documents/trae_projects/SysQ/docs/STYLEGUIDE.md)
-5. [TESTING.md](file:///Users/liuming/Documents/trae_projects/SysQ/docs/TESTING.md)
-6. [RUNBOOK.md](file:///Users/liuming/Documents/trae_projects/SysQ/docs/RUNBOOK.md)
-7. [DECISIONS.md](file:///Users/liuming/Documents/trae_projects/SysQ/docs/DECISIONS.md)
-8. [DOCS.md](file:///Users/liuming/Documents/trae_projects/SysQ/docs/README.md)
-9. [ROADMAP.md](file:///Users/liuming/Documents/trae_projects/SysQ/ROADMAP.md)
+1. [README.md](README.md)
+2. [AGENTS.md](AGENTS.md)
+3. [ARCHITECTURE.md](docs/ARCHITECTURE.md)
+4. [STYLEGUIDE.md](docs/STYLEGUIDE.md)
+5. [TESTING.md](docs/TESTING.md)
+6. [RUNBOOK.md](docs/RUNBOOK.md)
+7. [DECISIONS.md](docs/DECISIONS.md)
+8. [docs/README.md](docs/README.md)
+9. [ROADMAP.md](ROADMAP.md)
 
 ## 功能文档规范
 
 - 每个新功能必须先写：`docs/features/<feature_name>.md`。
-- 模板文件是 [new_feature.md](file:///Users/liuming/Documents/trae_projects/SysQ/docs/features/new_feature.md)。
+- 模板文件是 [new_feature.md](docs/features/new_feature.md)。
 - 架构文档只保留大结构，功能细节统一放在 `docs/features/`。
 
 ## ADR 与 Feature 的关系
@@ -106,8 +106,8 @@ SysQ/
 
 ## 要做新功能时先看什么
 
-1. 在 [ARCHITECTURE.md](file:///Users/liuming/Documents/trae_projects/SysQ/docs/ARCHITECTURE.md) 判断功能该放在哪个模块。
-2. 在 [AGENTS.md](file:///Users/liuming/Documents/trae_projects/SysQ/AGENTS.md) 确认可直接改和需先讨论的边界。
-3. 在 [STYLEGUIDE.md](file:///Users/liuming/Documents/trae_projects/SysQ/docs/STYLEGUIDE.md) 对齐代码风格。
-4. 在 [TESTING.md](file:///Users/liuming/Documents/trae_projects/SysQ/docs/TESTING.md) 按改动范围补测试并执行验证。
-5. 在 [RUNBOOK.md](file:///Users/liuming/Documents/trae_projects/SysQ/docs/RUNBOOK.md) 检查运行与排障步骤。
+1. 在 [ARCHITECTURE.md](docs/ARCHITECTURE.md) 判断功能该放在哪个模块。
+2. 在 [AGENTS.md](AGENTS.md) 确认可直接改和需先讨论的边界。
+3. 在 [STYLEGUIDE.md](docs/STYLEGUIDE.md) 对齐代码风格。
+4. 在 [TESTING.md](docs/TESTING.md) 按改动范围补测试并执行验证。
+5. 在 [RUNBOOK.md](docs/RUNBOOK.md) 检查运行与排障步骤。
