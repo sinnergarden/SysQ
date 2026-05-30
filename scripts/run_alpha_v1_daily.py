@@ -86,79 +86,6 @@ def _build_context(
 
 # ── Mode handlers ──────────────────────────────────────────────────────
 
-def _save_signal_basket_from_adapter(
-    trade_date: str, strategy: AlphaV1StrategyAdapter,
-) -> None:
-    """Read adapter-correct predictions and save as signal_basket to daily/.
-
-    This overwrites the broken signal_basket written by ``run_daily_trading.py``
-    (which uses a different model chain — Qlib .pkl with wrong scores).
-
-    The adapter predictions have correct scores (same as notification source).
-    """
-    pred_dir = strategy._predictions_dir
-    pred_path = pred_dir / f"predictions_{trade_date}.csv"
-    if not pred_path.exists():
-        print(f"  ⚠ 未找到 adapter predictions: {pred_path}")
-        return
-
-    preds = pd.read_csv(pred_path)
-    if preds.empty:
-        print(f"  ⚠ adapter predictions 为空")
-        return
-
-    signal_date = str(preds["trade_date"].iloc[0])
-
-    # Fetch prices for the signal_date using qlib (already initialized by run_preopen)
-    from qsys.data.adapter import QlibAdapter
-    instruments = preds["instrument"].unique().tolist()
-    prices = QlibAdapter().get_features(
-        instruments, ["$close", "$factor"],
-        start_time=signal_date, end_time=signal_date,
-    )
-    price_by_sym: dict[str, float] = {}
-    if prices is not None and not prices.empty:
-        norm = prices.copy()
-        if isinstance(norm.index, pd.MultiIndex):
-            norm.index = norm.index.get_level_values(-1)
-        norm = norm.groupby(level=0).last()
-        price_by_sym = norm["$close"].to_dict()
-
-    has_price = preds["instrument"].map(
-        lambda sym, lookup=price_by_sym: sym in lookup
-        and lookup[sym] is not None and float(lookup[sym]) > 0
-    )
-    valid = preds[has_price].copy()
-    if valid.empty:
-        print(f"  ⚠ 所有 adapter predictions 缺少有效价格")
-        return
-
-    valid["price"] = valid["instrument"].map(price_by_sym)
-    valid["score_rank"] = valid["score"].rank(ascending=False).astype(int)
-
-    basket = pd.DataFrame({
-        "symbol": valid["instrument"],
-        "score": valid["score"].astype(float),
-        "score_rank": valid["score_rank"],
-        "weight": 0.0,
-        "price": valid["price"].astype(float),
-        "signal_date": signal_date,
-        "execution_date": trade_date,
-        "price_basis_date": signal_date,
-        "price_basis_field": "close",
-        "price_basis_label": f"close@{signal_date} -> next-session signal basket",
-        "model_name": str(preds.iloc[0].get("model_name", "")),
-        "model_path": str(pred_dir),
-        "universe": "csi300",
-    }).sort_values("score_rank").reset_index(drop=True)
-
-    from qsys.live.signal_monitoring import save_signal_basket
-    signal_dir = PROJECT_ROOT / "daily" / trade_date / "pre_open" / "signals"
-    signal_dir.mkdir(parents=True, exist_ok=True)
-    save_signal_basket(basket, output_dir=signal_dir, signal_date=signal_date)
-    print(f"  ✅ signal_basket 已修复 (adapter predictions, {len(basket)}只, signal_date={signal_date})")
-
-
 def run_preopen(trade_date: str, debug_run: bool = False,
                 no_notify: bool = False, reason: str | None = None,
                 output_dir: str | None = None) -> None:
@@ -168,9 +95,6 @@ def run_preopen(trade_date: str, debug_run: bool = False,
     runner = DailyRunner()
     strategy = AlphaV1StrategyAdapter()
     runner.run_preopen(ctx, strategy)
-    # Fix signal_basket artifact — overwrite broken run_daily_trading.py output
-    if not debug_run:
-        _save_signal_basket_from_adapter(trade_date, strategy)
 
 
 def run_postclose(trade_date: str, debug_run: bool = False,
