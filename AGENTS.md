@@ -49,7 +49,33 @@ Qsys 有两条主链路：
 
 ---
 
-## 4. 默认可直接做的事
+## 4. Required Reading by Task
+
+开始改动前，先查阅对应文档。不要跳过。
+
+| Task | Must read first |
+|------|----------------|
+| 系统架构、模块边界、主链路调整 | `docs/ARCHITECTURE.md`, `docs/CONTRACTS.md` |
+| 新增/修改数据对象、artifact、read model、字段语义 | `docs/CONTRACTS.md`, `docs/schema/`, `docs/REPO_LAYOUT.md` |
+| 新增策略、feature、label、model、signal、allocation | `docs/ops/RESEARCH_STRATEGY_SOP.md`, `docs/CONTRACTS.md`, `docs/REPO_LAYOUT.md` |
+| 运行或修改 daily ops、preopen、postclose、systemd 入口 | `docs/ops/DAILY_OPS_SOP.md`, `docs/ARCHITECTURE.md`, `docs/REPO_LAYOUT.md` |
+| 修改 ledger、portfolio、execution、broker、MiniQMT | `docs/CONTRACTS.md`, `docs/ARCHITECTURE.md`, `docs/ops/DAILY_OPS_SOP.md` |
+| 新增/移动/删除文件、目录、产物、实验结果 | `docs/REPO_LAYOUT.md`, `AGENTS.md` |
+| 新增 UI、monitoring、dashboard、read-only API | `docs/CONTRACTS.md`, `docs/REPO_LAYOUT.md`, `ROADMAP.md` |
+| 修改路线图、阶段目标、优先级 | `ROADMAP.md`, `docs/ARCHITECTURE.md` |
+| 修改 agent 行为、安全边界、协作方式 | `AGENTS.md`, `docs/ARCHITECTURE.md` |
+| 清理 legacy path、旧入口、shadow、real_account.db | `docs/ARCHITECTURE.md`, `docs/REPO_LAYOUT.md`, `docs/ops/DAILY_OPS_SOP.md` |
+
+补充规则：
+
+- 若任务涉及多个类别，必须读取所有相关文档。
+- 若文档之间冲突，以实际代码调用链和测试结果为最高事实源，然后参考 `docs/ARCHITECTURE.md` 的 Current Transition State。
+- 不得把 `docs/features/` 中的历史设计自动当作 current truth。
+- 不得在未阅读对应 SOP / CONTRACT / REPO_LAYOUT 的情况下新增路径、改 artifact、切入口、动 ledger、改 broker bridge。
+
+---
+
+## 5. 默认可直接做的事
 
 AI 可以直接处理：
 
@@ -70,7 +96,7 @@ AI 可以直接处理：
 
 ---
 
-## 5. 必须先讨论的事
+## 6. 必须先讨论的事
 
 以下事项不能自动改，必须先说明影响并等待确认：
 
@@ -88,7 +114,7 @@ AI 可以直接处理：
 
 ---
 
-## 6. Protected Core
+## 7. Protected Core
 
 以下路径属于 Protected Core，默认只允许只读分析、测试补充、日志改善和文档说明。
 
@@ -113,7 +139,7 @@ AI 可以直接处理：
 
 ---
 
-## 7. 新功能与文档规则
+## 8. 新功能与文档规则
 
 不是所有新功能都必须先写长 feature 文档。
 
@@ -136,7 +162,7 @@ AI 可以直接处理：
 
 ---
 
-## 8. 测试要求
+## 9. 测试要求
 
 提交前默认执行：
 
@@ -160,7 +186,7 @@ python -m unittest discover tests
 
 ---
 
-## 9. 日期与数据语义
+## 10. 日期与数据语义
 
 - signal_date：信号来源日期，通常是最近一个已收盘交易日。
 - execution_date：实际计划执行日期。
@@ -170,7 +196,7 @@ python -m unittest discover tests
 
 ---
 
-## 10. 输出方式
+## 11. 输出方式
 
 默认先给：
 
@@ -192,7 +218,7 @@ python -m unittest discover tests
 
 ---
 
-## 11. 禁止事项
+## 12. 禁止事项
 
 禁止自动执行：
 
