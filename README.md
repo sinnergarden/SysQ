@@ -1,113 +1,71 @@
-# README
+# SysQ
 
-SysQ 是一个面向 A 股场景的系统化量化交易代码库，覆盖数据准备、特征计算、模型训练、策略生成、回测验证与每日交易计划。
+SysQ 是面向 A 股日频量化研究与准实盘运营的个人系统，覆盖 research、backtest、candidate/shadow、daily ops、ledger、UI/monitoring 的闭环。
 
-## 这个项目是干什么的
+---
 
-- 用统一工程结构承接“研究到交易”的完整闭环。
-- 让同一套模型与策略逻辑同时服务回测与日常交易计划生成。
-- 提供影子账户和实盘账户两套状态管理，降低执行偏差风险。
+## Current State
 
-## 现在做到哪一步
+- 处于 **Framework Stabilization + Daily Operations Hardening** 阶段。
+- Research / Backtest Chain 与 Daily Ops Chain 已形成主线。
+- `data/trade.db` 是目标 Account State / Execution Ledger SOT。
+- `data/meta/real_account.db` 与 `shadow/` 仍是 legacy compatibility path，不能随意删除。
+- systemd 当前仍可能走 legacy entry（`run_preopen.sh` / `run_postclose.sh`）。目标入口是 `run_daily.py` / `run_daily_batch.py`。
 
-- 已具备基础训练与推理链路，核心入口可运行。
-- 已具备每日交易主流程，包含模型新鲜度检查、影子模拟和计划生成。
-- 已建立核心测试集与文档体系，正在收敛首次稳定提交。
-- 当前重点见 [ROADMAP.md](ROADMAP.md)。
+---
 
-当前已知约束：
+## Read First
 
-- 本地运行依赖 `config/settings.yaml`，该文件默认不入库。
-- 测试主框架为 `unittest`，使用 `pytest` 时需保证 `PYTHONPATH` 正确。
+按顺序阅读：
 
-## 怎么跑起来
+1. [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — 系统地图：两条主链路、状态边界、过渡态
+2. [AGENTS.md](AGENTS.md) — AI 操作协议、Protected Core、安全边界
+3. [ROADMAP.md](ROADMAP.md) — 当前阶段目标和优先级
+4. [docs/CONTRACTS.md](docs/CONTRACTS.md) — 模块边界协议和数据对象契约
+5. [docs/REPO_LAYOUT.md](docs/REPO_LAYOUT.md) — 代码、数据、artifact、report 放置规则
+6. [docs/ops/DAILY_OPS_SOP.md](docs/ops/DAILY_OPS_SOP.md) — daily ops 运行手册
+7. [docs/ops/RESEARCH_STRATEGY_SOP.md](docs/ops/RESEARCH_STRATEGY_SOP.md) — 新策略研发 SOP
 
-1. 安装依赖并设置模块路径。
+---
 
-```bash
-pip install -r requirements.txt
-export PYTHONPATH=$PYTHONPATH:$(pwd)
-```
+## Core Documents
 
-2. 准备本地配置文件。
+| 文件 | 用途 |
+|------|------|
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 系统设计 |
+| [AGENTS.md](AGENTS.md) | AI 操作协议 |
+| [ROADMAP.md](ROADMAP.md) | 阶段优先级 |
+| [docs/CONTRACTS.md](docs/CONTRACTS.md) | 模块与数据 contract |
+| [docs/REPO_LAYOUT.md](docs/REPO_LAYOUT.md) | 仓库布局 |
+| [docs/ops/DAILY_OPS_SOP.md](docs/ops/DAILY_OPS_SOP.md) | 日常运维 |
+| [docs/ops/RESEARCH_STRATEGY_SOP.md](docs/ops/RESEARCH_STRATEGY_SOP.md) | 策略研发 |
 
-```bash
-cp config/settings.example.yaml config/settings.yaml
-```
+其他文档：[docs/](docs/)（features、ADR、schema、SOP）
 
-3. 训练一个基线模型。
+---
 
-```bash
-python scripts/run_train.py --model qlib_lgbm --start 2023-01-01 --end 2026-02-28
-```
+## Directory Quick View
 
-4. 运行每日交易主入口。
+| 目录 | 用途 |
+|------|------|
+| `qsys/` | 核心 Python package |
+| `scripts/` | CLI 入口脚本 |
+| `tests/` | 测试 |
+| `config/` + `configs/` | 运行与研究配置 |
+| `data/` | 行情数据、model artifact、ledger DB |
+| `daily/` | 每日运行产物 |
+| `experiments/` | 研究实验产物 |
+| `deploy/` | systemd 配置 |
 
-```bash
-python scripts/run_daily_trading.py
-```
+详细说明见 [docs/REPO_LAYOUT.md](docs/REPO_LAYOUT.md)。
 
-5. 运行测试。
+---
 
-```bash
-python -m unittest discover tests
-```
+## Safety Notes
 
-## 核心目录结构是什么
-
-```text
-SysQ/
-├── qsys/                # 核心业务代码（数据、特征、模型、策略、交易）
-├── scripts/             # 命令行入口脚本
-├── tests/               # 测试代码
-├── config/              # 配置文件
-├── notebooks/           # 演示与研究 notebook
-├── docs/                # 架构、规范、运维、测试、ADR
-├── README.md            # 入口地图（人和 AI 都先看）
-├── AGENTS.md            # AI 操作说明书
-├── CONTRIBUTING.md      # 协作与提交流程
-└── ROADMAP.md           # 当前阶段目标与任务焦点
-```
-
-## 主要技术栈是什么
-
-- Python 3.10+
-- Qlib
-- Pandas / NumPy
-- LightGBM
-- SQLite
-- unittest
-
-## 新人第一次该看哪里
-
-建议按以下顺序阅读：
-
-1. [README.md](README.md)
-2. [AGENTS.md](AGENTS.md)
-3. [ARCHITECTURE.md](docs/ARCHITECTURE.md)
-4. [STYLEGUIDE.md](docs/STYLEGUIDE.md)
-5. [TESTING.md](docs/TESTING.md)
-6. [RUNBOOK.md](docs/RUNBOOK.md)
-7. [DECISIONS.md](docs/DECISIONS.md)
-8. [docs/README.md](docs/README.md)
-9. [ROADMAP.md](ROADMAP.md)
-
-## 功能文档规范
-
-- 每个新功能必须先写：`docs/features/<feature_name>.md`。
-- 模板文件是 [new_feature.md](docs/features/new_feature.md)。
-- 架构文档只保留大结构，功能细节统一放在 `docs/features/`。
-
-## ADR 与 Feature 的关系
-
-- Feature 文档：描述“这次要做什么”。
-- ADR 文档：描述“为什么长期这么做”。
-- 如果功能改动引入了长期规则变化，除功能文档外，必须补 ADR。
-
-## 要做新功能时先看什么
-
-1. 在 [ARCHITECTURE.md](docs/ARCHITECTURE.md) 判断功能该放在哪个模块。
-2. 在 [AGENTS.md](AGENTS.md) 确认可直接改和需先讨论的边界。
-3. 在 [STYLEGUIDE.md](docs/STYLEGUIDE.md) 对齐代码风格。
-4. 在 [TESTING.md](docs/TESTING.md) 按改动范围补测试并执行验证。
-5. 在 [RUNBOOK.md](docs/RUNBOOK.md) 检查运行与排障步骤。
+- **UI / monitoring 只读**——不写 ledger，不下单，不改策略。
+- **Research artifact 不能直接进入 Production**。
+- **不无人值守自动实盘下单**。
+- **不直接编辑 ledger**。
+- **不删除 `data/meta/real_account.db` 和 `shadow/`**。
+- **不把旧入口扩张成新长期接口**。

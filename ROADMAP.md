@@ -1,313 +1,139 @@
 # ROADMAP
 
-## 当前阶段目标
+本文档只回答三个问题：
 
-当前阶段的目标，不再只是“把链路跑通一次”，而是把 SysQ 收敛成一个：
+1. 当前最重要的收束方向是什么；
+2. 每个阶段做到什么算完成；
+3. 哪些事情暂时不做。
 
-- 能稳定做周一到周五运营的系统
-- 能持续做投研、评估、滚动回测的系统
-- 能把 research / candidate / production 分层管理的系统
-- 能把高频研究与运营流程沉淀成稳定入口，而不是每次靠临时 prompt 和散装文档驱动
-- 能在长任务里稳定给出低噪音、结构化、可复盘进度的系统
-- 能逐步收敛出低 agent 依赖、可严格 review 的生产脚本与执行桥接链路
-
-阶段完成判定：
-
-- daily ops 有固定主入口与盘前/盘后流程
-- 训练 / strict eval / backtest / rolling backtest 口径统一
-- 模型替换有明确晋级门槛与回滚边界
-- feature set 可追踪 coverage / readiness / 缺失退化情况
-- 重要流程优先产出结构化 report，而不是堆 stdout
-- 高频流程已有可复用的 workflow asset（skills / commands / output contract）
-- 文档、脚本、测试三者保持同步
+系统设计见 `docs/ARCHITECTURE.md`，操作协议见 `AGENTS.md`，仓库布局见 `docs/REPO_LAYOUT.md`。
 
 ---
 
-## 现状总结（2026-04）
+## Current Focus
 
-当前 SysQ 已经不是“空架子”，而是已经具备最小闭环的量化投研/运营底座：
+当前只优先推进三条主线：
 
-- `raw -> qlib/bin -> train -> backtest -> latest cross-sectional predict` 最小链路已跑通
-- 日常交易主流程已存在，real / shadow 账户和 plan 产物已初步成形
-- 非重叠 strict eval 口径、`top_k=5`、周级重训等关键研究共识已基本固定
-- 文档、架构、runbook、feature docs 已开始成体系，项目已从“探索期”进入“收敛期”
+1. **Daily Operations Hardening**
+   - 入口收束；
+   - ledger 统一；
+   - systemd 切换；
+   - 最小只读 Ops UI。
 
-但当前的主要短板也比较明确：
+2. **Research Pipeline Productization**
+   - 统一评估口径；
+   - Research Analytics / DuckDB；
+   - Research UI；
+   - 实验结果可比较。
 
-- 高频流程仍偏脚本驱动，入口多、口径容易漂移
-- 一部分重要规则仍散落在聊天结论、文档、脚本默认值和人工记忆里
-- 结构化 report 还不完整，很多流程仍更像“能跑通”而不是“可审计、可复用”
-- SysQ 已有不少文档，但其中很多是给人读的，不是给 agent/自动流程直接消费的“可执行规则层”
-- 生产运行形态与执行桥接尚未产品化：目标是 WSL 固定生产流程 + Windows MiniQMT 执行桥接，但当前还停留在 plan / sync / reconcile 阶段
+3. **Promotion & Production Preparation**
+   - Candidate/Shadow dashboard；
+   - MiniQMT 只读桥接；
+   - execution / reconciliation contract。
 
-因此，当前 roadmap 的新增方向不是大改引擎，而是两条并行主线：
-
-- 保留现有 Python engine 与脚本入口，继续收束研究、评估、运营主链路
-- 补一层轻量的 workflow / plugin abstraction，把高频流程提炼成 `skills + commands + connectors + output contracts`
-- 同时明确生产运行形态：WSL 固定生产脚本 + Windows MiniQMT bridge
-
----
-
-## 阶段总览
-
-| Phase | 名称 | 状态 | 时间 |
-|-------|------|------|------|
-| Phase 1 | Stable Daily Operation | 进行中 | 2026 Q2 |
-| **Phase 1.5** | **Framework Stabilization** | **当前启动** | **2026 Q2-Q3** |
-| Phase 2 | Research → Candidate → Shadow → Production | 规划中 | 2026 Q3-Q4 |
-| Phase 3 | UI Debug & Production Hardening | 规划中 | 2026 Q4+ |
+除非用户明确要求，agent 不应主动推进 Current Focus 之外的大功能。
 
 ---
 
-## Phase 1.5 — Framework Stabilization（框架稳定化）
+## Phase 0 — Foundation（已完成）
 
-### 背景
+目标：最小闭环跑通，系统从脚本集合进入框架化阶段。
 
-SysQ 已完成从脚本集合到准生产 daily ops 系统的关键转变。SQLite ledger 已取代 JSON/CSV 成为影子/仿真账户状态的事实标准。
+完成结果：
 
-当前系统的能力已超越"研究脚本集合"阶段，但尚未完全达到"可运营生产系统"的成熟度。框架稳定化的目标是：在增加新策略复杂度之前，先收紧核心边界、标准化生命周期、固化产物契约。
-
-### 核心声明
-
-- **SQLite ledger 是影子/仿真账户状态的事实标准**。所有账户余额、持仓、成交、订单、现金流水、组合快照均以 `data/trade.db` 为准。
-- **JSON/CSV shadow 文件不再作为事实标准**。历史 shadow 文件已归档或迁移，新数据不再写入 shadow/*.json / *.csv。`check_shadow_status.py` 等检查工具优先读取 ledger，legacy CSV 仅为 fallback。
-- **下一优先级是框架稳定化，而不是新的 alpha 策略复杂度**。在 Phase 1.5 完成前，不引入需要修改 protected core 的新策略逻辑。
-- **Protected core 默认冻结**。`qsys/ledger/`、`qsys/backtest/`、`qsys/trader/` 核心模块、daily ops 主入口脚本、执行配置等受 ADR-005 保护，不允许随意修改。
-- **Research 层保持灵活**。因子研究、特征实验、模型调参仍在 `research/`、`qsys/signal/`、`qsys/feature/`、`qsys/model/` 等非保护区域内自由进行。
-- **所有策略必须遵循策略生命周期和产物契约**。Research → Candidate → Shadow → Production 的晋升流程和 artifact contract 由 ADR-006、ADR-007 定义。
-
-### 具体交付物
-
-#### 1. Protected Core Boundary（ADR-005）
-- 定义哪些模块受保护、不可随意修改。
-- 定义修改 protected core 时必须包含的 PR 信息。
-- 定义禁止事项清单，防止策略研究绕过核心约束。
-
-#### 2. Strategy Lifecycle（ADR-006）
-- 定义 Research → Candidate → Shadow → Production → Retired 的完整生命周期。
-- 每阶段标注 allowed / forbidden actions、required inputs / outputs、promotion criteria。
-
-#### 3. Artifact Contract（ADR-007 + docs/schema/）
-- 定义 SignalArtifact、OrderIntentArtifact、ExecutionArtifact、PortfolioSnapshot、CandidateReport、RunManifest 的标准字段。
-- 所有策略晋升至 Candidate 以上级别时必须遵守这些契约。
-
-#### 4. Agent Governance（AGENTS.md 更新）
-- 增加 Builder / Reviewer / Operator 三种 agent 角色定义。
-- Builder 可在 research 层自由修改；Reviewer 检查 protected core 和 artifact contract；Operator 执行 daily pipeline 不修改代码。
-- alpha_v1 分类为 Shadow Baseline，非自由研究沙盒。
-- 增加文档路径规范：跨文档引用统一用相对仓库根路径，禁止 `file://` 绝对路径。
-
-#### 5. Templates
-- 提供 research report template 和 candidate promotion checklist。
-- 降低研究到候选的转换摩擦，确保每次晋升有可追溯的记录。
-
-### 完成判定
-
-- [x] ADR-005 (Protected Core Boundary) 已采纳
-- [x] ADR-006 (Strategy Lifecycle) 已采纳
-- [x] ADR-007 (Artifact Contract) 已采纳
-- [x] docs/schema/ 产物契约文档已就绪
-- [x] AGENTS.md 已按 Phase 1.5 更新
-- [x] alpha_v1 已明确分类为 Shadow Baseline
-- [x] Research 报告模板 + 候选晋升检查清单可用
-- [ ] Protected core 变更检查脚本可用（`scripts/dev/check_protected_core_changes.py` 已创建，待集成 CI）
+- raw → qlib → train → backtest → daily predict 已跑通；
+- SQLite ledger 主线已建立，但 legacy account store 与 shadow files 仍在迁移收束期；
+- RollingResearchRunner v2 matrix mode 已落地；
+- Protected Core、Strategy Lifecycle、Artifact Contract 已有 ADR；
+- ARCHITECTURE / AGENTS / ROADMAP 已形成 current truth 主导航。
 
 ---
 
-## 已完成 / 已形成共识
+## Phase 1 — Daily Operations Hardening（当前主攻）
 
-- 数据 readiness 是训练、回测、 daily ops 的前置条件
-- 不能只依赖 phase123 量价特征；在数据 ready 且缺失可控时，应优先接入保守的资金流 / 基本面 / 估值因子
-- 默认不做 feature selection，先做可解释的 feature set 管理与分层观察
-- 评估必须尽量 out-of-sample，避免 train/test overlap
-- strict eval 近期统一优先用 `top_k=5`
-- 已建立 production manifest 与 daily ops 的生产模型解析路径
-- 已建立训练 / strict eval / daily ops 的结构化 report 基座
-- 新功能优先收束已有脚本，不轻易新增入口
-- 重要变更必须同步更新文档和测试
+目标：让 daily ops 从"能跑"变成"每天可检查、可回滚、可维护"。
 
----
+关键结果：
 
-## 进行中（当前主线）
+| 结果 | 完成判定 |
+|---|---|
+| 入口收束 | systemd 不再依赖 legacy shell wrapper，主链路使用 `run_daily.py` / `run_daily_batch.py` |
+| Ledger 统一 | `trade.db` 成为唯一账户状态 SOT，`real_account.db` 和 `shadow/` 不再作为写入事实源 |
+| Daily artifact 稳定 | preopen / postclose 每日产物路径稳定，关键报告可重建 |
+| 最小 Ops UI | 可只读查看 data readiness、latest date、daily plan、shadow/ledger 状态、postclose report |
+| 异常处理明确 | 空 plan、账户异常、数据不齐、MTM 异常有明确阻断或降级策略 |
 
-### 1. 生产主链路收束
+本阶段不做：
 
-目标：
-- 不再让研究产物和生产产物混用
-- 让盘前链路优先稳定、可解释、可回滚
-
-当前项：
-- [x] 定义 production model manifest 结构
-- [x] 明确 production 切换与回滚规则
-- [x] 在 daily ops 中去掉“默认拿最新模型目录”的隐式假设
-- [ ] 明确 candidate artifact 的目录与元信息要求
-- [ ] 定义 candidate gate / production gate 的最小可执行口径
-
-### 2. 评估与回测口径统一
-
-目标：
-- 把 strict eval、普通 backtest、rolling backtest 收到统一对比面板
-- 让模型是否值得晋级，不再只看一次性结果
-
-当前项：
-- [x] 统一 baseline / extended 的 strict eval 入口
-- [x] 明确 train / valid / test 切法
-- [x] 固化主评估窗口：`2025 -> 最近`
-- [x] 固化辅评估窗口：`2026 YTD`
-- [x] 固化 strict eval 默认参数：`top_k=5`
-- [ ] 普通 backtest 输出统一 report 与 artifact 契约
-- [x] rolling backtest 的窗口、步长、汇总指标落地（RollingResearchRunner v2 matrix mode）
-- [ ] strict eval / backtest / rolling backtest 的统一汇总视图
-
-### 3. feature set 收束与 readiness 观测
-
-目标：
-- 让 feature set 从“脚本里拼”变成“系统内可管理对象”
-- 让扩展因子缺失时能优雅退化，而不是直接把主链路搞坏
-
-当前项：
-- [x] 增加 `extended` feature set
-- [ ] 完成 feature 拉齐后的消融研究：baseline / 资金流 / PIT / 估值 / 组合增量
-- [ ] 输出字段级 coverage、缺失率、死因子/常数因子观察
-- [ ] 建立 feature set 命名、版本、meta 约定
-- [ ] 在 readiness 中补 feature coverage / readiness 分层摘要
-- [ ] graceful degradation：扩展层告警不掩盖 core 主链路状态
-
-### 4. 长任务进度与日志结构化
-
-目标：
-- 让长任务的进度表达更像“阶段状态 + 关键数字 + 产物位置”，而不是刷屏
-- 默认低噪音，但保留排障所需关键上下文
-
-当前项：
-- [x] daily ops 主入口收束为阶段化、键值化进度日志
-- [x] readiness 摘要进入结构化 `data_status`
-- [ ] 数据更新 / 训练 / backtest / strict eval 入口对齐同一进度口径
-- [ ] 统一 run report 中的 progress / stage / artifact schema
-- [ ] 为长任务失败场景补“卡在哪一阶段”的最小护栏测试
-
-### 5. workflow contract 与 skill 层
-
-目标：
-- 不再让规则长期停留在散装文档和聊天结论里
-- 把“给人看的说明”和“给 agent/流程消费的规则”明确分层
-
-当前项：
-- [ ] 盘点现有 `README / ARCHITECTURE / RUNBOOK / features/* / 研究记录` 中可提炼的高频规则
-- [ ] 首批沉淀 `trading-calendar-guard`、`feature-readiness-audit`、`train-split-discipline`、`shadow-execution-planner`
-- [ ] 为首批 skill 明确触发条件、workflow、输出契约、阻断条件
-- [ ] 建立 skill 与底层 Python 入口的映射表，避免规则层与执行层脱节
-- [ ] 定义 `md + json` 的统一输出契约，便于人读与 agent 续接
-
-### 6. daily ops 产品化与执行桥接准备
-
-目标：
-- 让盘前 / 盘后流程从“能跑”进化到“可运营”
-- 为后续 WSL 生产脚本与 Windows MiniQMT 执行桥接预留稳定输入输出
-
-当前项：
-- [x] 盘前 checklist 结构化
-- [x] 盘后 checklist 结构化
-- [x] 生成 daily plan 时附带模型版本 / 数据状态
-- [x] real/shadow reconciliation 结果结构化输出
-- [ ] 明确空 plan、账户异常、数据不齐时的处理策略
-- [ ] 定义 `order_intents` 产物契约，作为 WSL -> Windows bridge 的固定输入
+- 无人值守实盘下单；
+- 大规模 UI 复杂交互；
+- 新增无约束入口脚本。
 
 ---
 
-## 下一阶段
+## Phase 2 — Research Pipeline Productization
 
-### A. feature 拉齐后的研究闭环
+目标：让研究结果可横向比较、可复现、可进入 Candidate 评估。
 
-- [ ] 跑完 extended 相对 baseline 的消融研究
-- [ ] 补新特征候选池：行业/风格暴露、波动与换手稳定性、价格效率、财务质量衍生项
-- [ ] 区分“可直接纳入生产候选”和“仅研究观察”的新特征层级
+关键结果：
 
-### B. rolling backtest 产品化
+| 结果 | 完成判定 |
+|---|---|
+| 评估口径统一 | strict eval / backtest / rolling research 指标口径一致 |
+| Research Analytics | signal、label、IC、RankIC、experiment index 可通过 DuckDB 或等价查询层检索 |
+| Research UI | 可比较模型版本、信号组合、IC/RankIC、回测表现 |
+| ResearchSpec 稳定 | 实验配置可序列化、可复跑、可索引 |
+| feature set 观察 | baseline / extended / 资金流 / PIT / 估值增量可解释 |
 
-- [ ] 固化训练窗 / 测试窗 / 滚动步长默认值
-- [ ] 输出分窗口收益、回撤、换手、胜率、风格漂移摘要
-- [ ] 支持和 strict eval / production 模型做横向比较
+本阶段不做：
 
-### research framework v1
-
-为什么现在做：
-- 当前研究仍偏单脚本 / 单策略 / 单次 debug 驱动，研究维度难以自由组合，导致 feature、model、label、strategy、调仓频率、交易成本假设经常混在具体脚本里。
-- 当前结果解释仍偏一次性：很多 run 能看 PnL，但很难公平比较 signal quality、组合构造差异和执行假设差异，也不够直接对接 UI。
-- 如果继续围绕单次训练 / 单次回测 / 单次修 bug 推进，后续研究会越来越依赖临时脚本和口头解释，难以复用。
-
-这一版目标：
-- 定义第一版研究框架骨架，让研究时可通过显式 spec 组合 `feature_set / model_type / label_type / strategy_type / top_k / rebalance_mode / retrain_freq / inference_freq / universe / transaction_cost assumptions`。
-- 明确拆分 `SignalEngine` 与 `StrategyEngine`：前者只负责 signal 输出，后者只负责组合构造与订单/权重生成。
-- 明确第一版 `Evaluator` 指标面和统一 artifact contract，让研究结果可以被公平比较，并直接对接 report UI。
-- 保持与现有 `run_train / run_backtest / run_strict_eval / daily ops / unified schema` 的衔接，不先推翻旧入口。
-
-完成判定：
-- [x] repo 内有一份可直接指导开发的 `research framework v1` 文档（`docs/features/research_framework_v1.md`），明确核心抽象、字段、枚举值、产物协议与 UI 对接要求。
-- [x] 开发边界清晰：研究框架第一版只收口骨架、配置与产物契约，不混入大规模架构重写或复杂交易细则。
-- [x] RollingResearchRunner v2 (matrix mode) 已落地：generator/transform/strategy 独立可换，+ 信号组合层。
-- [ ] 文档能支持后续最小实现 PR，不再需要先靠聊天重新解释”研究框架第一版”到底做什么。
-- [ ] full ExperimentSpec / ResearchSpec 的稳定序列化与 UI 对接。
-
-这一版不做：
-- 不继续围绕单个策略做深度 debug。
-- 不新增大量临时 audit script。
-- 不做大规模架构重写。
-- 不先碰复杂交易所微观规则。
-- 不打乱 daily ops 主链路。
-
-### C. 运行可观测性完善
-
-- [ ] 将 feature coverage / readiness / graceful degradation 汇总到统一 run report
-- [ ] 把 report 保存路径、关键 artifact、下一步动作明确写入 CLI 末尾摘要
-- [ ] 为“空 plan、账户异常、数据不齐”补清晰处理策略与人机分工
-
-### D. 候选模型晋级流程
-
-- [ ] 重训后自动跑 strict eval + rolling backtest
-- [ ] 候选模型自动与 baseline / production 对比
-- [ ] 晋级、上线、回滚留下最小审计轨迹
-
-### E. Qsys plugin / workflow layer 首发版本
-
-目标：
-- 在不改动核心 engine 的前提下，给 Qsys 增加一层稳定的研究操作接口
-
-待办：
-- [ ] 设计 `qsys_plugins/core` 的目录骨架与 manifest
-- [ ] 首发 `preopen-plan`、`feature-audit`、`rolling-eval` 三个 command
-- [ ] 为 command 补一层薄适配代码，统一调用现有 `scripts/` 或 `qsys/*` 模块
-- [ ] 验证 command 输出可同时服务：人工阅读、日报沉淀、agent 二次消费
-- [ ] 再决定是否兼容 Claude plugin / OpenClaw skill 等外部宿主格式
-
-### F. MiniQMT bridge / production script 主线
-
-目标：
-- 收敛出低 agent 依赖的生产 daily 脚本，并逐步打通 WSL 与 Windows MiniQMT 的执行桥接
-
-待办：
-- [ ] 明确 production daily 的固定运行时：Windows 主机上的 WSL
-- [ ] 固化 `preopen-plan` adapter，并输出 target / executable / blocker / assumptions
-- [ ] 设计 `order_intents` artifact 作为 WSL -> Windows bridge 输入
-- [ ] 设计 `qsys/broker/miniqmt.py` 抽象接口，先支持账户/持仓/委托/成交读取
-- [ ] 定义订单生命周期对象：pending / partial_fill / filled / canceled / rejected
-- [ ] 设计 Windows 回流到 WSL 的执行结果契约，替代长期依赖手工 CSV
+- 自动晋级 production；
+- 复杂多资产框架；
+- 为了实验方便绕过数据泄露检查。
 
 ---
 
-## Backlog
+## Phase 3 — Promotion & Production Preparation
 
-- 更细粒度的风控与交易约束测试
-- 回测和 daily plan 输出的统一可视化报告
-- 测试数据样本标准化与可重复生成机制
-- 更正式的 model registry / artifact registry
-- 调度自动化与周级运营计划固化
+目标：让 Candidate/Shadow 到小资金 Production 的路径可审计、可回滚。
+
+关键结果：
+
+| 结果 | 完成判定 |
+|---|---|
+| Candidate gate | 重训后可自动跑 strict eval + rolling backtest + baseline 对比 |
+| Shadow dashboard | 可持续查看 shadow 表现、持仓、换手、回撤、reconciliation gap |
+| MiniQMT 只读桥接 | 可读取账户、持仓、委托、成交 |
+| 执行结果回流 | WSL ← Windows 的 execution result contract 稳定 |
+| 回滚轨迹 | 晋级、上线、回滚有最小审计记录 |
+
+本阶段不做：
+
+- 无人值守自动下单；
+- 未经人工确认的真实交易；
+- 未经 dashboard 验证的策略上线。
 
 ---
 
-## 明确不做
+## Phase 4 — Automation & Advanced Observability
 
-- 当前阶段不接入自动实盘下单
-- 当前阶段不做跨市场多资产统一引擎
-- 当前阶段不做大规模框架重写
-- 当前阶段不为了“看起来先进”而继续无约束增加脚本入口
+目标：把高频流程沉淀为可复用命令，增强告警和自动化。
+
+关键结果：
+
+| 结果 | 完成判定 |
+|---|---|
+| Daily ops monitoring | readiness、plan diff、MTM、reconciliation 有稳定告警 |
+| Broker monitoring | broker sync、position gap、cash gap 可观测 |
+| Workflow commands | `preopen-plan`、`feature-audit`、`rolling-eval` 可复用 |
+| 长任务状态 | 阶段、关键数字、产物位置结构化输出 |
+
+---
+
+## Global Non-goals
+
+- 不做无人值守自动实盘下单，除非 broker bridge、ledger、reconciliation、manual approval 全部稳定；
+- 不做跨市场多资产统一引擎；
+- 不为了"看起来先进"新增入口脚本；
+- 不把 UI 做成交易操作台，早期 UI 只读；
+- 不让 Research artifact 直接进入 Production。
