@@ -25,7 +25,7 @@ REQUIRED_INDEX_FILES = {
 SIGNAL_RUN_COLS = {"signal_id", "signal_run_id", "prediction_start", "prediction_end", "row_count", "path"}
 SIGNAL_EVAL_COLS = {"signal_id", "signal_run_id", "label_id", "ic_mean", "rank_ic_mean", "rank_icir", "path"}
 BACKTEST_COLS = {"strategy_template_id", "signal_id", "signal_run_id", "start_date", "end_date",
-                 "initial_capital", "final_value", "total_return", "trading_day_count"}
+                 "initial_capital", "final_value", "total_return", "trading_day_count", "path"}
 
 
 def _load_csv(path: Path) -> list[dict] | None:
@@ -35,6 +35,18 @@ def _load_csv(path: Path) -> list[dict] | None:
         return df.to_dict(orient="records")
     except Exception:
         return None
+
+
+def _is_empty(val) -> bool:
+    """Check if a cell value is empty (None, NaN, or empty string)."""
+    if val is None:
+        return True
+    if isinstance(val, str) and not val:
+        return True
+    if isinstance(val, float):
+        import pandas as pd
+        return pd.isna(val)
+    return False
 
 
 def check_experiment_index(exp_dir: Path, strict: bool = False) -> dict:
@@ -143,13 +155,13 @@ def check_experiment_index(exp_dir: Path, strict: bool = False) -> dict:
     if strict:
         # Empty artifact path
         for row in sri_rows:
-            if not row.get("path", ""):
+            if _is_empty(row.get("path")):
                 result["errors"].append("strict: signal_run has empty artifact path")
         for row in sei_rows:
-            if not row.get("path", ""):
+            if _is_empty(row.get("path")):
                 result["errors"].append("strict: signal_eval has empty artifact path")
         for row in bti_rows:
-            if not row.get("path", ""):
+            if _is_empty(row.get("path")):
                 result["errors"].append("strict: backtest has empty artifact path")
 
         # Zero-row eval or backtest index
@@ -158,13 +170,12 @@ def check_experiment_index(exp_dir: Path, strict: bool = False) -> dict:
         if result["backtest_count"] == 0:
             result["errors"].append("strict: backtest_index is empty")
 
-        # Missing critical metadata in manifest
+        # Missing critical metadata in manifest (experiment_id already checked above)
         if manifest_path.exists():
             try:
                 manifest = json.loads(manifest_path.read_text())
-                for key in ("experiment_id", "created_at"):
-                    if key not in manifest:
-                        result["errors"].append(f"strict: manifest missing {key}")
+                if "created_at" not in manifest:
+                    result["errors"].append("strict: manifest missing created_at")
             except Exception:
                 result["errors"].append("strict: manifest unreadable for metadata check")
     # ----------------------------------------------------------------------

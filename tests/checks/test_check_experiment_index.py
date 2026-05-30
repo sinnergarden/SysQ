@@ -31,7 +31,7 @@ _EVAL_COLS = ["signal_id", "signal_run_id", "label_id", "ic_mean",
               "rank_ic_mean", "rank_icir", "path"]
 _BT_COLS = ["strategy_template_id", "signal_id", "signal_run_id", "start_date",
             "end_date", "initial_capital", "final_value", "total_return",
-            "trading_day_count"]
+            "trading_day_count", "path"]
 
 _FIXTURE_MANIFEST = '{"experiment_id": "test_exp", "created_at": "2026-05-30T00:00:00Z"}'
 
@@ -46,7 +46,7 @@ def _valid_exp(tmp_path: Path, name: str = "valid_exp") -> Path:
                [["sig1", "run1", "fr_5d", 0.05, 0.03, 0.5, "/tmp/eval1.parquet"]])
     _write_csv(exp / "backtest_index.csv", _BT_COLS,
                [["rank_weight_top20", "sig1", "run1", "2026-05-01", "2026-05-30",
-                 1000000, 1050000, 0.05, 21]])
+                 1000000, 1050000, 0.05, 21, "/tmp/bt1.parquet"]])
     return exp
 
 
@@ -102,7 +102,7 @@ class TestCheckExperimentIndex:
                    [["sig1", "run1", "2026-05-01", "2026-05-30", 100, "/tmp/sig1.parquet"]])
         _write_csv(exp / "backtest_index.csv", _BT_COLS,
                    [["rank_weight_top20", "sig1", "run1", "2026-05-01", "2026-05-30",
-                     1000000, 1050000, 0.05, 21]])
+                     1000000, 1050000, 0.05, 21, "/tmp/bt1.parquet"]])
         # signal_eval_index.csv does not exist at all
         result = check_experiment_index(exp)
         assert "signal_eval_index.csv" in result["missing_files"]
@@ -118,7 +118,7 @@ class TestCheckExperimentIndex:
         _write_csv(exp / "signal_eval_index.csv", _EVAL_COLS, [])
         _write_csv(exp / "backtest_index.csv", _BT_COLS,
                    [["rank_weight_top20", "sig1", "run1", "2026-05-01", "2026-05-30",
-                     1000000, 1050000, 0.05, 21]])
+                     1000000, 1050000, 0.05, 21, "/tmp/bt1.parquet"]])
         result = check_experiment_index(exp)
         assert result["signal_eval_count"] == 0
 
@@ -163,7 +163,7 @@ class TestCheckExperimentIndex:
                    [["sig1", "run1", "fr_5d", 0.05, 0.03, 0.5, "/tmp/eval1.parquet"]])
         _write_csv(exp / "backtest_index.csv", _BT_COLS,
                    [["rank_weight_top20", "sig1", "run1", "2026-05-01", "2026-05-30",
-                     1000000, 1050000, 0.05, 21]])
+                     1000000, 1050000, 0.05, 21, "/tmp/bt1.parquet"]])
         result = check_experiment_index(exp, strict=True)
         assert result["status"] == "failed"
         assert any("empty artifact path" in e for e in result["errors"])
@@ -178,7 +178,7 @@ class TestCheckExperimentIndex:
         _write_csv(exp / "signal_eval_index.csv", _EVAL_COLS, [])
         _write_csv(exp / "backtest_index.csv", _BT_COLS,
                    [["rank_weight_top20", "sig1", "run1", "2026-05-01", "2026-05-30",
-                     1000000, 1050000, 0.05, 21]])
+                     1000000, 1050000, 0.05, 21, ""]])
         result = check_experiment_index(exp, strict=True)
         assert result["status"] == "failed"
         assert any("strict: signal_eval_index is empty" in e for e in result["errors"])
@@ -208,7 +208,7 @@ class TestCheckExperimentIndex:
                    [["sig1", "run1", "fr_5d", 0.05, 0.03, 0.5, "/tmp/eval1.parquet"]])
         _write_csv(exp / "backtest_index.csv", _BT_COLS,
                    [["rank_weight_top20", "sig1", "run1", "2026-05-01", "2026-05-30",
-                     1000000, 1050000, 0.05, 21]])
+                     1000000, 1050000, 0.05, 21, "/tmp/bt1.parquet"]])
         result = check_experiment_index(exp, strict=True)
         assert result["status"] == "failed"
         assert any("experiment_id" in e for e in result["errors"])
@@ -242,7 +242,7 @@ class TestCheckExperimentIndex:
                    [["sig1", "run1", "fr_5d", 0.05, 0.03, 0.5, "/tmp/eval1.parquet"]])
         _write_csv(exp / "backtest_index.csv", _BT_COLS,
                    [["rank_weight_top20", "sig1", "run1", "2026-05-01", "2026-05-30",
-                     1000000, 1050000, 0.05, 21]])
+                     1000000, 1050000, 0.05, 21, "/tmp/bt1.parquet"]])
         result = check_experiment_index(exp, strict=False)
         assert result["status"] == "degraded"
         assert "prediction_start" in result["signal_run_missing_cols"]
