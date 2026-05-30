@@ -95,7 +95,7 @@ SysQ 已完成从脚本集合到准生产 daily ops 系统的关键转变。SQLi
 - 增加 Builder / Reviewer / Operator 三种 agent 角色定义。
 - Builder 可在 research 层自由修改；Reviewer 检查 protected core 和 artifact contract；Operator 执行 daily pipeline 不修改代码。
 - alpha_v1 分类为 Shadow Baseline，非自由研究沙盒。
-- 增加文档路径规范：跨文档引用统一用相对仓库根路径，禁止 `file://` 绝对路径。**
+- 增加文档路径规范：跨文档引用统一用相对仓库根路径，禁止 `file://` 绝对路径。
 
 #### 5. Templates
 - 提供 research report template 和 candidate promotion checklist。
