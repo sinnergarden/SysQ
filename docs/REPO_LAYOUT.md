@@ -44,7 +44,7 @@
 | `qsys/workflow/` | workflow 编排 | 任务编排 |
 | `qsys/dataview/` | 数据视图 | 数据可视化 |
 | `qsys/experiment/` | 实验管理 | experiment 管理 |
-| `qsys/research_ui/` | Research UI | 研究 UI（目标态） |
+| `qsys/research_ui/` | Research UI 模块 | current（完整 UI 未完全实现） |
 | `scripts/` | CLI / shell entrypoints | 只做编排，不放复杂业务核心 |
 | `scripts/ops/` | data sync、shadow daily、ops 入口 | Protected Core 运维 |
 | `scripts/research/` | rolling research、signal eval、backtest from signal、experiment index | research 入口 |
@@ -87,7 +87,7 @@
 | `data/meta/shadow_test.db` | SQLite shadow test store | shadow 测试用 |
 | `data/feature/` | feature 计算中间数据 | feature engineering |
 | `data/clean/` | 清洗后数据 | clean data |
-| `data/experiments/` | 实验中间数据 | experiment runs |
+| `data/experiments/` | 实验中间数据 | experiment runs（research pipeline 配置中的 root 路径） |
 
 **注意**：
 - `data/trade.db` 是目标 SOT，但旧入口仍可能写 `data/meta/real_account.db`。

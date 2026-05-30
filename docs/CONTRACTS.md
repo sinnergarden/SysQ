@@ -506,3 +506,27 @@ docs/schema/       → 部分 artifact 的字段级 schema
 - **不同 universe / label horizon / cost assumption 下的指标不可直接混比**。
 - **Contract-backed runtime artifacts** 不得随意删除、重命名或改变语义。清理前必须确认 consumer 和回滚方式。
 - **修改 contract**：普通字段走 PR review；改变接口语义、生命周期或跨模块边界时应补 ADR。
+
+---
+
+## 13. Legacy Contract Documents
+
+旧的 `docs/contracts/*` 文档已被合并或降级为 legacy reference。文件本身已删除。
+
+| Legacy file | Status | Migrated / Replaced by |
+|-------------|--------|------------------------|
+| `docs/contracts/agent-operating-contract.md` | deprecated | `AGENTS.md` |
+| `docs/contracts/artifact-contract.md` | deprecated | `docs/CONTRACTS.md`, `docs/schema/`, `docs/adr/007-artifact-contract.md` |
+| `docs/contracts/data-interface.md` | deprecated | `docs/CONTRACTS.md` Data / Feature / Label / Readiness sections |
+| `docs/contracts/data-readiness-contract.md` | deprecated | `docs/CONTRACTS.md` §4.1 Data Readiness Contract |
+| `docs/contracts/daily-ops-read-model-contract.md` | deprecated | `docs/CONTRACTS.md` §10 Daily Ops / UI Read Model |
+| `docs/contracts/no-lookahead-checklist.md` | deprecated | `docs/ops/RESEARCH_STRATEGY_SOP.md` Data Leakage Checklist |
+| `docs/contracts/portfolio-state-contract.md` | deprecated | `docs/CONTRACTS.md` §8.2 Portfolio State / Ledger |
+| `docs/contracts/research-analytics-contract.md` | deprecated | `docs/CONTRACTS.md` §9 Research Analytics |
+| `docs/contracts/research-artifact-contract.md` | deprecated | `docs/CONTRACTS.md` Research Analytics / Signal / Label / Promotion Evidence |
+| `docs/contracts/signal-contract.md` | deprecated | `docs/CONTRACTS.md` §6.2 Prediction / Signal |
+| `docs/contracts/strategy-boundary-contract.md` | deprecated | `docs/ARCHITECTURE.md`, `docs/CONTRACTS.md`, `AGENTS.md` |
+| `docs/contracts/strategy-interface.md` | deprecated | `docs/CONTRACTS.md`, `docs/ops/RESEARCH_STRATEGY_SOP.md`, actual `StrategyCandidate` code |
+| `docs/contracts/time-semantics.md` | deprecated | `docs/CONTRACTS.md` Invariants, `docs/ops/RESEARCH_STRATEGY_SOP.md` |
+
+这些 legacy contract 文件不再作为 current truth。若未来发现旧文档中仍有未迁移的重要规则，应通过 PR 显式迁移，而不是继续引用 `docs/contracts/*`。

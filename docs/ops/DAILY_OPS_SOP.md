@@ -32,6 +32,8 @@
 | Weekly train | `qsys-alpha-v1-weekly-train.service` | Mon 07:00 | `scripts/run_alpha_v1_weekly_train.py` |
 | Shadow daily | `qsys-shadow-daily.service` | daily 15:30 | `scripts/ops/run_shadow_daily.py` |
 
+> 注意：production stage batch（`run_daily_batch.py --stage production`）需要显式 `--allow-production`，且不表示无人值守实盘。Broker submission 仍需人工确认。
+
 **关键事实**：当前 preopen 和 postclose systemd 入口仍是 `run_preopen.sh` / `run_postclose.sh`（shell wrapper）。这两个 wrapper 自身已声明 DEPRECATED，但在 systemd 切换之前它们仍是生产事实。
 
 ### 2.2 Target path
@@ -113,9 +115,9 @@ flowchart TD
     K --> L["MTM"]
     L --> M["Reconciliation"]
     M --> N{recon ok?}
-    N -->|matched| O["Ledger Commit"]
-    N -->|gap| GAP["⚠ Gap recorded<br/>+ notify operator"]
-    GAP --> O
+    N -->|shadow gap| GAP_SHADOW["Record gap + notify<br/>archive evidence"]
+    GAP_SHADOW --> O
+    N -->|production gap| GAP_PROD["⚠ Blocking: stop<br/>+ notify operator"]
     M -->|blocked| STOP2["⚠ Blocked: stop"]
     
     O --> P["Report + Notification"]
@@ -132,7 +134,8 @@ flowchart TD
    - Has orders → 进入 execution mode（shadow / production manual / dry-run）
 5. **Postclose** (15:30) → fills + close prices → MTM → reconciliation
    - Reconciliation matched → ledger commit
-   - Gap → 记录 gap + notify，仍可 commit
+   - Gap in shadow mode → 记录 gap + notify，仍可归档
+   - Gap in production/broker mode → **blocking，不得继续 production execution**
    - Blocked reconciliation → stop
 6. **Report + Notification**
 
@@ -174,11 +177,11 @@ daily/{date}/pre_open/manifests/
 
 | Symptom | Severity | First check | Safe action | Must not do |
 |---------|----------|-------------|-------------|-------------|
-| Data blocked | blocking | `journalctl -u qsys-csi800-daily-sync.service` 检查 sync 日志 | 重跑 sync；仍失败则跳过 preopen | 生成假推荐 |
+| Data blocked | blocking | `journalctl --user -u qsys-csi800-daily-sync.service` 检查 sync 日志 | 重跑 sync；仍失败则跳过 preopen | 生成假推荐 |
 | No approved manifest | blocking | `ls daily/{date}/pre_open/manifests/` 或 model registry | 确认是否从 weekly train 生成 | 用"最新模型目录"替代 |
-| Stale model | degraded | 检查 model_version 的 train_end 日期 | 降级运行旧模型，写入报告 | 用 in-sample signal 当可交易 signal |
+| Stale model | degraded | 检查 model_version 的 train_end 日期 | 只有 approved manifest 中存在 fallback model 时才降级使用，否则 blocking 或需人工确认 | 用 in-sample signal 当可交易 signal |
 | Missing previous account state | blocking | `sqlite3 data/trade.db "SELECT * FROM snapshots ORDER BY snapshot_time DESC LIMIT 1;"` | 尝试 legacy fallback (`data/meta/real_account.db`) | 直接写 ledger |
-| Signal generation failed | blocking | `journalctl -u qsys-preopen.service` | 检查 data readiness、model artifact | 跳过 signal 直接生成 plan |
+| Signal generation failed | blocking | `journalctl --user -u qsys-preopen.service` | 检查 data readiness、model artifact | 跳过 signal 直接生成 plan |
 | Empty plan | warning | 检查 plan JSON 中的 reason 字段 | expected no-trade → 正常通知；abnormal → 人工确认 | 视为失败阻断当天 |
 | Order intent generation failed | blocking | 检查 signal 和 allocation 中间产物 | 修复后重跑 | 生成假 order intent |
 
@@ -224,11 +227,11 @@ daily/{date}/pre_open/manifests/
 |---------|----------|-------------|-------------|-------------|
 | Missing fills | warning | `daily/{date}/post_close/` 下检查 fills 文件 | 重新拉取 broker snapshot | 手动补填 fill 记录 |
 | Missing close price | degraded | `daily/{date}/post_close/` 下检查 MTM | 跳过对应标的 | 用前日收盘价替代 |
-| Ledger write failed | blocking | `journalctl -u qsys-post-close.service` | 检查 DB 锁或磁盘空间 | 直接写 `data/trade.db` |
-| Reconciliation gap | warning | 检查 `reconciliation_result` 输出 | 记录 gap，通知 operator | 自动修正 ledger |
+| Ledger write failed | blocking | `journalctl --user -u qsys-post-close.service` | 检查 DB 锁或磁盘空间 | 直接写 `data/trade.db` |
+| Reconciliation gap | varies by mode | 检查 `reconciliation_result` 输出 | shadow mode → 记录 gap、通知 operator、归档；production/broker mode → blocking，不得继续 | 自动修正 ledger |
 | Broker snapshot unavailable | degraded | `ls -la /home/liuming/.openclaw/broker/` 检查同步文件 | 跳过 broker reconciliation，只做 shadow | 中断当天流程 |
 | Report generation failed | non-blocking | 检查 report 产出路径 | 重新生成 | 阻塞 postclose |
-| Notification failed | non-blocking | `journalctl` | 单独重发通知 | 影响主流程 |
+| Notification failed | non-blocking | 检查通知脚本日志 | 单独重发通知 | 影响主流程 |
 
 ---
 
@@ -271,7 +274,7 @@ flowchart TD
 - **Signal/Plan**：empty plan 或 failed signal → 人工确认原因
 - **Execution**：missing fills → 可尝试重新拉取，不影响 ledger
 - **Ledger**：ledger write failed → **必须人工确认**，不自动重试
-- **Reconciliation**：blocked reconciliation → **必须人工比对**，不自动修正
+- **Reconciliation**：blocked reconciliation → **必须人工比对**，不自动修正；production/broker mode 下 gap 默认 blocking
 
 ---
 
@@ -320,7 +323,9 @@ python scripts/ops/sync_csi800_daily.py --apply
 
 # 检查数据健康（待实现 → 统一 readiness 命令）
 # 当前建议：直接检查文件存在性和日期
-ls -la data/qlib/csi800/daily/  # 检查 qlib 数据日期
+# 检查 qlib 数据 — 查看 data/audit/ 下最新的 readiness 报告和配置中的 qlib bin root
+ls data/audit/ | tail -5
+# 实际 qlib bin 路径：data/qlib_bin/（CSI800）和 data/qlib_bin_candidate_20260430/（candidate）
 ```
 
 ### 跑 preopen
@@ -406,9 +411,9 @@ python scripts/run_daily.py --strategy alpha_v1 --notify-only --trade-date YYYY-
 
 | 场景 | 处理步骤 |
 |------|---------|
-| **Data blocked** | `journalctl -u qsys-csi800-daily-sync.service` 检查 sync 失败原因 → 修复（网络、quota、数据源）→ 手动重跑 `sync_csi800_daily.py --apply` → 仍失败则跳过当天 preopen |
+| **Data blocked** | `journalctl --user -u qsys-csi800-daily-sync.service` 检查 sync 失败原因 → 修复（网络、quota、数据源）→ 手动重跑 `sync_csi800_daily.py --apply` → 仍失败则跳过当天 preopen |
 | **No approved manifest** | 检查 weekly train 是否成功 → 如未训练，手动触发：`python scripts/run_alpha_v1_weekly_train.py` 或 `python scripts/run_daily.py --strategy alpha_v1 --mode train` → 确认 manifest 生成 |
-| **Stale model** | 若有 approved fallback model，使用 `--model_path` 指定 → 通知 operator 确认是否跳过一次训练 |
+| **Stale model** | 若有 approved fallback model（通过 manifest / strategy config），通知 operator 确认是否使用 fallback；当前 `run_daily.py` 不提供 CLI fallback 参数，fallback 需通过配置或 manifest 选择 |
 | **Empty plan** | 检查 plan 日志中的 reason → expected no-trade → 无需操作；abnormal → 检查 signal / readiness / manifest |
 | **Reconciliation gap** | 只记录，不自动修正 → 人工比对 broker snapshot 和 ledger → 走 reconciliation 修正流程 |
 | **Ledger mismatch** | 先备份 `data/trade.db` → 人工分析差异原因 → 走修正流程，不直接覆盖 |
@@ -455,5 +460,6 @@ Monitoring 告警触发点：
 - **不删除 legacy state**。`data/meta/real_account.db` 和 `shadow/` 删除前必须完成 consumer 切换、数据迁移和回归验证。
 - **不绕过 artifact contract**。所有 preopen / postclose 产物应符合 `docs/CONTRACTS.md`。
 - **不把旧入口扩张成新长期接口**。`run_preopen.sh`、`run_postclose.sh`、`run_alpha_v1_daily.py` 是 DEPRECATED，不扩展新依赖。
-- **不在 reconciliation gap 未处理时推进 production execution**。
+- **不在 reconciliation gap 未处理时推进 production execution**；production/broker mode 下 gap 默认 blocking。
+- **production stage batch 必须显式确认 `--allow-production`**，且不代表无人值守实盘。
 - **不在 blocked 时生成假推荐或假 plan**。

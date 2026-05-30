@@ -257,12 +257,14 @@ python scripts/research/query_experiment_duckdb.py \
 ### 快速自检命令
 
 ```bash
-# 检查 label 是否有未来泄露（scripts/checks/ 下有相关工具）
-python scripts/checks/check_no_lookahead.py
-# 检查 signal 字段 schema
-python scripts/checks/check_signal_schema.py
-# 检查 label schema
-python scripts/checks/check_label_schema.py
+# 检查 signal 是否有未来数据泄露（需要 signal 文件路径）
+python scripts/checks/check_no_lookahead.py --signal-path daily/<date>/pre_open/signals/<file>
+
+# 检查 signal 文件字段 schema
+python scripts/checks/check_signal_schema.py --path <path/to/signal.csv_or.parquet>
+
+# 检查 label 文件字段 schema
+python scripts/checks/check_label_schema.py --path <path/to/label.csv_or.parquet>
 ```
 
 ---
@@ -464,9 +466,12 @@ python scripts/research/build_experiment_index.py \
 ### 数据泄露检查
 
 ```bash
-python scripts/checks/check_no_lookahead.py
-python scripts/checks/check_signal_schema.py
-python scripts/checks/check_label_schema.py
+# 检查 signal 是否有未来数据泄露（需要 signal 文件路径）
+python scripts/checks/check_no_lookahead.py --signal-path <path/to/signal.csv_or.parquet>
+# 检查 signal 文件字段 schema
+python scripts/checks/check_signal_schema.py --path <path/to/signal.csv_or.parquet>
+# 检查 label 文件字段 schema
+python scripts/checks/check_label_schema.py --path <path/to/label.csv_or.parquet>
 ```
 
 ---
