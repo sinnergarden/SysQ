@@ -1,389 +1,405 @@
 # ARCHITECTURE
 
-本文档描述 Qsys 的**顶层系统设计、职责分层、代码骨架与不变量**。
-具体功能细节统一下沉到 `docs/features/`。
+本文档描述 Qsys 的**顶层系统设计、两条主链路、分层与当前过渡态**。
+具体功能细节下沉到 `docs/features/`，设计决策记录在 `docs/adr/`。
+
+> **阅读顺序**: 建议先读本文档，再读 `AGENTS.md`（治理协议），最后读 `ROADMAP.md`（当前优先级）。
 
 ---
 
-## 1. 目标与设计原则
+## 1. 系统目标与设计原则
 
-Qsys 当前不是纯研究仓库，也不是全自动实盘系统，而是一个正在收敛中的：
+Qsys 是一个**个人可维护的 A 股日频量化系统**。它必须同时支持持续研究、严格评估、日常运营、渐进实盘、可审计回滚。
 
-- 日常运营系统
-- 量化投研系统
-- 模型晋级与替换系统
+### 设计原则
 
-因此顶层设计遵循以下原则：
+- **研究自由，生产保守。** Research 可以快速试错，但不能绕过 Candidate/Shadow → Production 生命周期。
+- **框架稳定，策略可插拔。** Runner、ledger、matcher、artifact contract 属于框架；feature、model、signal、allocation 属于策略层。
+- **向后研究，向前运营。** Research/backtest 面向历史批量评估；Daily ops 面向未来逐日推进。二者复用执行语义但职责不同。
+- **状态唯一，产物可追踪。** 账户、持仓、成交最终应收敛到 ledger SOT；daily/experiments/reports 是 evidence，不是多个事实源。
+- **少入口，强契约。** 入口脚本只做编排，复杂逻辑下沉到 qsys；Candidate 以上阶段必须遵守 artifact contract。
+- **Agent 不自动越权。** 涉及 ledger、production entry、broker bridge、protected core 的改动必须有人类确认。
 
-- **研究、候选、生产分层**，避免互相污染
-- **数据、训练、评估、运营分链路**，避免脚本一锅炖
-- **默认 out-of-sample 评估**，禁止 train/test 混用自评
-- **少入口、强约束、可回滚**，优先收敛脚本而不是继续长脚本
-- **重要流程必须产出结构化结果**，而不是只看 stdout
-- **文档、脚本、测试同步演进**，功能变更不能只改代码
+### 两个核心区分
 
----
-
-## 2. 运行域划分
-
-Qsys 按用途分为三层运行域：
-
-### 2.1 Research
-
-用途：
-- 新因子
-- 新模型
-- 新策略
-- 参数实验
-- 研究性回测
-
-特点：
-- 可以快速试验
-- 可以失败
-- 可以有多版本并存
-- **不能直接影响线上生产**
-
-产物：
-- 实验脚本
-- 研究模型
-- 对比报告
-- 候选方案说明
-
-### 2.2 Candidate
-
-用途：
-- 通过统一口径做严格评估
-- 与当前 baseline / production 做对比
-- 准备晋级到生产
-
-特点：
-- 必须有清晰评估窗口
-- 必须有固定指标
-- 必须可复现
-- **不能绕过评估直接上线**
-
-产物：
-- candidate model artifact
-- evaluation report
-- promotion decision input
-
-### 2.3 Production
-
-用途：
-- 周一到周五盘前/盘后运营
-- 生成计划
-- 同步账户
-- 对账
-- 影子组合跟踪
-
-特点：
-- 稳定优先
-- 可观测优先
-- 可审计优先
-- 可回滚优先
-
-产物：
-- active production model
-- daily plan
-- account snapshot
-- reconciliation result
-- daily ops report
-
-**硬规则：**
-- production 不认“最新模型目录”
-- production 只认**明确批准的模型版本 / manifest**
-- research 产物不能直接进生产
+- **向后研究 vs 向前运营**：研究是历史回放视角，评估策略在历史上是否稳定、有增量；运营是推进视角，决定今天如何交易、如何记录结果。二者共享执行语义（撮合、成本、持仓演算），但编排器、数据流、产出截然不同。
+- **Research → Candidate/Shadow → Production**：策略从自由实验到生产部署，必须经过严格评估和仿真运行。Research 结果不能直接接入 daily ops。
 
 ---
 
-## 3. 四条主链路
+## 2. 系统总图
 
-### 3.1 Data pipeline
+### 2.1 Target Architecture
 
-职责：
-- universe 定义与维护
-- raw 数据抓取与存储
-- 核心行情字段 qlib 转换
-- 工具文件同步（instruments / calendar）
-- readiness / health check
-- audit 记录
+```mermaid
+flowchart TB
+    subgraph DATA["Data Layer"]
+        DP[Data Pipeline<br/>sync_csi800_daily]
+        Q[qlib_bin]
+        C[Calendar / Instruments]
+    end
 
-流程：`universe → raw fetch → qlib convert → instrument refresh → readiness check → audit`
+    subgraph RESEARCH["Research / Backtest Chain — 回放视角"]
+        RRR[RollingResearchRunner<br/>v2 matrix experiment]
+        BE[BacktestEngine<br/>signal-driven portfolio eval]
+        SE[SignalEvaluator<br/>IC / RankIC / ICIR]
+        EI[ExperimentIndex]
+    end
 
-当前代码骨架（数据层）：
-- `qsys/data/collector.py` — Tushare 数据拉取
-- `qsys/data/storage.py` — 本地 feather + SQLite 存储
-- `qsys/data/adapter.py` — qlib 转换与对齐
-- `qsys/data/health.py` — 数据健康检查
-- `qsys/ops/qlib_sync.py` — qlib 增量/全量同步
+    subgraph DAILY["Daily Ops Chain — 向前视角"]
+        DR[DailyRunner<br/>train / preopen / postclose]
+        EB[Execution Backend<br/>simulated or broker]
+        LS[LedgerService]
+    end
 
-当前入口（日常管道）：
-- `scripts/ops/sync_csi800_daily.py` — CSI800 日频增量同步（systemd timer 触发）
-  - 解析交易日 → 获取成分股 → 预检 → 拉 raw → qlib 转换 → 刷新工具文件 → readiness 检查 → 写 audit → Telegram 通知
+    subgraph STRATEGY["Strategy Layer — 可插拔"]
+        SC[StrategyCandidate Protocol]
+        F[Feature Sets<br/>baseline / extended]
+        M[Model Zoo<br/>qlib_lgbm / ...]
+        SG[Signal Generators<br/>alpha_v1 / technical_composite]
+        SA[Strategy Allocation<br/>rank_weight_top20 / ...]
+    end
 
-核心产物：
-- `data/raw/daily/` — 日线 Feather 文件
-- `data/qlib_bin/` — QLib serving 数据
-- `data/audit/` — 每日 sync audit JSON
-- instruments / calendar / feature dump
-- data status report（readiness check 内嵌在 sync 中）
+    subgraph LIFECYCLE["Lifecycle Management"]
+        R[Research → free experiment]
+        CA[Candidate / Shadow → strict eval + shadow run]
+        PR[Production → approved manifest]
+    end
 
-### 3.2 Research pipeline
+    subgraph OPS["Ops Infrastructure"]
+        SO[systemd timers]
+        NW[Telegram Notification]
+    end
 
-职责：
-- 特征定义
-- 模型训练
-- 因子/模型实验
-- baseline 对比
-- 严格评估
+    DATA --> RESEARCH
+    DATA --> DAILY
+    RESEARCH -->|promotion gate| LIFECYCLE
+    DAILY -->|production ops| LIFECYCLE
+    RESEARCH -.->|consumes| STRATEGY
+    DAILY -.->|consumes| STRATEGY
+    DAILY --> OPS
+```
 
-当前代码骨架：
-- `scripts/run_train.py`
-- `scripts/run_backtest.py`
-- `scripts/run_strict_eval.py`
-- `scripts/research/run_rolling_research.py` — Rolling research runner（v1 single-signal, v2 matrix mode）
-- `qsys/research/rolling_runner.py` — 核心编排器
-- `qsys/research/generators/` — 信号生成器（fixture、alpha_v1_existing、technical_composite）
-- `qsys/research/signal_combine.py` — 信号组合（linear_blend、equal_weight、confirm_filter）
-- `qsys/feature/library.py`
-- `qsys/model/`
-- `qsys/backtest.py`
-- `qsys/strategy/`
+图1：两条主链路共享数据层和策略层。Research 通过 promotion gate 决定哪些策略进入 Candidate/Shadow；Daily Ops 消费已批准的策略执行日常运营。OPS 层监控 daily 链路。
 
-核心产物：
-- model artifact
-- training summary
-- backtest summary
-- strict evaluation result
-- rolling research manifest + 实验索引（matrix_jobs.csv、signal_eval_index.csv、backtest_index.csv）
+### 2.2 Current Transition State
 
-### 3.3 Promotion pipeline
+```mermaid
+flowchart TB
+    subgraph LEGACY["Legacy Path (systemd active)"]
+        SYS[systemd] --> SH[run_preopen.sh]
+        SYS --> PSH[run_postclose.sh]
+        SH --> RDT[run_daily_trading.py<br/>997 lines]
+        SH --> RAV[run_alpha_v1_daily.py<br/>deprecated wrapper]
+        PSH --> RPC[run_post_close.py]
+        PSH --> RAV2[run_alpha_v1_daily.py]
+    end
 
-职责：
-- research -> candidate -> production 的晋级与替换
-- 控制上线门槛与回滚边界
+    subgraph TARGET["Target Path (not yet systemd)"]
+        TB[run_daily_batch.py] --> RD[run_daily.py]
+        RD --> NR[DailyRunner]
+        NR --> SC[StrategyCandidate]
+    end
 
-当前状态：
-- **设计已明确，落地仍不足**
-- 当前仍偏人工控制
+    subgraph STATE["State Backends"]
+        DB1[(data/trade.db<br/>LedgerService target)]
+        DB2[(data/meta/real_account.db<br/>live/account.py default)]
+        SHADOW[shadow/account.json<br/>still actively written]
+    end
 
-目标代码骨架：
-- `qsys/live/scheduler.py`
-- 未来应补：
-  - model registry / manifest
-  - promotion checker
-  - approval record
+    RDT --> DB2
+    RPC --> DB2
+    RAV --> DB1
+    RAV --> SHADOW
+    NR --> DB1
 
-核心产物：
-- approved candidate
-- production manifest
-- rollback target
+    style LEGACY fill:#ffe0e0,stroke:#c00
+    style TARGET fill:#e0ffe0,stroke:#0c0
+    style STATE fill:#fff0e0,stroke:#c80
+```
 
-### 3.4 Daily operation pipeline
-
-职责：
-- 盘前数据检查
-- 计划生成
-- 账户同步
-- 盘后对账
-- 影子组合跟踪
-
-当前代码骨架：
-- `scripts/run_daily_trading.py`
-- `scripts/run_post_close.py`
-- `qsys/live/manager.py`
-- `qsys/live/account.py`
-- `qsys/live/reconciliation.py`
-- `qsys/live/simulation.py`
-
-核心产物：
-- `daily/{date}/pre_open/plans/plan_{signal_date}_{account}.csv`
-- `daily/{date}/pre_open/plans/real_sync_template_{signal_date}_{account}.csv`
-- `daily/{date}/post_close/reconciliation/`
-- `daily/{date}/pre_open/reports/` 与 `daily/{date}/post_close/reports/`
+图2：当前 systemd 仍走 Legacy Path（红色），Target Path（绿色）尚未接入 systemd。三态存储（橙色）表示 state migration 尚未完成。
 
 ---
 
-## 4. 统一对象模型
+## 3. 两条主链路
 
-Qsys 顶层协作统一围绕以下对象：
+### 3.1 Research / Backtest Chain — 回放视角
 
-### 4.1 Dataset version
-- 含义：raw + qlib 的一次可用数据状态
-- 由谁生成：data pipeline
-- 被谁消费：training / backtest / daily plan
+**回答的问题**：某个 feature / model / signal / strategy 在历史上是否稳定、有增量、值得进入 Candidate？
 
-### 4.2 Universe version
-- 含义：某个 universe（如 `csi300`）在某时间段的成分定义
-- 由谁生成：universe/instrument pipeline
-- 被谁消费：feature fetch / train / backtest / plan
+**推荐调用关系**：
 
-### 4.3 Model artifact
-- 含义：训练产物及其元信息
-- 最低要求：
-  - `model.pkl`
-  - `meta.yaml`
-  - `training_summary.csv`
-- 被谁消费：backtest / daily ops / promotion
+```
+Data readiness
+  → feature set
+  → rolling train / predict
+  → signal cache
+  → BacktestEngine
+  → SignalEvaluator
+  → ExperimentIndex
+  → Candidate decision
+```
 
-### 4.4 Evaluation report
-- 含义：对某模型在固定口径下的评估结果
-- 最低要求：
-  - 时间窗口
-  - feature set
-  - baseline 对比
-  - 收益/Sharpe/回撤/换手/费用
-  - 是否允许晋级
+**边界规则**：
 
-### 4.5 Daily plan
-- 含义：某个 signal date 对应的执行计划
-- 最低要求：
-  - `symbol`
-  - `side`
-  - `amount`
-  - `price`
-  - `weight`
-  - `score` / `rank`
+- `rolling train / predict` 只负责生成历史 out-of-sample signal，不负责组合构造。
+- `BacktestEngine` 不训练模型，不管理 rolling window。它只消费已生成的 signal / prediction artifact。
+- BacktestEngine 的职责：组合构造、调仓、撮合、成本、持仓演化和绩效计算。
+- `SignalEvaluator` 的职责：IC / RankIC / ICIR / 分组收益等信号层评估。
+- `ExperimentIndex` 的职责：横向比较多个实验，不直接影响 production。
+- **Research 结果不能直接接入 daily ops**。必须进入 Candidate/Shadow 阶段，经过 strict eval + shadow run 才能接近生产。
 
-### 4.6 Account snapshot
-- 含义：real / shadow 在某日收盘后的真实账户状态
-- 被谁消费：下一日计划、对账、偏差分析
+### 3.2 Daily Ops Chain — 向前视角
 
----
+**回答的问题**：在今天这个交易日，系统应该基于已批准策略生成什么计划，并如何记录执行结果？
 
-## 5. 代码骨架与模块职责
+**推荐调用关系**：
 
-### 5.1 `scripts/` 入口层
+```
+Data readiness
+  → production manifest / strategy config
+  → model freshness check
+  → preopen: signal / plan / order intents
+  → execution: shadow or broker
+  → postclose: fills / MTM / reconciliation
+  → ledger / daily evidence / notification
+```
 
-职责：
-- 只做 orchestration
-- 参数解析
-- 结果落盘
-- 串联业务层
+**三阶段职责**：
 
-要求：
-- 不承载复杂业务规则
-- 新能力优先并入已有入口，不轻易新长脚本
+| 阶段 | 职责 | 不做什么 |
+|------|------|---------|
+| train / refresh | 周期性训练或刷新模型 | 不直接生成当天订单 |
+| preopen | 检查数据 readiness，读取 approved manifest，生成 signal、plan、order intents | 不写成交状态 |
+| postclose | 记录成交、估值、对账、报告 | 不修改已批准的 plan |
 
-当前建议保留的主入口（数据层）：
-- `scripts/ops/sync_csi800_daily.py` — CSI800 日频增量同步
+**Shadow vs Production**——不是两套框架：
 
-当前建议保留的主入口（研究/运营）：
-- `scripts/run_train.py`
-- `scripts/run_backtest.py`
-- `scripts/run_daily_trading.py`
-- `scripts/run_post_close.py`
-- `scripts/run_strict_eval.py`
+| 维度 | Shadow | Production |
+|------|--------|-----------|
+| Runner | DailyRunner | DailyRunner |
+| Execution Backend | simulated execution | broker bridge |
+| Account | virtual / ledger | real + manual approval |
+| Reconciliation | internal only | broker reconciliation |
 
-### 5.2 `qsys/data`
+Shadow 是运行模式，不是某一种数据库。Shadow mode 可以写入同一个 ledger，也可以在迁移期通过 legacy shadow files 兼容旧逻辑。
 
-职责：
-- tushare/raw 抓取
-- storage
-- qlib conversion
-- data health
-- universe readiness
+### 3.3 Shared Execution Kernel
 
-要求：
-- 数据质量逻辑下沉到这里
-- daily / train / backtest 不应各自重复写数据检查
+Research/backtest 和 daily ops 应尽可能复用同一套执行语义：
 
-### 5.3 `qsys/feature`
+- order generation：target weight → order intents
+- matching / fills：限价/市价撮合逻辑
+- transaction cost / slippage 模型
+- T+1 / lot size / cash constraint
+- portfolio accounting：持仓、现金、累计收益
+- performance / reconciliation：收益率、换手、胜率
 
-职责：
-- 因子集合定义
-- baseline / extended feature set
-- 因子研究辅助
-
-要求：
-- 特征集合集中定义
-- 避免脚本里各自拼 feature list
-
-### 5.4 `qsys/model`
-
-职责：
-- 训练
-- 保存 / 加载
-- 预处理契约
-- 推理
-
-要求：
-- 模型产物必须自描述
-- inference 不依赖训练时进程内的临时对象
-
-### 5.5 `qsys/strategy`
-
-职责：
-- score -> target weights / target positions
-- top_k 约束
-- 换仓逻辑
-
-### 5.6 `qsys/backtest`
-
-职责：
-- 历史回测
-- 日频收益与交易轨迹输出
-- 统一评估接口
-
-### 5.7 `qsys/live`
-
-职责：
-- 每日计划
-- real/shadow 账户管理
-- reconciliation
-- scheduler
-
-要求：
-- 生产逻辑只在这里汇总，不散落到研究脚本
-
-### 5.8 `tests/`
-
-职责：
-- 配置测试
-- 数据契约测试
-- 训练/推理契约测试
-- CLI 语义测试
-- 关键流程回归
-
-要求：
-- 新流程改动必须补最小回归
+**当前状态**：目标是共享同一套语义，当前处于收束过程中。BacktestEngine 和 DailyRunner 正在逐步靠拢同一套 MatchEngine / OrderGenerator。在收束完成前，两端的口径差异由 runner 适配层处理，不扩散到策略层。
 
 ---
 
-## 6. 当前架构不合理处
+## 4. 分层架构
 
-以下是当前已识别、后续要继续修的架构问题：
+### 4.1 Data Layer
 
-1. **research / candidate / production 仍未完全隔离**
-2. **production model 选择仍偏弱，manifest 机制未完全落地**
-3. **评估口径尚未完全产品化，仍有脚本漂移风险**
-4. **run report 还没有形成统一结构化产物**
-5. **daily ops 仍更像“能跑通”，还不像“强约束运营系统”**
+数据层是两条链路的共同前置条件：没有 readiness check，不能进入主流程。
+
+| 组件 | 路径 | 职责 |
+|------|------|------|
+| Data Pipeline | `scripts/ops/sync_csi800_daily.py` + `qsys/` 内模块 | Tushare raw → qlib_bin + audit |
+| Qlib Bin | `data/qlib_bin/` | QLib serving 数据 |
+| Calendar / Instruments | `data/meta/meta.db` | 交易日历、股票基本信息 |
+
+### 4.2 Framework Core（策略无关层）
+
+职责：所有的编排骨架、状态管理、评估基础设施。
+
+**硬规则**：
+- Framework Core **不直接 import 策略实现**，不硬编码具体策略路径；只能通过 `StrategyCandidate` Protocol 或 config 解析策略。
+- 框架的路径约定、日期语义、产物契约对所有策略统一。
+
+| 组件 | 路径 | 职责 | 隶属链路 |
+|------|------|------|---------|
+| `DailyRunner` | `qsys/ops/daily_runner.py` | 盘前/盘后/训练编排 | Daily Ops |
+| `BacktestEngine` | `qsys/backtest/engine.py` | 信号驱动的组合回测 | Research/Backtest |
+| `RollingResearchRunner` | `qsys/research/rolling_runner.py` | 滚动研究（v1/v2 matrix）| Research/Backtest |
+| `SignalEvaluator` | `qsys/research/signal.py` | IC/RankIC/ICIR 计算 | Research/Backtest |
+| `SignalStore` | `qsys/signal/store.py` | SignalRun 持久化 | 共享 |
+| `ExperimentIndex` | `qsys/research/experiment.py` | 实验索引收集 | Research/Backtest |
+| `LedgerService` | `qsys/ledger/service.py` | 账户状态管理 | Daily Ops |
+| `MatchEngine` | `qsys/trader/matcher.py` | 成交匹配 | 共享（收束目标）|
+| `OrderGenerator` | `qsys/trader/diff.py` | 订单意图生成 | 共享（收束目标）|
+
+### 4.3 Strategy Layer（策略相关层）
+
+职责：可插拔的模型、特征、信号、策略构造。策略之间独立，不互相依赖。
+
+这些模块是实现层结构，不要求用户日常逐层操作。研究入口应允许通过 signal expression 或 config abstraction 直接表达组合信号，例如 `raw(signal1) + 0.2 * zscore(signal2)`。日常研究入口应优先暴露简洁表达，让用户快速组合、评估和复用信号。
+
+| 组件 | 路径 | 可插拔点 |
+|------|------|---------|
+| Feature Sets | `qsys/feature/groups/` | `baseline` / `extended` / 自定义 |
+| Model Zoo | `qsys/model/` | `qlib_lgbm` / 未来扩展 |
+| Signal Generators | `qsys/research/generators/` | `fixture` / `alpha_v1_existing` / `technical_composite` |
+| Signal Transforms | `qsys/research/rolling_runner.py` `apply_signal_transform` | `identity` / `daily_zscore` |
+| Signal Combinations | `qsys/research/signal_combine.py` | `linear_blend` / `equal_weight` / `confirm_filter` |
+| Strategy Adapter | `qsys/strategy/<name>/adapter.py` | 实现 `StrategyCandidate` Protocol |
+| Strategy Allocation | `qsys/strategy/allocation/` | `rank_weight_top20` / `rank_weight_top50_capped` |
+
+### 4.4 State & Artifact Layer
+
+**状态存储**："DB"不是架构语义本身。SQLite、DuckDB、JSON、CSV 只是介质。架构上真正重要的是：谁是账户状态 SOT，谁是 research analytics，谁是 evidence，谁只是 legacy compatibility。
+
+| 对象 | 介质 | 路径 | 语义 | 当前角色 | 目标角色 | 备份/恢复 |
+|------|------|------|------|---------|---------|---------|
+| Account State / Execution Ledger | SQLite | `data/trade.db` | 账户、持仓、订单、成交、快照的结构化状态 | 新主线 | **唯一 SOT** | 每日/每次 postclose 前后备份 |
+| Legacy Account Store | SQLite | `data/meta/real_account.db` | 旧 live/account 路径使用的账户状态 | active legacy | 迁移后只读/移除 | 迁移前保留备份 |
+| Legacy Shadow Files | JSON/CSV | `shadow/` | 旧 alpha / shadow ops 兼容状态 | active compatibility | 只读或移除 | 迁移前保留原始文件 |
+| Daily Evidence | files | `daily/{date}/` | 单日计划、执行、报告、manifest | 当前有效 | 当前有效 | 不覆盖，只追加/归档 |
+| Research Artifacts | files | `experiments/` | 研究、训练、回测、评估结果 | 当前有效 | 当前有效 | 可重建但应保留关键报告 |
+| Model Artifacts | files | `data/models/` | 训练模型与 approved manifest | 当前有效 | 当前有效 | approved model 必须可回滚 |
+| Research Analytics Store | DuckDB / parquet / CSV | `scripts/research/query_experiment_duckdb.py` + `experiments/` | signal、label、IC/RankIC、实验索引查询 | 已有研究侧使用 | 研究分析加速层 | 可由原始 artifact 重建，但关键报告应保留 |
+
+**目标不变量**：账户、持仓、成交最终必须收敛到 LedgerService；在迁移完成前，legacy path 只能作为 compatibility layer，不得扩展新依赖。
+
+**产物契约（Artifact Contract）**：
+
+ADR-007 定义了 6 种标准 artifact。Artifact Contract 在 Candidate/Shadow 及 Production 阶段变硬；Research 阶段可以更灵活，但进入 Candidate 前必须能转换成标准 artifact。契约的目标不是增加文档负担，而是让运行可追踪、可重建、可审计。
+
+Artifact 的链式关系：
+
+```
+SignalArtifact → OrderIntentArtifact → ExecutionArtifact → PortfolioSnapshot → RunManifest
+```
+
+各 artifact 定位：
+
+- **SignalArtifact**：记录某天某策略产生了什么信号。
+- **OrderIntentArtifact**：记录由信号和账户状态推导出的目标订单意图。
+- **ExecutionArtifact**：记录订单如何被模拟或真实执行。
+- **PortfolioSnapshot**：记录执行后组合状态。
+- **RunManifest**：串起一次运行的输入、输出、版本和证据。
+- **CandidateReport**：汇总历史评估和 shadow 结果，服务晋级决策，不是 daily run 的必经产物。
+
+| Artifact | 生产者 | 消费者 |
+|----------|--------|--------|
+| SignalArtifact | preopen pipeline | 计划生成、UI |
+| OrderIntentArtifact | preopen pipeline | postclose execution |
+| ExecutionArtifact | postclose pipeline | ledger、MTM |
+| PortfolioSnapshot | postclose pipeline | MTM、报告 |
+| CandidateReport | 候选评估 | 晋级决策 |
+| RunManifest | 所有流程 | 审计、重建 |
+
+详见 `docs/adr/007-artifact-contract.md` 和 `docs/schema/`。
+
+### 4.5 Lifecycle Management
+
+策略生命周期为三阶段：Research → Candidate/Shadow → Production。Shadow 是 Candidate 的运行模式，不是独立系统，也不是某种数据库。
+
+```mermaid
+flowchart LR
+    R[Research] -->|strict eval + promotion review| C[Candidate / Shadow]
+    C -->|manual approval + stable evidence| P[Production]
+    P -->|retired / superseded| A[Archived]
+```
+
+图3：策略生命周期三阶段。稳定运行窗口由 ROADMAP / promotion checklist 定义，通常不低于数周。
+
+| 阶段 | 允许操作 | 禁止操作 | 产物要求 |
+|------|---------|---------|---------|
+| **Research** | 自由实验 feature/model/signal/strategy，做历史回测和信号评估 | ❌ 直接进入 daily production，写真实账户状态 | research report / experiment index |
+| **Candidate / Shadow** | 通过 stage-approved manifest 进入仿真 daily run，持续记录计划、执行、MTM、表现 | ❌ 自动实盘下单，影响 Production 状态，绕过 artifact contract | CandidateReport / SignalArtifact / OrderIntentArtifact / RunManifest / PortfolioSnapshot |
+| **Production** | 经人工确认后接入 broker bridge，小资金实盘与真实对账 | ❌ Agent 自动下单，跳过审批和 reconciliation | execution artifact / ledger state / broker reconciliation / run manifest |
+| **Archived** | 从 DAG 移除、标注 retired | — | 产物保留不删 |
+
+### 4.6 Research Analytics & Monitoring
+
+两个观测层都只读 artifact 和状态，不直接修改策略、ledger 或订单。
+
+**Research Analytics** 关注批量查询和横向比较：signal、label、IC/RankIC、分组收益、backtest summary、experiment index 等研究分析结果的存储与查询。DuckDB 是已在研究侧使用的查询引擎，位于 research chain 侧，不参与 daily production 状态写入，不替代 `data/trade.db`，不参与 broker execution。它可以加速横向实验比较和 UI 查询。
+
+**Monitoring** 关注系统健康和异常告警。
+
+- **Research monitoring**：IC / RankIC / ICIR、分组收益、turnover、回撤、feature coverage、缺失率。
+- **Daily ops monitoring**：数据 readiness、model freshness、plan diff、order intent 异常、postclose MTM、daily report。
+- **Production / broker monitoring**：broker sync、execution fill、position gap、cash gap、reconciliation result、告警通知。
 
 ---
 
-## 7. 架构不变量
+## 5. 模块 I/O 总表
 
-这些规则后续默认不轻易破坏：
+### 5.1 Research / Backtest I/O
 
-- `scripts/` 只做编排，不做复杂业务核心
-- 数据 readiness 是训练、回测、daily ops 的前置条件
-- 模型产物必须包含可追溯元信息
-- 默认采用 out-of-sample 评估
-- 默认优先使用统一 feature set 定义，而不是脚本内临时拼接
-- daily ops 只允许消费 production-approved model
-- 新脚本增加前，先检查是否能并入已有入口
-- 功能变更必须同步更新：代码、文档、测试
+| 模块 | 输入 | 输出 | 状态写入 |
+|------|------|------|---------|
+| Feature Builder | qlib data, feature config | feature matrix | feature cache / experiments |
+| Model Trainer | feature matrix, labels, split config | model artifact | experiments / data/models |
+| Predictor | model artifact, feature matrix | signal cache | SignalStore / experiments |
+| BacktestEngine | signal cache, price data, strategy config | portfolio curve, trades, metrics | experiments（不训练模型）|
+| SignalEvaluator | signal cache, labels | IC, RankIC, ICIR | ExperimentIndex |
+| ExperimentIndex | eval reports, backtest reports | comparison index | experiments |
+
+### 5.2 Daily Ops I/O
+
+| 模块 | 输入 | 输出 | 状态写入 |
+|------|------|------|---------|
+| DailyRunner (train) | approved config, data | model refresh result | data/models, reports（不直接下单）|
+| DailyRunner (preopen) | production manifest, latest data, ledger | signal, plan, order intents | daily/{date}/pre_open（不写成交）|
+| Execution Backend | order intents, broker or simulator | fills, execution report | staging / daily |
+| DailyRunner (postclose) | fills, prices, broker snapshot | MTM, reconciliation, report | ledger, daily/{date}/post_close |
+| LedgerService | execution, snapshot, cash events | account state | data/trade.db |
+| Notifier | run report | Telegram message | 不写状态 |
+
+### 5.3 State / Artifact I/O
+
+| 存储 | 写者 | 读者 | 角色 |
+|------|------|------|------|
+| data/trade.db | LedgerService | DailyRunner, ops tools | 目标 ledger SOT |
+| data/meta/real_account.db | old live path | old daily entry | legacy（当前兼容，目标迁移）|
+| shadow/ | alpha_v1, old ops | alpha adapters, plan builder | legacy（当前兼容，不是目标）|
+| daily/{date} | daily ops | audit, UI, report | daily evidence |
+| experiments | research chain | comparison, promotion | research artifact |
+| data/models | train, promotion | daily ops | model artifact |
 
 ---
 
-## 8. 与 RUNBOOK / ROADMAP 的关系
+## 6. Current Transition State
 
-- `docs/RUNBOOK.md`：描述 daily / weekly / research 的实际操作流程
-- `ROADMAP.md`：描述当前优先级与具体待办
-- `docs/features/`：描述具体功能与实现细节
+### 6.1 目标态 vs 现实
 
-架构文档负责回答：
-- 系统怎么分层
-- 代码应该改哪里
-- 哪些职责不能混
+| 维度 | 目标态 | 当前现实 | 差距 |
+|------|--------|---------|------|
+| 入口 | `run_daily.py` + `run_daily_batch.py` | systemd 调用 `run_preopen.sh` → `run_daily_trading.py` + deprecated wrapper | 需切换 systemd |
+| Ledger | `data/trade.db` 唯一 SOT | `trade.db` + `real_account.db` + `shadow/` 三态共存 | 需统一 + 迁移 |
+| 研究→Candidate | RollingResearchRunner → ExperimentIndex → promotion checklist | RollingResearchRunner v2 已落地，promotion checklist 存在但未自动化 | 需自动化晋级门禁 |
+| Candidate→Production | 候选 shadow run → eval → approval | 人工驱动，alpha_v1 已处 Shadow Baseline | 需自动化 gate |
+| 执行语义共享 | BacktestEngine 与 DailyRunner 共享 MatchEngine / OrderGenerator | 尚未完全靠拢 | 收束中 |
+| Ops SOP | 反映当前入口和流程 | SOP 引用旧入口 | 需同步 |
+
+详细 agent 权限、Protected Core 修改流程和操作禁令见 `AGENTS.md`。本文档只描述架构边界和系统不变量。
+
+---
+
+## 7. 架构不变量（不可破坏的规则）
+
+1. **`scripts/` 只做编排，不做复杂业务核心** — 业务逻辑下沉到 `qsys/`。
+2. **数据 readiness 是训练、回测、daily ops 的前置条件** — 无 readiness check 不能进入主流程。
+3. **默认 out-of-sample 评估** — 禁止 train/test 混用自评。
+4. **目标不变量：Ledger 是账户/持仓/成交的事实标准** — 所有状态查询走 `LedgerService`，不直接读 CSV/JSON。在迁移完成前，legacy path 只能作为 compatibility layer，不得扩展新依赖。
+5. **daily ops 只消费显式批准的 manifest** — 不认"最新模型目录"策略。
+6. **Framework Core 与 Strategy Layer 严格分离** — Core 不直接 import 策略实现，不硬编码策略路径；只能通过 Protocol / config 解析策略。
+7. **Research 不能直接进入 Production** — 必须经过 Candidate/Shadow 阶段。
+
+---
+
+## 8. 与其他文档的关系
+
+- `AGENTS.md` — AI 操作说明书（角色、权限、禁止事项）
+- `CONTRIBUTING.md` — 开发协作流程（branch → PR → merge）
+- `ROADMAP.md` — 当前优先级与具体待办
+- `docs/features/` — 功能规格（实现状态见 `docs/features/README.md`）
+- `docs/adr/` — 架构决策记录（索引见 `docs/DECISIONS.md`）
+- `docs/schema/` — 产物契约 schema
+- `docs/ops/` — 运营 SOP
