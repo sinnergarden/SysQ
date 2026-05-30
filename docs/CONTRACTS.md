@@ -2,21 +2,33 @@
 
 本文档定义 SysQ 中 Research、Daily Ops、Monitoring、UI 共同依赖的数据接口边界。
 
-系统地图见 `ARCHITECTURE.md`，artifact 字段级 schema 见 `docs/schema/`。
+系统地图见 `docs/ARCHITECTURE.md`，artifact 字段级 schema 见 `docs/schema/`。
 
 ---
 
 ## 1. 设计原则
 
-- **Contract 描述长期接口边界**，不是阶段性 feature spec。修改必须经过 PR Review 或 ADR。
-- `ARCHITECTURE.md` 讲系统地图（两条主链路、分层、过渡态）；**本文讲数据如何在模块间流动**（谁生产、谁消费、粒度、不变量）。
+- **Contract 描述长期接口边界**，不是阶段性 feature spec。普通字段补充走 PR review；改变接口语义、生命周期或跨模块边界时应补 ADR。
+- `docs/ARCHITECTURE.md` 讲系统地图（两条主链路、分层、过渡态）；**本文讲数据如何在模块间流动**（谁生产、谁消费、粒度、不变量）。
 - `docs/schema/` 是 artifact 字段级 schema（SignalArtifact、OrderIntentArtifact 等）；本文只讲更高层的 producer / consumer / grain / invariant。
 - **UI 和 monitoring 只读** —— 不写 ledger，不下单，不改策略。
 - **不把目标态写成当前事实**。当前尚未完成的迁移路径必须在文档中标注。
 - **Legacy path 只能作为 compatibility**，不扩展新依赖。
 - **字段只写第一版最小稳定字段**，不是全量字段大全。后续逐步演进。
 
+### Write / Read Boundary
+
+| Contract | Producer | Consumer | UI / Monitoring 可写？ |
+|----------|----------|----------|----------------------|
+| Data Readiness | data sync pipeline、readiness check | DailyRunner、train、backtest、UI、monitoring | ❌ 只读 |
+| Signal | Predictor、RollingResearchRunner、DailyRunner | BacktestEngine、SignalEvaluator、ExperimentIndex、UI | ❌ 只读 |
+| Research Analytics | RollingResearchRunner、SignalEvaluator、BacktestEngine、ExperimentIndex | Research UI、promotion review、monitoring | ❌ 只读 |
+| Daily Ops Read Model | DailyRunner、postclose pipeline、report generator | Ops UI、monitoring、notification | ❌ 只读 |
+| Portfolio State | LedgerService、Execution Backend、broker reconciliation | DailyRunner、UI、monitoring、broker bridge | ❌ 只读 |
+
 ---
+
+
 
 ## 2. Contract Index
 
@@ -53,7 +65,7 @@ per target_date / per data domain (raw / qlib / calendar / instrument) / per uni
 
 ### Required Fields
 
-`target_date`, `calendar_date`, `latest_raw_date`, `latest_qlib_date`, `universe_id`, `is_trading_day`, `raw_ready`, `qlib_ready`, `calendar_ready`, `instrument_ready`, `missing_rate`, `status` (ready/degraded/blocked), `reason`, `generated_at`, `source_run_id`。
+`target_date`, `calendar_date`, `latest_raw_date`, `latest_qlib_date`, `universe_id`, `is_trading_day`, `raw_ready`, `qlib_ready`, `calendar_ready`, `instrument_ready`, `missing_rate`, `status` (ready/degraded/blocked), `blocking_scope` (train/backtest/preopen/postclose/all), `reason`, `generated_at`, `run_id`。
 
 ### Invariants
 
@@ -98,7 +110,11 @@ strategy_id + signal_id + signal_date + instrument
 
 ### Required Fields
 
-`strategy_id`, `signal_id`, `signal_date`, `instrument`, `score`, `rank`, `universe_id`, `run_id`, `model_id`, `model_version`, `feature_set`, `signal_expression`, `is_oos`, `generated_at`。
+`strategy_id`, `signal_id`, `signal_date`, `instrument`, `score`, `universe_id`, `run_id`, `model_id`, `model_version`, `feature_set`, `signal_expression`, `is_oos`, `generated_at`。
+
+`rank` 不是必须物化的字段。rank 可由 score + universe 在消费时派生；若物化，必须记录 ranking universe 和排序方向 `rank_direction`（如 ascending / descending）。
+
+用于 evaluation 的 signal 必须能关联 `label_id` / `horizon`，可直接通过字段携带或通过 run_id 追溯。
 
 ### Invariants
 
@@ -133,7 +149,7 @@ Ops UI：当日 strategy signal、top/bottom、missing instruments、signal fres
 
 ### Storage / Transport
 
-DuckDB 是适合的 research analytics store（已有 `scripts/research/query_experiment_duckdb.py` 和 `qsys/signal/expression.py` 使用）。parquet / CSV / JSON index 可作为过渡介质。**它不替代 ledger，不参与 broker execution，不存真实账户状态。**
+DuckDB 是适合的 research analytics store。parquet / CSV / JSON index 可作为过渡介质。**它不替代 ledger，不参与 broker execution，不存真实账户状态。**
 
 ### Grain
 
@@ -162,7 +178,7 @@ Research UI：experiment list、signal comparison、model comparison、IC/RankIC
 
 ### Current Legacy Compatibility
 
-当前 research 结果分散在 `experiments/` 目录中，CSV 文件已被 RollingResearchRunner 和 query_experiment_duckdb.py 消费。迁移期间 CSV 继续有效，逐步统一到 DuckDB 查询视图。
+当前 research 结果分散在 `experiments/` 目录中。迁移期间 CSV 继续有效，逐步统一到 DuckDB 查询视图。
 
 ---
 
@@ -189,7 +205,7 @@ execution_date + strategy_id + account_id + run_id
 
 ### Required Fields
 
-`execution_date`, `strategy_id`, `stage` (candidate_shadow / production), `run_id`, `data_readiness_status`, `model_freshness_status`, `plan_status`, `order_intent_count`, `expected_turnover`, `account_snapshot_status`, `postclose_status`, `reconciliation_status`, `blocking`, `reason`, `artifact_paths`, `generated_at`。
+`execution_date`, `strategy_id`, `stage` (candidate / production), `execution_mode` (shadow / broker / simulated / manual), `run_id`, `data_readiness_status`, `model_freshness_status`, `plan_status`, `order_intent_count`, `expected_turnover`, `account_snapshot_status`, `postclose_status`, `reconciliation_status`, `blocking`, `reason`, `artifact_paths`, `generated_at`。
 
 ### Invariants
 
@@ -244,11 +260,11 @@ account_id + strategy_id + execution_date + snapshot_time + instrument / order /
 
 ### Required Concepts
 
-`AccountSnapshot`、`PositionSnapshot`、`OrderIntent`、`ExecutionFill`、`CashEvent`、`PortfolioSnapshot`、`ReconciliationResult`。
+`AccountSnapshot`、`PositionSnapshot`、`OrderIntent`（计划输入，不是账户状态 SOT）、`ExecutionFill`、`CashEvent`、`PortfolioSnapshot`、`ReconciliationResult`。
 
 ### Minimal Fields
 
-`account_id`, `strategy_id`, `execution_date`, `snapshot_time`, `cash`, `market_value`, `total_asset`, `instrument`, `quantity`, `available_quantity`, `cost_basis`, `last_price`, `order_id`, `fill_id`, `side`, `fill_qty`, `fill_price`, `fee`, `source_run_id`。
+`account_id`, `strategy_id`, `execution_date`, `snapshot_time`, `cash`, `market_value`, `total_asset`, `instrument`, `quantity`, `available_quantity`, `cost_basis`, `last_price`, `order_id`, `fill_id`, `side`, `fill_qty`, `fill_price`, `fee`, `run_id`, `source_run_id`（派生来源）。
 
 ### Invariants
 
@@ -259,7 +275,7 @@ account_id + strategy_id + execution_date + snapshot_time + instrument / order /
 - legacy account store 和 shadow files 不得扩展新依赖。
 - 删除 legacy store 前必须完成 consumer 切换、数据迁移和回归验证。
 - 不允许策略 adapter 直接写生产账户状态。
-- 所有状态变更必须可追溯 run_id。
+- 所有状态变更必须可追溯 run_id 或 source_run_id。
 
 ### UI / Monitoring
 
