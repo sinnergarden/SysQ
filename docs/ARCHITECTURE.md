@@ -402,4 +402,5 @@ flowchart LR
 - `docs/features/` — 功能规格（实现状态见 `docs/features/README.md`）
 - `docs/adr/` — 架构决策记录（索引见 `docs/DECISIONS.md`）
 - `docs/schema/` — 产物契约 schema
+- `docs/REPO_LAYOUT.md` — 代码、数据、artifact、report 放置规则
 - `docs/ops/` — 运营 SOP

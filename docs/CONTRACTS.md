@@ -5,6 +5,7 @@
 - `docs/ARCHITECTURE.md` 说明系统地图（两条主链路、分层、过渡态）；
 - **本文档说明模块之间通过哪些数据对象交互**；
 - `docs/schema/` 说明部分 artifact 的字段级结构；
+- `docs/REPO_LAYOUT.md` 说明代码、数据、artifact 的放置规则；
 - 代码 API / dataclass / DB schema 是最终实现。
 
 ---

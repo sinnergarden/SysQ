@@ -1,7 +1,7 @@
 # DAILY_OPS_SOP
 
 本文档是 daily ops 运行手册，不是架构文档。
-系统设计、模块职责和过渡态见 `docs/ARCHITECTURE.md`，模块边界契约见 `docs/CONTRACTS.md`。
+系统设计、模块职责和过渡态见 `docs/ARCHITECTURE.md`，模块边界契约见 `docs/CONTRACTS.md`，产物路径规范见 `docs/REPO_LAYOUT.md`。
 
 ---
 

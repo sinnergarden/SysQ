@@ -6,7 +6,7 @@
 2. 每个阶段做到什么算完成；
 3. 哪些事情暂时不做。
 
-系统设计见 `docs/ARCHITECTURE.md`，操作协议见 `AGENTS.md`。
+系统设计见 `docs/ARCHITECTURE.md`，操作协议见 `AGENTS.md`，仓库布局见 `docs/REPO_LAYOUT.md`。
 
 ---
 

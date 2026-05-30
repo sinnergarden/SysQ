@@ -187,6 +187,7 @@ python -m unittest discover tests
 - 不把推测写成事实；
 - 不用空泛总结替代验证证据；
 - 涉及文件移动、删除、入口切换、DB 变更时，必须先列影响范围；
+- 涉及新增目录、移动文件、删除产物、改变 artifact 位置时，必须参考 `docs/REPO_LAYOUT.md`；
 - 文档引用统一使用仓库相对路径，禁止 file:// 绝对路径。
 
 ---
