@@ -1,5 +1,5 @@
 [Unit]
-Description=Qsys CSI800 Daily Data Sync
+Description=Qsys Candidate Pre-Open Batch (signal → plan → shadow)
 Documentation=https://github.com/sinnergarden/SysQ
 After=network-online.target
 Wants=network-online.target
@@ -13,9 +13,13 @@ Environment=HTTP_PROXY=http://172.31.144.1:12334
 Environment=HTTPS_PROXY=http://172.31.144.1:12334
 EnvironmentFile=/home/liuming/.openclaw/.env
 ExecStart=/home/liuming/.openclaw/workspace/.mamba/envs/dl/bin/python \
-    /home/liuming/.openclaw/workspace/SysQ/scripts/ops/sync_csi800_daily.py --apply
-StandardOutput=append:/home/liuming/.openclaw/logs/sync_csi800_daily.log
-StandardError=append:/home/liuming/.openclaw/logs/sync_csi800_daily.log
+    scripts/run_daily_batch.py \
+    --stage candidate \
+    --mode preopen \
+    --trade-date auto \
+    --output-root runs
+StandardOutput=append:/home/liuming/.openclaw/logs/candidate-preopen.log
+StandardError=append:/home/liuming/.openclaw/logs/candidate-preopen.log
 
 [Install]
 WantedBy=default.target
