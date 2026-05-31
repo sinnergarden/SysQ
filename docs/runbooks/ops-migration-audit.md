@@ -43,12 +43,12 @@ dispatch via `run_daily.py` / `run_daily_batch.py`.
 
 ## Systemd Template Audit
 
-| Template File | Current Command | Migration Status |
-|---|---|---|
-| `deploy/systemd/qsys-preopen.service` | `scripts/run_preopen.sh` (wraps `run_alpha_v1_daily.py`) | ⏳ example template created |
-| `deploy/systemd/qsys-post-close.service` | `scripts/run_postclose.sh` (wraps `run_alpha_v1_daily.py`) | ⏳ example template created |
-| `deploy/systemd/qsys-alpha-v1-weekly-train.service` | `run_alpha_v1_weekly_train.py` | ⏳ example template created |
-| `deploy/systemd/qsys-csi800-daily-sync.service` | `scripts/ops/sync_csi800_daily.py` | unchanged (data pipeline, not strategy) |
+| File | Migration Status (PR #125) |
+|------|---------------------------|
+| `deploy/systemd/qsys-candidate-preopen.service` | ✅ `run_daily_batch.py --stage candidate --mode preopen --trade-date auto` |
+| `deploy/systemd/qsys-candidate-postclose.service` | ✅ `run_daily_batch.py --stage candidate --mode postclose --trade-date auto` |
+| `deploy/systemd/qsys-candidate-train.service` | ✅ `run_daily_batch.py --stage candidate --mode train` |
+| `deploy/systemd/qsys-csi800-daily-sync.service` | unchanged (data pipeline, not strategy) |
 
 ---
 
