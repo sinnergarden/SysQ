@@ -41,7 +41,7 @@ Qsys 有两条主链路：
 发生冲突时，按以下顺序判断：
 
 ```
-实际代码调用链 / 测试结果 → docs/ARCHITECTURE.md → ROADMAP.md → docs/adr/ → docs/features/ 和历史 runbook
+实际代码调用链 / 测试结果 → docs/ARCHITECTURE.md → ROADMAP.md → docs/adr/ → archive/docs/features/ 和 archive/docs/runbooks/
 ```
 
 不得把目标态写成当前事实。  
@@ -70,7 +70,7 @@ Qsys 有两条主链路：
 
 - 若任务涉及多个类别，必须读取所有相关文档。
 - 若文档之间冲突，以实际代码调用链和测试结果为最高事实源，然后参考 `docs/ARCHITECTURE.md` 的 Current Transition State。
-- 不得把 `docs/features/` 中的历史设计自动当作 current truth。
+- 不得把 `archive/docs/features/` 中的历史设计自动当作 current truth。
 - 不得在未阅读对应 SOP / CONTRACT / REPO_LAYOUT 的情况下新增路径、改 artifact、切入口、动 ledger、改 broker bridge。
 
 ---
@@ -174,7 +174,7 @@ gh pr merge <number> --squash --delete-branch
 
 如需文档：
 
-- 功能规格写入 docs/features/；
+- 功能规格写入文档（历史参考见 archive/docs/features/）；
 - 长期架构决策写入 docs/adr/；
 - artifact 字段约束写入 docs/schema/。
 

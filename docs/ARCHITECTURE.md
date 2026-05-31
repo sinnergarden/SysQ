@@ -1,7 +1,7 @@
 # ARCHITECTURE
 
 本文档描述 Qsys 的**顶层系统设计、两条主链路、分层与当前过渡态**。
-具体功能细节下沉到 `docs/features/`，设计决策记录在 `docs/adr/`。
+具体功能细节参考 `archive/docs/features/`（历史设计），设计决策记录在 `docs/adr/`。
 
 > **阅读顺序**: 建议先读本文档，再读 `AGENTS.md`（治理协议），最后读 `ROADMAP.md`（当前优先级）。
 
@@ -398,7 +398,7 @@ flowchart LR
 - `AGENTS.md` — AI 操作说明书（角色、权限、禁止事项）
 - `CONTRIBUTING.md` — 开发协作流程（branch → PR → merge）
 - `ROADMAP.md` — 当前优先级与具体待办
-- `docs/features/` — 功能规格（实现状态见 `docs/features/README.md`）
+- `archive/docs/features/` — 历史功能规格
 - `docs/adr/` — 架构决策记录（索引见 `docs/DECISIONS.md`）
 - `docs/schema/` — 产物契约 schema
 - `docs/REPO_LAYOUT.md` — 代码、数据、artifact、report 放置规则

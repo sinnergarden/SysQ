@@ -68,7 +68,7 @@
 | `deploy/systemd/` | systemd service / timer | 生产级定时任务配置 |
 | `docs/schema/` | artifact 字段级 schema | 如 `signal-artifact.md` |
 | `docs/adr/` | 架构决策记录 | 长期决策 |
-| `docs/features/` | 功能规格 / 历史设计 | 非 current truth |
+| `archive/docs/features/` | 历史功能规格 / 设计 | 非 current truth |
 | `docs/ops/` | 运营 SOP | 操作手册 |
 
 ---
