@@ -251,3 +251,146 @@ class LabelStore:
                 f"(tried parquet and csv in {self.paths.label_dir(label_id)})"
             )
         return None
+
+    # ── Existence ──────────────────────────────────────────────────
+
+    def label_exists(self, label_id: str) -> bool:
+        """Check whether label data exists for *label_id*."""
+        try:
+            return self._resolve_data_path(label_id, must_exist=False) is not None
+        except Exception:
+            return False
+
+    # ── Validation ─────────────────────────────────────────────────
+
+    def validate_label(
+        self,
+        label_id: str,
+        *,
+        universe: str | None = None,
+        start: str | None = None,
+        end: str | None = None,
+        min_coverage: float | None = None,
+    ) -> dict[str, Any]:
+        """Validate a label artifact.
+
+        Returns a report dict.  Raises if critical checks fail.
+
+        Parameters
+        ----------
+        label_id:
+            Label identifier.
+        universe:
+            If set, manifest must match universe.
+        start, end:
+            If set, label coverage must include [start, end].
+        min_coverage:
+            If set, fail when actual coverage < this ratio.
+
+        Returns
+        -------
+        dict
+            Validation report with keys: passed, label_id, exists,
+            columns_ok, date_coverage, coverage.
+        """
+        report: dict[str, Any] = {
+            "label_id": label_id,
+            "passed": False,
+            "exists": False,
+            "columns_ok": False,
+            "date_coverage": None,
+            "coverage": None,
+        }
+
+        # 1. Existence check
+        data_path = self._resolve_data_path(label_id, must_exist=False)
+        if data_path is None or not data_path.exists():
+            raise FileNotFoundError(
+                f"validate_label: no label data for {label_id}. "
+                f"Run compute_labels.py first."
+            )
+        report["exists"] = True
+
+        # 2. Load manifest
+        try:
+            mf = self.load_manifest(label_id)
+        except Exception as e:
+            raise FileNotFoundError(
+                f"validate_label: manifest for {label_id} is missing or corrupt: {e}"
+            ) from e
+
+        # 3. Universe check
+        if universe is not None:
+            mf_univ = mf.get("universe", "")
+            if mf_univ and mf_univ != universe:
+                raise ValueError(
+                    f"validate_label: {label_id} was computed for universe "
+                    f"{mf_univ!r}, requested {universe!r}"
+                )
+
+        # 4. Load sample data to verify columns
+        try:
+            df = self.load_labels(label_id)
+        except Exception as e:
+            raise RuntimeError(
+                f"validate_label: could not load label data for {label_id}: {e}"
+            ) from e
+
+        required = {"trade_date", "instrument", "label_id", "horizon", "label_value"}
+        missing = required - set(df.columns)
+        if missing:
+            raise ValueError(
+                f"validate_label: {label_id} missing required columns: {sorted(missing)}"
+            )
+        report["columns_ok"] = True
+
+        if df["label_value"].isna().all():
+            raise ValueError(f"validate_label: {label_id} label_value is all NaN")
+
+        # 5. Date coverage (allow forward-tail gap for return labels)
+        if start is not None and end is not None:
+            df_dates = set(df["trade_date"].unique())
+            from qsys.data.calendar import get_trading_calendar
+            cal = get_trading_calendar(start, end)
+            if cal:
+                cal_set = set(cal)
+                missing_dates = cal_set - df_dates
+
+                horizon = mf.get("horizon", 0)
+                if missing_dates and isinstance(horizon, int) and horizon > 0:
+                    sorted_cal = sorted(cal_set)
+                    tail_start = max(0, len(sorted_cal) - horizon)
+                    expected_tail = set(sorted_cal[tail_start:])
+                    middle_missing = missing_dates - expected_tail
+                    if not middle_missing:
+                        missing_dates = set()  # Only tail gap — OK
+                    else:
+                        missing_dates = middle_missing  # Report only middle missing
+
+                if missing_dates:
+                    if horizon > 0:
+                        raise ValueError(
+                            f"validate_label: {label_id} missing {len(missing_dates)} "
+                            f"trading dates in [{start}, {end}] (expected forward-tail "
+                            f"gap of {horizon}d already allowed). "
+                            f"Middle-missing e.g. {sorted(missing_dates)[:3]}"
+                        )
+                    raise ValueError(
+                        f"validate_label: {label_id} missing {len(missing_dates)} "
+                        f"trading dates in [{start}, {end}] "
+                        f"(e.g. {sorted(missing_dates)[:3]})"
+                    )
+            report["date_coverage"] = f"{start} → {end}"
+
+        # 6. Coverage ratio
+        cov = mf.get("coverage")
+        if cov is not None:
+            report["coverage"] = cov
+            if min_coverage is not None and cov < min_coverage:
+                raise ValueError(
+                    f"validate_label: {label_id} coverage={cov:.1%} "
+                    f"< min_coverage={min_coverage:.1%}"
+                )
+
+        report["passed"] = True
+        return report

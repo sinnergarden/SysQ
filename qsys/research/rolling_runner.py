@@ -46,9 +46,14 @@ def build_rolling_windows(
     end_date: str,
     *,
     train_window_days: int = 252,
-    predict_window_days: int = 5,
     step_days: int = 5,
 ) -> list[RollingWindow]:
+    """Build rolling windows.
+
+    Each window uses the same number of predict days as the step
+    (predict = step), so every trading day gets exactly one prediction
+    from exactly one model version — no overlap.
+    """
     from qsys.data.calendar import get_trading_calendar
 
     _extended_start = _calendar_backdate(start_date, train_window_days)
@@ -60,19 +65,24 @@ def build_rolling_windows(
     if not pred_cal:
         raise ValueError(f"No trading dates in [{start_date}, {end_date}]")
 
-    first_pred_idx = full_cal.index(pred_cal[0])
     windows: list[RollingWindow] = []
 
     for offset in range(0, len(pred_cal), step_days):
-        i = first_pred_idx + offset
-        pred_end_offset = offset + predict_window_days - 1
+        pred_end_offset = offset + step_days - 1
         if pred_end_offset >= len(pred_cal):
             break
 
         predict_start = pred_cal[offset]
         predict_end = pred_cal[pred_end_offset]
-        train_end_idx = i - 1
-        train_start_idx = i - train_window_days
+
+        # Map predict_start to full calendar index for train window
+        try:
+            predict_idx = full_cal.index(predict_start)
+        except ValueError:
+            continue
+
+        train_end_idx = predict_idx - 1
+        train_start_idx = predict_idx - train_window_days
 
         if train_start_idx < 0:
             continue
@@ -81,7 +91,7 @@ def build_rolling_windows(
         train_end = full_cal[train_end_idx] if train_end_idx >= 0 else full_cal[0]
 
         windows.append(RollingWindow(
-            window_id=f"w{i:04d}",
+            window_id=f"w{offset:04d}",
             train_start=train_start,
             train_end=train_end,
             predict_start=predict_start,
@@ -192,6 +202,7 @@ class FixtureSignalGenerator:
 @dataclass
 class LabelConfig:
     label_id: str
+    min_coverage: float | None = None
 
 
 @dataclass
@@ -238,7 +249,7 @@ class RollingResearchConfig:
     description: str | None = None
 
     calendar: dict[str, Any] = field(default_factory=dict)
-    # calendar keys: start_date, end_date, train_window_days, predict_window_days, step_days
+    # calendar keys: start_date, end_date, train_window_days, step_days
 
     signal: dict[str, Any] = field(default_factory=dict)
     # signal keys: signal_id, signal_run_id, score_column
@@ -332,6 +343,22 @@ def _create_generator_from_config(gen_config: dict) -> RollingSignalGenerator:
             volatility_days=params.get("volatility_days", 20),
             volume_short=params.get("volume_short", 5),
             volume_long=params.get("volume_long", 20),
+        )
+    if gen_type == "dnn_multitask":
+        from qsys.research.generators.dnn_multitask import DnnMultitaskGenerator
+        return DnnMultitaskGenerator(
+            project_root=_resolve_project_root(gen_config),
+            dnn_kwargs=params.get("dnn_kwargs"),
+            universe=params.get("universe", "csi300"),
+            label_ids=tuple(params.get("label_ids", ("fwd_ret_5d_xsz_clip3", "fwd_ret_20d_xsz_clip3"))),
+        )
+    if gen_type == "lightgbm_alpha_v1":
+        from qsys.research.generators.lightgbm_alpha_v1 import LightGBMAlphaV1Generator
+        return LightGBMAlphaV1Generator(
+            universe=params.get("universe", "csi300"),
+            n_estimators=params.get("n_estimators", 200),
+            lgb_params=params.get("lgb_params"),
+            label_ids=tuple(params.get("label_ids", ("fwd_ret_5d_xsz_clip3", "fwd_ret_20d_xsz_clip3"))),
         )
     raise ValueError(f"Unknown generator type: {gen_type!r}")
 
@@ -476,12 +503,35 @@ class RollingResearchRunner:
 
         exp_dir = self._paths.experiment_dir(config.experiment_id)
 
+        # -- 0. Pre-flight: validate label artifacts --
+        if config.labels:
+            from qsys.label.store import LabelStore
+            _ls = LabelStore(str(self.root))
+            _start = config.calendar.get("start_date")
+            _end = config.calendar.get("end_date")
+            for lcfg in config.labels:
+                lid = lcfg["label_id"]
+                _kwargs: dict[str, Any] = {"start": _start, "end": _end}
+                if "universe" in lcfg:
+                    _kwargs["universe"] = lcfg["universe"]
+                elif config.generators:
+                    # Derive universe from first generator's params
+                    _first_gen = config.generators[0]
+                    _univ = _first_gen.get("params", {}).get("universe")
+                    if _univ:
+                        _kwargs["universe"] = _univ
+                mc = lcfg.get("min_coverage")
+                if mc is not None:
+                    _kwargs["min_coverage"] = mc
+                _ls.validate_label(lid, **_kwargs)
+                print(f"  Label {lid}: pre-flight OK")
+
+
         # ── 1. Build rolling windows ──
         windows = build_rolling_windows(
             config.calendar.get("start_date", ""),
             config.calendar.get("end_date", ""),
             train_window_days=config.calendar.get("train_window_days", 252),
-            predict_window_days=config.calendar.get("predict_window_days", 5),
             step_days=config.calendar.get("step_days", 5),
         )
         window_df = pd.DataFrame([{
@@ -528,12 +578,10 @@ class RollingResearchRunner:
                 "model_mode": "rolling_train",
                 "window_count": len(windows),
                 "train_window_days": config.calendar.get("train_window_days"),
-                "predict_window_days": config.calendar.get("predict_window_days"),
             },
             overwrite=overwrite_signal,
         )
 
-        # ── 3. Evaluate ──
         from qsys.research.evaluation import SignalEvaluator
 
         evaluator = SignalEvaluator(str(self.root))
@@ -723,7 +771,6 @@ class RollingResearchRunner:
                     "generator_id": job.generator_id,
                     "transform_id": job.transform_id,
                     "train_window_days": config.calendar.get("train_window_days"),
-                    "predict_window_days": config.calendar.get("predict_window_days"),
                 },
                 overwrite=overwrite_signal,
             )
