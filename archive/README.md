@@ -4,7 +4,7 @@
 
 ## Purpose
 
-Archive 存放 PR #119 / #120 主线不再使用的文档和脚本，保留历史参考价值，同时降低主导航噪音。
+Archive 存放非 current truth 的历史文档和脚本，保留历史参考价值，同时降低主导航噪音。
 
 ## Rules
 
@@ -21,7 +21,13 @@ archive/
   README.md          ← 本文件
   docs/
     features/        ← 已暂停/已完成/已过时的功能文档
+    research/        ← 历史研究实验与分析
     runbooks/        ← 已被 SOP 替代的旧运行手册
+    architecture/    ← 历史架构说明（已被 ARCHITECTURE.md 替代）
+    audits/          ← 一次性代码审计报告
+    templates/       ← 旧模板（引用了 archive/ 内文档）
+    tutorials/       ← 旧教程 / 历史教程
+    ops/             ← 非 current 的 SOP 文档
   scripts/
     debug/           ← 一次性调试/分析脚本
     research_legacy/ ← 旧研究实验脚本（非 current SOP）
@@ -40,7 +46,30 @@ archive/
 | `docs/features/ops_requirements.md` | `archive/docs/features/` | 已完成/过时 |
 | `docs/features/data_layout_contract.md` | `archive/docs/features/` | 已被 `docs/REPO_LAYOUT.md` 合并 |
 | `docs/runbooks/daily-ops.md` | `archive/docs/runbooks/` | 已被 `docs/ops/DAILY_OPS_SOP.md` 替代 |
-| `docs/DATA_LAYOUT.md` | `archive/docs/` | 已被 `docs/REPO_LAYOUT.md` 替代 |
+| `docs/DATA_LAYOUT.md` | `archive/docs/` | 已被 `docs/REPO_LAYOUT.md` 合并 |
+| `docs/features/*.md`（全部）| `archive/docs/features/` | 功能规格 → archive（非 current truth） |
+| `docs/research/*.md`（全部）| `archive/docs/research/` | 历史研究实验分析 |
+| `docs/runbooks/*.md`（全部）| `archive/docs/runbooks/` | 已被 SOP 替代 |
+| `docs/architecture/*.md`（全部）| `archive/docs/architecture/` | 已被 `docs/ARCHITECTURE.md` 合并 |
+| `docs/audits/*.md`（全部）| `archive/docs/audits/` | 一次性审计 |
+| `docs/templates/*.md`（全部）| `archive/docs/templates/` | 引用了 archive/ 内的文档 |
+| `docs/tutorials/*.md`（全部）| `archive/docs/tutorials/` | 教程文档（持续更新中） |
+| `docs/ops/DATA_PIPELINE_SOP.md` | `archive/docs/ops/` | 已被 DAILY_OPS_SOP 合并 |
+| `docs/ops/FEATURE_PIPELINE_SOP.md` | `archive/docs/ops/` | 非 current |
+| `docs/ops/MODEL_OPS_SOP.md` | `archive/docs/ops/` | 非 current |
+| `docs/ops/POST_CLOSE_SOP.md` | `archive/docs/ops/` | 已被 DAILY_OPS_SOP 合并 |
+| `docs/ops/PRE_OPEN_SOP.md` | `archive/docs/ops/` | 已被 DAILY_OPS_SOP 合并 |
+| `docs/ops/READINESS.md` | `archive/docs/ops/` | 非 current |
+| `docs/SCRIPT_INVENTORY.md` | `archive/docs/` | 脚本清单（非 current truth） |
+| `docs/TESTING.md` | `archive/docs/` | 测试文档（非 current） |
+| `docs/STYLEGUIDE.md` | `archive/docs/` | 风格指南（非 current） |
+| `docs/README.md` | `archive/docs/` | 已被 `docs/CONTRACTS.md` + `AGENTS.md` 替代 |
+| `docs/RUNBOOK.md` | `archive/docs/` | 已被 ops/SOP 替代 |
+| `docs/strict-evaluation.md` | `archive/docs/` | 已被评估流程框架替代 |
+| `docs/alpha_v1_baseline.md` | `archive/docs/` | 历史基线记录 |
+| `docs/alpha_v1_model_debug.md` | `archive/docs/` | 一次性调试分析 |
+| `docs/margin_data_batch1.md` | `archive/docs/` | 一次性数据说明 |
+| `docs/production-model.md` | `archive/docs/` | 历史生产模型说明 |
 
 ### scripts/
 

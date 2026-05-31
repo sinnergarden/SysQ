@@ -3,7 +3,7 @@
 本文档是从策略想法到 Candidate 候选的研发操作手册。
 系统设计见 `docs/ARCHITECTURE.md`，模块边界见 `docs/CONTRACTS.md`，产物放置见 `docs/REPO_LAYOUT.md`。
 
-> 本文档不替代代码教程。研究工具的具体用法参考对应 `docs/features/` 文档。
+> 本文档不替代代码教程。历史功能规格参考 `archive/docs/features/`。
 > 本文档不是泛用量化方法论。只定义 SysQ 内部 research → candidate 的操作边界。
 
 ---

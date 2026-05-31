@@ -62,7 +62,7 @@ Markdown（推荐）或 JSON。
 
 ## 示例
 
-参见 `docs/templates/candidate-promotion-checklist.md` 和 `docs/alpha_v1_baseline.md`。
+参见 `archive/docs/templates/candidate-promotion-checklist.md` 和 `archive/docs/alpha_v1_baseline.md`。
 
 ## 验证规则
 

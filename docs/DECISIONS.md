@@ -5,8 +5,8 @@
 定位说明：
 
 - ADR 记录的是“长期有效的决策”。
-- 功能细节记录在 `docs/features/`，不是 ADR。
-- ADR 与功能文档关系见 [docs/README.md](README.md)。
+- 功能细节记录在 `archive/docs/features/`（历史设计），不是 ADR。
+- ADR 与功能文档关系见 [archive/docs/README.md](../archive/docs/README.md)。
 
 当前决策列表：
 
