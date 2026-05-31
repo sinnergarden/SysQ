@@ -1,10 +1,11 @@
 [Unit]
-Description=Qsys Candidate Post-Close Timer (Mon-Fri 21:00)
+Description=Qsys Post-Close Timer (Mon-Fri 15:30 CST)
 Documentation=https://github.com/sinnergarden/SysQ
 
 [Timer]
-OnCalendar=Mon..Fri 21:00:00
+OnCalendar=Mon..Fri 15:30:00
 Persistent=true
+Unit=qsys-post-close.service
 
 [Install]
 WantedBy=timers.target

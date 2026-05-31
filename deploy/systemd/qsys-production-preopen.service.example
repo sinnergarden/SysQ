@@ -1,0 +1,24 @@
+[Unit]
+Description=Qsys Production Pre-Open — batch dispatch all production strategies
+After=network-online.target
+Wants=network-online.target
+Documentation=docs/ops/DAILY_OPS_SOP.md
+
+#
+# WARNING: Production execution requires additional risk controls.
+# This template is structural only — do not enable without reviewing
+# the production deployment checklist.
+#
+# See docs/ops/DAILY_OPS_SOP.md for current limitations.
+#
+
+[Service]
+Type=oneshot
+WorkingDirectory=/path/to/SysQ
+# EnvironmentFile=-/path/to/SysQ/.env
+ExecStart=/usr/bin/env bash -lc 'cd /path/to/SysQ && python scripts/run_daily_batch.py --stage production --mode preopen --trade-date auto --output-root runs --no-notify'
+StandardOutput=append:/var/log/qsys/production-preopen.log
+StandardError=append:/var/log/qsys/production-preopen.log
+
+[Install]
+WantedBy=default.target

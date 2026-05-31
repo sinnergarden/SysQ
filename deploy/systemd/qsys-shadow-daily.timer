@@ -1,0 +1,10 @@
+[Unit]
+Description=Qsys Shadow Daily Timer
+
+[Timer]
+OnCalendar=*-*-* 15:30:00
+Persistent=true
+Unit=qsys-shadow-daily.service
+
+[Install]
+WantedBy=timers.target

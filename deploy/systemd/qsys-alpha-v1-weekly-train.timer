@@ -1,0 +1,13 @@
+[Unit]
+Description=Qsys Alpha V1 Weekly Training Timer (Mon 07:00)
+Documentation=https://github.com/sinnergarden/SysQ
+
+[Timer]
+# Run Monday 07:00 — before preopen (08:00) so model is ready
+OnCalendar=Mon 07:00:00
+# Catch up if system was down
+Persistent=true
+Unit=qsys-alpha-v1-weekly-train.service
+
+[Install]
+WantedBy=timers.target

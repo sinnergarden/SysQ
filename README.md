@@ -10,7 +10,7 @@ SysQ 是面向 A 股日频量化研究与准实盘运营的个人系统，覆盖
 - Research / Backtest Chain 与 Daily Ops Chain 已形成主线。
 - `data/trade.db` 是目标 Account State / Execution Ledger SOT。
 - `data/meta/real_account.db` 与 `shadow/` 仍是 legacy compatibility path，不能随意删除。
-- systemd 已切换至 `run_daily_batch.py --stage candidate`（PR #123）。旧 legacy 入口不再被 systemd 调用。
+- systemd 当前仍走 legacy entry（`run_preopen.sh` / `run_postclose.sh`）。目标入口 `run_daily.py` / `run_daily_batch.py` 已通过 8-gate 验证（`--trade-date auto`、signal_basket 修复、reconciliation_result），待 systemd unit 替换。
 
 ---
 

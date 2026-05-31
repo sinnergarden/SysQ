@@ -1,0 +1,18 @@
+[Unit]
+Description=Qsys Post-Close Pipeline (reconciliation → archive → summary)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/liuming/.openclaw/workspace/SysQ
+Environment=PYTHONPATH=/home/liuming/.openclaw/workspace/SysQ
+Environment=HTTPS_PROXY=http://172.31.144.1:12334
+Environment=HTTP_PROXY=http://172.31.144.1:12334
+EnvironmentFile=/home/liuming/.openclaw/.env
+ExecStart=/home/liuming/.openclaw/workspace/SysQ/scripts/run_postclose.sh
+StandardOutput=append:/home/liuming/.openclaw/logs/postclose.log
+StandardError=append:/home/liuming/.openclaw/logs/postclose.log
+
+[Install]
+WantedBy=default.target

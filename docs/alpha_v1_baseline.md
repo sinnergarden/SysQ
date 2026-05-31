@@ -167,10 +167,10 @@ blended_score = 0.8 × zscore(pred_5d) + 0.2 × zscore(pred_20d)
 
 | Task | Time | Trigger | Status |
 |------|------|---------|--------|
-| CSI 800 Data Sync | Mon-Fri 19:00 | `qsys-csi800-daily-sync.timer` | ✅ Active |
-| Weekly Train | Mon 07:00 | `qsys-candidate-train.timer` | ✅ Active (dispatches via `run_daily_batch.py --stage candidate --mode train`) |
-| Preopen | Mon-Fri 08:00 | `qsys-candidate-preopen.timer` | ✅ Active (dispatches via `run_daily_batch.py --stage candidate --mode preopen --trade-date auto`) |
-| Postclose | Mon-Fri 21:00 | `qsys-candidate-postclose.timer` | ✅ Active (dispatches via `run_daily_batch.py --stage candidate --mode postclose --trade-date auto`) |
+| CSI 800 Data Sync | Mon-Fri 21:30 | `qsys-csi800-daily-sync.timer` | ✅ Active |
+| Alpha V1 Weekly Train | Mon 07:00 | `qsys-alpha-v1-weekly-train.timer` | ✅ Active (Mon 07:00) |
+| Alpha V1 Preopen | Mon-Fri 08:00 | `qsys-preopen.timer` | ✅ Active (triggers `run_alpha_v1_daily.py --mode preopen`) |
+| Alpha V1 Postclose | Mon-Fri 15:30 | `qsys-post-close.timer` | ✅ Active (triggers `run_alpha_v1_daily.py --mode postclose`) |
 
 ### Status Dashboard
 

@@ -57,9 +57,9 @@
 
 | 结果 | 完成判定 | 当前进展 |
 |---|---|---|
-| 入口收束 | systemd 不再依赖 legacy shell wrapper，主链路使用 `run_daily.py` / `run_daily_batch.py` | ✅ systemd 已切换至 `run_daily_batch.py --stage candidate`（PR #123）。旧 legacy 入口从仓库移除（git 历史可追溯）。|
+| 入口收束 | systemd 不再依赖 legacy shell wrapper，主链路使用 `run_daily.py` / `run_daily_batch.py` | ✅ DailyRunner 4 模式通过 8-gate 验证；`--trade-date auto`、`--no-notify`、signal_basket 修复、reconciliation_result 写入。**systemd unit 替换 pending operator confirmation** |
 | Ledger 统一 | `trade.db` 成为唯一账户状态 SOT，`real_account.db` 和 `shadow/` 不再作为写入事实源 | 🟡 `audit_state_paths.py`（只读审计）已就绪；三态共存仍在；迁移尚待启动 |
-| Daily artifact 稳定 | preopen / postclose 每日产物路径稳定，关键报告可重建 | 🟡 target path 已验证（signal_basket CSV + reconciliation_result.json + checker 54/54）；systemd 切换后仍需生产路径观察 |
+| Daily artifact 稳定 | preopen / postclose 每日产物路径稳定，关键报告可重建 | 🟡 target path debug-chain artifact contract 已验证（signal_basket CSV + reconciliation_result.json + checker 54/54）；systemd cutover 后仍需生产路径观察 |
 | 最小 Ops UI | 可只读查看 data readiness、latest date、daily plan、shadow/ledger 状态、postclose report | ❌ 尚未启动（Phase 2 计划）|
 | 异常处理明确 | 空 plan、账户异常、数据不齐、MTM 异常有明确阻断或降级策略 | 🟡 checker 级别处理已就绪；SOP 已覆盖故障流程；operator 通知自动化待完成 |
 

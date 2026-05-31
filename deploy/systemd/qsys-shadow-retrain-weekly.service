@@ -1,0 +1,10 @@
+[Unit]
+Description=Qsys Shadow Weekly Retrain Runner
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=QSYS_ROOT
+Environment=PYTHONPATH=QSYS_ROOT
+ExecStart=QSYS_PYTHON QSYS_ROOT/scripts/ops/run_shadow_retrain_weekly.py --base-dir QSYS_ROOT --triggered-by systemd
