@@ -10,7 +10,7 @@
 - `scripts/run_daily_trading.py`: (legacy, systemd) pre-open daily plan and report generation
 - `scripts/run_post_close.py`: (legacy, systemd) post-close reconciliation and follow-up reports
 
-> Note: this inventory is partially outdated. See `docs/REPO_SLIMMING_PLAN.md` for current audit.
+> Note: this inventory is partially outdated. See `docs/REPO_SLIMMING_PLAN.md` and `archive/README.md` for PR #122 archive scope.
 
 ## Kept scripts
 
@@ -23,7 +23,21 @@
 | Training / research | `run_train.py`, `run_backtest.py`, `run_strict_eval.py`, `run_compare.py`, `run_feature_build.py`, `run_feature_experiment.py`, `run_feature_ablation.py`, `run_feature_backtest_report.py`, `run_feature_readiness_audit.py` | Current model and feature workflow |
 | Debug / manual utilities | `rebuild_qlib_bin.py`, `setup_openclaw_qsys_cron.sh` | Still useful for manual diagnostics or maintenance; not on the daily ops critical path |
 
-## Removed in this cleanup
+## Archived in PR #122
+
+| Old path | New path | Reason |
+|----------|----------|--------|
+| `scripts/audit_formal_backtest.py` | `archive/scripts/debug/` | one-off audit |
+| `scripts/check_amount.py` | `archive/scripts/debug/` | one-off data check |
+| `scripts/compare_formal_173_before_after.py` | `archive/scripts/research_legacy/` | one-off comparison |
+| `scripts/compare_absnorm_variants.py` | `archive/scripts/research_legacy/` | redundant wrapper |
+| `scripts/debug_data_quality.py` | `archive/scripts/debug/` | one-off debug |
+| `scripts/debug_model_performance.py` | `archive/scripts/debug/` | one-off debug |
+| `scripts/patch_backtest_ui_data.py` | `archive/scripts/debug/` | one-off patch |
+| `scripts/run_prod_backtest.py` | `archive/scripts/research_legacy/` | 0 consumers |
+| `scripts/run_prod_rolling_backtest.py` | `archive/scripts/research_legacy/` | 0 consumers |
+
+## Removed in a previous cleanup
 
 | Path | Reason |
 |------|--------|
