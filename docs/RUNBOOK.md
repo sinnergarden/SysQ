@@ -34,7 +34,7 @@
 - `daily/{execution_date}/post_close/reports`
 - `daily/{execution_date}/post_close/manifests`
 
-目录细节见 `archive/docs/DATA_LAYOUT.md`（已归档）；执行步骤见各 SOP。
+目录细节见 `docs/REPO_LAYOUT.md`；执行步骤见各 SOP。旧版 DATA_LAYOUT 已归档至 `archive/docs/DATA_LAYOUT.md`，仅供历史参考。
 
 ## 4. 入口命令
 
@@ -93,7 +93,7 @@ python3 scripts/run_alpha_v1_daily.py --trade-date 2026-05-23 --mode train
 - CSI800 日频同步脚本：`scripts/ops/sync_csi800_daily.py`（systemd: `qsys-csi800-daily-sync.{service,timer}`）
 - 盘前：`docs/ops/PRE_OPEN_SOP.md`
 - 盘后：`docs/ops/POST_CLOSE_SOP.md`
-- 目录契约：`archive/docs/DATA_LAYOUT.md`（已归档）
+- 目录契约：`docs/REPO_LAYOUT.md`（旧版 DATA_LAYOUT 已归档至 `archive/docs/DATA_LAYOUT.md`）
 
 ## 6. Alpha V1 详解
 
