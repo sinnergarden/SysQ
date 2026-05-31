@@ -29,14 +29,19 @@ generators:
         batch_size: 1024
         lr: 0.001
 
-labels:
-  - label_id: fwd_ret_5d_xsz_clip3
-  - label_id: fwd_ret_20d_xsz_clip3
+signal_transforms:
+  - transform_id: raw
+    type: identity
 
-backtests:
-  - strategy_template_id: rank_weight_top20
+strategies:
+  - strategy_id: top20
+    strategy_template_id: rank_weight_top20
     allocation_method: rank_weight
     top_n: 20
     initial_capital: 10000000
     rebalance_freq: weekly
     artifact_mode: summary
+
+labels:
+  - label_id: fwd_ret_5d_xsz_clip3
+  - label_id: fwd_ret_20d_xsz_clip3
