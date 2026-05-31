@@ -32,7 +32,7 @@ Qsys 有两条主链路：
 - Production 必须经过人工确认、broker 对账和 artifact 记录。
 - data/trade.db 是目标账户状态与执行流水 SOT。
 - data/meta/real_account.db 和 shadow/ 当前仍是 legacy compatibility path，不能擅自删除。
-- run_daily.py / run_daily_batch.py 是当前 systemd 入口（PR #125 cutover 完成）。旧 legacy 入口不再被 systemd 调用。
+- run_daily.py / run_daily_batch.py 是当前 systemd 入口（systemd cutover 完成）。旧 legacy 入口不再被 systemd 调用。
 
 ---
 

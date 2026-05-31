@@ -370,7 +370,7 @@ flowchart LR
 
 | 维度 | 目标态 | 当前现实 | 差距 |
 |------|--------|---------|------|
-| 入口 | `run_daily.py` + `run_daily_batch.py` | systemd 已切换至 `run_daily_batch.py --stage candidate`（PR #125）。旧 legacy 入口不再被 systemd 调用。| ✅ systemd cutover 完成 |
+| 入口 | `run_daily.py` + `run_daily_batch.py` | systemd 已切换至 `run_daily_batch.py --stage candidate`。旧 legacy 入口不再被 systemd 调用。| ✅ systemd cutover 完成 |
 | Ledger | `data/trade.db` 唯一 SOT | `trade.db` + `real_account.db` + `shadow/` 三态共存 | 需统一 + 迁移 |
 | 研究→Candidate | RollingResearchRunner → ExperimentIndex → promotion checklist | RollingResearchRunner v2 已落地，promotion checklist 存在但未自动化 | 需自动化晋级门禁 |
 | Candidate→Production | 候选 shadow run → eval → approval | 人工驱动，alpha_v1 已处 Shadow Baseline | 需自动化 gate |

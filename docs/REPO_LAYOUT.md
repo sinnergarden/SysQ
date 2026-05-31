@@ -141,7 +141,7 @@
 | `shadow/` | legacy shadow JSON/CSV（`account.json`、`positions.csv`、`ledger.csv`） | 当前仍可能被旧入口读写，不扩张新依赖 |
 | `shadow_alpha_v2/` | shadow alpha_v2 产物 | 同上 |
 | `data/meta/real_account.db` | legacy account store | 迁移前保留 |
-| `scripts/run_preopen.sh` | legacy preopen shell wrapper（DEPRECATED） | 不再被 systemd 调用（PR #125 cutover），保留参考。不扩张。|
+| `scripts/run_preopen.sh` | legacy preopen shell wrapper（DEPRECATED） | 不再被 systemd 调用（systemd cutover 完成），保留参考。不扩张。|
 | `scripts/run_postclose.sh` | legacy postclose shell wrapper（DEPRECATED） | 同上 |
 | `scripts/run_daily_trading.py` | legacy daily trading entry | 同上 |
 | `scripts/run_post_close.py` | legacy post-close entry | 同上 |

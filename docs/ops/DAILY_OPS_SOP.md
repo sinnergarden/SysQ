@@ -33,7 +33,7 @@
 
 > 注意：production stage batch（`run_daily_batch.py --stage production`）需要显式 `--allow-production`，且不表示无人值守实盘。Broker submission 仍需人工确认。
 
-**关键事实**：systemd 已从旧入口切换至 `run_daily_batch.py`（PR #125）。旧 legacy 入口（`run_preopen.sh`、`run_postclose.sh`、`run_alpha_v1_weekly_train.py`）不再被 systemd 调用。
+**关键事实**：systemd 已从旧入口切换至 `run_daily_batch.py`。旧 legacy 入口（`run_preopen.sh`、`run_postclose.sh`、`run_alpha_v1_weekly_train.py`）不再被 systemd 调用。
 
 ### 2.2 Manual debug path
 

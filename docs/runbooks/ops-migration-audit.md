@@ -43,7 +43,7 @@ dispatch via `run_daily.py` / `run_daily_batch.py`.
 
 ## Systemd Template Audit
 
-| File | Migration Status (PR #125) |
+| File | Migration Status |
 |------|---------------------------|
 | `deploy/systemd/qsys-candidate-preopen.service` | ✅ `run_daily_batch.py --stage candidate --mode preopen --trade-date auto` |
 | `deploy/systemd/qsys-candidate-postclose.service` | ✅ `run_daily_batch.py --stage candidate --mode postclose --trade-date auto` |

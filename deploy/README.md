@@ -15,6 +15,8 @@
 
 所有 service 文件使用 `--trade-date auto`（取机器本地当天日期，无需 shell 展开）。
 
+Timer 依赖 systemd 默认规则：`foo.timer` 激活同名 `foo.service`，无需显式 `Unit=`。
+
 ### 实际运行验证
 
 | Service | 最近成功运行 | 结果 |
@@ -22,7 +24,7 @@
 | `qsys-candidate-preopen.service` | 2026-05-29 08:00 | ✅ exit=0 |
 | `qsys-candidate-postclose.service` | 2026-05-29 21:00 | ✅ exit=0 |
 | `qsys-csi800-daily-sync.service` | 2026-05-29 19:00 | ✅ exit=0 |
-| `qsys-candidate-train.service` | next Mon 07:00 | ⏳ timer active |
+| `qsys-candidate-train.service` | next Mon 07:00 | ⏳ timer active; first scheduled success pending next Monday |
 
 ### 安装步骤
 
@@ -93,5 +95,5 @@ bash scripts/notify_telegram.sh "测试消息"
 
 ## 历史
 
-PR #125 将 `deploy/systemd/` 从 legacy 入口（`run_preopen.sh` / `run_postclose.sh` / `run_alpha_v1_weekly_train.py`）
+将 `deploy/systemd/` 从 legacy 入口（`run_preopen.sh` / `run_postclose.sh` / `run_alpha_v1_weekly_train.py`）
 同步为当前生产实际入口（`run_daily_batch.py --stage candidate`）。旧 legacy 文件已从仓库移除（git 历史可追溯）。
