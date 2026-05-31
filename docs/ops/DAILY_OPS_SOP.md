@@ -57,7 +57,7 @@
 | Dry-run postclose | `python scripts/run_daily.py --strategy alpha_v1 --mode postclose --trade-date YYYY-MM-DD --debug-run --no-notify` |
 | Notify only (from existing artifacts) | `python scripts/run_daily.py --strategy alpha_v1 --notify-only --trade-date YYYY-MM-DD` |
 
-`--trade-date` 支持 `auto`（等同于 `$(date +%Y-%m-%d)`），方便 systemd ExecStart 省略 shell 展开。
+`--trade-date auto` 取机器本地当天日期（`datetime.now().strftime("%Y-%m-%d")`），用于避免 systemd ExecStart 中的 shell 展开 `$(date ...)`。交易日历感知是后续改进。
 `--debug-run` 不修改 shadow/account.json / positions.csv / ledger.csv。`run_daily_batch.py` 另有 `--dry-run` 仅打印将要调度的策略而不执行。
 `--no-notify` 跳过 Telegram 通知（debug-run 默认行为，也可手动指定）。
 
@@ -169,7 +169,7 @@ flowchart TD
 ### Expected outputs
 
 ```
-daily/{date}/pre_open/signals/signal_basket_{data_date}.csv  ← 多策略合并信号
+daily/{date}/pre_open/signals/signal_basket_{data_date}.csv  ← 当前策略 adapter predictions archive
 daily/{date}/pre_open/signals/                              ← 单策略信号
 daily/{date}/pre_open/plans/
 daily/{date}/pre_open/order_intents/
@@ -388,20 +388,20 @@ python scripts/run_daily.py --strategy alpha_v1 --notify-only --trade-date YYYY-
 # 检查 order intents 字段完整性
 python scripts/checks/check_order_intents.py --path daily/<date>/pre_open/order_intents/<file>.json
 
-# 检查 postclose 对账结果
-python scripts/checks/check_reconciliation_result.py --path daily/<date>/post_close/reconciliation_result.json
+# 检查 postclose 对账结果（接受目录路径）
+python scripts/checks/check_reconciliation_result.py --path daily/<date>/post_close/
 
-# 检查 portfolio snapshot 完整性
-python scripts/checks/check_portfolio_snapshot.py --path daily/<date>/post_close/portfolio_snapshot.csv
+# 检查 portfolio snapshot 完整性（消费 snapshot_index.json）
+python scripts/checks/check_portfolio_snapshot.py --path daily/<date>/snapshot_index.json
 
 # 检查 daily read model
-python scripts/checks/check_daily_read_model.py --path daily/<date>/post_close/daily_ops_digest_*.json
+python scripts/checks/check_daily_read_model.py --path daily/<date>/post_close/daily_ops_manifest.json
 
 # 检查 signal schema
 python scripts/checks/check_signal_schema.py --path daily/<date>/pre_open/signals/<file>.csv
 
 # 检查实验索引（strict 模式）
-python scripts/checks/check_experiment_index.py --experiment-id <id> --strict
+python scripts/checks/check_experiment_index.py --path <experiment_dir> --strict
 
 # 路径状态审计（只读，不写任何状态）
 python scripts/ops/audit_state_paths.py
