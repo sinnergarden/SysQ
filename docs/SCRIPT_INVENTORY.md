@@ -5,12 +5,12 @@
 
 ## Main entrypoints
 
-Current daily ops only support these CLI entrypoints:
+- `scripts/run_daily.py`: (target) pre-open / postclose / train unified entry
+- `scripts/run_daily_batch.py`: (target) stage-aware batch dispatcher
+- `scripts/run_daily_trading.py`: (legacy, systemd) pre-open daily plan and report generation
+- `scripts/run_post_close.py`: (legacy, systemd) post-close reconciliation and follow-up reports
 
-- `scripts/run_daily_trading.py`: pre-open daily plan and report generation
-- `scripts/run_post_close.py`: post-close reconciliation and follow-up reports
-
-Legacy aliases `scripts/run_plan.py` and `scripts/run_reconcile.py` have been removed in this cleanup. Docs and future automation should call the main entrypoints directly.
+> Note: this inventory is partially outdated. See `docs/REPO_SLIMMING_PLAN.md` for current audit.
 
 ## Kept scripts
 
@@ -21,7 +21,7 @@ Legacy aliases `scripts/run_plan.py` and `scripts/run_reconcile.py` have been re
 | Legacy data pipeline | `run_update.py`, `update_data_all.py`, `create_instrument_csi300.py`, `dump_bin.py` | Mostly superseded by sync_csi800_daily.py; kept for manual diagnostics |
 | Ops scripts | `scripts/ops/fetch_csi800_full.py`, `scripts/ops/backfill_csi800_history.py` | Full re-fetch helpers; see `deploy/systemd/` for timer setup |
 | Training / research | `run_train.py`, `run_backtest.py`, `run_strict_eval.py`, `run_compare.py`, `run_feature_build.py`, `run_feature_experiment.py`, `run_feature_ablation.py`, `run_feature_backtest_report.py`, `run_feature_readiness_audit.py` | Current model and feature workflow |
-| Debug / manual utilities | `debug_data_quality.py`, `debug_model_performance.py`, `check_amount.py`, `rebuild_qlib_bin.py`, `setup_openclaw_qsys_cron.sh` | Still useful for manual diagnostics or maintenance; not on the daily ops critical path |
+| Debug / manual utilities | `rebuild_qlib_bin.py`, `setup_openclaw_qsys_cron.sh` | Still useful for manual diagnostics or maintenance; not on the daily ops critical path |
 
 ## Removed in this cleanup
 
@@ -37,7 +37,6 @@ Legacy aliases `scripts/run_plan.py` and `scripts/run_reconcile.py` have been re
 
 | Path | Why not removed |
 |------|-----------------|
-| `scripts/check_amount.py` | Thin, but still a direct manual qlib raw-data probe; low risk to revisit later |
 | `scripts/rebuild_qlib_bin.py` | Destructive rebuild helper with clearer intent than `dump_bin.py`; keep until a safer unified CLI exists |
 | `docs/features/new_feature.md` | Required feature-doc template referenced by repo workflow docs |
 | `data/` samples and `runs/examples/` | Not fully audited as unused; may still support docs, tests, or demos |

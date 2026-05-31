@@ -2,14 +2,14 @@
 Description=Qsys Production Pre-Open — batch dispatch all production strategies
 After=network-online.target
 Wants=network-online.target
-Documentation=docs/runbooks/daily-ops.md
+Documentation=docs/ops/DAILY_OPS_SOP.md
 
 #
 # WARNING: Production execution requires additional risk controls.
 # This template is structural only — do not enable without reviewing
 # the production deployment checklist.
 #
-# See docs/runbooks/daily-ops.md for current limitations.
+# See docs/ops/DAILY_OPS_SOP.md for current limitations.
 #
 
 [Service]

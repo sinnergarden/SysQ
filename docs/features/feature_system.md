@@ -133,8 +133,4 @@ Qsys 的特征系统不能只支持 float 标量。
 - `docs/research/feature_groups_phase3.md`：Phase 3 说明
 - `docs/research/feature_backtest_report.md`：正式实验与回测汇总
 
-后续若 feature 系统设计发生长期变化，应优先更新本文件，再更新具体实验文档。
-
-当前与 factor governance 相关的补充文档：
-- `docs/features/factor_governance_and_research_migration.md`
-- `docs/features/factor_governance_pr_plan.md`
+后续与 factor governance 相关的参考文档已移入 `archive/docs/features/`。

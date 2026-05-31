@@ -94,7 +94,7 @@ qsys_plugins/
 | `docs/RUNBOOK.md` daily pre-open checklist | Yes | `preopen-plan` + `trading-calendar-guard` + `shadow-execution-planner` | `scripts/run_daily_trading.py`, `qsys/live/*` |
 | `docs/RUNBOOK.md` weekly model ops | Partly | future `weekly-refresh` + `train-split-discipline` | `scripts/run_train.py`, `scripts/run_strict_eval.py` |
 | `docs/strict-evaluation.md` | Yes | `rolling-eval` + `train-split-discipline` | `scripts/run_backtest.py`, `scripts/run_strict_eval.py`, `qsys/evaluation` |
-| `docs/features/ops_requirements.md` | Yes | shared output contract + blocker rules | multiple scripts |
+| `archive/docs/features/ops_requirements.md` | Yes (archived) | shared output contract + blocker rules | multiple scripts |
 | `docs/features/post_close_reconciliation.md` | Later | future `postclose-review` / `shadow-sync` | `scripts/run_post_close.py`, `qsys/live/reconciliation.py` |
 | `docs/features/daily_signal_monitoring.md` | Later | future `signal-quality-review` | `scripts/run_signal_quality.py` |
 | `ROADMAP.md` / `ARCHITECTURE.md` | Partly | plugin scope / boundaries / invariants | documentation only |

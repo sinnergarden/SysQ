@@ -229,4 +229,5 @@ python -m unittest discover tests
 - 让 Research artifact 直接进入 Production；
 - 绕过 LedgerService 直接写生产状态；
 - 自动提交真实券商订单；
-- 修改生产密钥、本地私密配置或外部授权信息。
+- 修改生产密钥、本地私密配置或外部授权信息；
+- **从 archive/ import 或调用脚本**——archive/ 是只读历史参考，不保证可运行，新代码不得依赖 archive/。

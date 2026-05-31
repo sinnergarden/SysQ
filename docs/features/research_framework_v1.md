@@ -1,6 +1,6 @@
 # FEATURE: research_framework_v1
 
-> Update note: 本文档定义了 signal / strategy / evaluator / artifact 的第一版研究骨架；factor / variant / bundle / experiment object 的后续迁移，见 `docs/features/factor_governance_and_research_migration.md` 与 `docs/features/factor_governance_pr_plan.md`。
+> Update note: 本文档定义了 signal / strategy / evaluator / artifact 的第一版研究骨架；factor / variant / bundle / experiment object 的后续迁移方向已暂停，参考文档移入 `archive/docs/features/`。
 
 ## Goal
 

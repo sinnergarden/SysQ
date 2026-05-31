@@ -35,7 +35,7 @@ dispatch via `run_daily.py` / `run_daily_batch.py`.
 | `docs/features/new-strategy-development-guide.md` | `run_alpha_v1_weekly_train.py` refs | ✅ already says "Do not copy scripts/run_alpha_v1_daily.py" |
 | `docs/features/strategy-lifecycle.md` | — | ✅ stage-aware (this PR) |
 | `docs/runbooks/semantic-checks.md` | — | ✅ updated (this PR) |
-| `docs/runbooks/daily-ops.md` | — | ✅ created (this PR) |
+| `archive/docs/runbooks/daily-ops.md` | — | ✅ created (this PR) |
 | `docs/adr/005-protected-core-boundary.md` | lists `run_alpha_v1_daily.py` | ⏳ update to run_daily.py |
 | `deploy/README.md` | `run_preopen.sh` / `run_postclose.sh` | ⏳ point to new templates |
 
@@ -59,7 +59,7 @@ dispatch via `run_daily.py` / `run_daily_batch.py`.
 | Alpha V1 hardcoded in scripts | Strategy-agnostic `run_daily.py --strategy <id>` |
 | Per-strategy shell wrappers | Stage-aware `run_daily_batch.py --stage <stage>` |
 | Per-strategy systemd units | Stage-based systemd template (candidate / production) |
-| Script-specific ops runbook | Framework `daily-ops.md` runbook |
+| Script-specific ops runbook | Framework `docs/ops/DAILY_OPS_SOP.md` runbook |
 
 ---
 

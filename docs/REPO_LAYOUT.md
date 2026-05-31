@@ -202,3 +202,13 @@ UI / monitoring 应优先读以下路径：
 - 不把 UI 做成写状态入口。
 - 不把 legacy path 扩张为新标准。
 - 不无说明移动或删除历史产物。
+
+## 11. Archive
+
+`archive/` 是已暂停/已完成/已过时的文档和脚本的只读参考目录。
+
+- archive/ 下的文件不属于 current truth。
+- agent 不得从 archive/ import 或调用。
+- 新代码不得依赖 archive/。
+- archive/ 不参与 systemd、daily ops、research SOP、production path。
+- 如需恢复 archive/ 中的文件，必须单独 PR 移回主路径，并补测试、文档和 current owner。

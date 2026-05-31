@@ -1,6 +1,6 @@
 [Unit]
 Description=Qsys Candidate Post-Close — batch dispatch all candidate strategies
-Documentation=docs/runbooks/daily-ops.md
+Documentation=docs/ops/DAILY_OPS_SOP.md
 After=network-online.target
 Wants=network-online.target
 
