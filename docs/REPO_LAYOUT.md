@@ -141,17 +141,17 @@
 | `shadow/` | legacy shadow JSON/CSV（`account.json`、`positions.csv`、`ledger.csv`） | 当前仍可能被旧入口读写，不扩张新依赖 |
 | `shadow_alpha_v2/` | shadow alpha_v2 产物 | 同上 |
 | `data/meta/real_account.db` | legacy account store | 迁移前保留 |
-| `scripts/run_preopen.sh` | legacy preopen shell wrapper（DEPRECATED） | systemd 当前仍调用，不扩张 |
-| `scripts/run_postclose.sh` | legacy postclose shell wrapper（DEPRECATED） | systemd 当前仍调用，不扩张 |
-| `scripts/run_daily_trading.py` | legacy daily trading entry | 被 shell wrapper 调用 |
-| `scripts/run_post_close.py` | legacy post-close entry | 被 shell wrapper 调用 |
-| `scripts/run_alpha_v1_daily.py` | legacy alpha_v1 daily entry（DEPRECATED） | 被 shell wrapper 调用 |
+| `scripts/run_preopen.sh` | legacy preopen shell wrapper（DEPRECATED） | 不再被 systemd 调用（systemd cutover 完成），保留参考。不扩张。|
+| `scripts/run_postclose.sh` | legacy postclose shell wrapper（DEPRECATED） | 同上 |
+| `scripts/run_daily_trading.py` | legacy daily trading entry | 同上 |
+| `scripts/run_post_close.py` | legacy post-close entry | 同上 |
+| `scripts/run_alpha_v1_daily.py` | legacy alpha_v1 daily entry（DEPRECATED） | 同上 |
 
 **规则**：
 - 可以读。
 - 不能随意删。
 - 不能在新功能中增加新依赖。
-- 迁移需单独 PR。
+- 迁移需单独 PR（已迁入口，文件本身仍保留）。
 - 只读审计工具 `scripts/ops/audit_state_paths.py` 可检查此路径状态（0 write，0 migration）。
 
 ---

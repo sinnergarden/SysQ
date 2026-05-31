@@ -24,31 +24,18 @@
 
 ### 2.1 Current systemd path
 
-| 阶段 | Service | Timer | 实际调用链 |
-|------|---------|-------|-----------|
-| Data sync | `qsys-csi800-daily-sync.service` | Mon-Fri 21:30 | `scripts/ops/sync_csi800_daily.py --apply` |
-| Preopen | `qsys-preopen.service` | Mon-Fri 08:00 | `scripts/run_preopen.sh` → `run_daily_trading.py` + `run_alpha_v1_daily.py --mode preopen` |
-| Postclose | `qsys-post-close.service` | Mon-Fri 15:30 | `scripts/run_postclose.sh` → `run_post_close.py` + `run_alpha_v1_daily.py --mode postclose` |
-| Weekly train | `qsys-alpha-v1-weekly-train.service` | Mon 07:00 | `scripts/run_alpha_v1_weekly_train.py` |
-| Shadow daily | `qsys-shadow-daily.service` | daily 15:30 | `scripts/ops/run_shadow_daily.py` |
+| 阶段 | Service | Timer | 调用链 |
+|------|---------|-------|--------|
+| Data sync | `qsys-csi800-daily-sync.service` | Mon-Fri 19:00 | `scripts/ops/sync_csi800_daily.py --apply` |
+| Preopen | `qsys-candidate-preopen.service` | Mon-Fri 08:00 | `run_daily_batch.py --stage candidate --mode preopen --trade-date auto` |
+| Postclose | `qsys-candidate-postclose.service` | Mon-Fri 21:00 | `run_daily_batch.py --stage candidate --mode postclose --trade-date auto` |
+| Weekly train | `qsys-candidate-train.service` | Mon 07:00 | `run_daily_batch.py --stage candidate --mode train` |
 
 > 注意：production stage batch（`run_daily_batch.py --stage production`）需要显式 `--allow-production`，且不表示无人值守实盘。Broker submission 仍需人工确认。
 
-**关键事实**：当前 preopen 和 postclose systemd 入口仍是 `run_preopen.sh` / `run_postclose.sh`（shell wrapper）。这两个 wrapper 自身已声明 DEPRECATED，但在 systemd 切换之前它们仍是生产事实。
+**关键事实**：systemd 已从旧入口切换至 `run_daily_batch.py`。旧 legacy 入口（`run_preopen.sh`、`run_postclose.sh`、`run_alpha_v1_weekly_train.py`）不再被 systemd 调用。
 
-### 2.2 Target path
-
-| 模式 | 目标命令 | 当前状态 |
-|------|---------|---------|
-| Preopen | `python scripts/run_daily.py --strategy <id> --mode preopen --trade-date <date>` (或 `--trade-date auto`) | 可用，未接入 systemd |
-| Postclose | `python scripts/run_daily.py --strategy <id> --mode postclose --trade-date <date>` (或 `--trade-date auto`) | 可用，未接入 systemd |
-| Batch preopen | `python scripts/run_daily_batch.py --stage candidate --mode preopen --trade-date <date>` | 可用，未接入 systemd |
-| Batch postclose | `python scripts/run_daily_batch.py --stage candidate --mode postclose --trade-date <date>` | 可用，未接入 systemd |
-| Train | `python scripts/run_daily.py --strategy <id> --mode train [--no-notify]` | 可用，未接入 systemd |
-
-在 systemd 尚未切换前，本文档不会把目标入口宣称为生产事实。
-
-### 2.3 Manual debug path
+### 2.2 Manual debug path
 
 | 场景 | 命令 |
 |------|------|
@@ -61,17 +48,18 @@
 `--debug-run` 不修改 shadow/account.json / positions.csv / ledger.csv。`run_daily_batch.py` 另有 `--dry-run` 仅打印将要调度的策略而不执行。
 `--no-notify` 跳过 Telegram 通知（debug-run 默认行为，也可手动指定）。
 
+
 ---
 
 ## 3. Daily Timeline
 
 ```
-       Mon 07:00   Mon-Fri 08:00       Mon-Fri 15:30    Mon-Fri 21:30
+       Mon 07:00   Mon-Fri 08:00       Mon-Fri 19:00    Mon-Fri 21:00
          │             │                    │                │
-  weekly train     preopen              postclose        data sync
-  (qsys-alpha-v1-  (qsys-preopen.       (qsys-post-       (qsys-csi800-
-   weekly-train.    service)              close.service)    daily-sync.
-   service)                                                    service)
+  weekly train     preopen              data sync        postclose
+  (qsys-candidate- (qsys-candidate-      (qsys-csi800-    (qsys-candidate-
+   train.service)    preopen.service)      daily-sync.    postclose.service)
+                                           service)
 ```
 
 ### 盘前顺序
@@ -184,7 +172,7 @@ daily/{date}/pre_open/manifests/
 | No approved manifest | blocking | `ls daily/{date}/pre_open/manifests/` 或 model registry | 确认是否从 weekly train 生成 | 用"最新模型目录"替代 |
 | Stale model | degraded | 检查 model_version 的 train_end 日期 | 只有 approved manifest 中存在 fallback model 时才降级使用，否则 blocking 或需人工确认 | 用 in-sample signal 当可交易 signal |
 | Missing previous account state | blocking | `sqlite3 data/trade.db "SELECT * FROM snapshots ORDER BY snapshot_time DESC LIMIT 1;"` | 尝试 legacy fallback (`data/meta/real_account.db`) | 直接写 ledger |
-| Signal generation failed | blocking | `journalctl --user -u qsys-preopen.service` | 检查 data readiness、model artifact | 跳过 signal 直接生成 plan |
+| Signal generation failed | blocking | `journalctl --user -u qsys-candidate-preopen.service` | 检查 data readiness、model artifact | 跳过 signal 直接生成 plan |
 | Empty plan | warning | 检查 plan JSON 中的 reason 字段 | expected no-trade → 正常通知；abnormal → 人工确认 | 视为失败阻断当天 |
 | Order intent generation failed | blocking | 检查 signal 和 allocation 中间产物 | 修复后重跑 | 生成假 order intent |
 
@@ -230,7 +218,7 @@ daily/{date}/pre_open/manifests/
 |---------|----------|-------------|-------------|-------------|
 | Missing fills | warning | `daily/{date}/post_close/` 下检查 fills 文件 | 重新拉取 broker snapshot | 手动补填 fill 记录 |
 | Missing close price | degraded | `daily/{date}/post_close/` 下检查 MTM | 跳过对应标的 | 用前日收盘价替代 |
-| Ledger write failed | blocking | `journalctl --user -u qsys-post-close.service` | 检查 DB 锁或磁盘空间 | 直接写 `data/trade.db` |
+| Ledger write failed | blocking | `journalctl --user -u qsys-candidate-postclose.service` | 检查 DB 锁或磁盘空间 | 直接写 `data/trade.db` |
 | Reconciliation gap | varies by mode | 检查 `reconciliation_result` 输出 | shadow mode → 记录 gap、通知 operator、归档；production/broker mode → blocking，不得继续 | 自动修正 ledger |
 | Broker snapshot unavailable | degraded | `ls -la /home/liuming/.openclaw/broker/` 检查同步文件 | 跳过 broker reconciliation，只做 shadow | 中断当天流程 |
 | Report generation failed | non-blocking | 检查 report 产出路径 | 重新生成 | 阻塞 postclose |
@@ -290,17 +278,17 @@ flowchart TD
 systemctl --user list-units 'qsys-*'
 
 # 单个服务状态
-systemctl --user status qsys-preopen.service
-systemctl --user status qsys-post-close.service
+systemctl --user status qsys-candidate-preopen.service
+systemctl --user status qsys-candidate-postclose.service
 systemctl --user status qsys-csi800-daily-sync.service
 
 # 查看最近一次运行日志
-journalctl --user -u qsys-preopen.service -n 50 --no-pager
-journalctl --user -u qsys-post-close.service -n 50 --no-pager
+journalctl --user -u qsys-candidate-preopen.service -n 50 --no-pager
+journalctl --user -u qsys-candidate-postclose.service -n 50 --no-pager
 journalctl --user -u qsys-csi800-daily-sync.service -n 50 --no-pager
 
 # 持续跟踪日志
-journalctl --user -u qsys-preopen.service -f
+journalctl --user -u qsys-candidate-preopen.service -f
 ```
 
 ### 查看当天产物
@@ -334,29 +322,29 @@ ls data/audit/ | tail -5
 ### 跑 preopen
 
 ```bash
-# 当前 legacy（systemd 实际路径）
-python scripts/run_daily_trading.py --date T-1 --execution_date YYYY-MM-DD
+# systemd 实际路径（batch 模式）
+python scripts/run_daily_batch.py --stage candidate --mode preopen --trade-date auto
 
-# 目标入口（dry-run 模式，不写 shadow）
+# 单策略 dry-run
 python scripts/run_daily.py --strategy alpha_v1 --mode preopen --trade-date YYYY-MM-DD --debug-run --no-notify
 
-# 目标入口（正式运行，--trade-date auto 自动取今天）
+# 单策略正式运行
 python scripts/run_daily.py --strategy alpha_v1 --mode preopen --trade-date auto
 
-# Batch 模式
+# Batch dry-run
 python scripts/run_daily_batch.py --stage candidate --mode preopen --trade-date YYYY-MM-DD --dry-run
 ```
 
 ### 跑 postclose
 
 ```bash
-# 当前 legacy（systemd 实际路径）
-python scripts/run_post_close.py --date YYYY-MM-DD --real_sync /path/to/sync/file
+# systemd 实际路径（batch 模式）
+python scripts/run_daily_batch.py --stage candidate --mode postclose --trade-date auto
 
-# 目标入口（dry-run）
+# 单策略 dry-run
 python scripts/run_daily.py --strategy alpha_v1 --mode postclose --trade-date YYYY-MM-DD --debug-run --no-notify
 
-# 目标入口（正式运行，--trade-date auto 自动取今天）
+# 单策略正式运行
 python scripts/run_daily.py --strategy alpha_v1 --mode postclose --trade-date auto
 ```
 

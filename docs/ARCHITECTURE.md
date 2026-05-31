@@ -86,39 +86,37 @@ flowchart TB
 
 ```mermaid
 flowchart TB
-    subgraph LEGACY["Legacy Path (systemd active)"]
-        SYS[systemd] --> SH[run_preopen.sh]
-        SYS --> PSH[run_postclose.sh]
-        SH --> RDT[run_daily_trading.py<br/>997 lines]
-        SH --> RAV[run_alpha_v1_daily.py<br/>deprecated wrapper]
-        PSH --> RPC[run_post_close.py]
-        PSH --> RAV2[run_alpha_v1_daily.py]
+    subgraph OLD["Legacy Path (no longer systemd, git history only)"]
+        SH[run_preopen.sh]
+        PSH[run_postclose.sh]
+        RDT[run_daily_trading.py<br/>997 lines]
+        RAV[run_alpha_v1_daily.py<br/>deprecated wrapper]
+        RPC[run_post_close.py]
     end
 
-    subgraph TARGET["Target Path (validated, awaiting systemd cutover)"]
-        TB[run_daily_batch.py] --> RD[run_daily.py]
+    subgraph CURRENT["Active Path (systemd)"]
+        SYS[systemd] --> TB[run_daily_batch.py<br/>--stage candidate]
+        TB --> RD[run_daily.py]
         RD --> NR[DailyRunner<br/>preopen/postclose/train/notify-only<br/>--trade-date auto · --no-notify<br/>signal_basket · reconciliation_result]
         NR --> CA[StrategyCandidate Adapter]
     end
 
     subgraph STATE["State Backends"]
         DB1[(data/trade.db<br/>LedgerService target)]
-        DB2[(data/meta/real_account.db<br/>live/account.py default)]
-        SHADOW[shadow/account.json<br/>still actively written]
+        DB2[(data/meta/real_account.db<br/>legacy active)]
+        SHADOW[shadow/account.json<br/>legacy active]
     end
 
-    RDT --> DB2
-    RPC --> DB2
-    RAV --> DB1
-    RAV --> SHADOW
     NR --> DB1
+    DB2 -.->|legacy fallback| NR
+    SHADOW -.->|legacy fallback| NR
 
-    style LEGACY fill:#ffe0e0,stroke:#c00
-    style TARGET fill:#e0ffe0,stroke:#0c0
+    style OLD fill:#ffe0e0,stroke:#c00
+    style CURRENT fill:#e0ffe0,stroke:#0c0
     style STATE fill:#fff0e0,stroke:#c80
 ```
 
-图2：当前 systemd 仍走 Legacy Path（红色），Target Path（绿色）已完成功能验证（signal_basket 修复、reconciliation_result、--trade-date auto），等待 systemd cutover。三态存储（橙色）表示 state migration 尚未完成。
+图2：systemd 已切换至 `run_daily_batch.py`（绿色 Active Path）。旧 Legacy Path 仅留 git 历史。三态存储（橙色）表示 state migration 尚未完成。
 
 ---
 
@@ -372,7 +370,7 @@ flowchart LR
 
 | 维度 | 目标态 | 当前现实 | 差距 |
 |------|--------|---------|------|
-| 入口 | `run_daily.py` + `run_daily_batch.py` | systemd 调用 `run_preopen.sh` → `run_daily_trading.py` + deprecated wrapper。新入口已通过 8-gate 验证（signal_basket 修复、reconciliation_result、--trade-date auto、--no-notify、54/54 checker tests），只差 systemd unit 替换 | 需切换 systemd |
+| 入口 | `run_daily.py` + `run_daily_batch.py` | systemd 已切换至 `run_daily_batch.py --stage candidate`。旧 legacy 入口不再被 systemd 调用。| ✅ systemd cutover 完成 |
 | Ledger | `data/trade.db` 唯一 SOT | `trade.db` + `real_account.db` + `shadow/` 三态共存 | 需统一 + 迁移 |
 | 研究→Candidate | RollingResearchRunner → ExperimentIndex → promotion checklist | RollingResearchRunner v2 已落地，promotion checklist 存在但未自动化 | 需自动化晋级门禁 |
 | Candidate→Production | 候选 shadow run → eval → approval | 人工驱动，alpha_v1 已处 Shadow Baseline | 需自动化 gate |
