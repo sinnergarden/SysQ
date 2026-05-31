@@ -204,7 +204,16 @@ class DnnMultitaskGenerator:
         signal_id: str,
         signal_run_id: str,
     ) -> pd.DataFrame:
-        """Generate blended signal for the given window."""
+        """Generate blended signal for the given window.
+
+        Currently requires exactly two label_ids (5d and 20d forward
+        returns) because the internal model always produces two outputs.
+        """
+        if len(self.label_ids) != 2:
+            raise ValueError(
+                f"DnnMultitaskGenerator currently requires exactly two label_ids, "
+                f"got {len(self.label_ids)}: {self.label_ids}"
+            )
         self._ensure_qlib()
         features = self._resolve_features()
 

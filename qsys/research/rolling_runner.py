@@ -202,6 +202,7 @@ class FixtureSignalGenerator:
 @dataclass
 class LabelConfig:
     label_id: str
+    min_coverage: float | None = None
 
 
 @dataclass
@@ -510,7 +511,19 @@ class RollingResearchRunner:
             _end = config.calendar.get("end_date")
             for lcfg in config.labels:
                 lid = lcfg["label_id"]
-                _ls.validate_label(lid, start=_start, end=_end)
+                _kwargs: dict[str, Any] = {"start": _start, "end": _end}
+                if "universe" in lcfg:
+                    _kwargs["universe"] = lcfg["universe"]
+                elif config.generators:
+                    # Derive universe from first generator's params
+                    _first_gen = config.generators[0]
+                    _univ = _first_gen.get("params", {}).get("universe")
+                    if _univ:
+                        _kwargs["universe"] = _univ
+                mc = lcfg.get("min_coverage")
+                if mc is not None:
+                    _kwargs["min_coverage"] = mc
+                _ls.validate_label(lid, **_kwargs)
                 print(f"  Label {lid}: pre-flight OK")
 
 

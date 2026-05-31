@@ -347,7 +347,7 @@ class LabelStore:
         if df["label_value"].isna().all():
             raise ValueError(f"validate_label: {label_id} label_value is all NaN")
 
-        # 5. Date coverage
+        # 5. Date coverage (allow forward-tail gap for return labels)
         if start is not None and end is not None:
             df_dates = set(df["trade_date"].unique())
             from qsys.data.calendar import get_trading_calendar
@@ -355,7 +355,26 @@ class LabelStore:
             if cal:
                 cal_set = set(cal)
                 missing_dates = cal_set - df_dates
+
+                horizon = mf.get("horizon", 0)
+                if missing_dates and isinstance(horizon, int) and horizon > 0:
+                    sorted_cal = sorted(cal_set)
+                    tail_start = max(0, len(sorted_cal) - horizon)
+                    expected_tail = set(sorted_cal[tail_start:])
+                    middle_missing = missing_dates - expected_tail
+                    if not middle_missing:
+                        missing_dates = set()  # Only tail gap — OK
+                    else:
+                        missing_dates = middle_missing  # Report only middle missing
+
                 if missing_dates:
+                    if horizon > 0:
+                        raise ValueError(
+                            f"validate_label: {label_id} missing {len(missing_dates)} "
+                            f"trading dates in [{start}, {end}] (expected forward-tail "
+                            f"gap of {horizon}d already allowed). "
+                            f"Middle-missing e.g. {sorted(missing_dates)[:3]}"
+                        )
                     raise ValueError(
                         f"validate_label: {label_id} missing {len(missing_dates)} "
                         f"trading dates in [{start}, {end}] "

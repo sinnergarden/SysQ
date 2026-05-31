@@ -124,6 +124,14 @@ class LightGBMAlphaV1Generator:
         signal_id: str,
         signal_run_id: str,
     ) -> pd.DataFrame:
+        # Validate label_ids before any setup: must be exactly {5d, 20d}
+        horizons = sorted(_horizon_from_label_id(lid) for lid in self.label_ids)
+        if horizons != [5, 20]:
+            raise ValueError(
+                f"LightGBMAlphaV1Generator currently requires exactly 5d and 20d labels, "
+                f"got horizons {horizons} from label_ids {self.label_ids}"
+            )
+
         self._ensure_qlib()
 
         extended_end = (

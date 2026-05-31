@@ -24,11 +24,14 @@ sys.path.insert(0, str(_PROJECT_ROOT))
 
 
 def _cs_zscore(s: pd.Series, clip: float = 3.0) -> pd.Series:
-    """Cross-sectional zscore, clip, handle constant."""
-    std = s.std(ddof=0)
+    """Cross-sectional zscore, clip, handle constant/all-NaN."""
+    clean = s.dropna()
+    if len(clean) == 0:
+        return pd.Series(float("nan"), index=s.index)
+    std = clean.std(ddof=0)
     if pd.isna(std) or std < 1e-12:
         return pd.Series(0.0, index=s.index)
-    return ((s - s.mean()) / std).clip(-clip, clip)
+    return ((clean - clean.mean()) / std).clip(-clip, clip).reindex(s.index)
 
 
 def compute_label(
@@ -65,20 +68,22 @@ def compute_label(
     frame["_fwd"] = fwd
 
     # Per-date cross-sectional zscore
-    frame["label_value"] = frame.groupby("trade_date")["_fwd"].transform(
+    # Compute zscore only on rows with valid forward returns (non-NaN tail removed)
+    valid = frame.dropna(subset=["_fwd"]).copy()
+    valid["label_value"] = valid.groupby("trade_date")["_fwd"].transform(
         lambda g: _cs_zscore(g.astype(float), clip=3.0)
     )
 
     label_id = f"fwd_ret_{horizon}d_xsz_clip3"
     result = pd.DataFrame({
-        "trade_date": frame["trade_date"],
-        "instrument": frame["instrument"],
+        "trade_date": valid["trade_date"],
+        "instrument": valid["instrument"],
         "label_id": label_id,
         "horizon": int(horizon),
-        "label_value": frame["label_value"].astype(np.float32),
+        "label_value": valid["label_value"].astype(np.float32),
     })
 
-    # Drop rows where label_value is NaN (end of time series, no future close)
+    # Drop any remaining NaN rows (should not happen after valid filter, but be safe)
     result = result.dropna(subset=["label_value"]).reset_index(drop=True)
 
     return result
@@ -158,15 +163,17 @@ def main() -> None:
     from qlib.data import D
     insts = D.instruments(args.universe)
     n_insts = len(insts) if insts else 0
-    expected_rows = n_dates * n_insts if n_dates and n_insts else 0
 
     for h in args.horizons:
+        effective_dates = max(n_dates - h, 0)
+        expected_rows = effective_dates * n_insts if n_dates and n_insts else 0
+
         # ── xsz_clip3 label ──
         label_id = f"fwd_ret_{h}d_xsz_clip3"
         print(f"Computing {label_id} ...")
         df = compute_label(args.universe, h, args.start, args.end)
         cov = _coverage(len(df), expected_rows)
-        print(f"  {len(df)} rows, coverage={cov:.1%}")
+        print(f"  {len(df)} rows, effective_dates={effective_dates}, coverage={cov:.1%}")
 
         store.save_labels(
             label_id, df,
@@ -178,6 +185,8 @@ def main() -> None:
                 "formula": f"shift(-{h}) / close - 1, then per-date cs_zscore",
                 "normalization": "cross-sectional zscore",
                 "clip": 3.0,
+                "n_dates": n_dates,
+                "effective_dates": effective_dates,
                 "coverage": round(cov, 4),
             },
             overwrite=args.overwrite,
@@ -197,6 +206,8 @@ def main() -> None:
                 "prediction_end": args.end,
                 "formula": f"shift(-{h}) / close - 1",
                 "normalization": "none",
+                "n_dates": n_dates,
+                "effective_dates": effective_dates,
                 "coverage": round(_coverage(len(df_raw), expected_rows), 4),
             },
             overwrite=args.overwrite,
