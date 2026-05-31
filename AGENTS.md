@@ -172,9 +172,10 @@ gh pr merge <number> --squash --delete-branch
 
 普通 research 实验、小 bugfix、小脚本、小文档修正，可以直接实现并在 PR 里说明。
 
-如需文档：
+如需新增功能规格：
 
-- 功能规格写入文档（历史参考见 archive/docs/features/）；
+- 必须先由人类确认目标位置；不得写入 archive/，不得自行恢复 docs/features/ 体系。
+- 优先更新 ROADMAP / CONTRACTS / SOP / ADR。
 - 长期架构决策写入 docs/adr/；
 - artifact 字段约束写入 docs/schema/。
 

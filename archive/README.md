@@ -4,7 +4,7 @@
 
 ## Purpose
 
-Archive 存放 PR #119 / #120 / #NEXT 主线不再使用的文档和脚本，保留历史参考价值，同时降低主导航噪音。
+Archive 存放非 current truth 的历史文档和脚本，保留历史参考价值，同时降低主导航噪音。
 
 ## Rules
 
@@ -26,7 +26,7 @@ archive/
     architecture/    ← 历史架构说明（已被 ARCHITECTURE.md 替代）
     audits/          ← 一次性代码审计报告
     templates/       ← 旧模板（引用了 archive/ 内文档）
-    tutorials/       ← 旧教程（持续开发中）
+    tutorials/       ← 旧教程 / 历史教程
     ops/             ← 非 current 的 SOP 文档
   scripts/
     debug/           ← 一次性调试/分析脚本
