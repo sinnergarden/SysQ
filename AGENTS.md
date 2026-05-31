@@ -96,6 +96,24 @@ AI 可以直接处理：
 
 ---
 
+## 5.1 PR Workflow Constraint
+
+**代码变更必须走 PR。禁止直接推送到 main 分支。零例外。**
+
+AI 操作 worktree 时，所有的 push 和 merge 必须通过以下流程：
+```
+git checkout -b pr-<topic>
+git add -A && git commit -m "..."
+git push origin <branch>
+gh pr create --title "..." --body "..."
+# 用户 approve 后
+gh pr merge <number> --squash --delete-branch
+```
+
+违反后果：用户要求回滚，并修复约束本身。这是硬性 protocol violation。
+
+---
+
 ## 6. 必须先讨论的事
 
 以下事项不能自动改，必须先说明影响并等待确认：
@@ -220,14 +238,27 @@ python -m unittest discover tests
 
 ## 12. 禁止事项
 
-禁止自动执行：
+以下事项禁止自动执行。违反任何一条属于 agent protocol violation，用户可能要求回滚并放弃当前 session。
 
-- 删除 shadow/；
-- 删除或迁移 data/meta/real_account.db；
-- 切换 production systemd 入口；
+### 12.1 PR / 分支
+
+- **禁止直接推送或合并到 main 分支。** 零例外。所有变更必须通过 `gh pr create` 流程。
+
+### 12.2 数据与状态
+
+- 删除 `shadow/`；
+- 删除或迁移 `data/meta/real_account.db`；
+- 绕过 LedgerService 直接写生产状态；
+- 直接编辑 `data/trade.db`（只能通过 `run_daily.py` / `LedgerService` 写入）；
+- 切换 production systemd 入口。
+
+### 12.3 交易与生产
+
 - 绕过 artifact contract 接入 Candidate / Production；
 - 让 Research artifact 直接进入 Production；
-- 绕过 LedgerService 直接写生产状态；
 - 自动提交真实券商订单；
-- 修改生产密钥、本地私密配置或外部授权信息；
-- **从 archive/ import 或调用脚本**——archive/ 是只读历史参考，不保证可运行，新代码不得依赖 archive/。
+- 修改生产密钥、本地私密配置或外部授权信息。
+
+### 12.4 代码与依赖
+
+- **从 `archive/` import 或调用脚本**——archive/ 是只读历史参考，不保证可运行，新代码不得依赖 archive/。
