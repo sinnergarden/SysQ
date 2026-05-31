@@ -47,9 +47,10 @@
 | `qsys/research_ui/` | Research UI 模块 | current（完整 UI 未完全实现） |
 | `scripts/` | CLI / shell entrypoints | 只做编排，不放复杂业务核心 |
 | `scripts/ops/` | data sync、shadow daily、ops 入口 | Protected Core 运维 |
+| `scripts/ops/audit_state_paths.py` | data/trade.db + real_account.db + shadow/ 只读审计 | 0 write，0 migration |
 | `scripts/research/` | rolling research、signal eval、backtest from signal、experiment index | research 入口 |
 | `scripts/live/` | broker order、reconciliation、alpha_v1 live plan | live ops 入口 |
-| `scripts/checks/` | data leakage、schema 检查 | 检查工具 |
+| `scripts/checks/` | data leakage / schema / order intents / portfolio snapshot / reconciliation result / daily read model / experiment index 检查 | 产检工具（run_daily.py 产物验证）|
 | `tests/` | unit / regression tests | 改动必须补测试 |
 
 ---
@@ -104,7 +105,7 @@
 | `daily/{date}/pre_open/order_intents/` | 盘前订单意图 | current |
 | `daily/{date}/pre_open/manifests/` | 盘前 manifest | current |
 | `daily/{date}/pre_open/reports/` | 盘前报告 | current |
-| `daily/{date}/post_close/` | 盘后产物（fills、MTM、reconciliation、snapshot） | current |
+| `daily/{date}/post_close/` | 盘后产物（fills、MTM、reconciliation_result.json、snapshot、daily_ops_digest） | current |
 | `daily/{date}/snapshot_index.json` | 每日快照索引 | current |
 
 **原则**：
@@ -151,6 +152,7 @@
 - 不能随意删。
 - 不能在新功能中增加新依赖。
 - 迁移需单独 PR。
+- 只读审计工具 `scripts/ops/audit_state_paths.py` 可检查此路径状态（0 write，0 migration）。
 
 ---
 

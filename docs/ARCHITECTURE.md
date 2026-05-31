@@ -95,10 +95,10 @@ flowchart TB
         PSH --> RAV2[run_alpha_v1_daily.py]
     end
 
-    subgraph TARGET["Target Path (not yet systemd)"]
+    subgraph TARGET["Target Path (validated, awaiting systemd cutover)"]
         TB[run_daily_batch.py] --> RD[run_daily.py]
-        RD --> NR[DailyRunner]
-        NR --> SC[StrategyCandidate]
+        RD --> NR[DailyRunner<br/>preopen/postclose/train/notify-only<br/>--trade-date auto · --no-notify<br/>signal_basket · reconciliation_result]
+        NR --> CA[StrategyCandidate Adapter]
     end
 
     subgraph STATE["State Backends"]
@@ -118,7 +118,7 @@ flowchart TB
     style STATE fill:#fff0e0,stroke:#c80
 ```
 
-图2：当前 systemd 仍走 Legacy Path（红色），Target Path（绿色）尚未接入 systemd。三态存储（橙色）表示 state migration 尚未完成。
+图2：当前 systemd 仍走 Legacy Path（红色），Target Path（绿色）已完成功能验证（signal_basket 修复、reconciliation_result、--trade-date auto），等待 systemd cutover。三态存储（橙色）表示 state migration 尚未完成。
 
 ---
 
@@ -231,6 +231,7 @@ Research/backtest 和 daily ops 应尽可能复用同一套执行语义：
 | `LedgerService` | `qsys/ledger/service.py` | 账户状态管理 | Daily Ops |
 | `MatchEngine` | `qsys/trader/matcher.py` | 成交匹配 | 共享（收束目标）|
 | `OrderGenerator` | `qsys/trader/diff.py` | 订单意图生成 | 共享（收束目标）|
+| Checkers | `scripts/checks/` | signal/label/order intents/portfolio snapshot/reconciliation result/daily read model/experiment index 等静态验证 | 跨链路 |
 
 ### 4.3 Strategy Layer（策略相关层）
 
@@ -346,11 +347,11 @@ flowchart LR
 | 模块 | 输入 | 输出 | 状态写入 |
 |------|------|------|---------|
 | DailyRunner (train) | approved config, data | model refresh result | data/models, reports（不直接下单）|
-| DailyRunner (preopen) | production manifest, latest data, ledger | signal, plan, order intents | daily/{date}/pre_open（不写成交）|
+| DailyRunner (preopen) | production manifest, latest data, ledger | signal, plan, order intents, **signal_basket CSV** | daily/{date}/pre_open（不写成交）|
 | Execution Backend | order intents, broker or simulator | fills, execution report | staging / daily |
-| DailyRunner (postclose) | fills, prices, broker snapshot | MTM, reconciliation, report | ledger, daily/{date}/post_close |
+| DailyRunner (postclose) | fills, prices, broker snapshot | MTM, reconciliation, **reconciliation_result.json** | ledger, daily/{date}/post_close |
 | LedgerService | execution, snapshot, cash events | account state | data/trade.db |
-| Notifier | run report | Telegram message | 不写状态 |
+| Notifier | run report | Telegram message（支持 **--no-notify** 跳过）| 不写状态 |
 
 ### 5.3 State / Artifact I/O
 
@@ -371,12 +372,12 @@ flowchart LR
 
 | 维度 | 目标态 | 当前现实 | 差距 |
 |------|--------|---------|------|
-| 入口 | `run_daily.py` + `run_daily_batch.py` | systemd 调用 `run_preopen.sh` → `run_daily_trading.py` + deprecated wrapper | 需切换 systemd |
+| 入口 | `run_daily.py` + `run_daily_batch.py` | systemd 调用 `run_preopen.sh` → `run_daily_trading.py` + deprecated wrapper。新入口已通过 8-gate 验证（signal_basket 修复、reconciliation_result、--trade-date auto、--no-notify、54/54 checker tests），只差 systemd unit 替换 | 需切换 systemd |
 | Ledger | `data/trade.db` 唯一 SOT | `trade.db` + `real_account.db` + `shadow/` 三态共存 | 需统一 + 迁移 |
 | 研究→Candidate | RollingResearchRunner → ExperimentIndex → promotion checklist | RollingResearchRunner v2 已落地，promotion checklist 存在但未自动化 | 需自动化晋级门禁 |
 | Candidate→Production | 候选 shadow run → eval → approval | 人工驱动，alpha_v1 已处 Shadow Baseline | 需自动化 gate |
 | 执行语义共享 | BacktestEngine 与 DailyRunner 共享 MatchEngine / OrderGenerator | 尚未完全靠拢 | 收束中 |
-| Ops SOP | 反映当前入口和流程 | SOP 引用旧入口 | 需同步 |
+| Ops SOP | 反映当前入口和流程 | SOP 已更新 target 入口信息（--trade-date auto、checkers） | 待同步 systemd cutover |
 
 详细 agent 权限、Protected Core 修改流程和操作禁令见 `AGENTS.md`。本文档只描述架构边界和系统不变量。
 

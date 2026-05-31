@@ -10,7 +10,7 @@ SysQ 是面向 A 股日频量化研究与准实盘运营的个人系统，覆盖
 - Research / Backtest Chain 与 Daily Ops Chain 已形成主线。
 - `data/trade.db` 是目标 Account State / Execution Ledger SOT。
 - `data/meta/real_account.db` 与 `shadow/` 仍是 legacy compatibility path，不能随意删除。
-- systemd 当前仍可能走 legacy entry（`run_preopen.sh` / `run_postclose.sh`）。目标入口是 `run_daily.py` / `run_daily_batch.py`。
+- systemd 当前仍走 legacy entry（`run_preopen.sh` / `run_postclose.sh`）。目标入口 `run_daily.py` / `run_daily_batch.py` 已通过 8-gate 验证（`--trade-date auto`、signal_basket 修复、reconciliation_result），待 systemd unit 替换。
 
 ---
 
@@ -49,7 +49,11 @@ SysQ 是面向 A 股日频量化研究与准实盘运营的个人系统，覆盖
 | 目录 | 用途 |
 |------|------|
 | `qsys/` | 核心 Python package |
-| `scripts/` | CLI 入口脚本 |
+| `scripts/` | 通用 CLI 入口（`run_daily.py`、`run_daily_batch.py` 等）|
+| `scripts/ops/` | 数据同步、shadow daily、入口编排 |
+| `scripts/checks/` | 产检工具（schema、order intents、snapshot、reconciliation 检查）|
+| `scripts/research/` | 研究评估入口（rolling research、signal eval、backtest、experiment index）|
+| `scripts/live/` | 实盘操作脚本（broker 下单、对账）|
 | `tests/` | 测试 |
 | `config/` + `configs/` | 运行与研究配置 |
 | `data/` | 行情数据、model artifact、ledger DB |
