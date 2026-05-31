@@ -530,3 +530,97 @@ docs/schema/       → 部分 artifact 的字段级 schema
 | `docs/contracts/time-semantics.md` | deprecated | `docs/CONTRACTS.md` Invariants, `docs/ops/RESEARCH_STRATEGY_SOP.md` |
 
 这些 legacy contract 文件不再作为 current truth。若未来发现旧文档中仍有未迁移的重要规则，应通过 PR 显式迁移，而不是继续引用 `docs/contracts/*`。
+
+
+## B. Label Contract
+
+### Purpose
+
+Label 是从原始行情数据到模型训练目标的标准化 artifact。同一个 label_id 下的数据是唯一的 current truth，无论 consumer 是 DNN、LightGBM 还是 IC evaluation。
+
+### Producer / Consumer
+
+| 角色 | 组件 | 操作 |
+|------|------|------|
+| Producer | `scripts/research/compute_labels.py` | 创建 label parquet + manifest |
+| Consumer | `DnnMultitaskGenerator` | 训练时从 LabelStore 读取 |
+| Consumer | `LightGBMAlphaV1Generator` | 训练时从 LabelStore 读取 |
+| Consumer | `rolling_runner.evaluate()` | IC 评估时从 LabelStore 读取 |
+
+### Grain
+
+一行 = 一个（trade_date, instrument）的 label_value。
+
+### Required Fields
+
+| 字段 | 类型 | 描述 |
+|------|------|------|
+| `trade_date` | str | 交易日 (YYYY-MM-DD) |
+| `instrument` | str | 股票代码 |
+| `label_id` | str | Label 标识符（见下面 Label IDs） |
+| `horizon` | int | 预测天数 |
+| `label_value` | float | 归一化后的值 |
+
+### Label IDs
+
+| label_id | horizon | formula | normalization | clip |
+|----------|---------|---------|---------------|------|
+| `fwd_ret_5d_xsz_clip3` | 5 | shift(-5) / close - 1 → cs_zscore | per-date cs_zscore | [-3, 3] |
+| `fwd_ret_20d_xsz_clip3` | 20 | shift(-20) / close - 1 → cs_zscore | per-date cs_zscore | [-3, 3] |
+| `fwd_ret_5d_raw` | 5 | shift(-5) / close - 1 | none | none |
+| `fwd_ret_20d_raw` | 20 | shift(-20) / close - 1 | none | none |
+
+Generator 默认消费 `xsz_clip3` 系列。`raw` 系列仅作历史参考，不保证被 generator 使用。
+
+### Manifest Semantics
+
+每个 label 目录下 `manifest.json` 包含以下字段：
+
+```json
+{
+  "artifact_type": "label",
+  "label_id": "fwd_ret_5d_xsz_clip3",
+  "row_count": 200000,
+  "columns": ["trade_date", "instrument", "label_id", "horizon", "label_value"],
+  "horizon": 5,
+  "universe": "csi300",
+  "prediction_start": "2023-06-01",
+  "prediction_end": "2026-06-01",
+  "formula": "shift(-5) / close - 1, then per-date cs_zscore",
+  "normalization": "cross-sectional zscore",
+  "clip": 3.0,
+  "coverage": 0.95,
+  "created_at": "2026-05-31T12:00:00+00:00",
+  "git_commit": "abc1234"
+}
+```
+
+### Invariants
+
+- 同 label_id 的数据在同一 universe 内 **只存一份**，不按模型或实验重复存储。
+- label_value 是 **已归一化的值**（xsz_clip3 系列为每日横截面 zscore + clip）。generator 不再做二次归一化。
+- Label 数据一旦发布，**应被视为只读**。如需修改 label 定义，应使用新的 label_id。
+- 每次覆盖写入（`--overwrite`）会更新数据文件和 manifest，但不保证前向兼容。
+
+### Current Usage
+
+| label_id | 使用方 |
+|----------|--------|
+| `fwd_ret_5d_xsz_clip3` | DNN multitask (score_5d target), LightGBM alpha_v1 (5d target), IC evaluation |
+| `fwd_ret_20d_xsz_clip3` | DNN multitask (score_20d target), LightGBM alpha_v1 (20d target), IC evaluation |
+
+### Failure Behavior
+
+- 当 `rolling_runner.run()` 检测到 config.labels 中某个 label_id 不存在时：**fail fast**，提示先运行 `compute_labels.py`。
+- 当 label 的 universe 与 config 不符时：fail fast。
+- 当 label 的日期覆盖不足时：fail fast。
+- Generator 在训练时若 label_value 全为 NaN：**raise ValueError**。
+
+### 计算脚本
+
+```bash
+# 生成 CSI300 2023-06 → 2026-06 的全部 label
+python scripts/research/compute_labels.py \\
+    --universe csi300 --start 2023-06-01 --end 2026-06-01 \\
+    --horizons 5 20 --overwrite
+```

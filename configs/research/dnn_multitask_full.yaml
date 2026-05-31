@@ -1,0 +1,42 @@
+experiment_id: dnn_multitask_full_2024_2026
+title: "DNN Kronos multi-task signal (full run 2024-2026)"
+description: >
+  Shared-bottom DNN, 254 raw + 254 zscore features,
+  multi-task predict 5d/20d forward returns, equal-weight blend.
+  Full run from 2024-01-01 to 2026-05-22.
+
+calendar:
+  start_date: "2024-01-01"
+  end_date: "2026-05-22"
+  train_window_days: 252
+  predict_window_days: 5
+  step_days: 5
+
+signal:
+  signal_id: dnn_multitask_score
+  signal_run_id: full_dnn_multitask_2024_2026
+
+generators:
+  - generator_id: dnn_multitask
+    type: dnn_multitask
+    params:
+      universe: csi300
+      label_ids:
+        - fwd_ret_5d_xsz_clip3
+        - fwd_ret_20d_xsz_clip3
+      dnn_kwargs:
+        epochs: 50
+        batch_size: 1024
+        lr: 0.001
+
+labels:
+  - label_id: fwd_ret_5d_xsz_clip3
+  - label_id: fwd_ret_20d_xsz_clip3
+
+backtests:
+  - strategy_template_id: rank_weight_top20
+    allocation_method: rank_weight
+    top_n: 20
+    initial_capital: 10000000
+    rebalance_freq: weekly
+    artifact_mode: summary
