@@ -18,6 +18,7 @@ class TestDataContractReady(unittest.TestCase):
             "root": self.root,
             "raw": self.root / "raw",
             "raw_daily": self.root / "raw" / "daily",
+            "canonical_dir": self.root / "canonical" / "daily",
             "meta": self.root / "meta",
             "db": self.root,
             "qlib_bin": self.root / "qlib_bin",
@@ -48,7 +49,7 @@ class TestDataContractReady(unittest.TestCase):
                 "paused": [0],
             }
         )
-        df.to_feather(cfg.get_path("raw_daily") / "000001.SZ.feather")
+        df.to_feather(cfg.get_path("canonical_dir") / "000001.SZ.feather")
 
         adapter = QlibAdapter()
         csv_dir, count = adapter._prepare_csvs()

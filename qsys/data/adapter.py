@@ -57,7 +57,7 @@ class QlibAdapter:
 
     def __init__(self, *, qlib_dir: str | Path | None = None, raw_dir: str | Path | None = None):
         self.qlib_dir = Path(qlib_dir).expanduser() if qlib_dir is not None else Path(str(cfg.get_path("qlib_bin")))
-        self.raw_dir = Path(raw_dir).expanduser() if raw_dir is not None else Path(str(cfg.get_path("raw_daily")))
+        self.raw_dir = Path(raw_dir).expanduser() if raw_dir is not None else Path(str(cfg.get_path("canonical_dir")))
         self.meta_db_path = Path(str(cfg.get_path("root"))) / "meta.db"
 
     def get_last_qlib_date(self):

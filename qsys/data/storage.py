@@ -9,10 +9,10 @@ from qsys.utils.logger import log
 
 class StockDataStore:
     def __init__(self):
-        raw_daily_dir = cfg.get_path("raw_daily")
-        if raw_daily_dir is None:
-            raise ValueError("raw_daily path not found in settings")
-        self.raw_daily_dir = cast(Path, raw_daily_dir)
+        canonical_dir = cfg.get_path("canonical_dir")
+        if canonical_dir is None:
+            raise ValueError("canonical_dir path not found in settings")
+        self.canonical_dir = cast(Path, canonical_dir)
         root_path = cfg.get_path("root")
         if root_path is None:
             raise ValueError("root path not found in settings")
@@ -59,12 +59,12 @@ class StockDataStore:
         if df.empty:
             return
 
-        file_path = self.raw_daily_dir / f"{code}.feather"
-        
+        file_path = self.canonical_dir / f"{code}.feather"
+
         # Ensure data types
         # Tushare returns object for some floats sometimes, ensure conversion
         # df = df.convert_dtypes() # Safe but slow?
-        
+
         if file_path.exists():
             try:
                 old_df = existing_df if existing_df is not None else pd.read_feather(file_path)
@@ -79,6 +79,11 @@ class StockDataStore:
                 # We raise here because we don't want to silently overwrite history
                 raise e
 
+        # Canonical cleaning: coalesce merge artifacts before writing
+        from qsys.data.cleaner import coalesce_merge_suffix_columns
+
+        df = coalesce_merge_suffix_columns(df)
+
         if "circ_mv" in df.columns:
             df["circ_mv"] = pd.to_numeric(df["circ_mv"], errors="coerce").fillna(0.0)
             df.loc[df["circ_mv"] < 0, "circ_mv"] = 0.0
@@ -90,7 +95,7 @@ class StockDataStore:
             self.update_latest_date(code, latest_date)
 
     def load_daily(self, code: str) -> Optional[pd.DataFrame]:
-        file_path = self.raw_daily_dir / f"{code}.feather"
+        file_path = self.canonical_dir / f"{code}.feather"
         if not file_path.exists():
             return None
         return pd.read_feather(file_path)

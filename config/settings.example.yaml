@@ -11,6 +11,8 @@ ops:
 
 # 3. Paths (Relative to Project Root)
 data_root: "data"
+canonical_dir: "data/canonical/daily"    # Daily feather SOT (was data/raw/daily)
+min_active_instruments: 750              # Minimum active stocks for readiness check
 
 # 4. Trading Settings
 account_name: "sim_account_001"

@@ -122,101 +122,22 @@ def _do_raw_fetch(collector: TushareCollector, codes: list[str], target_dt: str)
         return {"status": "failed", "codes_fetched": 0, "elapsed_s": round(elapsed, 1), "error": str(e)}
 
 
-def _readiness_check(adapter: QlibAdapter, target_dt: str, min_active: int = 750) -> dict:
-    """Run comprehensive readiness checks after sync."""
-    from qlib.data import D
+def _readiness_check(adapter: QlibAdapter, target_dt: str, min_active: int = 750) -> DataHealthReport:
+    """Run comprehensive readiness checks after sync, using the unified health system.
 
-    checks: dict = {}
-    all_passed = True
+    Returns a ``DataHealthReport`` with separate *blocking* and *warnings* lists.
+    """
+    from qsys.data.health import inspect_qlib_data_health
 
     target_date = f"{target_dt[:4]}-{target_dt[4:6]}-{target_dt[6:]}"
 
-    # 1. Raw latest >= target_date
-    try:
-        raw_latest = StockDataStore().get_global_latest_date()
-        raw_ok = raw_latest is not None and raw_latest >= target_dt
-        checks["raw_latest"] = {"value": raw_latest, "target": target_dt, "passed": raw_ok}
-        if not raw_ok:
-            all_passed = False
-    except Exception as e:
-        checks["raw_latest"] = {"error": str(e), "passed": False}
-        all_passed = False
-
-    # 2. Qlib calendar latest >= target_date
-    try:
-        qlib_last = adapter.get_last_qlib_date()
-        qlib_last_str = qlib_last.strftime("%Y-%m-%d") if qlib_last is not None else None
-        qlib_ok = qlib_last_str is not None and qlib_last_str >= target_date
-        checks["qlib_calendar"] = {"value": qlib_last_str, "target": target_date, "passed": qlib_ok}
-        if not qlib_ok:
-            all_passed = False
-    except Exception as e:
-        checks["qlib_calendar"] = {"error": str(e), "passed": False}
-        all_passed = False
-
-    # 3. all.txt end_date >= target_date
-    try:
-        all_end = adapter.get_instrument_latest_end_date("all")
-        all_end_str = all_end.strftime("%Y-%m-%d") if all_end is not None else None
-        all_ok = all_end_str is not None and all_end_str >= target_date
-        checks["all_instruments"] = {"end_date": all_end_str, "target": target_date, "passed": all_ok}
-        if not all_ok:
-            all_passed = False
-    except Exception as e:
-        checks["all_instruments"] = {"error": str(e), "passed": False}
-        all_passed = False
-
-    # 4. csi800.txt end_date >= target_date
-    try:
-        csi800_end = adapter.get_instrument_latest_end_date("csi800")
-        csi800_end_str = csi800_end.strftime("%Y-%m-%d") if csi800_end is not None else None
-        csi800_ok = csi800_end_str is not None and csi800_end_str >= target_date
-        checks["csi800_instruments"] = {"end_date": csi800_end_str, "target": target_date, "passed": csi800_ok}
-        if not csi800_ok:
-            all_passed = False
-    except Exception as e:
-        checks["csi800_instruments"] = {"error": str(e), "passed": False}
-        all_passed = False
-
-    # 5. Active instrument count on target_date
-    try:
-        inst_obj = D.instruments("csi800")
-        cal = D.calendar(start_time=target_date, end_time=target_date)
-        if len(cal) > 0:
-            active = D.list_instruments(inst_obj, start_time=target_date, end_time=target_date)
-            active_count = len(active)
-        else:
-            active_count = 0
-        count_ok = active_count >= min_active
-        checks["active_instruments"] = {"count": active_count, "min_required": min_active, "passed": count_ok}
-        if not count_ok:
-            all_passed = False
-    except Exception as e:
-        checks["active_instruments"] = {"error": str(e), "passed": False}
-        all_passed = False
-
-    # 6. Core field null rates
-    core_fields = ["$open", "$high", "$low", "$close", "$volume", "$factor"]
-    try:
-        field_checks = {}
-        for field in core_fields:
-            data = adapter.get_features("csi800", [field], start_time=target_date, end_time=target_date)
-            if data is not None and not data.empty:
-                null_pct = float(data.isnull().sum().iloc[0] / len(data))
-            else:
-                null_pct = 1.0
-            name = field.replace("$", "")
-            field_ok = null_pct < 0.05
-            field_checks[name] = {"null_pct": round(null_pct, 4), "passed": field_ok}
-            if not field_ok:
-                all_passed = False
-        checks["field_null_rates"] = field_checks
-    except Exception as e:
-        checks["field_null_rates"] = {"error": str(e), "passed": False}
-        all_passed = False
-
-    checks["_summary"] = {"passed": all_passed}
-    return checks
+    report = inspect_qlib_data_health(
+        target_date,
+        feature_fields=["$open", "$high", "$low", "$close", "$volume", "$factor"],
+        universe="csi800",
+        min_active_instruments=min_active,
+    )
+    return report
 
 
 def _write_audit(audit_dir: Path, report: dict):
@@ -264,27 +185,10 @@ def _notify_telegram(report: dict) -> None:
     fetched = raw_fetch.get("codes_fetched", raw_fetch.get("would_fetch", 0))
     qlib_elapsed = qlib_convert.get("elapsed_s", "?")
 
-    # Count readiness checks excluding _summary
+    # Count readiness checks
     readiness_detail = report.get("readiness", {})
-    data_checks_passed = sum(
-        1 for k, v in readiness_detail.items()
-        if k != "_summary" and k != "field_null_rates"
-        and isinstance(v, dict) and v.get("passed") is True
-    )
-    data_checks_total = sum(
-        1 for k, v in readiness_detail.items()
-        if k != "_summary" and k != "field_null_rates"
-        and isinstance(v, dict) and "passed" in v
-    )
-    # Count core field checks inside field_null_rates
-    field_rates = readiness_detail.get("field_null_rates", {})
-    if isinstance(field_rates, dict) and "passed" not in field_rates:
-        field_passed = sum(1 for v in field_rates.values()
-                           if isinstance(v, dict) and v.get("passed") is True)
-        field_total = sum(1 for v in field_rates.values()
-                          if isinstance(v, dict) and "passed" in v)
-    else:
-        field_passed = field_total = 0
+    blocking = readiness_detail.get("blocking", [])
+    warnings = readiness_detail.get("warnings", [])
 
     lines = [
         f"Qsys CSI800 Daily Sync — {target_date}",
@@ -294,10 +198,21 @@ def _notify_telegram(report: dict) -> None:
     if isinstance(qlib_elapsed, (int, float)):
         qlib_mode = qlib_convert.get("mode", "?")
         lines.append(f"Qlib convert ({qlib_mode}): {qlib_elapsed}s")
-    if data_checks_total > 0:
-        lines.append(f"Data checks: {data_checks_passed}/{data_checks_total} passed")
-    if field_total > 0:
-        lines.append(f"Core fields: {field_passed}/{field_total} passed")
+
+    if blocking:
+        lines.append(f"Blocking ({len(blocking)}):")
+        for b in blocking[:3]:
+            lines.append(f"  ⛔ {b}")
+        if len(blocking) > 3:
+            lines.append(f"  ... +{len(blocking)-3} more")
+    if warnings:
+        lines.append(f"Warnings ({len(warnings)}):")
+        for w in warnings[:3]:
+            lines.append(f"  ⚠ {w}")
+        if len(warnings) > 3:
+            lines.append(f"  ... +{len(warnings)-3} more")
+    if not blocking and not warnings:
+        lines.append("✅ All checks passed")
 
     text = "\n".join(lines)
 
@@ -422,11 +337,15 @@ def main() -> None:
 
     # Step 6: Readiness check
     t0 = time.time()
-    readiness = _readiness_check(adapter, target_dt)
+    readiness_report = _readiness_check(adapter, target_dt, min_active=750)
     readiness_elapsed = round(time.time() - t0, 1)
-    overall = "ready" if readiness["_summary"]["passed"] else "degraded"
+    overall = "ready" if readiness_report.ok else "degraded"
     report["steps"]["readiness_check"] = {"elapsed_s": readiness_elapsed}
-    report["readiness"] = readiness
+    report["readiness"] = {
+        "blocking": list(readiness_report.blocking_issues),
+        "warnings": list(readiness_report.warnings),
+        "overall": overall,
+    }
     report["overall_status"] = overall
     report["ended_at"] = datetime.now().isoformat()
 
@@ -443,9 +362,12 @@ def main() -> None:
 
     log.info(f"Done — status={overall}")
 
-    # Exit code for systemd
-    if overall != "ready":
+    # Exit code for systemd: blocking → exit 2, only warnings → exit 0
+    if readiness_report.blocking_issues:
+        log.warning(f"Blocking issues ({len(readiness_report.blocking_issues)}), exiting 2")
         sys.exit(2)
+    elif readiness_report.warnings:
+        log.info(f"Warnings only ({len(readiness_report.warnings)}), exiting 0")
 
 
 if __name__ == "__main__":

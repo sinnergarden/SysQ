@@ -674,6 +674,7 @@ class DailyRunner:
                 strategy_id=ctx.strategy_id,
                 account_id=ctx.account_id,
                 status="completed",
+                data_version=f"canonical_{ctx.data_date}" if ctx.data_date else None,
                 output_artifacts=[
                     {"path": sidecar_path(lr_csv).name, "type": "ExecutionArtifact"},
                     {"path": "manifest.adr7.json", "type": "RunManifest"},

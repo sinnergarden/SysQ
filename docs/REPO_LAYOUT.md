@@ -75,23 +75,48 @@
 
 ## 4. Data Layout
 
-| 路径 | 类型 | 角色 |
-|------|------|------|
-| `data/raw/` | raw market data | 原始行情数据 |
-| `data/qlib_bin/` | qlib serving data | 研究/训练/回测输入 |
-| `data/audit/` | audit / readiness reports | 数据检查结果（如 `sync_csi800_*.json`） |
-| `data/research/` | research analytics 中间数据 | 信号、label、evaluation 缓存 |
-| `data/models/` | model artifact + manifest | 模型产物与 `production_manifest.yaml` |
-| `data/trade.db` | SQLite ledger | **目标** Account State / Execution Ledger SOT |
-| `data/meta/real_account.db` | SQLite legacy account store | active legacy compatibility |
-| `data/meta/meta.db` | SQLite meta store | 元数据缓存 |
-| `data/meta/shadow_test.db` | SQLite shadow test store | shadow 测试用 |
-| `data/feature/` | feature 计算中间数据 | feature engineering |
-| `data/clean/` | 清洗后数据 | clean data |
-| `data/experiments/` | 实验中间数据 | experiment runs（research pipeline 配置中的 root 路径） |
+数据层按语义分三层：Canonical SOT、Materialized View、Meta。Canonical 是事实源，Materialized View 完全由其派生。
 
-**注意**：
-- `data/trade.db` 是目标 SOT，但旧入口仍可能写 `data/meta/real_account.db`。
+### 4.1 三层语义表
+
+| 层 | 路径 | 语义 | 可重建性 | 消费者 |
+|----|------|------|---------|--------|
+| **Canonical SOT** | `data/canonical/daily/` | merge + 清洗 + PIT 后的日频宽表（feather），单一事实源 | 从 Tushare 重建 | StockDataStore、QlibAdapter |
+| **Canonical SOT** | `data/raw/index/` | 指数日线 CSV（CSI300/CSI500/CSI800），独立于个股 | 从 Tushare 重建 | benchmark comparison |
+| **Materialized View** | `data/qlib_bin/` | qlib 格式只读缓存，完全由 canonical 派生 | 从 canonical **完全重建** | 训练、推理、回测 |
+| **Meta / Metadata** | `data/meta/meta.db` | SQLite 元数据（日历、股票信息、龙虎榜） | 从 Tushare 重建 | 日历查询、覆盖检查 |
+| **Meta / Ledger** | `data/trade.db` | SQLite ledger，账户状态与执行流水 SOT | 备份恢复 | DailyRunner、LedgerService |
+| **Meta / Legacy** | `data/meta/real_account.db` | 旧账户状态（legacy） | 迁移中保留 | legacy fallback |
+
+### 4.2 详细路径表
+
+| 路径 | 类型 | 角色 | 当前状态 |
+|------|------|------|---------|
+| `data/canonical/daily/` | feather | **日频宽表 SOT**，单股票每个 feather 文件包含 OHLCV + 复权 + PIT 财报 + 资金流向 + 两融 + 龙虎榜 | **主线** |
+| `data/raw/index/` | CSV | 指数日线（CSI300/CSI500/CSI800/broad-market），不转 qlib | **主线** |
+| `data/raw/` | 目录 | 旧原始数据目录（已废弃，仅作兼容引用） | **废弃，待清理** |
+| `data/qlib_bin/` | qlib bin | qlib 格式只读缓存，从 canonical 派生 | **主线（materialized view）** |
+| `data/qlib_bin_candidate_20260430/` | qlib bin | 候选期快照备份 | 参考备份 |
+| `data/audit/` | JSON | 数据检查结果（如 `sync_csi800_*.json`） | **主线** |
+| `data/research/` | 混合 | research analytics 中间数据（signal、label、evaluation 缓存） | **主线** |
+| `data/models/` | 混合 | model artifact + manifest + `production_manifest.yaml` | **主线** |
+| `data/trade.db` | SQLite | **目标** Account State / Execution Ledger SOT | **主线** |
+| `data/meta/real_account.db` | SQLite | legacy account store | active legacy compatibility |
+| `data/meta/meta.db` | SQLite | 元数据缓存（日历、股票基本信息） | **主线** |
+| `data/meta/shadow_test.db` | SQLite | shadow 测试用 | 测试 |
+| `data/feature/` | — | feature 计算中间数据（当前为空） | **计划中，未启用** |
+| `data/clean/` | — | 清洗后数据（当前为空） | **已弃用** |
+| `data/experiments/` | 混合 | 实验中间数据 | 研究主产物 |
+| `data/raw/daily/` | feather | **旧路径，已迁移至 `data/canonical/daily/`** | **已迁移** |
+| `data/meta/` | SQLite | 元数据库 | **主线** |
+
+### 4.3 关键规则
+
+- **`data/canonical/daily/` 是日频数据的单一事实源**。`data/qlib_bin/` 是完全由 canonical 派生的 materialized view，**不是事实源**。如果两者不一致，以 canonical 为准。
+- **`data/qlib_bin/` 可随时删除重建**：`rm -rf data/qlib_bin/` 后执行 `sync_csi800_daily.py --apply --force-fetch` 即可恢复。
+- 只有 1 天历史数据的成分股不参与模型训练（历史不足，信号不可靠）。
+- Index 数据与个股分开存储，不混入 canonical feather 体系，不转入 qlib。
+- `data/raw/` 中的文件仅用于向下兼容，新代码不应引用 `data/raw/daily/`。
 - 不得随意删除或迁移 DB。迁移前必须完成 consumer 切换、数据迁移和回归验证。
 
 ---
