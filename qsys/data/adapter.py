@@ -57,7 +57,7 @@ class QlibAdapter:
 
     def __init__(self, *, qlib_dir: str | Path | None = None, raw_dir: str | Path | None = None):
         self.qlib_dir = Path(qlib_dir).expanduser() if qlib_dir is not None else Path(str(cfg.get_path("qlib_bin")))
-        self.raw_dir = Path(raw_dir).expanduser() if raw_dir is not None else Path(str(cfg.get_path("raw_daily")))
+        self.raw_dir = Path(raw_dir).expanduser() if raw_dir is not None else Path(str(cfg.get_path("canonical_dir")))
         self.meta_db_path = Path(str(cfg.get_path("root"))) / "meta.db"
 
     def get_last_qlib_date(self):
@@ -997,6 +997,11 @@ class QlibAdapter:
 
         Supports csi300 and csi800. Fetches index constituents via Tushare,
         matches against all.txt, and writes the instrument file.
+
+        Forces end_date to at least the latest calendar date in qlib,
+        because the qlib dump_update process does not reliably bump
+        end_dates for all symbols — without this force, the readiness
+        check will under-count active instruments on new trading days.
         """
         supported = {"csi300", "csi800"}
         if universe not in supported:
@@ -1021,6 +1026,17 @@ class QlibAdapter:
             log.warning(f"all.txt not found at {all_txt_path}")
             return
 
+        # Resolve the latest calendar date to use as the force-end_date
+        cal_path = qlib_dir / "calendars" / "day.txt"
+        calendar_latest = None
+        if cal_path.exists():
+            try:
+                all_dates = [l.strip() for l in cal_path.read_text().splitlines() if l.strip()]
+                if all_dates:
+                    calendar_latest = all_dates[-1]
+            except Exception:
+                pass
+
         df_all = pd.read_csv(all_txt_path, sep="\t", names=["symbol", "start_date", "end_date"])
         code_set = set(codes)
         df_universe = df_all[df_all["symbol"].isin(code_set)]
@@ -1030,6 +1046,17 @@ class QlibAdapter:
         if df_universe.empty:
             log.warning(f"No matches found for {universe}! Check symbol format.")
             return
+
+        # Force end_date to at least the latest calendar date.
+        # dump_update only bumps end_dates for symbols it touched,
+        # leaving the rest pointing to the previous day.  Since we
+        # know the sync completed, all constituents are active on
+        # the latest trading day.
+        if calendar_latest:
+            before = int((df_universe["end_date"] >= calendar_latest).sum())
+            df_universe["end_date"] = df_universe["end_date"].clip(lower=calendar_latest)
+            after = int((df_universe["end_date"] >= calendar_latest).sum())
+            log.info(f"  end_date force: {before} → {after} symbols >= {calendar_latest}")
 
         out_path = qlib_dir / "instruments" / f"{universe}.txt"
         df_universe.to_csv(out_path, sep="\t", header=False, index=False)

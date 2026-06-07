@@ -204,11 +204,21 @@ Research/backtest 和 daily ops 应尽可能复用同一套执行语义：
 
 数据层是两条链路的共同前置条件：没有 readiness check，不能进入主流程。
 
-| 组件 | 路径 | 职责 |
-|------|------|------|
-| Data Pipeline | `scripts/ops/sync_csi800_daily.py` + `qsys/` 内模块 | Tushare raw → qlib_bin + audit |
-| Qlib Bin | `data/qlib_bin/` | QLib serving 数据 |
-| Calendar / Instruments | `data/meta/meta.db` | 交易日历、股票基本信息 |
+数据层采用三层语义边界，严格区分事实源与派生视图：
+
+| 层 | 路径 | 语义 | 可重建性 | 消费方 |
+|----|------|------|---------|--------|
+| **Canonical SOT** | `data/canonical/daily/` | merge、清洗、PIT 处理后的日频宽表（feather），**单一事实源** | 从 Tushare 重建（需 token） | QlibAdapter、StockDataStore |
+| **Materialized View** | `data/qlib_bin/` | qlib 格式的只读缓存，由 canonical 完全派生 | 从 canonical 完全重建，**可随时删除** `rm -rf data/qlib_bin/` | 训练、推理、回测 |
+| **Calendar / Instruments** | `data/meta/meta.db` | 交易日历、股票基本信息 | 从 Tushare 重建 | 所有模块 |
+
+**关键规则**：
+
+- `data/qlib_bin/` 不是事实源。如果 qlib_bin 与 canonical 不一致，以 canonical 为准。
+- qlib sync 的唯一 fallback 是**全量重建**（`convert_all`）。不存在 convert_fix、selective rebuild、特征级回滚。
+- `data/canonical/daily/` 中的每只股票必须有足够的交易日历史才能参与模型训练。只有 1 天历史的成分股不参与训练。
+- 数据 readiness check 是训练、回测、daily ops 的前置条件：无通过检查，不能进入主流程。
+- Readiness check 将问题分为 **blocking**（阻断流程）和 **warning**（仅报告，不阻断）。
 
 ### 4.2 Framework Core（策略无关层）
 
@@ -253,6 +263,9 @@ Research/backtest 和 daily ops 应尽可能复用同一套执行语义：
 
 | 对象 | 介质 | 路径 | 语义 | 当前角色 | 目标角色 | 备份/恢复 |
 |------|------|------|------|---------|---------|---------|
+| Canonical Daily Data | feather | `data/canonical/daily/` | merge + 清洗 + PIT 后的日频宽表，**日频数据事实源** | **单一 SOT** | **唯一 SOT** | 从 Tushare 重建 |
+| Qlib Bin (Materialized View) | qlib bin | `data/qlib_bin/` | 由 canonical 完全派生的只读缓存 | **主线** | **materialized view** | 从 canonical 重建 |
+| Index Data | CSV | `data/raw/index/` | CSI300/CSI500/CSI800 指数日线，与个股体系分离 | **主线** | **主线** | 从 Tushare 重建 |
 | Account State / Execution Ledger | SQLite | `data/trade.db` | 账户、持仓、订单、成交、快照的结构化状态 | 新主线 | **唯一 SOT** | 每日/每次 postclose 前后备份 |
 | Legacy Account Store | SQLite | `data/meta/real_account.db` | 旧 live/account 路径使用的账户状态 | active legacy | 迁移后只读/移除 | 迁移前保留备份 |
 | Legacy Shadow Files | JSON/CSV | `shadow/` | 旧 alpha / shadow ops 兼容状态 | active compatibility | 只读或移除 | 迁移前保留原始文件 |
@@ -344,8 +357,9 @@ flowchart LR
 
 | 模块 | 输入 | 输出 | 状态写入 |
 |------|------|------|---------|
-| DailyRunner (train) | approved config, data | model refresh result | data/models, reports（不直接下单）|
-| DailyRunner (preopen) | production manifest, latest data, ledger | signal, plan, order intents, **signal_basket CSV** | daily/{date}/pre_open（不写成交）|
+| Data Sync Pipeline | canonical feather, qlib calendar | qlib_bin, audit JSON | data/canonical/daily/, data/qlib_bin/, data/audit/ |
+| DailyRunner (train) | approved config, qlib_bin | model refresh result | data/models, reports（不直接下单）|
+| DailyRunner (preopen) | production manifest, qlib_bin, ledger | signal, plan, order intents, **signal_basket CSV** | daily/{date}/pre_open（不写成交）|
 | Execution Backend | order intents, broker or simulator | fills, execution report | staging / daily |
 | DailyRunner (postclose) | fills, prices, broker snapshot | MTM, reconciliation, **reconciliation_result.json** | ledger, daily/{date}/post_close |
 | LedgerService | execution, snapshot, cash events | account state | data/trade.db |
@@ -355,6 +369,8 @@ flowchart LR
 
 | 存储 | 写者 | 读者 | 角色 |
 |------|------|------|------|
+| data/canonical/daily/ | Tushare sync pipeline | QlibAdapter, research pipeline | **日频数据 SOT**，由 canonical 派生 qlib_bin |
+| data/qlib_bin/ | convert pipeline | 训练、推理、回测 | **materialized view**，从 canonical 重建 |
 | data/trade.db | LedgerService | DailyRunner, ops tools | 目标 ledger SOT |
 | data/meta/real_account.db | old live path | old daily entry | legacy（当前兼容，目标迁移）|
 | shadow/ | alpha_v1, old ops | alpha adapters, plan builder | legacy（当前兼容，不是目标）|
@@ -372,6 +388,7 @@ flowchart LR
 |------|--------|---------|------|
 | 入口 | `run_daily.py` + `run_daily_batch.py` | systemd 已切换至 `run_daily_batch.py --stage candidate`。旧 legacy 入口不再被 systemd 调用。| ✅ systemd cutover 完成 |
 | Ledger | `data/trade.db` 唯一 SOT | `trade.db` + `real_account.db` + `shadow/` 三态共存 | 需统一 + 迁移 |
+| 数据层 | `data/canonical/daily/` 为日频数据 SOT，`data/qlib_bin/` 为 materialized view | `data/raw/daily/` 实际已是清洗后数据但命名误导，`data/qlib_bin/` 是主消费路径但角色未文档化 | ✅ raw → canonical 重命名 + 文档确立语义 |
 | 研究→Candidate | RollingResearchRunner → ExperimentIndex → promotion checklist | RollingResearchRunner v2 已落地，promotion checklist 存在但未自动化 | 需自动化晋级门禁 |
 | Candidate→Production | 候选 shadow run → eval → approval | 人工驱动，alpha_v1 已处 Shadow Baseline | 需自动化 gate |
 | 执行语义共享 | BacktestEngine 与 DailyRunner 共享 MatchEngine / OrderGenerator | 尚未完全靠拢 | 收束中 |
@@ -390,6 +407,8 @@ flowchart LR
 5. **daily ops 只消费显式批准的 manifest** — 不认"最新模型目录"策略。
 6. **Framework Core 与 Strategy Layer 严格分离** — Core 不直接 import 策略实现，不硬编码策略路径；只能通过 Protocol / config 解析策略。
 7. **Research 不能直接进入 Production** — 必须经过 Candidate/Shadow 阶段。
+8. **`data/canonical/daily/` 是日频数据的唯一事实源。`data/qlib_bin/` 是 materialized view** — qlib_bin 完全由 canonical 派生，如果两者不一致以 canonical 为准。qlib_bin 可随时删除重建。
+9. **Data readiness check 必须区分 blocking 与 warning** — blocking 阻断流程（exit 2），warning 仅报告不阻断（exit 0）。非核心字段缺失不可阻断 daily ops。
 
 ---
 

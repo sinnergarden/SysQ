@@ -41,18 +41,30 @@ class ConfigManager:
     def _init_directories(self):
         config = self._config or {}
         data_root = self.project_root / config.get("data_root", "data")
-        
-        # Define required subdirectories
+
+        # canonical_dir from settings.yaml takes priority over hardcoded default
+        config_canonical = config.get("canonical_dir")
+        if config_canonical:
+            canonical_path = Path(config_canonical)
+            if not canonical_path.is_absolute():
+                canonical_path = (data_root.parent / canonical_path).resolve()
+        else:
+            canonical_path = data_root / "canonical" / "daily"
+
         self.dirs = {
             "root": data_root,
             "raw": data_root / "raw",
             "raw_daily": data_root / "raw" / "daily",
+            "canonical_dir": canonical_path,
             "meta": data_root / "meta",
-            "db": data_root, # db usually sits in root or specific db folder
+            "db": data_root,
             "qlib_bin": data_root / "qlib_bin",
             "feature": data_root / "feature",
-            "clean": data_root / "clean"
+            "clean": data_root / "clean",
         }
+
+        # Deprecation: warn when code accesses "raw_daily" instead of "canonical_dir"
+        self._deprecated_path_keys = {"raw_daily": "canonical_dir"}
 
         qlib_override = os.environ.get("QSYS_QLIB_BIN", "").strip()
         if qlib_override:
@@ -74,6 +86,14 @@ class ConfigManager:
         return self.dirs["root"]
 
     def get_path(self, key):
+        if key in getattr(self, "_deprecated_path_keys", {}):
+            import logging
+            replacement = self._deprecated_path_keys[key]
+            logging.warning(
+                "cfg.get_path(%r) is deprecated. Use cfg.get_path(%r) instead. "
+                "This fallback will be removed in a future version.",
+                key, replacement,
+            )
         return self.dirs.get(key)
 
     def get_tushare_feature_config(self):

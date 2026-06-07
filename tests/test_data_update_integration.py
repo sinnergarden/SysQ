@@ -162,11 +162,12 @@ class TestDataUpdateIntegration(unittest.TestCase):
             "root": self.root,
             "raw": self.root / "raw",
             "raw_daily": self.root / "raw" / "daily",
+            "canonical_dir": self.root / "canonical" / "daily",
             "meta": self.root / "meta",
             "db": self.root,
             "qlib_bin": self.root / "qlib_bin",
             "feature": self.root / "feature",
-            "clean": self.root / "clean"
+            "clean": self.root / "clean",
         }
         for path in cfg.dirs.values():
             path.mkdir(parents=True, exist_ok=True)

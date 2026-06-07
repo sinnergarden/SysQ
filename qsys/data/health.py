@@ -197,9 +197,17 @@ def inspect_qlib_data_health(
     optional_field_missing_threshold: float = 0.95,
     pit_optional_field_missing_threshold: float = 0.97,
     margin_optional_field_missing_threshold: float = 0.995,
+    min_active_instruments: int | None = None,
 ) -> DataHealthReport:
     adapter = QlibAdapter()
     adapter.init_qlib()
+
+    if min_active_instruments is None:
+        try:
+            from qsys.config import cfg
+            min_active_instruments = int(cfg.get("min_active_instruments", 750))
+        except Exception:
+            min_active_instruments = 750
 
     requested_date = _normalize_date(requested_date)
     expected_latest_date, trading_calendar_last_date = _resolve_expected_latest_date(requested_date)
@@ -229,6 +237,22 @@ def inspect_qlib_data_health(
             blocking_issues.append(
                 f"Qlib data is stale: last_qlib_date={last_qlib_date}, expected_latest_date={expected_latest_date}"
             )
+
+    # Active instrument count check
+    try:
+        from qlib.data import D
+        inst_obj = D.instruments(universe)
+        cal = D.calendar(start_time=requested_date, end_time=requested_date)
+        if len(cal) > 0:
+            active = D.list_instruments(inst_obj, start_time=requested_date, end_time=requested_date)
+            active_count = len(active)
+            if active_count < min_active_instruments:
+                blocking_issues.append(
+                    f"Active instrument count ({active_count}) < minimum ({min_active_instruments}) "
+                    f"for universe={universe} on {requested_date}"
+                )
+    except Exception as e:
+        warnings.append(f"Could not check active instrument count: {e}")
 
     fields = _normalize_feature_fields(feature_fields)
     required_fields_list = [f for f in required_fields if isinstance(f, str) and f.strip()]

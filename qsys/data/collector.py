@@ -721,7 +721,7 @@ class TushareCollector:
             after = len(df)
             if before != after:
                 log.info(f"{code} removed {before - after} non-open days")
-        df = df.drop_duplicates(subset=['trade_date'], keep='last')
+        df = df.drop_duplicates(subset=['ts_code', 'trade_date'] if 'ts_code' in df.columns else ['trade_date'], keep='last')
         df = df.sort_values('trade_date').reset_index(drop=True)
         non_negative_cols = self._non_negative_cols
         for col in non_negative_cols:
