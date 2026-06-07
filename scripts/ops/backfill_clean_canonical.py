@@ -10,7 +10,6 @@ Safe to run multiple times (idempotent).
 from __future__ import annotations
 
 import argparse
-import re
 import sys
 from pathlib import Path
 
@@ -21,7 +20,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from qsys.config import cfg
-from qsys.data.cleaner import coalesce_merge_suffix_columns, has_dirty_columns
+from qsys.data.cleaner import DIRTY_SUFFIX_RE, coalesce_merge_suffix_columns, has_dirty_columns
 
 
 def main() -> None:
@@ -41,7 +40,7 @@ def main() -> None:
     for f in files:
         try:
             df = pd.read_feather(f)
-            dirty = [c for c in df.columns if bool(re.search(r"_(x|y|__src)$", c))]
+            dirty = [c for c in df.columns if bool(DIRTY_SUFFIX_RE.search(c))]
             if not dirty:
                 continue
 

@@ -16,6 +16,11 @@ from typing import Any
 
 import pandas as pd
 
+# ── Dirty suffix detection ──────────────────────────────────────────────
+# Matches _x, _y, __src at end of column names (merge artifacts).
+
+DIRTY_SUFFIX_RE = re.compile(r"(_x|_y|__src)$")
+
 # ── Known merge-suffix pairs ─────────────────────────────────────────────
 # Order: (canonical_name, [suffix candidates]) — first-found wins.
 MERGE_SUFFIX_COALESCE: dict[str, list[str]] = {
@@ -78,7 +83,7 @@ def coalesce_merge_suffix_columns(df: pd.DataFrame) -> pd.DataFrame:
     # Drop any remaining _x/_y/__src columns not in our known list
     stray = [
         c for c in out.columns
-        if re.search(r"_(x|y|__src)$", c) and c not in _COALESCE_CANDIDATES
+        if DIRTY_SUFFIX_RE.search(c) and c not in _COALESCE_CANDIDATES
     ]
     if stray:
         out = out.drop(columns=stray)
@@ -88,7 +93,7 @@ def coalesce_merge_suffix_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 def has_dirty_columns(df: pd.DataFrame) -> bool:
     """Return True if *df* contains any ``_x``/``_y``/``__src`` suffix columns.""" ""
-    return any(re.search(r"_(x|y|__src)$", c) for c in df.columns)
+    return any(DIRTY_SUFFIX_RE.search(c) for c in df.columns)
 
 
 # ── Column normalization ─────────────────────────────────────────────────

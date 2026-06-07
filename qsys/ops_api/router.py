@@ -16,9 +16,7 @@ _repo: OpsRepository | None = None
 def _get_repo() -> OpsRepository:
     global _repo
     if _repo is None:
-        # Auto-detect project root
-        project_root = Path(__file__).resolve().parents[3]
-        _repo = OpsRepository(project_root)
+        _repo = OpsRepository()
     return _repo
 
 
