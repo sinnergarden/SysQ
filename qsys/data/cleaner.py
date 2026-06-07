@@ -61,7 +61,7 @@ def coalesce_merge_suffix_columns(df: pd.DataFrame) -> pd.DataFrame:
         if target in out.columns:
             series = pd.to_numeric(out[target], errors="coerce").copy()
         else:
-            series = pd.Series(pd.NA, index=out.index, dtype="float64")
+            series = pd.Series(index=out.index, dtype="float64")
 
         for cand in present_candidates:
             candidate_series = pd.to_numeric(out[cand], errors="coerce")
