@@ -9,6 +9,8 @@ from qsys.config import cfg
 from qsys.utils.logger import log
 from qsys.data.storage import StockDataStore
 from qsys.data._collector_utils import _normalize_date, _dedupe_list
+from qsys.data._merge_helpers import merge_trade_frames, prepare_financial_frame
+from qsys.data._fetch_strategies import fetch_with_retry, fetch_by_stock_loop, fetch_by_date_loop
 import numpy as np
 
 class TushareCollector:
@@ -198,20 +200,7 @@ class TushareCollector:
         return rename if isinstance(rename, dict) else {}
 
     def _merge_trade_frames(self, left: pd.DataFrame, right: pd.DataFrame, *, keys: list[str]) -> pd.DataFrame:
-        if left is None or left.empty:
-            return right.copy() if right is not None else pd.DataFrame()
-        if right is None or right.empty:
-            return left
-
-        overlapping = [col for col in right.columns if col in left.columns and col not in keys]
-        merged = pd.merge(left, right, on=keys, how="left", suffixes=("", "__src"))
-        for col in overlapping:
-            src_col = f"{col}__src"
-            if src_col not in merged.columns:
-                continue
-            merged[col] = merged[col].combine_first(merged[src_col])
-            merged = merged.drop(columns=[src_col])
-        return merged
+        return merge_trade_frames(left, right, keys=keys)
 
     def _fetch_by_date_range(self, interface_name, ts_codes, start_date, end_date):
         api = self._get_interface_api(interface_name)
@@ -258,84 +247,18 @@ class TushareCollector:
         return df
 
     def _fetch_by_stock_loop(self, api, fields, start_date, end_date, code_list):
-        """
-        Iterate over stocks and fetch range for each.
-        """
-        dfs = []
-        # Tushare limit is ~4000-5000 rows.
-        # If range is large (e.g. > 10 years), we might need to chunk time.
-        # But for typical updates (incremental), range is small.
-        # For full history (10+ years), let's chunk by 5 years to be safe.
-        
-        start_dt = datetime.strptime(str(start_date), "%Y%m%d")
-        end_dt = datetime.strptime(str(end_date), "%Y%m%d")
-        
-        chunks = []
-        curr = start_dt
-        while curr <= end_dt:
-            # 5 years chunk
-            chunk_end = datetime(min(curr.year + 4, end_dt.year), 12, 31)
-            if chunk_end > end_dt:
-                chunk_end = end_dt
-            chunks.append((curr.strftime("%Y%m%d"), chunk_end.strftime("%Y%m%d")))
-            curr = chunk_end + timedelta(days=1)
-            
-        for i, code in enumerate(code_list):
-            for c_start, c_end in chunks:
-                df = self._fetch_with_retry(
-                    api,
-                    ts_code=code,
-                    start_date=c_start,
-                    end_date=c_end,
-                    fields=fields,
-                )
-                if df is not None and not df.empty:
-                    dfs.append(df)
-                # Rate limiting: Tushare API rate limit is 200 calls/min per interface.
-                # Sleep 0.35s between calls to stay at ~170 calls/min (under limit).
-                time.sleep(0.35)
-                    
-        if not dfs:
-            return pd.DataFrame()
-            
-        # Filter empty or all-NA frames
-        dfs = [d for d in dfs if not d.empty and not d.isna().all().all()]
-        if not dfs:
-            return pd.DataFrame()
-
-        return pd.concat(dfs, ignore_index=True)
+        return fetch_by_stock_loop(
+            api, fields, start_date, end_date, code_list,
+            fetch_fn=lambda api_func, **kw: fetch_with_retry(api_func, self.max_retries, log.warning, **kw),
+        )
 
     def _fetch_by_date_loop(self, api, fields, start_date, end_date, ts_codes=None):
-        # Get calendar from Tushare directly to be safe
-        try:
-            cal = self.pro.trade_cal(start_date=start_date, end_date=end_date, is_open='1')
-        except Exception as e:
-            log.error(f"Failed to fetch calendar: {e}")
-            return pd.DataFrame()
-
-        if cal is None or cal.empty:
-            return pd.DataFrame()
-        
-        dates = cal['cal_date'].tolist()
-        dfs = []
-        
-        for date in dates:
-            # Fetch snapshot for the day
-            df = self._fetch_with_retry(api, trade_date=date, fields=fields)
-            if df is not None and not df.empty:
-                if ts_codes and "ts_code" in df.columns:
-                    df = df[df["ts_code"].isin(ts_codes)]
-                dfs.append(df)
-                
-        if not dfs:
-            return pd.DataFrame()
-            
-        # Filter empty or all-NA frames
-        dfs = [d for d in dfs if not d.empty and not d.isna().all().all()]
-        if not dfs:
-            return pd.DataFrame()
-            
-        return pd.concat(dfs, ignore_index=True)
+        return fetch_by_date_loop(
+            api, fields, start_date, end_date,
+            fetch_fn=lambda api_func, **kw: fetch_with_retry(api_func, self.max_retries, log.warning, **kw),
+            ts_codes=ts_codes,
+            trade_cal_fn=self.pro.trade_cal,
+        )
 
     def _normalize_percent_financial_columns(self, df: pd.DataFrame, columns=None) -> pd.DataFrame:
         if df is None or df.empty:
@@ -353,38 +276,7 @@ class TushareCollector:
         return df
 
     def _prepare_financial_frame(self, df: pd.DataFrame, value_cols):
-        if df is None or df.empty:
-            return pd.DataFrame()
-        df = df.copy()
-        if "ann_date" not in df.columns:
-            # 如果没有公告日期，无法进行 PIT 对齐，必须丢弃
-            log.warning("Financial dataframe missing 'ann_date' column. Dropping.")
-            return pd.DataFrame()
-            
-        if "end_date" not in df.columns:
-            df["end_date"] = np.nan
-
-        # 清理日期字段
-        df["ann_date"] = df["ann_date"].replace("", np.nan)
-        df["end_date"] = df["end_date"].replace("", np.nan)
-        
-        # 移除没有公告日期的行 (严格 PIT 要求：不知道何时发布的数据不可用)
-        # 绝对不能 ffill ann_date，那是造假/未来函数
-        original_len = len(df)
-        df = df[df["ann_date"].notna()]
-        if len(df) < original_len:
-            # log.debug(f"Dropped {original_len - len(df)} rows due to missing ann_date")
-            pass
-
-        df["_ann_dt"] = pd.to_datetime(df["ann_date"], errors="coerce")
-        df["_end_dt"] = pd.to_datetime(df["end_date"], errors="coerce")
-        
-        # 排序方便后续处理，但不要去重（保留修正记录）
-        df = df.sort_values(["ts_code", "_ann_dt", "_end_dt"])
-        
-        cols = ["ts_code", "ann_date", "end_date"] + list(value_cols)
-        cols = [c for c in cols if c in df.columns]
-        return df[cols]
+        return prepare_financial_frame(df, value_cols)
 
     def _fetch_financials(self, start_date, end_date, ts_code=None):
         start_date = _normalize_date(start_date)
@@ -736,13 +628,7 @@ class TushareCollector:
         return df
 
     def _fetch_with_retry(self, api_func, **kwargs):
-        for i in range(self.max_retries):
-            try:
-                return api_func(**kwargs)
-            except Exception as e:
-                log.warning(f"API call failed (attempt {i+1}/{self.max_retries}): {e}")
-                time.sleep(1 * (i + 1))
-        raise Exception("Max retries exceeded")
+        return fetch_with_retry(api_func, self.max_retries, log.warning, **kwargs)
 
     def update_daily(self, date: str):
         """
