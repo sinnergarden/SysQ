@@ -3,6 +3,7 @@ from unittest.mock import patch
 
 import pandas as pd
 
+from qsys.config import cfg
 from qsys.data.adapter import InstrumentCoverageReport, QlibAdapter
 from qsys.data.health import inspect_qlib_data_health
 
@@ -84,33 +85,76 @@ class TestAdapterCoverage(unittest.TestCase):
 
     @patch.object(QlibAdapter, "_run_dump_script")
     @patch.object(QlibAdapter, "_prepare_csvs")
-    @patch.object(QlibAdapter, "_list_symbols_with_raw_at_or_after")
     def test_convert_fix_rebuilds_full_history_for_affected_symbols(
         self,
-        mock_list_symbols,
         mock_prepare_csvs,
         mock_run_dump,
     ):
         adapter = QlibAdapter()
-        mock_list_symbols.return_value = ["000001.SZ", "600519.SH"]
         mock_prepare_csvs.return_value = (adapter.qlib_dir.parent / "qlib_csv_tmp", 2)
 
         adapter.convert_fix(pd.Timestamp("2026-04-17"))
 
-        mock_list_symbols.assert_called_once_with(pd.Timestamp("2026-04-17"))
-        mock_prepare_csvs.assert_called_once_with(selected_symbols=["000001.SZ", "600519.SH"])
+        mock_prepare_csvs.assert_called_once()
         mock_run_dump.assert_called_once()
         self.assertEqual(mock_run_dump.call_args.kwargs["mode"], "dump_fix")
 
     @patch.object(QlibAdapter, "touch_qlib_mtime")
-    @patch.object(QlibAdapter, "_list_symbols_with_raw_at_or_after", return_value=[])
-    def test_convert_fix_touches_qlib_when_nothing_needs_refresh(self, _mock_list_symbols, mock_touch):
+    def test_convert_fix_touches_qlib_when_nothing_needs_refresh(self, mock_touch):
         adapter = QlibAdapter()
 
-        adapter.convert_fix(pd.Timestamp("2026-04-17"))
+        adapter.convert_fix(None)
 
         mock_touch.assert_called_once_with()
 
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ── convert_fix inlined-fs tests (real feather files) ────────────────────────
+
+
+def test_convert_fix_selects_symbols_with_new_data(data_dir):
+    """convert_fix scans raw_dir and only selects symbols whose max date >= threshold."""
+    import numpy as np
+
+    raw_dir = cfg.get_path("canonical_dir")  # convert_fix reads from adapter.raw_dir
+    adapter = QlibAdapter(raw_dir=raw_dir)
+
+    # Symbols A has data through 2026-04-17, B only to 2026-04-10, C no data
+    pd.DataFrame({"trade_date": ["20260410", "20260417"]}).to_feather(
+        raw_dir / "A.feather"
+    )
+    pd.DataFrame({"trade_date": ["20260410"]}).to_feather(
+        raw_dir / "B.feather"
+    )
+    pd.DataFrame({"trade_date": []}).to_feather(
+        raw_dir / "empty.feather"
+    )
+
+    with patch.object(adapter, "_prepare_csvs", return_value=(raw_dir, 2)) as mock_prep, \
+         patch.object(adapter, "_run_dump_script"):
+        adapter.convert_fix(pd.Timestamp("2026-04-17"))
+
+    mock_prep.assert_called_once()
+    call_kwargs = mock_prep.call_args.kwargs
+    assert "selected_symbols" in call_kwargs
+    assert sorted(call_kwargs["selected_symbols"]) == sorted(["A"])
+
+
+def test_convert_fix_no_data_does_not_call_convert(data_dir):
+    """When no symbol has data at or after threshold, convert_fix is a no-op."""
+    raw_dir = cfg.get_path("canonical_dir")
+    adapter = QlibAdapter(raw_dir=raw_dir)
+
+    pd.DataFrame({"trade_date": ["20260410"]}).to_feather(raw_dir / "X.feather")
+
+    with patch.object(adapter, "touch_qlib_mtime") as mock_touch, \
+         patch.object(adapter, "_prepare_csvs") as mock_prep, \
+         patch.object(adapter, "_run_dump_script") as mock_dump:
+        adapter.convert_fix(pd.Timestamp("2026-04-17"))
+
+    mock_touch.assert_called_once()
+    mock_prep.assert_not_called()
+    mock_dump.assert_not_called()

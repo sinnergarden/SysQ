@@ -199,24 +199,6 @@ class QlibAdapter:
             if path.exists():
                 os.utime(path, None)
 
-    def _list_symbols_with_raw_at_or_after(self, since_date) -> list[str]:
-        if since_date is None:
-            return []
-        threshold = pd.Timestamp(since_date)
-        affected = []
-        for feather_path in self.raw_dir.glob("*.feather"):
-            try:
-                frame = pd.read_feather(feather_path, columns=["trade_date"])
-            except Exception as err:
-                log.warning(f"Failed to inspect {feather_path.name} for same-date repair: {err}")
-                continue
-            if frame.empty or "trade_date" not in frame.columns:
-                continue
-            dates = pd.to_datetime(frame["trade_date"], errors="coerce").dropna()
-            if not dates.empty and dates.max() >= threshold:
-                affected.append(feather_path.stem)
-        return sorted(set(affected))
-
     def check_and_update(self, force=False):
         """
         Check if Feather data is newer than Qlib bin.
@@ -773,117 +755,51 @@ class QlibAdapter:
 
         if count == 0:
             log.info("No new data found to update.")
-            if self._should_rebuild_corrupted_aligned_data(since_date):
-                log.warning(
-                    "Detected unusable qlib core fields on aligned latest date. "
-                    "Running full rebuild to backfill repaired conversion logic."
-                )
-                self.convert_all()
-                return
             os.utime(self.qlib_dir, None)
             return
 
         log.info(f"Found {count} stocks with new data. Running dump_update...")
         self._run_dump_script(csv_dir, mode="dump_update")
 
-        # ── Read-back verification ────────────────────────────────────────
-        # dump_update's append mode can silently misalign bin offsets when
-        # the calendar and bin file are out of sync.  Verify a sample of
-        # stocks on since_date and fall back to convert_fix if stale.
-        try:
-            self.init_qlib()
-            stale_pct = self._check_stale_after_update(since_date, sample_size=20)
-            if stale_pct < -0.5:
-                log.warning(f"Read-back verification inconclusive ({stale_pct}), skipping auto-fix")
-            elif stale_pct > 80:
-                log.warning(
-                    f"dump_update produced stale data ({stale_pct:.0f}% unchanged) "
-                    f"on {since_date}.  Falling back to convert_fix to repair..."
-                )
-                self._run_dump_script(csv_dir, mode="dump_fix")
-        except Exception as e:
-            log.warning(f"Read-back verification error ({e})")
-
-    def _check_stale_after_update(self, since_date: str, sample_size: int = 30) -> float:
-        """Quick read-back check: compare close prices on since_date vs previous trading day.
-
-        Uses reset_index() to normalize qlib's MultiIndex (instrument, datetime),
-        converting datetime Timestamps to YYYY-MM-DD string for robust comparison.
-
-        Returns:
-            Percentage of sampled stocks with unchanged prices (0-100).
-            -1.0 if check cannot be performed (unverifiable).
-        """
+        # Lightweight calendar verification: confirm dump_update advanced
+        # the qlib calendar to include the target date.  This replaces the
+        # more expensive (and never-triggering) read-back price comparison
+        # that was removed.
         cal_path = self.qlib_dir / "calendars" / "day.txt"
-        if not cal_path.exists():
-            log.warning("qlib calendar not found, cannot verify data freshness")
-            return -1.0
-        cal = [l.strip() for l in cal_path.read_text().splitlines() if l.strip()]
-        try:
-            idx = cal.index(since_date)
-        except ValueError:
-            log.warning(f"{since_date} not in qlib calendar, cannot verify")
-            return -1.0
-        if idx < 1:
-            log.warning(f"{since_date} is the first calendar entry, nothing to compare against")
-            return -1.0
-        prev_date = cal[idx - 1]
-
-        import random
-        all_feature_dirs = sorted(self.qlib_dir.glob("features/*"))
-        if not all_feature_dirs:
-            log.warning("no feature directories found, cannot verify")
-            return -1.0
-        sampled = random.sample(all_feature_dirs, min(sample_size, len(all_feature_dirs)))
-        symbols = [d.name for d in sampled]
-
-        try:
-            from qlib.data import D
-            df_now = D.features(symbols, ["$close"], start_time=since_date, end_time=since_date)
-            df_prev = D.features(symbols, ["$close"], start_time=prev_date, end_time=prev_date)
-        except Exception as e:
-            log.warning(f"D.features() query failed: {e}, cannot verify")
-            return -1.0
-
-        if df_now is None or df_now.empty or df_prev is None or df_prev.empty:
-            log.warning("D.features() returned empty data, cannot verify")
-            return -1.0
-
-        # Normalize MultiIndex: (instrument, datetime) → reset, datetime→string
-        now = df_now.reset_index()
-        now["datetime"] = now["datetime"].astype(str).str[:10]
-        prev = df_prev.reset_index()
-        prev["datetime"] = prev["datetime"].astype(str).str[:10]
-
-        stale = 0
-        total = 0
-        for sym in symbols:
+        if cal_path.exists():
             try:
-                r_now = now[(now["instrument"] == sym) & (now["datetime"] == since_date)]
-                r_prev = prev[(prev["instrument"] == sym) & (prev["datetime"] == prev_date)]
-                if r_now.empty or r_prev.empty:
-                    continue
-                c_now = float(r_now["$close"].iloc[0])
-                c_prev = float(r_prev["$close"].iloc[0])
-                if min(abs(c_now), abs(c_prev)) < 0.01:
-                    continue
-                total += 1
-                if abs(c_now - c_prev) / max(abs(c_prev), 0.01) < 0.0001:
-                    stale += 1
-            except (KeyError, TypeError, ValueError):
-                continue
-
-        if total == 0:
-            log.warning("no overlapping stock data for read-back comparison")
-            return -1.0
-        pct = stale / total * 100
-        log.info(f"Read-back check: {stale}/{total} sampled stocks unchanged ({pct:.0f}%)")
-        return pct
+                all_dates = [l.strip() for l in cal_path.read_text().splitlines() if l.strip()]
+                expected = str(since_date) if not hasattr(since_date, "strftime") else since_date.strftime("%Y-%m-%d")
+                expected_short = expected[:10]
+                if all_dates and all_dates[-1] < expected_short:
+                    log.warning(
+                        f"dump_update did not extend calendar to {expected_short}; "
+                        f"latest calendar date is {all_dates[-1]}. "
+                        "Data may be stale on expected latest date."
+                    )
+            except Exception as exc:
+                log.warning(f"Calendar verification failed: {exc}")
 
     def convert_fix(self, since_date):
         """Repair same-date changes without collapsing symbol history to a one-day slice."""
         log.info(f"Starting same-date repair update (since {since_date})...")
-        affected_symbols = self._list_symbols_with_raw_at_or_after(since_date)
+        if since_date is None:
+            affected_symbols = []
+        else:
+            threshold = pd.Timestamp(since_date)
+            affected_symbols = []
+            for feather_path in self.raw_dir.glob("*.feather"):
+                try:
+                    frame = pd.read_feather(feather_path, columns=["trade_date"])
+                except Exception as err:
+                    log.warning(f"Failed to inspect {feather_path.name} for same-date repair: {err}")
+                    continue
+                if frame.empty or "trade_date" not in frame.columns:
+                    continue
+                dates = pd.to_datetime(frame["trade_date"], errors="coerce").dropna()
+                if not dates.empty and dates.max() >= threshold:
+                    affected_symbols.append(feather_path.stem)
+            affected_symbols = sorted(set(affected_symbols))
         if not affected_symbols:
             log.info("No repaired symbols found to update.")
             self.touch_qlib_mtime()

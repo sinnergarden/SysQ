@@ -8,6 +8,7 @@ from typing import Optional
 from qsys.config import cfg
 from qsys.utils.logger import log
 from qsys.data.storage import StockDataStore
+from qsys.data._collector_utils import _normalize_date, _dedupe_list
 import numpy as np
 
 class TushareCollector:
@@ -123,14 +124,6 @@ class TushareCollector:
         }
         self._industry_cache = None
 
-    def _normalize_date(self, date_str):
-        if date_str is None:
-            return None
-        date_str = str(date_str)
-        if "-" in date_str:
-            return date_str.replace("-", "")
-        return date_str
-
     def _get_interface_config(self, name):
         return self._collector_interfaces.get(name, {})
 
@@ -147,15 +140,6 @@ class TushareCollector:
         if isinstance(fields, str):
             return [f.strip() for f in fields.split(",") if f.strip()]
         return list(fields)
-
-    def _dedupe_list(self, items):
-        seen = set()
-        result = []
-        for item in items:
-            if item not in seen:
-                seen.add(item)
-                result.append(item)
-        return result
 
     def _get_interface_feature_fields(self, name):
         fields = self._get_interface_field_list(name)
@@ -180,7 +164,7 @@ class TushareCollector:
     def _get_expected_columns(self):
         cols = self._get_all_interface_fields()
         cols += self._expected_extra_cols + self._moneyflow_derived + self.financial_cols
-        return self._dedupe_list(cols)
+        return _dedupe_list(cols)
 
     def _get_numeric_columns(self):
         expected = self._get_expected_columns()
@@ -402,42 +386,9 @@ class TushareCollector:
         cols = [c for c in cols if c in df.columns]
         return df[cols]
 
-    def _get_quarter_periods(self, start_date, end_date):
-        start_dt = datetime.strptime(str(start_date), "%Y%m%d")
-        end_dt = datetime.strptime(str(end_date), "%Y%m%d")
-        periods = []
-        
-        current = start_dt
-        while current <= end_dt:
-            year = current.year
-            md = current.strftime("%m%d")
-            if md <= "0331":
-                q_end = datetime(year, 3, 31)
-            elif md <= "0630":
-                q_end = datetime(year, 6, 30)
-            elif md <= "0930":
-                q_end = datetime(year, 9, 30)
-            else:
-                q_end = datetime(year, 12, 31)
-            
-            if q_end < start_dt:
-                 q_end = datetime(year + 1, 3, 31)
-            
-            if q_end > end_dt:
-                break
-            
-            # 避免重复（虽然逻辑上应该是递增的）
-            p_str = q_end.strftime("%Y%m%d")
-            if not periods or periods[-1] != p_str:
-                periods.append(p_str)
-            
-            current = q_end + timedelta(days=1)
-            
-        return periods
-
     def _fetch_financials(self, start_date, end_date, ts_code=None):
-        start_date = self._normalize_date(start_date)
-        end_date = self._normalize_date(end_date)
+        start_date = _normalize_date(start_date)
+        end_date = _normalize_date(end_date)
         if start_date is None or end_date is None:
             return pd.DataFrame()
             
@@ -1113,10 +1064,10 @@ class TushareCollector:
 
     def update_universe_history(self, universe='csi300', start_date='20100101', end_date=None, incremental=True, include_basic=True, include_limit=True, include_adj=True, batch_size=50, include_moneyflow=True, include_margin=True):
         start_ts = time.time()
-        start_date = self._normalize_date(start_date)
+        start_date = _normalize_date(start_date)
         if end_date is None:
             end_date = datetime.now().strftime('%Y%m%d')
-        end_date = self._normalize_date(end_date)
+        end_date = _normalize_date(end_date)
         log.info(f"Fetching universe {universe} from {start_date} to {end_date}...")
         codes = self.get_universe(universe)
         if not codes:
@@ -1151,32 +1102,9 @@ class TushareCollector:
         total_elapsed = time.time() - start_ts
         log.info(f"Universe {universe} update completed in {total_elapsed:.1f}s.")
 
-    # def _fetch_financials_batch(self, code_str, start_date, end_date, span_years=5):
-    #     start_date = self._normalize_date(start_date)
-    #     end_date = self._normalize_date(end_date)
-    #     if start_date is None or end_date is None:
-    #         return pd.DataFrame()
-    #     start_dt = datetime.strptime(start_date, '%Y%m%d')
-    #     end_dt = datetime.strptime(end_date, '%Y%m%d')
-    #     frames = []
-    #     current = start_dt
-    #     while current <= end_dt:
-    #         chunk_end = datetime(min(current.year + span_years - 1, end_dt.year), 12, 31)
-    #         if chunk_end > end_dt:
-    #             chunk_end = end_dt
-    #         df = self._fetch_financials(current.strftime('%Y%m%d'), chunk_end.strftime('%Y%m%d'), ts_code=code_str)
-    #         if df is not None and not df.empty:
-    #             frames.append(df)
-    #         current = chunk_end + timedelta(days=1)
-    #     if not frames:
-    #         return pd.DataFrame()
-    #     merged = pd.concat(frames, ignore_index=True)
-    #     merged = merged.drop_duplicates(subset=['ts_code', 'ann_date'], keep='last')
-    #     return merged
-
     def _fetch_financials_batch(self, code_str, start_date, end_date):
-        start_date = self._normalize_date(start_date)
-        end_date = self._normalize_date(end_date)
+        start_date = _normalize_date(start_date)
+        end_date = _normalize_date(end_date)
         if start_date is None or end_date is None or not code_str:
             return pd.DataFrame()
         
