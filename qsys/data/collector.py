@@ -25,7 +25,6 @@ class TushareCollector:
 
         self._tushare_cfg = cfg.get_tushare_feature_config()
         collector_cfg = self._tushare_cfg.get("collector", {})
-        self._collector_cfg = collector_cfg
         self._collector_interfaces = collector_cfg.get("interfaces", {})
         self._financial_interfaces = collector_cfg.get(
             "financial_interfaces",
@@ -89,8 +88,6 @@ class TushareCollector:
                 "margin_total_balance", "lend_volume", "lend_sell_volume", "lend_repay_volume",
             ],
         )
-        self._margin_interfaces = collector_cfg.get("interfaces", {}).get("margin", {})
-        
         self._non_negative_cols = collector_cfg.get(
             "non_negative_cols",
             [
@@ -366,12 +363,6 @@ class TushareCollector:
                 fina_indicator = fina_indicator.rename(columns=rename_map)
             if "ann_date" in fina_indicator.columns:
                 fina_indicator = fina_indicator[fina_indicator["ann_date"].notna()]
-            # 注意：这里不能按照 end_date 去重，必须保留历史上的每一次修正记录，才能做到真正的 Point-in-Time
-            # if "end_date" in fina_indicator.columns:
-            #     fina_indicator = fina_indicator.sort_values("ann_date").drop_duplicates(
-            #         subset=["ts_code", "end_date"], keep="last"
-            #     )
-                
         fina_indicator = self._prepare_financial_frame(
             fina_indicator,
             [

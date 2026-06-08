@@ -312,11 +312,17 @@ cat daily/YYYY-MM-DD/post_close/daily_ops_digest_*.json | python -m json.tool
 # 手动触发数据同步
 python scripts/ops/sync_csi800_daily.py --apply
 
-# 检查数据健康（待实现 → 统一 readiness 命令）
-# 当前建议：直接检查文件存在性和日期
-# 检查 qlib 数据 — 查看 data/audit/ 下最新的 readiness 报告和配置中的 qlib bin root
-ls data/audit/ | tail -5
-# 实际 qlib bin 路径：data/qlib_bin/（CSI800）和 data/qlib_bin_candidate_20260430/（candidate）
+# 数据健康检查（已实现）
+python -c "from qsys.data.health import inspect_qlib_data_health; r = inspect_qlib_data_health('$(date +%Y-%m-%d)', ['\$open', '\$high', '\$low', '\$close', '\$volume', '\$factor'], universe='csi800'); print(r.to_markdown())"
+
+# 快速检查 qlib 与 raw 对齐状态
+python -c "from qsys.data.adapter import QlibAdapter; a = QlibAdapter(); print(a.get_data_status_report())"
+
+# 检查最近 audit 记录
+ls -t data/audit/ | head -3
+python -c "import json; print(json.load(open('data/audit/' + sorted(__import__('os').listdir('data/audit/'))[-1])))"
+
+# 实际 qlib bin 路径：data/qlib_bin/
 ```
 
 ### 跑 preopen

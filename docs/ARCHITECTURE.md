@@ -209,13 +209,15 @@ Research/backtest 和 daily ops 应尽可能复用同一套执行语义：
 | 层 | 路径 | 语义 | 可重建性 | 消费方 |
 |----|------|------|---------|--------|
 | **Canonical SOT** | `data/canonical/daily/` | merge、清洗、PIT 处理后的日频宽表（feather），**单一事实源** | 从 Tushare 重建（需 token） | QlibAdapter、StockDataStore |
+| **Canonical SOT (Index)** | `data/raw/index/` | CSI300/CSI500/CSI800 指数日线 CSV，与个股体系分离 | 从 Tushare 重建 | benchmark comparison |
 | **Materialized View** | `data/qlib_bin/` | qlib 格式的只读缓存，由 canonical 完全派生 | 从 canonical 完全重建，**可随时删除** `rm -rf data/qlib_bin/` | 训练、推理、回测 |
 | **Calendar / Instruments** | `data/meta/meta.db` | 交易日历、股票基本信息 | 从 Tushare 重建 | 所有模块 |
+| **Audit Records** | `data/audit/` | 数据同步检查结果 JSON（`sync_csi800_*.json`），只追加 | 不可重建（历史记录） | 健康检查、Telegram 通知 |
 
 **关键规则**：
 
 - `data/qlib_bin/` 不是事实源。如果 qlib_bin 与 canonical 不一致，以 canonical 为准。
-- qlib sync 的唯一 fallback 是**全量重建**（`convert_all`）。不存在 convert_fix、selective rebuild、特征级回滚。
+- qlib sync 路径按需选择：新日期用 `convert_incremental`（`dump_update`），局部修复用 `convert_fix`（按日期扫描）或 `convert_fix_symbols`（按符号列表），**全量重建用 `convert_all`（`dump_all`）**。`refresh_selected_symbols_from_raw` 是 `convert_fix_symbols` 的向后兼容包装器，仅 `full_universe_backfill` 使用。
 - `data/canonical/daily/` 中的每只股票必须有足够的交易日历史才能参与模型训练。只有 1 天历史的成分股不参与训练。
 - 数据 readiness check 是训练、回测、daily ops 的前置条件：无通过检查，不能进入主流程。
 - Readiness check 将问题分为 **blocking**（阻断流程）和 **warning**（仅报告，不阻断）。
@@ -407,7 +409,7 @@ flowchart LR
 5. **daily ops 只消费显式批准的 manifest** — 不认"最新模型目录"策略。
 6. **Framework Core 与 Strategy Layer 严格分离** — Core 不直接 import 策略实现，不硬编码策略路径；只能通过 Protocol / config 解析策略。
 7. **Research 不能直接进入 Production** — 必须经过 Candidate/Shadow 阶段。
-8. **`data/canonical/daily/` 是日频数据的唯一事实源。`data/qlib_bin/` 是 materialized view** — qlib_bin 完全由 canonical 派生，如果两者不一致以 canonical 为准。qlib_bin 可随时删除重建。
+8. **`data/canonical/daily/` 是日频数据的唯一事实源。`data/qlib_bin/` 是 materialized view** — qlib_bin 完全由 canonical 派生，如果两者不一致以 canonical 为准。qlib_bin 可随时删除重建。局部修复走 `convert_fix` / `convert_fix_symbols`，全量重建走 `convert_all`。
 9. **Data readiness check 必须区分 blocking 与 warning** — blocking 阻断流程（exit 2），warning 仅报告不阻断（exit 0）。非核心字段缺失不可阻断 daily ops。
 
 ---
