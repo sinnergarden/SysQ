@@ -74,20 +74,52 @@ def _resolve_target_date(end_date: str | None) -> str:
 
 def _check_stock_data_status(store: StockDataStore, codes: list[str], target_dt: str) -> dict:
     """
-    Per-stock latest date check — only read trade_date column.
-    Returns: { 'have': [codes with target date], 'missing': [codes without] }
+    Per-stock latest date check.
+
+    Prefers meta.db ``data_latest`` table (one query) over scanning each
+    feather file.  Falls back to feather scan when meta data is missing or
+    incomplete for individual symbols.
+
+    Returns: { 'have': [codes with target date], 'missing': [codes without],
+               'source': 'meta_db' | 'feather_scan' }
     """
-    have = []
-    missing = []
-    for code in codes:
+    # ── Fast path: meta.db data_latest table ──────────────────
+    try:
+        import sqlite3
+        from qsys.config import cfg
+        db_path = Path(str(cfg.get_path("root"))) / "meta.db"
+        meta_conn = sqlite3.connect(str(db_path))
+        meta_rows = meta_conn.execute(
+            "SELECT ts_code, latest_date FROM data_latest"
+        ).fetchall()
+        meta_conn.close()
+        meta_map = {str(row[0]): str(row[1] or "") for row in meta_rows}
+        have = [c for c in codes if meta_map.get(c, "") >= target_dt]
+        missing = [c for c in codes if c not in have]
+        if not missing:
+            return {
+                "have": have, "missing": missing,
+                "total": len(codes), "already_up_to_date": len(have),
+                "need_fetch": 0, "source": "meta_db",
+            }
+    except Exception:
+        have = []
+        missing = list(codes)
+
+    # ── Slow path: feather scan for remaining symbols ────────
+    remaining = [c for c in missing]
+    for code in remaining:
         df = store.load_daily(code)
         if df is not None and not df.empty:
             latest = str(df["trade_date"].max())
             if latest >= target_dt:
                 have.append(code)
-                continue
-        missing.append(code)
-    return {"have": have, "missing": missing, "total": len(codes), "already_up_to_date": len(have), "need_fetch": len(missing)}
+    missing = [c for c in codes if c not in have]
+    return {
+        "have": have, "missing": missing,
+        "total": len(codes), "already_up_to_date": len(have),
+        "need_fetch": len(missing), "source": "feather_scan",
+    }
 
 
 def _do_raw_fetch(collector: TushareCollector, codes: list[str], target_dt: str) -> dict:

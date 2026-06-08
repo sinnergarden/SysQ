@@ -96,7 +96,6 @@
 | `data/raw/index/` | CSV | 指数日线（CSI300/CSI500/CSI800/broad-market），不转 qlib | **主线** |
 | `data/raw/` | 目录 | 旧原始数据目录（已废弃，仅作兼容引用） | **废弃，待清理** |
 | `data/qlib_bin/` | qlib bin | qlib 格式只读缓存，从 canonical 派生 | **主线（materialized view）** |
-| `data/qlib_bin_candidate_20260430/` | qlib bin | 候选期快照备份 | 参考备份 |
 | `data/audit/` | JSON | 数据检查结果（如 `sync_csi800_*.json`） | **主线** |
 | `data/research/` | 混合 | research analytics 中间数据（signal、label、evaluation 缓存） | **主线** |
 | `data/models/` | 混合 | model artifact + manifest + `production_manifest.yaml` | **主线** |

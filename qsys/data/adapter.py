@@ -840,33 +840,6 @@ class QlibAdapter:
         self._run_dump_script(csv_dir, mode="dump_fix")
         return {"status": "success", "symbols_count": len(symbols), "csv_count": count}
 
-    def _should_rebuild_corrupted_aligned_data(self, latest_date, missing_threshold: float = 0.2) -> bool:
-        """
-        When raw/qlib dates are aligned but recent qlib rows are unusable, trigger a full rebuild.
-        This protects against previously-buggy conversions that produced empty/NaN core fields.
-        """
-        if latest_date is None:
-            return False
-        try:
-            self.init_qlib()
-            check_date = pd.Timestamp(latest_date).strftime("%Y-%m-%d")
-            core_fields = ["$close", "$open", "$high", "$low", "$volume", "$factor"]
-            probe = self.get_features("all", core_fields, start_time=check_date, end_time=check_date)
-
-            if probe is None or probe.empty:
-                return True
-
-            for field in core_fields:
-                if field not in probe.columns:
-                    return True
-                missing_ratio = float(probe[field].isna().mean())
-                if missing_ratio > missing_threshold:
-                    return True
-        except Exception as err:
-            log.warning(f"Skip aligned-corruption rebuild probe due to error: {err}")
-            return False
-        return False
-
     def convert_all(self, *, output_qlib_dir=None, selected_symbols=None, until_date=None, csv_output_dir=None, refresh_universes=None):
         """Full update using dump_all"""
         log.info("Starting full Qlib data conversion...")

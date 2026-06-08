@@ -75,6 +75,61 @@ Qsys 有两条主链路：
 
 ---
 
+## 4.1 数据层常用命令
+
+### 健康检查
+
+```bash
+# 检查 qlib 数据健康（blocking/warning 分离）
+python -c "from qsys.data.health import inspect_qlib_data_health; r = inspect_qlib_data_health('YYYY-MM-DD', ['\$open','\$high','\$low','\$close','\$volume','\$factor'], universe='csi800'); print(r.to_markdown())"
+
+# 快速对齐状态
+python -c "from qsys.data.adapter import QlibAdapter; print(QlibAdapter().get_data_status_report())"
+```
+
+### 覆盖审计
+
+```bash
+# canonical → qlib 覆盖对比
+python scripts/ops/audit_raw_to_qlib_coverage.py --universe csi800 --start-date YYYY-MM-DD --end-date YYYY-MM-DD
+
+# qlib instrument 审计
+python scripts/ops/audit_qlib_instrument_coverage.py
+
+# 状态路径审计（只读）
+python scripts/ops/audit_state_paths.py
+```
+
+### 数据同步
+
+```bash
+# 手动触发 CSI800 同步（dry-run / apply）
+python scripts/ops/sync_csi800_daily.py
+python scripts/ops/sync_csi800_daily.py --apply
+python scripts/ops/sync_csi800_daily.py --apply --force-fetch
+
+# 回填历史
+python scripts/ops/backfill_csi800_history.py --apply
+```
+
+### 检查最近审计记录
+
+```bash
+ls -t data/audit/ | head -3
+python -c "import json,os; a=json.load(open('data/audit/'+sorted(os.listdir('data/audit/'))[-1])); print(a['overall_status'], a['target_date'])"
+```
+
+### 测试
+
+```bash
+# 数据层相关测试
+python -m pytest tests/test_data_health.py tests/test_data_contract_ready.py tests/test_adapter_coverage.py -v
+python -m pytest tests/test_qlib_sync.py tests/test_shadow_presync.py tests/test_full_universe_backfill.py -v
+python -m pytest tests/test_data_update_integration.py tests/test_financial_derivation.py -v
+```
+
+---
+
 ## 5. 默认可直接做的事
 
 AI 可以直接处理：
