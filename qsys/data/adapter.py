@@ -817,6 +817,29 @@ class QlibAdapter:
         log.info(f"Found {count} stocks with repaired data. Running dump_fix...")
         self._run_dump_script(csv_dir, mode="dump_fix")
 
+    def convert_fix_symbols(self, symbols: list[str]) -> dict:
+        """Replace per-symbol qlib bins from canonical data using ``dump_fix``.
+
+        Unlike ``convert_fix`` which scans canonical dir by date threshold,
+        this operates on an explicit symbol list and is suitable for
+        targeted per-symbol repair from qlib_sync or backfill callers.
+
+        Returns a dict with ``status`` (``"success"`` | ``"skipped"``) and
+        summary fields for downstream audit/artifact recording.
+        """
+        if not symbols:
+            log.info("convert_fix_symbols: empty symbol list, no-op.")
+            return {"status": "skipped", "reason": "empty_symbol_list"}
+
+        csv_dir, count = self._prepare_csvs(selected_symbols=symbols)
+        if count == 0:
+            log.info("convert_fix_symbols: no CSV generated from selected symbols.")
+            return {"status": "skipped", "reason": "no_csv_generated"}
+
+        log.info(f"convert_fix_symbols: {count} symbols, running dump_fix...")
+        self._run_dump_script(csv_dir, mode="dump_fix")
+        return {"status": "success", "symbols_count": len(symbols), "csv_count": count}
+
     def _should_rebuild_corrupted_aligned_data(self, latest_date, missing_threshold: float = 0.2) -> bool:
         """
         When raw/qlib dates are aligned but recent qlib rows are unusable, trigger a full rebuild.
