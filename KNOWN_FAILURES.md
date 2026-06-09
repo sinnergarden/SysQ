@@ -38,3 +38,17 @@
 **涉及用例**：全部 TestSignalStoreSave、TestSignalStoreNoLookahead、TestSignalStoreLoad、TestSignalStoreList。
 
 **修复方案**：测试中使用更早的日期（如 2020-01-01），确保 qlib calendar 覆盖，或 mock `_check_no_lookahead_on_frame`。
+
+## `tests/research/test_rolling_research_runner.py` — RollingResearchRunner deprecation (15 failures)
+
+RollingResearchRunner 被降级为 deprecated wrapper（delegate 到 SignalResearchPipeline），因此直接测试其内部方法（`_run_matrix`、`_run_single` 等）的测试不再通过。这些测试需要重写以指向 SignalResearchPipeline。
+
+**涉及用例**：
+
+| 类 | 用例数 | 原因 |
+|----|--------|------|
+| `TestBuildRollingWindows` | 2 | 测试内部 `_run_matrix` |
+| `TestRollingResearchRunner` | 2 | 测试内部 `run` 的 backtest 行为 |
+| `TestMatrixExperiment` | 9 | 测试内部 `_run_matrix` |
+| `TestMatrixWithCombinations` | 1 | 测试内部 `_run_matrix` |
+| `TestMultiHeadRunnerSupport` | 1 | 测试内部 `_run_matrix` |
