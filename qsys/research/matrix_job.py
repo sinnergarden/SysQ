@@ -151,6 +151,27 @@ def _slugify_id(raw: str) -> str:
     return re.sub(r"[^a-zA-Z0-9_-]", "_", raw)
 
 
+def _resolve_project_root(gen_config: dict) -> Path | None:
+    """Resolve project root from generator config.
+
+    Checks the explicit ``project_root`` param first, then falls back
+    to auto-detection.  Returns ``None`` if neither provides a path.
+    """
+    from pathlib import Path
+
+    params = gen_config.get("params", {})
+    explicit = params.get("project_root")
+    if explicit:
+        return Path(str(explicit))
+    # Auto-detect from file location (legacy convention)
+    try:
+        import inspect
+        caller_file = inspect.stack()[1].filename
+        return Path(caller_file).resolve().parents[2]
+    except Exception:
+        return None
+
+
 def expand_multi_label_generators(generators: list[dict]) -> list[dict]:
     """Expand ``multi_label_lightgbm`` entries into per-label ``single_label_lightgbm``."""
     expanded: list[dict] = []
@@ -219,7 +240,7 @@ def _create_generator_from_config(gen_config: dict) -> RollingSignalGenerator:
     if gen_type == "dnn_multitask":
         from qsys.research.generators.dnn_multitask import DnnMultitaskGenerator
         return DnnMultitaskGenerator(
-            project_root=None,
+            project_root=_resolve_project_root(gen_config),
             dnn_kwargs=params.get("dnn_kwargs"),
             universe=params.get("universe", "csi300"),
             label_ids=tuple(params.get("label_ids", ("fwd_ret_5d_xsz_clip3", "fwd_ret_20d_xsz_clip3"))),
