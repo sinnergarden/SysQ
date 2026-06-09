@@ -18,7 +18,7 @@ class RollingSignalGenerator(Protocol):
     Implementations must return a SignalStore-compatible DataFrame with
     columns: trade_date, data_date, instrument, signal_id, signal_run_id, score.
 
-    See ``AGENTS.md §4.4`` for the full generator development guide.
+    See ``docs/GENERATOR_DEV_GUIDE.md`` for the full generator development guide.
     """
 
     def generate(

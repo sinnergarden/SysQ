@@ -207,6 +207,82 @@ class TestSingleLabelFactory:
         assert gen.n_estimators == 100
 
 
+class TestLightGBMSingleLabelGolden:
+    """Golden test: deterministic input → exact score values."""
+
+    @patch("qsys.signal.alpha_v1.training.train_model", _fake_train_model)
+    @patch("qsys.signal.alpha_v1.training.predict_model", _fake_predict_model)
+    @patch("qsys.label.store.LabelStore.load_labels")
+    def test_golden_scores(self, mock_labels) -> None:
+        """Lock the exact score values from deterministic input."""
+        mock_labels.return_value = self._fake_labels()
+        gen = LightGBMSingleLabelGenerator(label_id="fwd_ret_5d_xsz_clip3")
+        with patch.object(gen, "_load_data") as mock_load:
+            mock_load.return_value = self._make_fake_data(), ["f1", "f2"]
+            with patch.object(gen, "_ensure_qlib"):
+                result = gen.generate(
+                    train_start="2026-01-01",
+                    train_end="2026-01-10",
+                    predict_start="2026-01-13",
+                    predict_end="2026-01-15",
+                    signal_id="lgbm_golden",
+                    signal_run_id="run_golden",
+                )
+        result = result.sort_values(["trade_date", "instrument"]).reset_index(drop=True)
+
+        # FakeModel.predict returns [0.0, 0.1, 0.2] for 3 instruments.
+        # _cs_zscore normalizes this to [-1.2247, 0.0, 1.2247] per date.
+        # With flat data, these values are the same across all 3 trade dates.
+        assert len(result) == 9  # 3 dates × 3 instruments
+        assert list(result.columns) == [
+            "trade_date", "data_date", "instrument",
+            "signal_id", "signal_run_id", "score",
+        ]
+
+        expected = [
+            ("2026-01-13", "000001.SZ", -1.224744871),
+            ("2026-01-13", "000002.SZ", 0.0),
+            ("2026-01-13", "000003.SZ", 1.224744871),
+            ("2026-01-14", "000001.SZ", -1.224744871),
+            ("2026-01-14", "000002.SZ", 0.0),
+            ("2026-01-14", "000003.SZ", 1.224744871),
+            ("2026-01-15", "000001.SZ", -1.224744871),
+            ("2026-01-15", "000002.SZ", 0.0),
+            ("2026-01-15", "000003.SZ", 1.224744871),
+        ]
+        for i, (td, inst, exp_score) in enumerate(expected):
+            row = result.iloc[i]
+            assert row["trade_date"] == td, f"row {i}: trade_date mismatch"
+            assert row["instrument"] == inst, f"row {i}: instrument mismatch"
+            assert abs(row["score"] - exp_score) < 1e-9, (
+                f"row {i} {td} {inst}: score {row['score']:.10f} != {exp_score:.10f}"
+            )
+
+    @staticmethod
+    def _fake_labels(label_id: str = "fwd_ret_5d_xsz_clip3") -> pd.DataFrame:
+        rows = []
+        inst_labels = {"000001.SZ": 0.01, "000002.SZ": 0.02, "000003.SZ": 0.03}
+        for td in [f"2026-01-{d:02d}" for d in range(2, 17)]:
+            for inst, val in inst_labels.items():
+                rows.append({
+                    "trade_date": td, "instrument": inst,
+                    "label_id": label_id, "horizon": 5, "label_value": val,
+                })
+        return pd.DataFrame(rows)
+
+    @staticmethod
+    def _make_fake_data() -> pd.DataFrame:
+        dates = [f"2026-01-{d:02d}" for d in range(2, 17)]
+        rows = []
+        for td in dates:
+            for inst in ["000001.SZ", "000002.SZ", "000003.SZ"]:
+                rows.append({
+                    "trade_date": td, "instrument": inst,
+                    "f1": 1.0, "f2": 2.0, "$close": 100.0,
+                })
+        return pd.DataFrame(rows)
+
+
 class TestMultiLabelBuildMatrixJobs:
     """Integration: multi_label_lightgbm → expand → build_matrix_jobs."""
 
