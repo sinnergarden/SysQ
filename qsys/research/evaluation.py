@@ -136,6 +136,173 @@ def _ic_stats(ic_series: pd.Series) -> dict[str, float | None]:
     return {"mean": mean, "std": std, "ir": ir}
 
 
+# ── IC distribution stats ───────────────────────────────────────────────────
+
+
+def _ic_distribution_stats(ic_series: pd.Series) -> dict[str, Any]:
+    """Compute IC positive ratio, quantiles, and extreme ratio.
+
+    Parameters
+    ----------
+    ic_series:
+        Daily IC series (may contain NaN).
+
+    Returns
+    -------
+    dict
+        Keys: ``positive_ratio``, ``quantiles`` (5/25/50/75/95),
+        ``extreme_ratio`` (fraction of days with |IC| > 2 sigma).
+    """
+    valid = ic_series.dropna()
+    if len(valid) < 2:
+        return {
+            "positive_ratio": None,
+            "quantiles": None,
+            "extreme_ratio": None,
+        }
+    pos_ratio = float((valid > 0).sum() / len(valid))
+    quantiles = {
+        str(p): float(valid.quantile(q))
+        for p, q in [("5%", 0.05), ("25%", 0.25), ("50%", 0.50),
+                     ("75%", 0.75), ("95%", 0.95)]
+    }
+    std = float(valid.std(ddof=1))
+    extreme_ratio = float((valid.abs() > 2 * std).sum() / len(valid)) if std > 1e-12 else 0.0
+    return {
+        "positive_ratio": pos_ratio,
+        "quantiles": quantiles,
+        "extreme_ratio": extreme_ratio,
+    }
+
+
+# ── IC decay ────────────────────────────────────────────────────────────────
+
+
+def compute_ic_decay(
+    ic_series: pd.Series,
+    n_segments: int = 5,
+) -> pd.DataFrame:
+    """Compute ICIR per time segment to measure signal decay.
+
+    Splits the IC series chronologically into ``n_segments`` equal-length
+    segments and computes ICIR for each.  A declining ICIR across segments
+    indicates the signal's predictive power fades over time.
+
+    Parameters
+    ----------
+    ic_series:
+        Daily IC series, index should be chronological (e.g. sorted by date).
+    n_segments:
+        Number of equal-length segments (default 5).
+
+    Returns
+    -------
+    pd.DataFrame
+        Columns: ``segment`` (1-indexed), ``n_days``, ``ic_mean``,
+        ``ic_std``, ``icir``.
+    """
+    valid = ic_series.dropna().reset_index(drop=True)
+    if len(valid) < 2:
+        return pd.DataFrame(columns=["segment", "n_days", "ic_mean", "ic_std", "icir"])
+
+    rows = []
+    total = len(valid)
+    for seg in range(n_segments):
+        start = int(seg * total / n_segments)
+        end = int((seg + 1) * total / n_segments)
+        chunk = valid.iloc[start:end]
+        stats = _ic_stats(chunk)
+        rows.append({
+            "segment": seg + 1,
+            "n_days": len(chunk),
+            "ic_mean": stats["mean"],
+            "ic_std": stats["std"],
+            "icir": stats["ir"],
+        })
+    return pd.DataFrame(rows)
+
+
+# ── Regime-aware IC ─────────────────────────────────────────────────────────
+
+
+def compute_regime_ic(
+    ic_df: pd.DataFrame,
+    index_code: str = "000300.SH",
+    bull_threshold: float = 0.01,
+    bear_threshold: float = -0.01,
+) -> pd.DataFrame:
+    """Compute IC per market regime (bull / neutral / bear).
+
+    Loads the index daily data for regime classification, merges with
+    daily IC, and aggregates IC statistics per regime.
+
+    Parameters
+    ----------
+    ic_df:
+        DataFrame with columns ``date`` and ``ic`` (from ``compute_daily_ic``).
+    index_code:
+        Tushare index code for regime classification (default 000300.SH).
+    bull_threshold:
+        Minimum index daily return to classify as bull (default 0.01 = 1%).
+    bear_threshold:
+        Maximum index daily return to classify as bear (default -0.01 = -1%).
+
+    Returns
+    -------
+    pd.DataFrame
+        Columns: ``regime``, ``n_days``, ``ic_mean``, ``ic_std``, ``icir``,
+        ``positive_ratio``.
+    """
+    if ic_df.empty:
+        return pd.DataFrame(columns=["regime", "n_days", "ic_mean", "ic_std", "icir", "positive_ratio"])
+
+    try:
+        from qsys.feature.groups.index_context import load_index_daily
+        idx = load_index_daily(index_code)
+    except Exception:
+        return pd.DataFrame(columns=["regime", "n_days", "ic_mean", "ic_std", "icir", "positive_ratio"])
+
+    # Daily return
+    idx["return"] = idx["close"].pct_change()
+    idx_map = dict(zip(idx["trade_date"].dt.strftime("%Y-%m-%d"), idx["return"]))
+
+    # Merge regime with IC
+    merged = ic_df.copy()
+    merged["_td"] = merged["date"].astype(str).str[:10]
+    merged["index_return"] = merged["_td"].map(idx_map)
+
+    def _classify(r: float | None) -> str:
+        if r is None:
+            return "unknown"
+        if r > bull_threshold:
+            return "bull"
+        if r < bear_threshold:
+            return "bear"
+        return "neutral"
+
+    merged["regime"] = merged["index_return"].apply(_classify)
+
+    rows = []
+    for regime in ["bull", "neutral", "bear", "unknown"]:
+        sub = merged[merged["regime"] == regime]["ic"]
+        if sub.empty:
+            continue
+        stats = _ic_stats(sub)
+        dist = _ic_distribution_stats(sub)
+        rows.append({
+            "regime": regime,
+            "n_days": len(sub),
+            "ic_mean": stats["mean"],
+            "ic_std": stats["std"],
+            "icir": stats["ir"],
+            "positive_ratio": dist["positive_ratio"],
+        })
+
+    if not rows:
+        return pd.DataFrame(columns=["regime", "n_days", "ic_mean", "ic_std", "icir", "positive_ratio"])
+    return pd.DataFrame(rows)
+
+
 # ── Group returns ────────────────────────────────────────────────────────────
 
 
@@ -225,6 +392,16 @@ class SignalEvaluationResult:
     coverage_mean: float | None = None
     output_dir: Path | None = None
 
+    # ── IC distribution (new) ───────────────────────────────────────
+    ic_positive_ratio: float | None = None
+    ic_extreme_ratio: float | None = None
+
+    # ── IC decay (new) ──────────────────────────────────────────────
+    decay_icirs: list[float | None] | None = None
+
+    # ── Regime IC (new) ─────────────────────────────────────────────
+    regime_ic: dict[str, Any] | None = None
+
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
         if d["output_dir"]:
@@ -310,7 +487,28 @@ class SignalEvaluator:
         cov_df = compute_coverage(signal, joined)
         cov_mean = float(cov_df["coverage"].mean()) if "coverage" in cov_df.columns and len(cov_df) > 0 else None
 
-        # 6. Resolve output dir
+        # 6. IC distribution stats
+        ic_dist = _ic_distribution_stats(ic_df["ic"])
+
+        # 7. IC decay
+        decay_df = compute_ic_decay(ic_df["ic"], n_segments=5)
+        decay_icirs = [float(r["icir"]) if r["icir"] is not None else None
+                       for _, r in decay_df.iterrows()] if not decay_df.empty else None
+
+        # 8. Regime-aware IC
+        regime_df = compute_regime_ic(ic_df)
+        regime_ic: dict[str, Any] | None = None
+        if not regime_df.empty:
+            regime_ic = {}
+            for _, r in regime_df.iterrows():
+                regime_ic[str(r["regime"])] = {
+                    "n_days": int(r["n_days"]),
+                    "ic_mean": float(r["ic_mean"]) if r["ic_mean"] is not None else None,
+                    "icir": float(r["icir"]) if r["icir"] is not None else None,
+                    "positive_ratio": float(r["positive_ratio"]) if r["positive_ratio"] is not None else None,
+                }
+
+        # 9. Resolve output dir
         if output_dir is None:
             output_dir = self._paths.signal_eval_dir(signal_id, signal_run_id, label_id)
 
@@ -339,6 +537,14 @@ class SignalEvaluator:
             "coverage_mean": cov_mean,
             "start_date": str(joined["trade_date"].min()) if len(joined) > 0 else None,
             "end_date": str(joined["trade_date"].max()) if len(joined) > 0 else None,
+            # IC distribution
+            "ic_positive_ratio": ic_dist["positive_ratio"],
+            "ic_quantiles": ic_dist["quantiles"],
+            "ic_extreme_ratio": ic_dist["extreme_ratio"],
+            # IC decay
+            "decay_icirs": decay_icirs,
+            # Regime-aware IC
+            "regime_ic": regime_ic,
         }
         summary = with_standard_metadata(summary)
         write_manifest(output_dir / "summary.json", summary)
@@ -347,6 +553,8 @@ class SignalEvaluator:
         _write_parquet_or_csv(rank_ic_df, output_dir / "rank_ic_daily.parquet")
         _write_parquet_or_csv(grp_df, output_dir / "group_returns.parquet")
         _write_parquet_or_csv(cov_df, output_dir / "coverage.parquet")
+        _write_parquet_or_csv(decay_df, output_dir / "decay.parquet")
+        _write_parquet_or_csv(regime_df, output_dir / "regime_ic.parquet")
 
         manifest = {
             "artifact_type": "signal_evaluation",
@@ -374,4 +582,8 @@ class SignalEvaluator:
             rank_icir=rank_ic_stats["ir"],
             coverage_mean=cov_mean,
             output_dir=output_dir,
+            ic_positive_ratio=ic_dist["positive_ratio"],
+            ic_extreme_ratio=ic_dist["extreme_ratio"],
+            decay_icirs=decay_icirs,
+            regime_ic=regime_ic,
         )
