@@ -1658,3 +1658,127 @@ class TestQueryExperimentDuckDB:
         )
         assert result.returncode == 0
         assert "sig1" in result.stdout
+
+
+class TestMultiHeadRunnerSupport:
+    """Multi-head generator support in matrix experiment pipeline."""
+
+    def test_multi_head_builds_one_job_per_head(self) -> None:
+        """heads config expands to N MatrixJobs, each with head_signal_id."""
+        from qsys.research.rolling_runner import (
+            RollingResearchConfig,
+            build_matrix_jobs,
+        )
+
+        config = RollingResearchConfig(
+            experiment_id="multi_head_test",
+            generators=[
+                {
+                    "generator_id": "dnn",
+                    "type": "multi_head_fixture",
+                    "params": {
+                        "heads": [
+                            {"signal_id": "task_direction"},
+                            {"signal_id": "task_magnitude"},
+                        ],
+                    },
+                },
+            ],
+            transforms=[{"transform_id": "raw", "type": "identity"}],
+            strategies=[{"strategy_id": "s1", "strategy_template_id": "rank_weight_top20"}],
+            calendar={"start_date": "2026-01-01", "end_date": "2026-01-10"},
+        )
+
+        jobs = build_matrix_jobs(config)
+        assert len(jobs) == 2, f"expected 2 jobs (one per head), got {len(jobs)}"
+
+        job_a = [j for j in jobs if j.head_signal_id == "task_direction"][0]
+        job_b = [j for j in jobs if j.head_signal_id == "task_magnitude"][0]
+
+        assert job_a.signal_id == "task_direction__raw"
+        assert job_b.signal_id == "task_magnitude__raw"
+        assert job_a.generator_id == "dnn"
+        assert job_b.generator_id == "dnn"
+        assert job_a.head_signal_id == "task_direction"
+        assert job_b.head_signal_id == "task_magnitude"
+        assert job_a.signal_run_id.endswith("__task_direction")
+        assert job_b.signal_run_id.endswith("__task_magnitude")
+
+    def test_non_multi_head_passthrough(self) -> None:
+        """Without heads, MatrixJob.head_signal_id is None."""
+        from qsys.research.rolling_runner import (
+            RollingResearchConfig,
+            build_matrix_jobs,
+        )
+
+        config = RollingResearchConfig(
+            experiment_id="normal",
+            generators=[{"generator_id": "g1", "type": "technical_composite"}],
+            transforms=[{"transform_id": "raw", "type": "identity"}],
+            strategies=[],
+            calendar={"start_date": "2026-01-01", "end_date": "2026-01-10"},
+        )
+
+        jobs = build_matrix_jobs(config)
+        assert len(jobs) == 1
+        assert jobs[0].head_signal_id is None
+        assert jobs[0].signal_id == "matrix_signal__g1__raw"
+
+    def test_multi_head_generator_returns_multiple_ids(self) -> None:
+        """MultiHeadFixtureGenerator returns rows with different signal_ids."""
+        from qsys.research.rolling_runner import MultiHeadFixtureGenerator
+
+        gen = MultiHeadFixtureGenerator(head_signal_ids=("task_a", "task_b"), seed=42)
+        result = gen.generate(
+            train_start="2026-01-01", train_end="2026-01-10",
+            predict_start="2026-01-12", predict_end="2026-01-16",
+            signal_id="__internal__", signal_run_id="__internal__",
+        )
+        ids = sorted(result["signal_id"].unique())
+        assert ids == ["task_a", "task_b"]
+        # Each head has the same number of rows
+        n_a = len(result[result["signal_id"] == "task_a"])
+        n_b = len(result[result["signal_id"] == "task_b"])
+        assert n_a == n_b
+        assert n_a > 0
+
+    def test_head_signal_id_filters_raw_before_save(self, tmp_path) -> None:
+        """head_signal_id filter isolates one head's rows from multi-head output."""
+        from qsys.research.rolling_runner import MatrixJob
+        from qsys.signal.store import SignalStore
+        import pandas as pd
+
+        store = SignalStore(str(tmp_path))
+
+        # Simulate multi-head generator output with two signal_ids
+        raw = pd.DataFrame({
+            "trade_date": ["2026-01-12", "2026-01-12", "2026-01-12", "2026-01-12"],
+            "data_date": ["2026-01-09", "2026-01-09", "2026-01-09", "2026-01-09"],
+            "instrument": ["000001.SZ", "000002.SZ", "000001.SZ", "000002.SZ"],
+            "signal_id": ["head_a", "head_a", "head_b", "head_b"],
+            "signal_run_id": ["r", "r", "r", "r"],
+            "score": [0.1, 0.2, 0.3, 0.4],
+        })
+
+        # Filter for head_a (same logic as _run_matrix save loop)
+        job = MatrixJob(
+            generator_id="dnn", transform_id="raw",
+            strategy_configs=[], signal_id="head_a__raw",
+            signal_run_id="run__head_a", head_signal_id="head_a",
+        )
+        filtered = raw[raw["signal_id"] == job.head_signal_id].copy()
+        filtered["signal_id"] = job.signal_id
+        filtered["signal_run_id"] = job.signal_run_id
+
+        store.save_signal_run(
+            job.signal_id, job.signal_run_id, filtered,
+            manifest={"model_mode": "rolling_matrix"},
+            overwrite=True,
+        )
+
+        loaded = store.load_signal_run("head_a__raw", "run__head_a")
+        assert len(loaded) == 2
+        assert list(loaded["score"]) == [0.1, 0.2]
+
+        # head_b rows should NOT appear in head_a's SignalRun
+        assert "head_b" not in loaded["signal_id"].values
