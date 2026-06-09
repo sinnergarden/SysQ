@@ -284,13 +284,14 @@ class SignalAnalytics:
             run_id = (signal_run_ids or {}).get(sig_id)
             if run_id is None:
                 # Pick most recently created run directory (mtime)
-                run_dirs = [
-                    run_dir for run_dir in sorted(
-                        (self._signals_dir / sig_id).iterdir()
-                    ) if run_dir.is_dir()
-                ]
+                run_dirs = sorted(
+                    d for d in (self._signals_dir / sig_id).iterdir()
+                    if d.is_dir() and (d / "predictions.parquet").exists()
+                )
                 run_dirs.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-                run_id = run_dirs[0].name if run_dirs else runs.sort_values("signal_run_id", ascending=False).iloc[0]["signal_run_id"]
+                if not run_dirs:
+                    continue
+                run_id = run_dirs[0].name
             path = self._signal_path(sig_id, run_id)
             if path.exists():
                 result.append({"path": str(path), "signal_id": sig_id, "signal_run_id": run_id})
@@ -322,18 +323,18 @@ class SignalAnalytics:
             runs = runs[runs["signal_run_id"] == signal_run_id]
             if runs.empty:
                 raise FileNotFoundError(f"No signal run {signal_id}/{signal_run_id}")
-        # Use mtime for latest-run
+        # Use mtime for latest-run (parquet-valid only)
         sig_dir = self._signals_dir / signal_id
         if sig_dir.exists():
-            run_dirs = [d for d in sig_dir.iterdir() if d.is_dir()]
+            run_dirs = sorted(
+                d for d in sig_dir.iterdir()
+                if d.is_dir() and (d / "predictions.parquet").exists()
+            )
             run_dirs.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+            if not run_dirs:
+                raise FileNotFoundError(f"No valid signal parquet for {signal_id}")
             run_id = run_dirs[0].name
-        else:
-            run_id = runs.sort_values("signal_run_id", ascending=False).iloc[0]["signal_run_id"]
-        path = self._signal_path(signal_id, run_id)
-        if not path.exists():
-            raise FileNotFoundError(f"Signal parquet not found: {path}")
-        return str(path)
+        return str(self._signal_path(signal_id, run_id))
 
     # ── IC computation ──────────────────────────────────────────────────
 
