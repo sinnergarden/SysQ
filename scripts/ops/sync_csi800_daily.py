@@ -7,10 +7,11 @@ Flow:
   2. get latest csi800 constituents (via index_weight)
   3. pre-check: skip fetch if all stocks already have target date
   4. batch fetch raw data for missing stocks (single-pass)
-  5. convert to qlib bin (incremental → fallback fix)
-  6. refresh csi300 + csi800 instrument files
-  7. comprehensive readiness check
-  8. write structured audit record → data/audit/
+  5. update index daily data (7 benchmark indices, OHLCV+volume)
+  6. convert to qlib bin (incremental → fallback fix)
+  7. refresh csi300 + csi800 instrument files
+  8. comprehensive readiness check
+  9. write structured audit record → data/audit/
 
 Usage:
   # dry-run
@@ -120,6 +121,82 @@ def _check_stock_data_status(store: StockDataStore, codes: list[str], target_dt:
         "total": len(codes), "already_up_to_date": len(have),
         "need_fetch": len(missing), "source": "feather_scan",
     }
+
+
+# Index codes refreshed daily alongside stock data
+_INDEX_CODES = [
+    "000001.SH", "000300.SH", "000905.SH", "000852.SH",
+    "000906.SH", "000688.SH", "399006.SZ",
+]
+
+
+def _update_index_daily(collector: TushareCollector, target_dt: str) -> dict:
+    """Incremental update: fetch index daily data from last CSV date to target.
+
+    Writes/updates CSV in ``data/raw/index/<ts_code>.csv``.
+    Returns a summary dict per index.
+    """
+    index_dir = cfg.project_root / "data" / "raw" / "index"
+    index_dir.mkdir(parents=True, exist_ok=True)
+
+    results = {}
+    for code in _INDEX_CODES:
+        csv_path = index_dir / f"{code}.csv"
+        start_date = None
+
+        if csv_path.exists():
+            import pandas as pd
+            existing = pd.read_csv(csv_path)
+            if not existing.empty:
+                # If existing file lacks OHLCV columns, re-fetch from 2010
+                has_ohlcv = {"open", "high", "low", "vol"}.intersection(existing.columns)
+                if not has_ohlcv:
+                    log.info("%s: existing CSV is close-only, re-fetching full OHLCV from 2010", code)
+                    start_date = "20100101"
+                else:
+                    last_date = str(existing["trade_date"].iloc[-1]).replace("-", "")
+                    if last_date >= target_dt:
+                        results[code] = {"status": "skipped", "reason": "already_up_to_date"}
+                        continue
+                    start_date = last_date
+            else:
+                start_date = None
+
+        if start_date is None:
+            # No existing data — fetch the full history from 2010
+            start_date = "20100101"
+
+        try:
+            df = collector.get_index_daily(code, start_date=start_date, end_date=target_dt)
+        except Exception as e:
+            results[code] = {"status": "failed", "error": str(e)}
+            continue
+
+        if df is None or df.empty:
+            results[code] = {"status": "skipped", "reason": "no_new_data"}
+            continue
+
+        if "ts_code" in df.columns and df["ts_code"].nunique() == 1:
+            df = df.drop(columns=["ts_code"])
+
+        df = df.sort_values("trade_date").reset_index(drop=True)
+
+        if csv_path.exists():
+            import pandas as pd
+            existing = pd.read_csv(csv_path)
+            combined = pd.concat([existing, df], ignore_index=True)
+            combined = combined.drop_duplicates(subset=["trade_date"]).sort_values("trade_date").reset_index(drop=True)
+            combined.to_csv(csv_path, index=False)
+        else:
+            df.to_csv(csv_path, index=False)
+
+        results[code] = {
+            "status": "success",
+            "rows_added": len(df),
+            "date_range": f"{df['trade_date'].iloc[0]} ~ {df['trade_date'].iloc[-1]}",
+        }
+
+    return results
 
 
 def _do_raw_fetch(collector: TushareCollector, codes: list[str], target_dt: str) -> dict:
@@ -335,7 +412,16 @@ def main() -> None:
             raw_summary = {"dry_run": True, "would_fetch": status_check["need_fetch"], "elapsed_s": round(time.time() - t0, 1)}
         report["steps"]["raw_fetch"] = raw_summary
 
-    # Step 4: Qlib convert
+    # Step 4: Index daily update (always applies when do_apply, no separate dry-run for this)
+    if do_apply:
+        t0 = time.time()
+        index_result = _update_index_daily(collector, target_dt)
+        report["steps"]["index_daily"] = {
+            "indices": index_result,
+            "elapsed_s": round(time.time() - t0, 1),
+        }
+
+    # Step 5: Qlib convert
     qlib_summary = {"mode": "skipped", "status": "skipped"}
     if do_apply and not args.no_qlib_convert:
         since = target_date

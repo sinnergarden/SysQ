@@ -93,7 +93,7 @@
 | 路径 | 类型 | 角色 | 当前状态 |
 |------|------|------|---------|
 | `data/canonical/daily/` | feather | **日频宽表 SOT**，单股票每个 feather 文件包含 OHLCV + 复权 + PIT 财报 + 资金流向 + 两融 + 龙虎榜 | **主线** |
-| `data/raw/index/` | CSV | 指数日线（CSI300/CSI500/CSI800/broad-market），不转 qlib | **主线** |
+| `data/raw/index/` | CSV | 指数日线（OHLCV+volume，沪深300/中证500/中证800/中证1000/上证综指/科创50/创业板指），随 sync_csi800_daily 每日增量更新，不转 qlib | **主线** |
 | `data/raw/` | 目录 | 旧原始数据目录（已废弃，仅作兼容引用） | **废弃，待清理** |
 | `data/qlib_bin/` | qlib bin | qlib 格式只读缓存，从 canonical 派生 | **主线（materialized view）** |
 | `data/audit/` | JSON | 数据检查结果（如 `sync_csi800_*.json`） | **主线** |

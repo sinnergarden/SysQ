@@ -219,6 +219,7 @@ Research/backtest 和 daily ops 应尽可能复用同一套执行语义：
 - `data/qlib_bin/` 不是事实源。如果 qlib_bin 与 canonical 不一致，以 canonical 为准。
 - qlib sync 路径按需选择：新日期用 `convert_incremental`（`dump_update`），局部修复用 `convert_fix`（按日期扫描）或 `convert_fix_symbols`（按符号列表），**全量重建用 `convert_all`（`dump_all`）**。`refresh_selected_symbols_from_raw` 是 `convert_fix_symbols` 的向后兼容包装器，仅 `full_universe_backfill` 使用。
 - `data/canonical/daily/` 中的每只股票必须有足够的交易日历史才能参与模型训练。只有 1 天历史的成分股不参与训练。
+- `data/raw/index/` 的指数日线（OHLCV + volume）随 `sync_csi800_daily` 流水线每日增量更新。覆盖 7 个指数：沪深300、中证500、中证1000、中证800（CSI800 基准）、上证综指、科创50、创业板指。初次回填用 `scripts/ops/backfill_index_daily.py`，从 2010 年起拉全量。
 - 数据 readiness check 是训练、回测、daily ops 的前置条件：无通过检查，不能进入主流程。
 - Readiness check 将问题分为 **blocking**（阻断流程）和 **warning**（仅报告，不阻断）。
 
