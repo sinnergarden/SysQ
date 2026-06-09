@@ -73,18 +73,45 @@ def _horizon_from_label_id(label_id: str) -> int:
     raise ValueError(f"Cannot extract horizon from label_id: {label_id}")
 
 
+def _cs_zscore(s: pd.Series, clip: float = 3.0) -> pd.Series:
+    """Cross-sectional zscore, clip at ±clip, handle constant."""
+    std = s.std(ddof=0)
+    if pd.isna(std) or std < 1e-12:
+        return pd.Series(0.0, index=s.index)
+    return ((s - s.mean()) / std).clip(-clip, clip)
+
+
 @dataclass
 class LightGBMAlphaV1Generator:
     """Rolling signal generator that retrains LightGBM per window.
 
     Labels are loaded from LabelStore.  ``make_zs_label`` is
     no longer used as the primary path.
+
+    .. note::
+
+       **Legacy compatibility**: this generator blends multiple label
+       predictions (e.g. 5d + 20d) into a **single** ``score`` column.
+       This predates the Generator→Combine separation.  For new research,
+       train **one model per label** so each label produces its own
+       ``SignalRun``, then combine via ``signal_combine.py`` (combine
+       layer).  ``blend_weights`` only exists for this legacy path.
+
+    Parameters
+    ----------
+    blend_weights:
+        Weight per label horizon for the blended score (legacy alpha_v1
+        compatibility).  Each horizon's prediction is cross-sectionally
+        z-scored then multiplied by its weight and summed into a single
+        score.  Default ``{"5d": 0.8, "20d": 0.2}`` preserves the
+        legacy ``compute_signal(blend_5d=0.8, blend_20d=0.2)`` behaviour.
     """
 
     universe: str = "csi300"
     n_estimators: int = 200
     lgb_params: dict | None = None
     label_ids: tuple[str, ...] = ("fwd_ret_5d_xsz_clip3", "fwd_ret_20d_xsz_clip3")
+    blend_weights: dict[str, float] = field(default_factory=lambda: {"5d": 0.8, "20d": 0.2})
 
     _qlib_inited: bool = field(default=False, repr=False)
     _clean_features: list[str] = field(default_factory=list, repr=False)
@@ -124,13 +151,20 @@ class LightGBMAlphaV1Generator:
         signal_id: str,
         signal_run_id: str,
     ) -> pd.DataFrame:
-        # Validate label_ids before any setup: must be exactly {5d, 20d}
+        # Legacy blended generator: only 5d + 20d supported.
+        # Multi-label support -> MultiLabelLightGBMGenerator (separate PR),
+        # where each label produces an independent SignalRun.
         horizons = sorted(_horizon_from_label_id(lid) for lid in self.label_ids)
         if horizons != [5, 20]:
             raise ValueError(
-                f"LightGBMAlphaV1Generator currently requires exactly 5d and 20d labels, "
-                f"got horizons {horizons} from label_ids {self.label_ids}"
+                f"LightGBMAlphaV1Generator is a legacy blended generator "
+                f"that requires exactly (5d, 20d) label horizons, "
+                f"got {horizons}. "
+                f"Arbitrary labels will be supported by "
+                f"MultiLabelLightGBMGenerator (one SignalRun per label)."
             )
+        if abs(self.blend_weights.get("5d", 0.8) + self.blend_weights.get("20d", 0.2)) < 1e-12:
+            raise ValueError("blend_weights 5d + 20d must not sum to zero")
 
         self._ensure_qlib()
 
@@ -143,7 +177,6 @@ class LightGBMAlphaV1Generator:
 
         from qsys.label.store import LabelStore
         from qsys.signal.alpha_v1.training import train_model, predict_model
-        from qsys.signal.alpha_v1.inference import compute_signal
 
         # Load labels from LabelStore
         store = LabelStore()
@@ -202,20 +235,23 @@ class LightGBMAlphaV1Generator:
 
         for d in sorted(pred["trade_date"].unique()):
             sub = pred[pred["trade_date"] == d]
-            sig = compute_signal(
-                pd.Series(sub["pred_5d"].values, index=sub.index),
-                pd.Series(sub["pred_20d"].values, index=sub.index),
-                sub["instrument"].values, str(d),
-            )
             dd = prev_td.get(str(d), str(d))
-            for _, r in sig.iterrows():
+
+            # Inline blend: cross-sectional zscore per horizon, weighted sum
+            z5 = _cs_zscore(sub["pred_5d"])
+            z20 = _cs_zscore(sub["pred_20d"])
+            w5 = self.blend_weights.get("5d", 0.8)
+            w20 = self.blend_weights.get("20d", 0.2)
+            blended = w5 * z5.values + w20 * z20.values
+
+            for i, (_, r) in enumerate(sub.iterrows()):
                 rows.append({
                     "trade_date": str(d),
                     "data_date": dd,
                     "instrument": str(r["instrument"]),
                     "signal_id": signal_id,
                     "signal_run_id": signal_run_id,
-                    "score": float(r["score"]),
+                    "score": float(blended[i]) if pd.notna(blended[i]) else 0.0,
                 })
 
         result = pd.DataFrame(rows)

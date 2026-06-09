@@ -129,7 +129,50 @@ python -c "import json,os; a=json.load(open('data/audit/'+sorted(os.listdir('dat
 python -m pytest tests/test_data_health.py tests/test_data_contract_ready.py tests/test_adapter_coverage.py -v
 python -m pytest tests/test_qlib_sync.py tests/test_shadow_presync.py tests/test_full_universe_backfill.py -v
 python -m pytest tests/test_data_update_integration.py tests/test_financial_derivation.py -v
+
+# 信号层 golden 测试（锁 generator 输入→输出，改变必须确认）
+python -m pytest tests/research/test_generators_golden.py -v
 ```
+
+---
+
+## 4.4 Generator 开发指南
+
+信号生成器是 research 管线的核心可插拔点。每个 generator 实现 `RollingSignalGenerator` Protocol（`qsys/research/generators/base.py`）。
+
+### 核心边界
+
+::
+
+   Generator:   label/task ─→ base signal (单个 score 列)
+   Combine:     多个 base signal ─→ final composite signal
+
+Generator 内部不做最终组合。多 label 模型应该每个 label 输出一个独立 `SignalRun`，通过 `signal_combine.py`（combine 层）组合。只有这样，每个 base signal 才能被单独评估 IC、回测、替换、调节权重。
+
+**例外**：`LightGBMAlphaV1Generator` 和 `DnnMultitaskGenerator` 的 `blend_weights` 参数是 legacy alpha_v1 兼容路径，将多个 label 预测混合成一个 score。新 generator 不应延续这个模式。
+
+### 契约
+
+- 输入：`(train_start, train_end, predict_start, predict_end, signal_id, signal_run_id)` — 全是 str YYYY-MM-DD
+- 输出：SignalStore 兼容 DataFrame，必选 6 列：
+  `trade_date, data_date, instrument, signal_id, signal_run_id, score`
+- `data_date` 必须是 `previous_trading_day(trade_date)` — SignalStore.save 会自动检查
+- 不允许改 `score` 的含义（值越大越好，可排序）
+
+### 依赖规则
+
+- 如果需要 label，从 `LabelStore` 读（`qsys/label/store.py`），不要自己计算 forward return
+- 如果需要特征，从 qlib `D.features()` 或 `QlibAdapter.get_features()` 获取
+- 不要引用 `qsys/strategy/` 下的具体策略模块（策略代码不应被 research 反向依赖）
+- 输出中不要用 `print()` — 用 `qsys.utils.logger.log`
+
+### 注册
+
+新增 generator 后必须在 `rolling_runner.py` 的 `_create_generator_from_config()` 注册，才能在 matrix experiment YAML 中按 `type` 引用。
+
+### 测试要求
+
+每个 generator 必须有 golden test：**确定性输入 → 断言精确 score 值**。参考 `tests/research/test_generators_golden.py`。
 
 ---
 

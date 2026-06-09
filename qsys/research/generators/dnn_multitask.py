@@ -73,6 +73,13 @@ class DnnMultitaskGenerator:
     Labels are loaded from LabelStore via ``label_ids``.
     ``_labels_from_close`` is no longer used as the primary path.
 
+    .. note::
+
+       **Legacy compatibility**: this generator blends multiple task
+       outputs into a **single** ``score`` column using ``blend_weights``.
+       For new research, expose each task tower as a separate
+       ``SignalRun`` and combine via ``signal_combine.py``.
+
     Parameters
     ----------
     project_root: Path | None
@@ -83,6 +90,14 @@ class DnnMultitaskGenerator:
         Qlib universe identifier.
     label_ids: tuple[str, ...]
         LabelStore label IDs to use as training targets.
+    blend_weights:
+        Weight per model prediction column for the blended score (legacy
+        compatibility).  Each column is cross-sectionally z-scored then
+        weighted.  Default ``{"5d": 0.5, "20d": 0.5}`` preserves the
+        existing ``(score_5d + score_20d) / 2.0`` behaviour.
+
+        For new research: expose each task tower as a separate ``SignalRun``
+        and combine in the combine layer (``signal_combine.py``).
     """
 
     project_root: Path | None = None
@@ -90,6 +105,7 @@ class DnnMultitaskGenerator:
     universe: str = "csi300"
     feature_set: list[str] | None = None
     label_ids: tuple[str, ...] = ("fwd_ret_5d_xsz_clip3", "fwd_ret_20d_xsz_clip3")
+    blend_weights: dict[str, float] = field(default_factory=lambda: {"5d": 0.5, "20d": 0.5})
 
     _feature_set: list[str] = field(default_factory=list, repr=False)
     _qlib_inited: bool = field(default=False, repr=False)
@@ -206,14 +222,21 @@ class DnnMultitaskGenerator:
     ) -> pd.DataFrame:
         """Generate blended signal for the given window.
 
-        Currently requires exactly two label_ids (5d and 20d forward
-        returns) because the internal model always produces two outputs.
+        Blends model prediction columns via ``self.blend_weights``.
         """
+        # Legacy two-task generator: only 5d + 20d supported.
+        # Arbitrary tasks -> separate DNN task-tower PR (one SignalRun per task).
         if len(self.label_ids) != 2:
             raise ValueError(
-                f"DnnMultitaskGenerator currently requires exactly two label_ids, "
-                f"got {len(self.label_ids)}: {self.label_ids}"
+                f"DnnMultitaskGenerator is a legacy two-task blended generator "
+                f"that requires exactly two label_ids, "
+                f"got {len(self.label_ids)}: {self.label_ids}. "
+                f"Arbitrary tasks will be supported by a future DNN task-tower "
+                f"generator (one SignalRun per task)."
             )
+        if abs(self.blend_weights.get("5d", 0.5) + self.blend_weights.get("20d", 0.5)) < 1e-12:
+            raise ValueError("blend_weights 5d + 20d must not sum to zero")
+
         self._ensure_qlib()
         features = self._resolve_features()
 
@@ -272,7 +295,10 @@ class DnnMultitaskGenerator:
 
         pred_frame["score_5d"] = pred_frame.groupby("trade_date")["pred_5d"].transform(_cs_zscore)
         pred_frame["score_20d"] = pred_frame.groupby("trade_date")["pred_20d"].transform(_cs_zscore)
-        pred_frame["score"] = (pred_frame["score_5d"] + pred_frame["score_20d"]) / 2.0
+        w5 = self.blend_weights.get("5d", 0.5)
+        w20 = self.blend_weights.get("20d", 0.5)
+        total = w5 + w20
+        pred_frame["score"] = (w5 * pred_frame["score_5d"] + w20 * pred_frame["score_20d"]) / total
 
         # Assemble output
         rows = []
