@@ -297,6 +297,47 @@ class RollingResearchConfig:
 # ── Generator factory ──────────────────────────────────────────────────
 
 
+def expand_multi_label_generators(generators: list[dict]) -> list[dict]:
+    """Expand ``multi_label_lightgbm`` entries into per-label ``single_label_lightgbm``.
+
+    Each label in the ``labels`` list becomes one independent generator entry
+    with ``generator_id = <base_id>__<label_id>``.  The per-label ``signal_id``
+    is propagated so that ``build_matrix_jobs`` assigns each label its own
+    named ``SignalRun``.
+
+    This is called before ``build_matrix_jobs`` and the raw-prediction loop
+    so the rest of the pipeline sees only single-label generators.
+    """
+    expanded: list[dict] = []
+    for gen_cfg in generators:
+        if gen_cfg.get("type") != "multi_label_lightgbm":
+            expanded.append(gen_cfg)
+            continue
+        params = gen_cfg.get("params", {})
+        labels = params.get("labels", [])
+        if not labels:
+            raise ValueError(
+                f"multi_label_lightgbm generator '{gen_cfg.get('generator_id')}' "
+                f"requires a 'labels' list in params"
+            )
+        base_id = gen_cfg["generator_id"]
+        for entry in labels:
+            label_id = entry["label_id"]
+            label_signal_id = entry.get("signal_id", label_id)
+            expanded.append({
+                "generator_id": f"{base_id}__{label_id}",
+                "type": "single_label_lightgbm",
+                "params": {
+                    "label_id": label_id,
+                    "universe": params.get("universe", "csi300"),
+                    "n_estimators": params.get("n_estimators", 200),
+                    "lgb_params": params.get("lgb_params"),
+                },
+                "label_signal_id": label_signal_id,
+            })
+    return expanded
+
+
 def _create_generator_from_config(gen_config: dict) -> RollingSignalGenerator:
     """Create a generator instance from a config dict.
 
@@ -340,6 +381,14 @@ def _create_generator_from_config(gen_config: dict) -> RollingSignalGenerator:
             n_estimators=params.get("n_estimators", 200),
             lgb_params=params.get("lgb_params"),
             label_ids=tuple(params.get("label_ids", ("fwd_ret_5d_xsz_clip3", "fwd_ret_20d_xsz_clip3"))),
+        )
+    if gen_type == "single_label_lightgbm":
+        from qsys.research.generators.lightgbm_single_label import LightGBMSingleLabelGenerator
+        return LightGBMSingleLabelGenerator(
+            label_id=params["label_id"],
+            universe=params.get("universe", "csi300"),
+            n_estimators=params.get("n_estimators", 200),
+            lgb_params=params.get("lgb_params"),
         )
     raise ValueError(f"Unknown generator type: {gen_type!r}")
 
@@ -409,9 +458,14 @@ def build_matrix_jobs(config: RollingResearchConfig) -> list[MatrixJob]:
     jobs: list[MatrixJob] = []
     for gen_cfg in config.generators:
         gen_id = gen_cfg["generator_id"]
+        # Multi-label expanded entries carry an explicit per-label signal_id
+        label_signal_id = gen_cfg.get("label_signal_id", None)
         for tf_cfg in config.transforms:
             tf_id = tf_cfg["transform_id"]
-            signal_id = f"{base_signal_id}__{gen_id}__{tf_id}"
+            if label_signal_id:
+                signal_id = f"{label_signal_id}__{tf_id}"
+            else:
+                signal_id = f"{base_signal_id}__{gen_id}__{tf_id}"
             signal_run_id = (
                 f"rolling__{experiment_id}__{gen_id}__{tf_id}__{start}_{end}"
             )
@@ -694,11 +748,14 @@ class RollingResearchRunner:
             overwrite=overwrite_experiment,
         )
 
-        # ── 2. Build matrix jobs ──
+        # ── 2. Expand multi-label generators into per-label entries ──
+        config.generators = expand_multi_label_generators(config.generators)
+
+        # ── 3. Build matrix jobs ──
         jobs = build_matrix_jobs(config)
         explicit_generator = signal_generator is not None
 
-        # ── 3. Generate raw predictions once per generator ──
+        # ── 4. Generate raw predictions once per generator ──
         evaluator = SignalEvaluator(str(self.root))
         bt_runner = BacktestRunner()
 
@@ -724,7 +781,7 @@ class RollingResearchRunner:
                 all_preds.append(pred)
             raw_predictions[gen_id] = pd.concat(all_preds, ignore_index=True)
 
-        # ── 4. For each job: transform → save → eval → backtest → index ──
+        # ── 5. For each job: transform → save → eval → backtest → index ──
         job_rows: list[dict[str, Any]] = []
 
         for job in jobs:
@@ -836,7 +893,7 @@ class RollingResearchRunner:
                     backtest_id=_bid,
                 )
 
-        # ── 5a. Signal combinations (cross-signal) ────────────────────
+        # ── 6 (cont). Signal combinations (cross-signal) ──────────────
         combine_count = 0
         combined_signal_run_ids: list[str] = []
         if config.signal_combinations:
@@ -988,10 +1045,10 @@ class RollingResearchRunner:
                 config.experiment_id,
             )
 
-        # ── 5. Rebuild indexes ──
+        # ── 7. Rebuild indexes ──
         self._experiment_index.rebuild_indexes(config.experiment_id)
 
-        # ── 6. Write matrix_jobs.csv ──
+        # ── 8. Write matrix_jobs.csv ──
         job_cols = [
             "generator_id", "transform_id", "strategy_id",
             "signal_id", "signal_run_id",
@@ -1001,7 +1058,7 @@ class RollingResearchRunner:
         job_df = pd.DataFrame(job_rows, columns=job_cols)
         job_df.to_csv(exp_dir / "matrix_jobs.csv", index=False)
 
-        # ── 7. Rolling research manifest ──
+        # ── 9. Rolling research manifest ──
         signal_runs_summary = [
             {
                 "generator_id": j.generator_id,
