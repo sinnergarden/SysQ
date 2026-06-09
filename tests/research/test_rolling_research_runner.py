@@ -16,12 +16,12 @@ from qsys.research.rolling_runner import (
     RollingResearchConfig,
     RollingResearchRunner,
     SignalTransformConfig,
-    _calendar_backdate,
     _create_generator_from_config,
     apply_signal_transform,
     build_matrix_jobs,
     build_rolling_windows,
 )
+from qsys.research.rolling_window import _calendar_backdate
 
 
 _MOCK_CAL = [f"2026-04-{d:02d}" for d in range(1, 31)] + \

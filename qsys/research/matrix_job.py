@@ -1,0 +1,348 @@
+"""Matrix job builder — job data structures, config, expansion, factory.
+
+Extracted from ``rolling_runner.py``.  See that module for
+``RollingResearchRunner`` and the research pipeline orchestrator.
+"""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+import pandas as pd
+
+from qsys.research.generators.base import RollingSignalGenerator
+
+
+# ── Config dataclasses ─────────────────────────────────────────────────
+
+
+@dataclass
+class LabelConfig:
+    label_id: str
+    min_coverage: float | None = None
+
+
+@dataclass
+class BacktestConfig:
+    strategy_template_id: str = "rank_weight_top20"
+    allocation_method: str = "rank_weight"
+    top_n: int = 20
+    max_weight: float | None = None
+    initial_capital: float = 1_000_000.0
+    rebalance_freq: str = "weekly"
+    artifact_mode: str = "summary"
+
+
+@dataclass
+class SignalTransformConfig:
+    """Configuration for a single signal transform."""
+    transform_id: str
+    type: str
+
+
+@dataclass
+class MatrixJob:
+    """One cell in the matrix: a (generator, transform) pair with strategy configs.
+
+    Each job produces one SignalRun (shared across all strategies).
+
+    Parameters
+    ----------
+    head_signal_id:
+        When set, filter the generator's output to rows whose ``signal_id``
+        matches this value before saving.  Used by multi-head generators
+        (e.g. DNN task towers) that return a single DataFrame containing
+        multiple signal_ids.
+    """
+    generator_id: str
+    transform_id: str
+    strategy_configs: list[dict[str, Any]]
+    signal_id: str
+    signal_run_id: str
+    head_signal_id: str | None = None
+
+
+@dataclass
+class RollingResearchConfig:
+    """Full configuration for a rolling research run.
+
+    v1 single-signal mode: set ``signal`` (and optionally ``backtests``).
+    v2 matrix mode: set ``generators``, ``signal_transforms``, and ``strategies``.
+    """
+
+    experiment_id: str
+    title: str | None = None
+    description: str | None = None
+
+    calendar: dict[str, Any] = field(default_factory=dict)
+    # calendar keys: start_date, end_date, train_window_days, step_days
+
+    signal: dict[str, Any] = field(default_factory=dict)
+    # signal keys: signal_id, signal_run_id, score_column
+
+    labels: list[dict[str, Any]] = field(default_factory=list)
+    # each label: label_id
+
+    backtests: list[dict[str, Any]] = field(default_factory=list)
+    # each backtest: strategy_template_id, top_n, max_weight, ...  (v1 only)
+
+    # ── v2 matrix fields ───────────────────────────────────────────────
+    generators: list[dict[str, Any]] = field(default_factory=list)
+    # each generator: generator_id, type, params
+
+    transforms: list[dict[str, Any]] = field(default_factory=list)
+    # each transform: transform_id, type  (mapped from signal_transforms in YAML)
+
+    strategies: list[dict[str, Any]] = field(default_factory=list)
+    # each strategy: strategy_id, strategy_template_id, top_n, ...
+
+    # ── v2 signal combinations ──────────────────────────────────────────
+    signal_combinations: list[dict[str, Any]] = field(default_factory=list)
+    # each combination: combine_id, type, inputs
+
+    @classmethod
+    def from_file(cls, path: Path) -> RollingResearchConfig:
+        """Load config from YAML or JSON file."""
+        text = path.read_text(encoding="utf-8")
+        suffix = path.suffix.lower()
+        if suffix in (".yaml", ".yml"):
+            import yaml
+            payload = yaml.safe_load(text)
+        elif suffix == ".json":
+            payload = json.loads(text)
+        else:
+            raise ValueError(f"Unsupported config format: {path}")
+        return cls.from_dict(payload)
+
+    @classmethod
+    def from_dict(cls, payload: dict) -> RollingResearchConfig:
+        cal = payload.get("calendar", {})
+        sig = payload.get("signal", {})
+        labels = payload.get("labels", [])
+        backtests = payload.get("backtests", [])
+        generators = payload.get("generators", [])
+        transforms = payload.get("signal_transforms", [])
+        strategies = payload.get("strategies", [])
+        signal_combinations = payload.get("signal_combinations", [])
+        return cls(
+            experiment_id=payload.get("experiment_id", "rolling_run"),
+            title=payload.get("title"),
+            description=payload.get("description"),
+            calendar=cal,
+            signal=sig,
+            labels=labels,
+            backtests=backtests,
+            generators=generators,
+            transforms=transforms,
+            strategies=strategies,
+            signal_combinations=signal_combinations,
+        )
+
+
+# ── Expansion helpers ──────────────────────────────────────────────────
+
+
+def _slugify_id(raw: str) -> str:
+    """Sanitize an identifier for use in file paths and run IDs."""
+    import re
+    return re.sub(r"[^a-zA-Z0-9_-]", "_", raw)
+
+
+def expand_multi_label_generators(generators: list[dict]) -> list[dict]:
+    """Expand ``multi_label_lightgbm`` entries into per-label ``single_label_lightgbm``."""
+    expanded: list[dict] = []
+    for gen_cfg in generators:
+        if gen_cfg.get("type") != "multi_label_lightgbm":
+            expanded.append(gen_cfg)
+            continue
+        params = gen_cfg.get("params", {})
+        labels = params.get("labels", [])
+        if not labels:
+            raise ValueError(
+                f"multi_label_lightgbm generator '{gen_cfg.get('generator_id')}' "
+                f"requires a 'labels' list in params"
+            )
+        base_id = gen_cfg["generator_id"]
+        for entry in labels:
+            label_id = entry["label_id"]
+            label_signal_id = entry.get("signal_id", label_id)
+            expanded.append({
+                "generator_id": _slugify_id(f"{base_id}__{label_id}"),
+                "type": "single_label_lightgbm",
+                "params": {
+                    "label_id": label_id,
+                    "universe": params.get("universe", "csi300"),
+                    "n_estimators": params.get("n_estimators", 200),
+                    "lgb_params": params.get("lgb_params"),
+                },
+                "label_signal_id": label_signal_id,
+            })
+    return expanded
+
+
+# ── Generator factory ──────────────────────────────────────────────────
+
+
+def _create_generator_from_config(gen_config: dict) -> RollingSignalGenerator:
+    """Create a generator instance from a config dict.
+
+    Supported types:
+    - ``fixture`` — deterministic fixture (tests/CI)
+    - ``alpha_v1_existing`` — existing alpha_v1 prediction adapter
+    - ``technical_composite`` — OHLCV-derived composite signal
+    """
+    from qsys.research.generators.fixture import FixtureSignalGenerator
+
+    gen_type = gen_config.get("type", "fixture")
+    params = gen_config.get("params", {})
+    if gen_type == "fixture":
+        return FixtureSignalGenerator(
+            n_instruments=params.get("n_instruments", 100),
+            seed=params.get("seed", 42),
+        )
+    if gen_type == "alpha_v1_existing":
+        from qsys.research.generators.alpha_v1_existing import AlphaV1ExistingGenerator
+        return AlphaV1ExistingGenerator()
+    if gen_type == "technical_composite":
+        from qsys.research.generators.technical_composite import TechnicalCompositeV1Generator
+        return TechnicalCompositeV1Generator(
+            momentum_short=params.get("momentum_short", 20),
+            momentum_long=params.get("momentum_long", 60),
+            reversal_days=params.get("reversal_days", 5),
+            volatility_days=params.get("volatility_days", 20),
+            volume_short=params.get("volume_short", 5),
+            volume_long=params.get("volume_long", 20),
+        )
+    if gen_type == "dnn_multitask":
+        from qsys.research.generators.dnn_multitask import DnnMultitaskGenerator
+        return DnnMultitaskGenerator(
+            project_root=None,
+            dnn_kwargs=params.get("dnn_kwargs"),
+            universe=params.get("universe", "csi300"),
+            label_ids=tuple(params.get("label_ids", ("fwd_ret_5d_xsz_clip3", "fwd_ret_20d_xsz_clip3"))),
+        )
+    if gen_type == "lightgbm_alpha_v1":
+        from qsys.research.generators.lightgbm_alpha_v1 import LightGBMAlphaV1Generator
+        return LightGBMAlphaV1Generator(
+            universe=params.get("universe", "csi300"),
+            n_estimators=params.get("n_estimators", 200),
+            lgb_params=params.get("lgb_params"),
+            label_ids=tuple(params.get("label_ids", ("fwd_ret_5d_xsz_clip3", "fwd_ret_20d_xsz_clip3"))),
+        )
+    if gen_type == "single_label_lightgbm":
+        from qsys.research.generators.lightgbm_single_label import LightGBMSingleLabelGenerator
+        return LightGBMSingleLabelGenerator(
+            label_id=params["label_id"],
+            universe=params.get("universe", "csi300"),
+            n_estimators=params.get("n_estimators", 200),
+            lgb_params=params.get("lgb_params"),
+        )
+    raise ValueError(f"Unknown generator type: {gen_type!r}")
+
+
+# ── Signal transforms ─────────────────────────────────────────────────
+
+
+def apply_signal_transform(
+    frame: pd.DataFrame,
+    transform_config: SignalTransformConfig | dict[str, Any],
+) -> pd.DataFrame:
+    """Apply a signal transform to a predictions DataFrame."""
+    if isinstance(transform_config, dict):
+        transform_config = SignalTransformConfig(**transform_config)
+
+    result = frame.copy()
+    result["score_raw"] = frame["score"]
+    result["transform_id"] = transform_config.transform_id
+
+    if transform_config.type == "identity":
+        result["score"] = frame["score"].copy()
+    elif transform_config.type == "daily_zscore":
+        def _safe_zscore(scores: pd.Series) -> pd.Series:
+            std = scores.std(ddof=0)
+            if pd.isna(std) or std == 0.0:
+                return pd.Series(0.0, index=scores.index)
+            return (scores - scores.mean()) / std
+
+        result["score"] = result.groupby("trade_date", group_keys=False)["score"].transform(
+            _safe_zscore
+        )
+    else:
+        raise ValueError(f"Unknown signal transform type: {transform_config.type!r}")
+
+    return result
+
+
+# ── Matrix job builder ────────────────────────────────────────────────
+
+
+def build_matrix_jobs(
+    config: RollingResearchConfig,
+    effective_generators: list[dict] | None = None,
+) -> list[MatrixJob]:
+    """Expand a matrix config into individual (generator, transform) jobs.
+
+    Each job carries the full list of strategy configs so that generation
+    and transform are performed once and backtests are run per strategy.
+
+    Parameters
+    ----------
+    config:
+        Full research config.
+    effective_generators:
+        Pre-expanded generator list (e.g. after multi-label expansion).
+        When ``None``, uses ``config.generators``.
+    """
+    generators = effective_generators if effective_generators is not None else config.generators
+    base_signal_id = config.signal.get("signal_id", "matrix_signal")
+    experiment_id = config.experiment_id
+    cal = config.calendar
+    start = cal.get("start_date", "")
+    end = cal.get("end_date", "")
+
+    jobs: list[MatrixJob] = []
+    for gen_cfg in generators:
+        gen_id = gen_cfg["generator_id"]
+        # Multi-label expanded entries carry an explicit per-label signal_id
+        label_signal_id = gen_cfg.get("label_signal_id", None)
+        # Multi-head generators carry per-head config
+        heads = gen_cfg.get("params", {}).get("heads", None)
+        for tf_cfg in config.transforms:
+            tf_id = tf_cfg["transform_id"]
+            if label_signal_id:
+                signal_id = f"{label_signal_id}__{tf_id}"
+            else:
+                signal_id = f"{base_signal_id}__{gen_id}__{tf_id}"
+            signal_run_id = (
+                f"rolling__{experiment_id}__{gen_id}__{tf_id}__{start}_{end}"
+            )
+            if heads:
+                for head in heads:
+                    head_signal_id = head.get("signal_id", "").strip()
+                    if not head_signal_id:
+                        raise ValueError(
+                            f"multi-head generator '{gen_id}' has a head entry "
+                            f"with empty or missing signal_id"
+                        )
+                    head_slug = _slugify_id(head_signal_id)
+                    head_job_signal_id = f"{head_signal_id}__{tf_id}"
+                    jobs.append(MatrixJob(
+                        generator_id=gen_id,
+                        transform_id=tf_id,
+                        strategy_configs=config.strategies,
+                        signal_id=head_job_signal_id,
+                        signal_run_id=f"{signal_run_id}__{head_slug}",
+                        head_signal_id=head_signal_id,
+                    ))
+            else:
+                jobs.append(MatrixJob(
+                    generator_id=gen_id,
+                    transform_id=tf_id,
+                    strategy_configs=config.strategies,
+                    signal_id=signal_id,
+                    signal_run_id=signal_run_id,
+                ))
+    return jobs

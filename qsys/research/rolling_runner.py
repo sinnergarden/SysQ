@@ -1,606 +1,164 @@
-"""RollingResearchRunner v2 — rolling research pipeline with matrix experiment support.
+"""RollingResearchRunner — rolling research pipeline orchestrator.
 
 v1: single-path rolling research (signal → eval → backtest → index).
 v2: matrix experiment (generators × signal_transforms × strategies).
 
 Both modes share rolling windows, SignalStore, SignalEvaluator,
 BacktestRunner, and ExperimentIndex.
+
+Backward-compatible re-exports
+-------------------------------
+This module re-exports the following for existing importers:
+
+- ``RollingWindow``, ``build_rolling_windows`` → ``rolling_window``
+- ``MatrixJob``, ``RollingResearchConfig``, ``build_matrix_jobs``,
+  ``expand_multi_label_generators``, ``_create_generator_from_config``,
+  ``apply_signal_transform``, ``LabelConfig``, ``BacktestConfig``,
+  ``SignalTransformConfig``, ``_slugify_id`` → ``matrix_job``
+- ``FixtureSignalGenerator``, ``MultiHeadFixtureGenerator`` → ``generators.fixture``
 """
 
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
 
 import pandas as pd
 
 from qsys.research.experiment import ExperimentIndex, ExperimentSpec
 from qsys.research.generators.base import RollingSignalGenerator
+from qsys.research.generators.fixture import (
+    FixtureSignalGenerator,
+    MultiHeadFixtureGenerator,
+)
 from qsys.research.manifest import write_manifest, with_standard_metadata
+from qsys.research.matrix_job import (
+    BacktestConfig,
+    LabelConfig,
+    MatrixJob,
+    RollingResearchConfig,
+    SignalTransformConfig,
+    _create_generator_from_config,
+    _slugify_id,
+    apply_signal_transform,
+    build_matrix_jobs,
+    expand_multi_label_generators,
+)
 from qsys.research.paths import ResearchPaths
+from qsys.research.rolling_window import RollingWindow, build_rolling_windows
+from qsys.research.signal_combine import build_cross_signal_index
 from qsys.signal.store import SignalStore
 
-
-# ── Rolling window builder ─────────────────────────────────────────────
-
-
-@dataclass
-class RollingWindow:
-    window_id: str
-    train_start: str
-    train_end: str
-    predict_start: str
-    predict_end: str
-
-
-def _calendar_backdate(start_date: str, n_days: int, buffer: int = 10) -> str:
-    from datetime import datetime, timedelta
-    dt = datetime.strptime(start_date, "%Y-%m-%d")
-    estimated = dt - timedelta(days=int(n_days * 1.4) + buffer + 5)
-    return estimated.strftime("%Y-%m-%d")
-
-
-def build_rolling_windows(
-    start_date: str,
-    end_date: str,
-    *,
-    train_window_days: int = 252,
-    step_days: int = 5,
-) -> list[RollingWindow]:
-    """Build rolling windows.
-
-    Each window uses the same number of predict days as the step
-    (predict = step), so every trading day gets exactly one prediction
-    from exactly one model version — no overlap.
-    """
-    from qsys.data.calendar import get_trading_calendar
-
-    _extended_start = _calendar_backdate(start_date, train_window_days)
-    full_cal = get_trading_calendar(_extended_start, end_date)
-    if not full_cal:
-        raise ValueError(f"No trading dates in [{_extended_start}, {end_date}]")
-
-    pred_cal = [d for d in full_cal if start_date <= d <= end_date]
-    if not pred_cal:
-        raise ValueError(f"No trading dates in [{start_date}, {end_date}]")
-
-    windows: list[RollingWindow] = []
-
-    for offset in range(0, len(pred_cal), step_days):
-        pred_end_offset = offset + step_days - 1
-        if pred_end_offset >= len(pred_cal):
-            break
-
-        predict_start = pred_cal[offset]
-        predict_end = pred_cal[pred_end_offset]
-
-        # Map predict_start to full calendar index for train window
-        try:
-            predict_idx = full_cal.index(predict_start)
-        except ValueError:
-            continue
-
-        train_end_idx = predict_idx - 1
-        train_start_idx = predict_idx - train_window_days
-
-        if train_start_idx < 0:
-            continue
-
-        train_start = full_cal[train_start_idx]
-        train_end = full_cal[train_end_idx] if train_end_idx >= 0 else full_cal[0]
-
-        windows.append(RollingWindow(
-            window_id=f"w{offset:04d}",
-            train_start=train_start,
-            train_end=train_end,
-            predict_start=predict_start,
-            predict_end=predict_end,
-        ))
-
-    return windows
-
-
-# ── Signal generator protocol ──────────────────────────────────────────
-
-
-class FixtureSignalGenerator:
-    """Deterministic fixture generator for testing / CI.
-
-    Returns random-shaped signals that are valid for SignalStore.
-    """
-
-    def __init__(self, n_instruments: int = 100, seed: int = 42) -> None:
-        self._n_inst = n_instruments
-        self._seed = seed
-
-    def generate(
-        self,
-        *,
-        train_start: str,
-        train_end: str,
-        predict_start: str,
-        predict_end: str,
-        signal_id: str,
-        signal_run_id: str,
-    ) -> pd.DataFrame:
-        import numpy as np
-        import pandas as pd
-        from datetime import datetime, timedelta
-
-        # Resolve full trading calendar and predict date range
-        _all_dates: list[str] = []
-        _predict_dates: list[str] = []
-        try:
-            from qsys.data.calendar import get_trading_calendar
-            _all_dates = sorted(get_trading_calendar("2000-01-01", predict_end) or [])
-        except Exception:
-            pass
-
-        if not _all_dates:
-            # Fallback: business days only, never weekend
-            _bdate_range = pd.bdate_range(start=predict_start, end=predict_end)
-            # Extend backward by 10 business days so the earliest trade_date
-            # still gets a valid previous business day as data_date
-            _extended_start = pd.bdate_range(
-                end=predict_start, periods=11, inclusive="left"
-            )
-            _all_dates = sorted(
-                set(d.strftime("%Y-%m-%d") for d in _extended_start)
-                | set(d.strftime("%Y-%m-%d") for d in _bdate_range)
-            )
-
-        _predict_dates = [d for d in _all_dates if predict_start <= d <= predict_end]
-
-        # Build lookup: trade_date -> previous business/trading day
-        _prev_map: dict[str, str] = {}
-        for i, d in enumerate(_all_dates):
-            _prev_map[d] = _all_dates[i - 1] if i > 0 else (
-                (pd.Timestamp(d) - pd.tseries.offsets.BDay(1)).strftime("%Y-%m-%d")
-            )
-
-        rng = np.random.default_rng(self._seed)
-        rows = []
-        for td in _predict_dates:
-            prev = _prev_map.get(td,
-                (pd.Timestamp(td) - pd.tseries.offsets.BDay(1)).strftime("%Y-%m-%d"))
-            for ii in range(self._n_inst):
-                rows.append({
-                    "trade_date": td,
-                    "data_date": prev,
-                    "instrument": f"000{ii:04d}.SZ",
-                    "signal_id": signal_id,
-                    "signal_run_id": signal_run_id,
-                    "score": float(rng.normal(0, 1)),
-                })
-        return pd.DataFrame(rows)
-
-
-class MultiHeadFixtureGenerator:
-    """Fixture generator producing rows with multiple signal_ids.
-
-    Simulates a multi-head model (e.g. DNN task-tower) where one
-    ``generate()`` call returns a DataFrame containing predictions
-    for multiple heads, differentiated by the ``signal_id`` column.
-    """
-
-    def __init__(
-        self,
-        head_signal_ids: tuple[str, ...] = ("head_a", "head_b"),
-        n_instruments: int = 50,
-        seed: int = 42,
-    ) -> None:
-        self._head_ids = head_signal_ids
-        self._n_inst = n_instruments
-        self._seed = seed
-
-    def generate(
-        self,
-        *,
-        train_start: str,
-        train_end: str,
-        predict_start: str,
-        predict_end: str,
-        signal_id: str,
-        signal_run_id: str,
-    ) -> pd.DataFrame:
-        import numpy as np
-        import pandas as pd
-        from datetime import datetime, timedelta
-
-        _all_dates: list[str] = []
-        try:
-            from qsys.data.calendar import get_trading_calendar
-            _all_dates = sorted(get_trading_calendar("2000-01-01", predict_end) or [])
-        except Exception:
-            pass
-        if not _all_dates:
-            _bdate_range = pd.bdate_range(start=predict_start, end=predict_end)
-            _extended_start = pd.bdate_range(end=predict_start, periods=11, inclusive="left")
-            _all_dates = sorted(
-                set(d.strftime("%Y-%m-%d") for d in _extended_start)
-                | set(d.strftime("%Y-%m-%d") for d in _bdate_range)
-            )
-
-        _predict_dates = [d for d in _all_dates if predict_start <= d <= predict_end]
-        _prev_map: dict[str, str] = {}
-        for i, d in enumerate(_all_dates):
-            _prev_map[d] = _all_dates[i - 1] if i > 0 else (
-                (pd.Timestamp(d) - pd.tseries.offsets.BDay(1)).strftime("%Y-%m-%d")
-            )
-
-        rng = np.random.default_rng(self._seed)
-        rows = []
-        for head_id in self._head_ids:
-            h_rng = np.random.default_rng(self._seed + hash(head_id) % 10000)
-            for td in _predict_dates:
-                prev = _prev_map.get(td,
-                    (pd.Timestamp(td) - pd.tseries.offsets.BDay(1)).strftime("%Y-%m-%d"))
-                for ii in range(self._n_inst):
-                    rows.append({
-                        "trade_date": td,
-                        "data_date": prev,
-                        "instrument": f"000{ii:04d}.SZ",
-                        "signal_id": head_id,
-                        "signal_run_id": signal_run_id,
-                        "score": float(h_rng.normal(0, 1)),
-                    })
-        return pd.DataFrame(rows)
-
-
-# ── Config dataclasses ─────────────────────────────────────────────────
-
-
-@dataclass
-class LabelConfig:
-    label_id: str
-    min_coverage: float | None = None
-
-
-@dataclass
-class BacktestConfig:
-    strategy_template_id: str = "rank_weight_top20"
-    allocation_method: str = "rank_weight"
-    top_n: int = 20
-    max_weight: float | None = None
-    initial_capital: float = 1_000_000.0
-    rebalance_freq: str = "weekly"
-    artifact_mode: str = "summary"
-
-
-@dataclass
-class SignalTransformConfig:
-    """Configuration for a single signal transform."""
-    transform_id: str
-    type: str
-
-
-@dataclass
-class MatrixJob:
-    """One cell in the matrix: a (generator, transform) pair with strategy configs.
-
-    Each job produces one SignalRun (shared across all strategies).
-
-    Parameters
-    ----------
-    head_signal_id:
-        When set, filter the generator's output to rows whose ``signal_id``
-        matches this value before saving.  Used by multi-head generators
-        (e.g. DNN task towers) that return a single DataFrame containing
-        multiple signal_ids.
-    """
-    generator_id: str
-    transform_id: str
-    strategy_configs: list[dict[str, Any]]
-    signal_id: str
-    signal_run_id: str
-    head_signal_id: str | None = None
-
-
-@dataclass
-class RollingResearchConfig:
-    """Full configuration for a rolling research run.
-
-    v1 single-signal mode: set ``signal`` (and optionally ``backtests``).
-    v2 matrix mode: set ``generators``, ``signal_transforms``, and ``strategies``.
-    """
-
-    experiment_id: str
-    title: str | None = None
-    description: str | None = None
-
-    calendar: dict[str, Any] = field(default_factory=dict)
-    # calendar keys: start_date, end_date, train_window_days, step_days
-
-    signal: dict[str, Any] = field(default_factory=dict)
-    # signal keys: signal_id, signal_run_id, score_column
-
-    labels: list[dict[str, Any]] = field(default_factory=list)
-    # each label: label_id
-
-    backtests: list[dict[str, Any]] = field(default_factory=list)
-    # each backtest: strategy_template_id, top_n, max_weight, ...  (v1 only)
-
-    # ── v2 matrix fields ───────────────────────────────────────────────
-    generators: list[dict[str, Any]] = field(default_factory=list)
-    # each generator: generator_id, type, params
-
-    transforms: list[dict[str, Any]] = field(default_factory=list)
-    # each transform: transform_id, type  (mapped from signal_transforms in YAML)
-
-    strategies: list[dict[str, Any]] = field(default_factory=list)
-    # each strategy: strategy_id, strategy_template_id, top_n, ...
-
-    # ── v2 signal combinations ──────────────────────────────────────────
-    signal_combinations: list[dict[str, Any]] = field(default_factory=list)
-    # each combination: combine_id, type, inputs
-
-    @classmethod
-    def from_file(cls, path: Path) -> RollingResearchConfig:
-        """Load config from YAML or JSON file."""
-        text = path.read_text(encoding="utf-8")
-        suffix = path.suffix.lower()
-        if suffix in (".yaml", ".yml"):
-            import yaml
-            payload = yaml.safe_load(text)
-        elif suffix == ".json":
-            payload = json.loads(text)
-        else:
-            raise ValueError(f"Unsupported config format: {path}")
-        return cls.from_dict(payload)
-
-    @classmethod
-    def from_dict(cls, payload: dict) -> RollingResearchConfig:
-        cal = payload.get("calendar", {})
-        sig = payload.get("signal", {})
-        labels = payload.get("labels", [])
-        backtests = payload.get("backtests", [])
-        generators = payload.get("generators", [])
-        transforms = payload.get("signal_transforms", [])
-        strategies = payload.get("strategies", [])
-        signal_combinations = payload.get("signal_combinations", [])
-        return cls(
-            experiment_id=payload.get("experiment_id", "rolling_run"),
-            title=payload.get("title"),
-            description=payload.get("description"),
-            calendar=cal,
-            signal=sig,
-            labels=labels,
-            backtests=backtests,
-            generators=generators,
-            transforms=transforms,
-            strategies=strategies,
-            signal_combinations=signal_combinations,
-        )
-
-
-# ── Generator factory ──────────────────────────────────────────────────
-
-
-def _slugify_id(raw: str) -> str:
-    """Sanitize an identifier for use in file paths and run IDs.
-
-    Replaces any non-alphanumeric, non-underscore, non-dash character
-    with underscore.
-    """
-    import re
-    return re.sub(r"[^a-zA-Z0-9_-]", "_", raw)
-
-
-def expand_multi_label_generators(generators: list[dict]) -> list[dict]:
-    """Expand ``multi_label_lightgbm`` entries into per-label ``single_label_lightgbm``.
-
-    Each label in the ``labels`` list becomes one independent generator entry
-    with ``generator_id = <base_id>__<label_id>``.  The per-label ``signal_id``
-    is propagated so that ``build_matrix_jobs`` assigns each label its own
-    named ``SignalRun``.
-
-    This is called before ``build_matrix_jobs`` and the raw-prediction loop
-    so the rest of the pipeline sees only single-label generators.
-    """
-    expanded: list[dict] = []
-    for gen_cfg in generators:
-        if gen_cfg.get("type") != "multi_label_lightgbm":
-            expanded.append(gen_cfg)
-            continue
-        params = gen_cfg.get("params", {})
-        labels = params.get("labels", [])
-        if not labels:
-            raise ValueError(
-                f"multi_label_lightgbm generator '{gen_cfg.get('generator_id')}' "
-                f"requires a 'labels' list in params"
-            )
-        base_id = gen_cfg["generator_id"]
-        for entry in labels:
-            label_id = entry["label_id"]
-            label_signal_id = entry.get("signal_id", label_id)
-            expanded.append({
-                "generator_id": _slugify_id(f"{base_id}__{label_id}"),
-                "type": "single_label_lightgbm",
-                "params": {
-                    "label_id": label_id,
-                    "universe": params.get("universe", "csi300"),
-                    "n_estimators": params.get("n_estimators", 200),
-                    "lgb_params": params.get("lgb_params"),
-                },
-                "label_signal_id": label_signal_id,
-            })
-    return expanded
-
-
-def _create_generator_from_config(gen_config: dict) -> RollingSignalGenerator:
-    """Create a generator instance from a config dict.
-
-    Supported types:
-    - ``fixture`` — deterministic fixture (tests/CI)
-    - ``alpha_v1_existing`` — existing alpha_v1 prediction adapter
-    - ``technical_composite`` — OHLCV-derived composite signal
-    """
-    gen_type = gen_config.get("type", "fixture")
-    params = gen_config.get("params", {})
-    if gen_type == "fixture":
-        return FixtureSignalGenerator(
-            n_instruments=params.get("n_instruments", 100),
-            seed=params.get("seed", 42),
-        )
-    if gen_type == "alpha_v1_existing":
-        from qsys.research.generators.alpha_v1_existing import AlphaV1ExistingGenerator
-        return AlphaV1ExistingGenerator()
-    if gen_type == "technical_composite":
-        from qsys.research.generators.technical_composite import TechnicalCompositeV1Generator
-        return TechnicalCompositeV1Generator(
-            momentum_short=params.get("momentum_short", 20),
-            momentum_long=params.get("momentum_long", 60),
-            reversal_days=params.get("reversal_days", 5),
-            volatility_days=params.get("volatility_days", 20),
-            volume_short=params.get("volume_short", 5),
-            volume_long=params.get("volume_long", 20),
-        )
-    if gen_type == "dnn_multitask":
-        from qsys.research.generators.dnn_multitask import DnnMultitaskGenerator
-        return DnnMultitaskGenerator(
-            project_root=_resolve_project_root(gen_config),
-            dnn_kwargs=params.get("dnn_kwargs"),
-            universe=params.get("universe", "csi300"),
-            label_ids=tuple(params.get("label_ids", ("fwd_ret_5d_xsz_clip3", "fwd_ret_20d_xsz_clip3"))),
-        )
-    if gen_type == "lightgbm_alpha_v1":
-        from qsys.research.generators.lightgbm_alpha_v1 import LightGBMAlphaV1Generator
-        return LightGBMAlphaV1Generator(
-            universe=params.get("universe", "csi300"),
-            n_estimators=params.get("n_estimators", 200),
-            lgb_params=params.get("lgb_params"),
-            label_ids=tuple(params.get("label_ids", ("fwd_ret_5d_xsz_clip3", "fwd_ret_20d_xsz_clip3"))),
-        )
-    if gen_type == "single_label_lightgbm":
-        from qsys.research.generators.lightgbm_single_label import LightGBMSingleLabelGenerator
-        return LightGBMSingleLabelGenerator(
-            label_id=params["label_id"],
-            universe=params.get("universe", "csi300"),
-            n_estimators=params.get("n_estimators", 200),
-            lgb_params=params.get("lgb_params"),
-        )
-    raise ValueError(f"Unknown generator type: {gen_type!r}")
-
-
-# ── Signal transforms ─────────────────────────────────────────────────
-
-
-def apply_signal_transform(
-    frame: pd.DataFrame,
-    transform_config: SignalTransformConfig | dict[str, Any],
-) -> pd.DataFrame:
-    """Apply a signal transform to a predictions DataFrame.
-
-    Parameters
-    ----------
-    frame:
-        DataFrame with at least columns ``trade_date``, ``score``.
-    transform_config:
-        Transform specification with ``transform_id`` and ``type``.
-
-    Returns
-    -------
-    pd.DataFrame
-        Frame with the same columns plus ``score_raw`` and ``transform_id``.
-        Column ``score`` is replaced with the transformed values.
-    """
-    if isinstance(transform_config, dict):
-        transform_config = SignalTransformConfig(**transform_config)
-
-    result = frame.copy()
-    result["score_raw"] = frame["score"]
-    result["transform_id"] = transform_config.transform_id
-
-    if transform_config.type == "identity":
-        result["score"] = frame["score"].copy()
-    elif transform_config.type == "daily_zscore":
-        def _safe_zscore(scores: pd.Series) -> pd.Series:
-            std = scores.std(ddof=0)
-            if pd.isna(std) or std == 0.0:
-                return pd.Series(0.0, index=scores.index)
-            return (scores - scores.mean()) / std
-
-        result["score"] = result.groupby("trade_date", group_keys=False)["score"].transform(
-            _safe_zscore
-        )
-    else:
-        raise ValueError(f"Unknown signal transform type: {transform_config.type!r}")
-
-    return result
-
-
-# ── Matrix job builder ────────────────────────────────────────────────
-
-
-def build_matrix_jobs(
+# ── Backward-compatible re-exports ────────────────────────────────────
+# Everything above is importable from this module as before.
+
+__all__ = [
+    # re-exported classes/functions
+    "RollingWindow",
+    "build_rolling_windows",
+    "MatrixJob",
+    "RollingResearchConfig",
+    "BacktestConfig",
+    "LabelConfig",
+    "SignalTransformConfig",
+    "_slugify_id",
+    "_create_generator_from_config",
+    "apply_signal_transform",
+    "build_matrix_jobs",
+    "expand_multi_label_generators",
+    "FixtureSignalGenerator",
+    "MultiHeadFixtureGenerator",
+    # own
+    "RollingResearchRunner",
+    "run_signal_backtests",
+]
+
+# ── Backtest triggering (extracted from _run_matrix) ──────────────────
+
+
+def run_signal_backtests(
+    signal_store: SignalStore,
+    jobs: list[MatrixJob],
     config: RollingResearchConfig,
-    effective_generators: list[dict] | None = None,
-) -> list[MatrixJob]:
-    """Expand a matrix config into individual (generator, transform) jobs.
+    *,
+    overwrite: bool = False,
+    research_root: str | Path = "data/research",
+) -> list[dict[str, Any]]:
+    """Run backtest for each job's strategy configs.
 
-    Each job carries the full list of strategy configs so that generation
-    and transform are performed once and backtests are run per strategy.
-
-    Parameters
-    ----------
-    config:
-        Full research config.
-    effective_generators:
-        Pre-expanded generator list (e.g. after multi-label expansion).
-        When ``None``, uses ``config.generators``.
+    This is a standalone function extracted from ``RollingResearchRunner._run_matrix``.
+    It can be called independently after signal generation is complete.
+    Returns a list of job_rows (suitable for ``matrix_jobs.csv``) and a list of
+    backtest refs for experiment index registration.
     """
-    generators = effective_generators if effective_generators is not None else config.generators
-    base_signal_id = config.signal.get("signal_id", "matrix_signal")
-    experiment_id = config.experiment_id
-    cal = config.calendar
-    start = cal.get("start_date", "")
-    end = cal.get("end_date", "")
+    from qsys.backtest.strategy_runner import BacktestRunner
 
-    jobs: list[MatrixJob] = []
-    for gen_cfg in generators:
-        gen_id = gen_cfg["generator_id"]
-        # Multi-label expanded entries carry an explicit per-label signal_id
-        label_signal_id = gen_cfg.get("label_signal_id", None)
-        # Multi-head generators carry per-head config
-        heads = gen_cfg.get("params", {}).get("heads", None)
-        for tf_cfg in config.transforms:
-            tf_id = tf_cfg["transform_id"]
-            if label_signal_id:
-                signal_id = f"{label_signal_id}__{tf_id}"
-            else:
-                signal_id = f"{base_signal_id}__{gen_id}__{tf_id}"
-            signal_run_id = (
-                f"rolling__{experiment_id}__{gen_id}__{tf_id}__{start}_{end}"
+    bt_runner = BacktestRunner()
+    bt_count = 0
+    all_bt_refs: list[tuple[str, str, str, str]] = []
+    job_rows: list[dict[str, Any]] = []
+
+    for job in jobs:
+        bt_refs_for_job: list[tuple[str, str]] = []
+        for scfg in job.strategy_configs:
+            bt_result = bt_runner.run_from_signal_cache(
+                signal_id=job.signal_id,
+                signal_run_id=job.signal_run_id,
+                start_date=scfg.get("start_date", config.calendar.get("start_date")),
+                end_date=scfg.get("end_date", config.calendar.get("end_date")),
+                initial_capital=scfg.get("initial_capital", 1_000_000.0),
+                top_n=scfg.get("top_n", 20),
+                max_weight=scfg.get("max_weight"),
+                strategy_template_id=scfg.get("strategy_template_id", "rank_weight_top20"),
+                allocation_method=scfg.get("allocation_method", "rank_weight"),
+                rebalance_freq=scfg.get("rebalance_freq", "weekly"),
+                artifact_mode=scfg.get("artifact_mode", "summary"),
+                overwrite=overwrite,
+                research_root=str(research_root),
             )
-            if heads:
-                for head in heads:
-                    head_signal_id = head.get("signal_id", "").strip()
-                    if not head_signal_id:
-                        raise ValueError(
-                            f"multi-head generator '{gen_id}' has a head entry "
-                            f"with empty or missing signal_id"
-                        )
-                    head_slug = _slugify_id(head_signal_id)
-                    head_job_signal_id = f"{head_signal_id}__{tf_id}"
-                    jobs.append(MatrixJob(
-                        generator_id=gen_id,
-                        transform_id=tf_id,
-                        strategy_configs=config.strategies,
-                        signal_id=head_job_signal_id,
-                        signal_run_id=f"{signal_run_id}__{head_slug}",
-                        head_signal_id=head_signal_id,
-                    ))
-            else:
-                jobs.append(MatrixJob(
-                    generator_id=gen_id,
-                    transform_id=tf_id,
-                    strategy_configs=config.strategies,
-                    signal_id=signal_id,
-                    signal_run_id=signal_run_id,
-                ))
-    return jobs
+
+            if not hasattr(bt_result, "artifacts") or not bt_result.artifacts:
+                raise RuntimeError("BacktestRunResult missing artifacts dict")
+            _mf_path = bt_result.artifacts.get("manifest")
+            if not _mf_path or not Path(_mf_path).exists():
+                raise RuntimeError(f"Backtest manifest not found: {_mf_path}")
+            _mf = json.loads(Path(_mf_path).read_text())
+            _sid = _mf.get("strategy_run_id")
+            _bid = _mf.get("backtest_id")
+            if not _sid or not _bid:
+                raise RuntimeError(
+                    f"Backtest manifest missing strategy_run_id or backtest_id in {_mf_path}"
+                )
+            bt_refs_for_job.append((_sid, _bid))
+            all_bt_refs.append((job.signal_id, job.signal_run_id, _sid, _bid))
+            bt_count += 1
+
+            job_rows.append({
+                "generator_id": job.generator_id,
+                "transform_id": job.transform_id,
+                "strategy_id": scfg.get("strategy_id", scfg.get("strategy_template_id", "")),
+                "signal_id": job.signal_id,
+                "signal_run_id": job.signal_run_id,
+                "head_signal_id": job.head_signal_id or "",
+                "strategy_template_id": scfg.get("strategy_template_id", ""),
+                "top_n": scfg.get("top_n", ""),
+                "backtest_id": _bid,
+                "strategy_run_id": _sid,
+                "status": "completed",
+            })
+
+        # Register backtest refs in experiment index
+        from qsys.research.experiment import ExperimentIndex
+        ei = ExperimentIndex(str(research_root))
+        for _sid, _bid in bt_refs_for_job:
+            ei.add_backtest_run(
+                config.experiment_id,
+                strategy_run_id=_sid,
+                backtest_id=_bid,
+            )
+
+    return job_rows, all_bt_refs
 
 
 # ── RollingResearchRunner ──────────────────────────────────────────────
@@ -674,7 +232,6 @@ class RollingResearchRunner:
                 if "universe" in lcfg:
                     _kwargs["universe"] = lcfg["universe"]
                 elif config.generators:
-                    # Derive universe from first generator's params
                     _first_gen = config.generators[0]
                     _univ = _first_gen.get("params", {}).get("universe")
                     if _univ:
@@ -684,7 +241,6 @@ class RollingResearchRunner:
                     _kwargs["min_coverage"] = mc
                 _ls.validate_label(lid, **_kwargs)
                 print(f"  Label {lid}: pre-flight OK")
-
 
         # ── 1. Build rolling windows ──
         windows = build_rolling_windows(
@@ -714,7 +270,7 @@ class RollingResearchRunner:
                 overwrite_experiment=overwrite_experiment,
             )
 
-        # ── v1 single-signal path (unchanged) ──
+        # ── v1 single-signal path ──
         signal_id = config.signal.get("signal_id", "rolling_signal")
         signal_run_id = config.signal.get("signal_run_id", "rolling_run")
         gen = signal_generator or FixtureSignalGenerator()
@@ -741,6 +297,7 @@ class RollingResearchRunner:
             overwrite=overwrite_signal,
         )
 
+        # ── Evaluate ──
         from qsys.research.evaluation import SignalEvaluator
 
         evaluator = SignalEvaluator(str(self.root))
@@ -755,42 +312,27 @@ class RollingResearchRunner:
             )
             eval_count += 1
 
-        # ── 4. Backtest ──
-        from qsys.backtest.strategy_runner import BacktestRunner
-
-        runner = BacktestRunner()
+        # ── Backtest (delegated) ──
         bt_count = 0
         bt_manifest_refs: list[tuple[str, str]] = []
-        for btc in config.backtests:
-            bt_result = runner.run_from_signal_cache(
+        if config.backtests:
+            jobs = [MatrixJob(
+                generator_id="single",
+                transform_id="raw",
+                strategy_configs=config.backtests,
                 signal_id=signal_id,
                 signal_run_id=signal_run_id,
-                start_date=btc.get("start_date", config.calendar.get("start_date")),
-                end_date=btc.get("end_date", config.calendar.get("end_date")),
-                initial_capital=btc.get("initial_capital", 1_000_000.0),
-                top_n=btc.get("top_n", 20),
-                max_weight=btc.get("max_weight"),
-                strategy_template_id=btc.get("strategy_template_id", "rank_weight_top20"),
-                allocation_method=btc.get("allocation_method", "rank_weight"),
-                rebalance_freq=btc.get("rebalance_freq", "weekly"),
-                artifact_mode=btc.get("artifact_mode", "summary"),
+            )]
+            bt_job_rows, bt_all_refs = run_signal_backtests(
+                self._signal_store, jobs, config,
                 overwrite=overwrite_backtest,
+                research_root=str(self.root),
             )
-            if not hasattr(bt_result, "artifacts") or not bt_result.artifacts:
-                raise RuntimeError("BacktestRunResult missing artifacts dict")
-            _mf_path = bt_result.artifacts.get("manifest")
-            if not _mf_path or not Path(_mf_path).exists():
-                raise RuntimeError(f"Backtest manifest not found: {_mf_path}")
-            import json as _j
-            _mf = _j.loads(Path(_mf_path).read_text())
-            _sid = _mf.get("strategy_run_id")
-            _bid = _mf.get("backtest_id")
-            if not _sid or not _bid:
-                raise RuntimeError(f"Backtest manifest missing strategy_run_id or backtest_id in {_mf_path}")
-            bt_manifest_refs.append((_sid, _bid))
-            bt_count += 1
+            bt_count = len(bt_all_refs)
+            # bt_all_refs format: [(signal_id, signal_run_id, strategy_run_id, backtest_id)]
+            bt_manifest_refs = [(sr, bt) for _, _, sr, bt in bt_all_refs]
 
-        # ── 5. Experiment index ──
+        # ── Experiment index ──
         self._experiment_index.create(
             ExperimentSpec(
                 experiment_id=config.experiment_id,
@@ -812,9 +354,9 @@ class RollingResearchRunner:
         for _sid, _bid in bt_manifest_refs:
             self._experiment_index.add_backtest_run(config.experiment_id, strategy_run_id=_sid, backtest_id=_bid)
 
-        index_result = self._experiment_index.rebuild_indexes(config.experiment_id)
+        self._experiment_index.rebuild_indexes(config.experiment_id)
 
-        # ── 6. Rolling research manifest ──
+        # ── Rolling research manifest ──
         manifest = with_standard_metadata({
             "artifact_type": "rolling_research",
             "experiment_id": config.experiment_id,
@@ -858,7 +400,6 @@ class RollingResearchRunner:
     ) -> dict[str, Any]:
         """Matrix experiment: generators × transforms × strategies."""
         from qsys.research.evaluation import SignalEvaluator
-        from qsys.backtest.strategy_runner import BacktestRunner
 
         exp_dir = self._paths.experiment_dir(config.experiment_id)
 
@@ -881,12 +422,9 @@ class RollingResearchRunner:
 
         # ── 4. Generate raw predictions once per generator ──
         evaluator = SignalEvaluator(str(self.root))
-        bt_runner = BacktestRunner()
 
         raw_predictions: dict[str, pd.DataFrame] = {}
         eval_count = 0
-        bt_count = 0
-        all_bt_refs: list[tuple[str, str, str, str]] = []
 
         for gen_cfg in effective_generators:
             gen_id = gen_cfg["generator_id"]
@@ -905,8 +443,9 @@ class RollingResearchRunner:
                 all_preds.append(pred)
             raw_predictions[gen_id] = pd.concat(all_preds, ignore_index=True)
 
-        # ── 5. For each job: transform → save → eval → backtest → index ──
+        # ── 5. For each job: transform → save → eval → index ──
         job_rows: list[dict[str, Any]] = []
+        bt_refs_for_experiment: list[tuple[str, str, str, str]] = []
 
         for job in jobs:
             raw = raw_predictions[job.generator_id]
@@ -952,56 +491,6 @@ class RollingResearchRunner:
                 )
                 eval_count += 1
 
-            # Run backtest for each strategy
-            bt_refs_for_job: list[tuple[str, str]] = []
-            for scfg in job.strategy_configs:
-                bt_result = bt_runner.run_from_signal_cache(
-                    signal_id=job.signal_id,
-                    signal_run_id=job.signal_run_id,
-                    start_date=scfg.get("start_date", config.calendar.get("start_date")),
-                    end_date=scfg.get("end_date", config.calendar.get("end_date")),
-                    initial_capital=scfg.get("initial_capital", 1_000_000.0),
-                    top_n=scfg.get("top_n", 20),
-                    max_weight=scfg.get("max_weight"),
-                    strategy_template_id=scfg.get("strategy_template_id", "rank_weight_top20"),
-                    allocation_method=scfg.get("allocation_method", "rank_weight"),
-                    rebalance_freq=scfg.get("rebalance_freq", "weekly"),
-                    artifact_mode=scfg.get("artifact_mode", "summary"),
-                    overwrite=overwrite_backtest,
-                    research_root=str(self.root),
-                )
-
-                # Extract backtest IDs from manifest
-                if not hasattr(bt_result, "artifacts") or not bt_result.artifacts:
-                    raise RuntimeError("BacktestRunResult missing artifacts dict")
-                _mf_path = bt_result.artifacts.get("manifest")
-                if not _mf_path or not Path(_mf_path).exists():
-                    raise RuntimeError(f"Backtest manifest not found: {_mf_path}")
-                _mf = json.loads(Path(_mf_path).read_text())
-                _sid = _mf.get("strategy_run_id")
-                _bid = _mf.get("backtest_id")
-                if not _sid or not _bid:
-                    raise RuntimeError(
-                        f"Backtest manifest missing strategy_run_id or backtest_id in {_mf_path}"
-                    )
-                bt_refs_for_job.append((_sid, _bid))
-                all_bt_refs.append((job.signal_id, job.signal_run_id, _sid, _bid))
-                bt_count += 1
-
-                job_rows.append({
-                    "generator_id": job.generator_id,
-                    "transform_id": job.transform_id,
-                    "strategy_id": scfg.get("strategy_id", scfg.get("strategy_template_id", "")),
-                    "signal_id": job.signal_id,
-                    "signal_run_id": job.signal_run_id,
-                    "head_signal_id": job.head_signal_id or "",
-                    "strategy_template_id": scfg.get("strategy_template_id", ""),
-                    "top_n": scfg.get("top_n", ""),
-                    "backtest_id": _bid,
-                    "strategy_run_id": _sid,
-                    "status": "completed",
-                })
-
             # Register signal run and evals in experiment index
             self._experiment_index.add_signal_run(
                 config.experiment_id,
@@ -1015,14 +504,19 @@ class RollingResearchRunner:
                     signal_run_id=job.signal_run_id,
                     label_id=lcfg["label_id"],
                 )
-            for _sid, _bid in bt_refs_for_job:
-                self._experiment_index.add_backtest_run(
-                    config.experiment_id,
-                    strategy_run_id=_sid,
-                    backtest_id=_bid,
-                )
 
-        # ── 6 (cont). Signal combinations (cross-signal) ──────────────
+        # ── Backtest (delegated) ──
+        bt_count = 0
+        if config.strategies and any(j.strategy_configs for j in jobs):
+            bt_job_rows, bt_all_refs = run_signal_backtests(
+                self._signal_store, jobs, config,
+                overwrite=overwrite_backtest,
+                research_root=str(self.root),
+            )
+            job_rows.extend(bt_job_rows)
+            bt_count = len(bt_all_refs)
+
+        # ── 6 (cont). Signal combinations ──────────────────────────────
         combine_count = 0
         combined_signal_run_ids: list[str] = []
         if config.signal_combinations:
@@ -1030,10 +524,8 @@ class RollingResearchRunner:
                 CombineSpec,
                 build_combine_spec_from_config,
                 combine_signals,
-                build_cross_signal_index,
             )
 
-            # Build signal_id_map and signal_run_id_map from jobs
             signal_id_map: dict[str, str] = {}
             signal_run_id_map: dict[str, str] = {}
             for job in jobs:
@@ -1063,7 +555,6 @@ class RollingResearchRunner:
                 combined_output_ids.append(out_sig_id)
                 combined_output_run_ids.append(out_run_id)
 
-                # Run combination
                 combined_df = combine_signals(
                     spec,
                     output_signal_id=out_sig_id,
@@ -1084,64 +575,70 @@ class RollingResearchRunner:
                     )
                     eval_count += 1
 
-                # Backtest combined signal against all strategies
-                bt_refs_combined: list[tuple[str, str]] = []
-                for scfg in config.strategies:
-                    bt_result = bt_runner.run_from_signal_cache(
+                # Backtest combined signals (delegated)
+                if config.strategies:
+                    cmb_jobs = [MatrixJob(
+                        generator_id=spec.combine_id,
+                        transform_id="combined",
+                        strategy_configs=config.strategies,
                         signal_id=out_sig_id,
                         signal_run_id=out_run_id,
-                        start_date=scfg.get("start_date", cal.get("start_date")),
-                        end_date=scfg.get("end_date", cal.get("end_date")),
-                        initial_capital=scfg.get("initial_capital", 1_000_000.0),
-                        top_n=scfg.get("top_n", 20),
-                        max_weight=scfg.get("max_weight"),
-                        strategy_template_id=scfg.get(
-                            "strategy_template_id", "rank_weight_top20"
-                        ),
-                        allocation_method=scfg.get("allocation_method", "rank_weight"),
-                        rebalance_freq=scfg.get("rebalance_freq", "weekly"),
-                        artifact_mode=scfg.get("artifact_mode", "summary"),
-                        overwrite=overwrite_backtest,
-                        research_root=str(self.root),
+                    )]
+                    cmb_cfg = RollingResearchConfig(
+                        experiment_id=config.experiment_id,
+                        calendar=config.calendar,
                     )
-
-                    if not hasattr(bt_result, "artifacts") or not bt_result.artifacts:
-                        raise RuntimeError("BacktestRunResult missing artifacts dict")
-                    _mf_path = bt_result.artifacts.get("manifest")
-                    if not _mf_path or not Path(_mf_path).exists():
-                        raise RuntimeError(
-                            f"Backtest manifest not found: {_mf_path}"
+                    from qsys.backtest.strategy_runner import BacktestRunner
+                    bt_runner = BacktestRunner()
+                    for scfg in config.strategies:
+                        bt_result = bt_runner.run_from_signal_cache(
+                            signal_id=out_sig_id,
+                            signal_run_id=out_run_id,
+                            start_date=scfg.get("start_date", cal.get("start_date")),
+                            end_date=scfg.get("end_date", cal.get("end_date")),
+                            initial_capital=scfg.get("initial_capital", 1_000_000.0),
+                            top_n=scfg.get("top_n", 20),
+                            max_weight=scfg.get("max_weight"),
+                            strategy_template_id=scfg.get("strategy_template_id", "rank_weight_top20"),
+                            allocation_method=scfg.get("allocation_method", "rank_weight"),
+                            rebalance_freq=scfg.get("rebalance_freq", "weekly"),
+                            artifact_mode=scfg.get("artifact_mode", "summary"),
+                            overwrite=overwrite_backtest,
+                            research_root=str(self.root),
                         )
-                    import json as _j
-                    _mf = _j.loads(Path(_mf_path).read_text())
-                    _sid = _mf.get("strategy_run_id")
-                    _bid = _mf.get("backtest_id")
-                    if not _sid or not _bid:
-                        raise RuntimeError(
-                            f"Backtest manifest missing strategy_run_id or "
-                            f"backtest_id in {_mf_path}"
-                        )
-                    bt_refs_combined.append((_sid, _bid))
-                    all_bt_refs.append((out_sig_id, out_run_id, _sid, _bid))
-                    bt_count += 1
 
-                    job_rows.append({
-                        "generator_id": spec.combine_id,
-                        "transform_id": "combined",
-                        "strategy_id": scfg.get(
-                            "strategy_id", scfg.get("strategy_template_id", "")
-                        ),
-                        "signal_id": out_sig_id,
-                        "signal_run_id": out_run_id,
-                        "head_signal_id": "",
-                        "strategy_template_id": scfg.get(
-                            "strategy_template_id", ""
-                        ),
-                        "top_n": scfg.get("top_n", ""),
-                        "backtest_id": _bid,
-                        "strategy_run_id": _sid,
-                        "status": "completed",
-                    })
+                        if not hasattr(bt_result, "artifacts") or not bt_result.artifacts:
+                            raise RuntimeError("BacktestRunResult missing artifacts dict")
+                        _mf_path = bt_result.artifacts.get("manifest")
+                        if not _mf_path or not Path(_mf_path).exists():
+                            raise RuntimeError(f"Backtest manifest not found: {_mf_path}")
+                        _mf = json.loads(Path(_mf_path).read_text())
+                        _sid = _mf.get("strategy_run_id")
+                        _bid = _mf.get("backtest_id")
+                        if not _sid or not _bid:
+                            raise RuntimeError(
+                                f"Backtest manifest missing strategy_run_id or "
+                                f"backtest_id in {_mf_path}"
+                            )
+                        bt_count += 1
+
+                        job_rows.append({
+                            "generator_id": spec.combine_id,
+                            "transform_id": "combined",
+                            "strategy_id": scfg.get("strategy_id", scfg.get("strategy_template_id", "")),
+                            "signal_id": out_sig_id,
+                            "signal_run_id": out_run_id,
+                            "head_signal_id": "",
+                            "strategy_template_id": scfg.get("strategy_template_id", ""),
+                            "top_n": scfg.get("top_n", ""),
+                            "backtest_id": _bid,
+                            "strategy_run_id": _sid,
+                            "status": "completed",
+                        })
+
+                        self._experiment_index.add_backtest_run(
+                            config.experiment_id, strategy_run_id=_sid, backtest_id=_bid,
+                        )
 
                 # Register combined signal in experiment index
                 self._experiment_index.add_signal_run(
@@ -1155,12 +652,6 @@ class RollingResearchRunner:
                         signal_id=out_sig_id,
                         signal_run_id=out_run_id,
                         label_id=lcfg["label_id"],
-                    )
-                for _sid, _bid in bt_refs_combined:
-                    self._experiment_index.add_backtest_run(
-                        config.experiment_id,
-                        strategy_run_id=_sid,
-                        backtest_id=_bid,
                     )
 
                 combine_count += 1
@@ -1186,8 +677,9 @@ class RollingResearchRunner:
             "strategy_template_id", "top_n",
             "backtest_id", "strategy_run_id", "status",
         ]
-        job_df = pd.DataFrame(job_rows, columns=job_cols)
-        job_df.to_csv(exp_dir / "matrix_jobs.csv", index=False)
+        if job_rows:
+            job_df = pd.DataFrame(job_rows, columns=job_cols)
+            job_df.to_csv(exp_dir / "matrix_jobs.csv", index=False)
 
         # ── 9. Rolling research manifest ──
         signal_runs_summary = [
@@ -1198,15 +690,6 @@ class RollingResearchRunner:
                 "signal_run_id": j.signal_run_id,
             }
             for j in jobs
-        ]
-        bt_refs_summary = [
-            {
-                "signal_id": sid,
-                "signal_run_id": srid,
-                "strategy_run_id": srid2,
-                "backtest_id": bid,
-            }
-            for sid, srid, srid2, bid in all_bt_refs
         ]
         manifest = with_standard_metadata({
             "artifact_type": "rolling_research",
@@ -1220,7 +703,6 @@ class RollingResearchRunner:
             "job_count": len(jobs),
             "window_count": len(windows),
             "signal_runs": signal_runs_summary,
-            "backtest_refs": bt_refs_summary,
             "labels": config.labels,
             "date_range": {
                 "start": config.calendar.get("start_date"),
