@@ -722,6 +722,7 @@ class TestMatrixExperiment:
         expected_cols = [
             "generator_id", "transform_id", "strategy_id",
             "signal_id", "signal_run_id",
+            "head_signal_id",
             "strategy_template_id", "top_n",
             "backtest_id", "strategy_run_id", "status",
         ]
@@ -1782,3 +1783,131 @@ class TestMultiHeadRunnerSupport:
 
         # head_b rows should NOT appear in head_a's SignalRun
         assert "head_b" not in loaded["signal_id"].values
+
+    def test_multi_head_runner_saves_independent_signalruns(self, tmp_path) -> None:
+        """Runner-level: multi-head generator produces 2 SignalRuns via _run_matrix."""
+        from qsys.research.rolling_runner import (
+            RollingResearchRunner,
+            RollingResearchConfig,
+            RollingWindow,
+            MultiHeadFixtureGenerator,
+        )
+        from qsys.signal.store import SignalStore
+        import pandas as pd
+        from unittest.mock import patch
+
+        runner = RollingResearchRunner(str(tmp_path))
+        config = RollingResearchConfig(
+            experiment_id="mh_end2end",
+            generators=[
+                {
+                    "generator_id": "dnn",
+                    "type": "multi_head_fixture",
+                    "params": {
+                        "heads": [
+                            {"signal_id": "task_dir"},
+                            {"signal_id": "task_mag"},
+                        ],
+                    },
+                },
+            ],
+            transforms=[{"transform_id": "raw", "type": "identity"}],
+            strategies=[],
+            calendar={"start_date": "2026-01-01", "end_date": "2026-01-15"},
+            labels=[],
+        )
+
+        windows = [
+            RollingWindow(
+                window_id="w0000",
+                train_start="2026-01-01", train_end="2026-01-10",
+                predict_start="2026-01-12", predict_end="2026-01-16",
+            ),
+        ]
+
+        gen = MultiHeadFixtureGenerator(
+            head_signal_ids=("task_dir", "task_mag"), seed=42,
+        )
+
+        with patch("qsys.data.calendar.get_trading_calendar",
+                   return_value=["2026-01-12", "2026-01-13", "2026-01-14", "2026-01-15", "2026-01-16"]), \
+             patch("qsys.research.evaluation.SignalEvaluator") as me, \
+             patch("qsys.backtest.strategy_runner.BacktestRunner") as mb:
+            me.return_value.evaluate.return_value = None
+            mb.return_value.run_from_signal_cache.return_value = type("R", (), {
+                "backtest_id": "bt1",
+                "artifacts": {"manifest": "/tmp/dummy"},
+            })()
+
+            result = runner._run_matrix(
+                config, windows,
+                signal_generator=gen,
+                overwrite_signal=True, overwrite_eval=True,
+                overwrite_backtest=True, overwrite_experiment=True,
+            )
+
+        assert result["signal_run_count"] == 2
+
+        store = SignalStore(str(tmp_path))
+        all_runs = store.list_signal_runs()
+        assert len(all_runs) == 2
+
+        # Load each SignalRun and verify it only contains its own head's data
+        for head_id, signal_id in [("task_dir", "task_dir__raw"), ("task_mag", "task_mag__raw")]:
+            matching = all_runs[all_runs["signal_id"] == signal_id]
+            assert len(matching) == 1, f"SignalRun for {signal_id} should exist"
+            run_id = matching.iloc[0]["signal_run_id"]
+            df = store.load_signal_run(signal_id, run_id)
+            assert len(df) > 0
+            # The saved DataFrame should have had signal_id overwritten to the job signal_id
+            assert (df["signal_id"] == signal_id).all()
+
+
+class TestMultiHeadValidation:
+    """Input validation for multi-head generators."""
+
+    def test_empty_head_signal_id_raises(self) -> None:
+        from qsys.research.rolling_runner import build_matrix_jobs, RollingResearchConfig
+
+        config = RollingResearchConfig(
+            experiment_id="bad_heads",
+            generators=[
+                {
+                    "generator_id": "dnn",
+                    "type": "multi_head_fixture",
+                    "params": {
+                        "heads": [
+                            {"signal_id": ""},
+                        ],
+                    },
+                },
+            ],
+            transforms=[{"transform_id": "raw", "type": "identity"}],
+            strategies=[],
+            calendar={"start_date": "2026-01-01", "end_date": "2026-01-10"},
+        )
+        with pytest.raises(ValueError, match="empty or missing"):
+            build_matrix_jobs(config)
+
+    def test_missing_head_signal_id_key_raises(self) -> None:
+        from qsys.research.rolling_runner import build_matrix_jobs, RollingResearchConfig
+
+        config = RollingResearchConfig(
+            experiment_id="bad_heads",
+            generators=[
+                {
+                    "generator_id": "dnn",
+                    "type": "multi_head_fixture",
+                    "params": {
+                        "heads": [
+                            {"not_signal_id": "val"},
+                        ],
+                    },
+                },
+            ],
+            transforms=[{"transform_id": "raw", "type": "identity"}],
+            strategies=[],
+            calendar={"start_date": "2026-01-01", "end_date": "2026-01-10"},
+        )
+        with pytest.raises(ValueError, match="empty or missing"):
+            build_matrix_jobs(config)

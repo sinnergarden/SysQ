@@ -576,14 +576,20 @@ def build_matrix_jobs(
             )
             if heads:
                 for head in heads:
-                    head_signal_id = head.get("signal_id", "")
+                    head_signal_id = head.get("signal_id", "").strip()
+                    if not head_signal_id:
+                        raise ValueError(
+                            f"multi-head generator '{gen_id}' has a head entry "
+                            f"with empty or missing signal_id"
+                        )
+                    head_slug = _slugify_id(head_signal_id)
                     head_job_signal_id = f"{head_signal_id}__{tf_id}"
                     jobs.append(MatrixJob(
                         generator_id=gen_id,
                         transform_id=tf_id,
                         strategy_configs=config.strategies,
                         signal_id=head_job_signal_id,
-                        signal_run_id=f"{signal_run_id}__{head_signal_id}",
+                        signal_run_id=f"{signal_run_id}__{head_slug}",
                         head_signal_id=head_signal_id,
                     ))
             else:
@@ -988,6 +994,7 @@ class RollingResearchRunner:
                     "strategy_id": scfg.get("strategy_id", scfg.get("strategy_template_id", "")),
                     "signal_id": job.signal_id,
                     "signal_run_id": job.signal_run_id,
+                    "head_signal_id": job.head_signal_id or "",
                     "strategy_template_id": scfg.get("strategy_template_id", ""),
                     "top_n": scfg.get("top_n", ""),
                     "backtest_id": _bid,
@@ -1126,6 +1133,7 @@ class RollingResearchRunner:
                         ),
                         "signal_id": out_sig_id,
                         "signal_run_id": out_run_id,
+                        "head_signal_id": "",
                         "strategy_template_id": scfg.get(
                             "strategy_template_id", ""
                         ),
@@ -1174,6 +1182,7 @@ class RollingResearchRunner:
         job_cols = [
             "generator_id", "transform_id", "strategy_id",
             "signal_id", "signal_run_id",
+            "head_signal_id",
             "strategy_template_id", "top_n",
             "backtest_id", "strategy_run_id", "status",
         ]
