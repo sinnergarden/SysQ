@@ -88,14 +88,23 @@ class LightGBMAlphaV1Generator:
     Labels are loaded from LabelStore.  ``make_zs_label`` is
     no longer used as the primary path.
 
+    .. note::
+
+       **Legacy compatibility**: this generator blends multiple label
+       predictions (e.g. 5d + 20d) into a **single** ``score`` column.
+       This predates the Generator→Combine separation.  For new research,
+       train **one model per label** so each label produces its own
+       ``SignalRun``, then combine via ``signal_combine.py`` (combine
+       layer).  ``blend_weights`` only exists for this legacy path.
+
     Parameters
     ----------
     blend_weights:
-        Weight per label horizon for the final blended score.
-        Each horizon's prediction is cross-sectionally z-scored then
-        multiplied by its weight.  Default ``{"5d": 0.8, "20d": 0.2}``
-        preserves the legacy ``compute_signal(blend_5d=0.8, blend_20d=0.2)``
-        behaviour.
+        Weight per label horizon for the blended score (legacy alpha_v1
+        compatibility).  Each horizon's prediction is cross-sectionally
+        z-scored then multiplied by its weight and summed into a single
+        score.  Default ``{"5d": 0.8, "20d": 0.2}`` preserves the
+        legacy ``compute_signal(blend_5d=0.8, blend_20d=0.2)`` behaviour.
     """
 
     universe: str = "csi300"

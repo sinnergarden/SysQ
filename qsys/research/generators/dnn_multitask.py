@@ -73,6 +73,13 @@ class DnnMultitaskGenerator:
     Labels are loaded from LabelStore via ``label_ids``.
     ``_labels_from_close`` is no longer used as the primary path.
 
+    .. note::
+
+       **Legacy compatibility**: this generator blends multiple task
+       outputs into a **single** ``score`` column using ``blend_weights``.
+       For new research, expose each task tower as a separate
+       ``SignalRun`` and combine via ``signal_combine.py``.
+
     Parameters
     ----------
     project_root: Path | None
@@ -84,10 +91,13 @@ class DnnMultitaskGenerator:
     label_ids: tuple[str, ...]
         LabelStore label IDs to use as training targets.
     blend_weights:
-        Weight per model prediction column for the final blended score.
-        Each column is cross-sectionally z-scored then weighted.
-        Default ``{"5d": 0.5, "20d": 0.5}`` preserves the existing
-        ``(score_5d + score_20d) / 2.0`` behaviour.
+        Weight per model prediction column for the blended score (legacy
+        compatibility).  Each column is cross-sectionally z-scored then
+        weighted.  Default ``{"5d": 0.5, "20d": 0.5}`` preserves the
+        existing ``(score_5d + score_20d) / 2.0`` behaviour.
+
+        For new research: expose each task tower as a separate ``SignalRun``
+        and combine in the combine layer (``signal_combine.py``).
     """
 
     project_root: Path | None = None

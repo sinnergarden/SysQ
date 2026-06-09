@@ -140,6 +140,17 @@ python -m pytest tests/research/test_generators_golden.py -v
 
 信号生成器是 research 管线的核心可插拔点。每个 generator 实现 `RollingSignalGenerator` Protocol（`qsys/research/generators/base.py`）。
 
+### 核心边界
+
+::
+
+   Generator:   label/task ─→ base signal (单个 score 列)
+   Combine:     多个 base signal ─→ final composite signal
+
+Generator 内部不做最终组合。多 label 模型应该每个 label 输出一个独立 `SignalRun`，通过 `signal_combine.py`（combine 层）组合。只有这样，每个 base signal 才能被单独评估 IC、回测、替换、调节权重。
+
+**例外**：`LightGBMAlphaV1Generator` 和 `DnnMultitaskGenerator` 的 `blend_weights` 参数是 legacy alpha_v1 兼容路径，将多个 label 预测混合成一个 score。新 generator 不应延续这个模式。
+
 ### 契约
 
 - 输入：`(train_start, train_end, predict_start, predict_end, signal_id, signal_run_id)` — 全是 str YYYY-MM-DD
