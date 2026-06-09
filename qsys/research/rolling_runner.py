@@ -177,6 +177,78 @@ class FixtureSignalGenerator:
         return pd.DataFrame(rows)
 
 
+class MultiHeadFixtureGenerator:
+    """Fixture generator producing rows with multiple signal_ids.
+
+    Simulates a multi-head model (e.g. DNN task-tower) where one
+    ``generate()`` call returns a DataFrame containing predictions
+    for multiple heads, differentiated by the ``signal_id`` column.
+    """
+
+    def __init__(
+        self,
+        head_signal_ids: tuple[str, ...] = ("head_a", "head_b"),
+        n_instruments: int = 50,
+        seed: int = 42,
+    ) -> None:
+        self._head_ids = head_signal_ids
+        self._n_inst = n_instruments
+        self._seed = seed
+
+    def generate(
+        self,
+        *,
+        train_start: str,
+        train_end: str,
+        predict_start: str,
+        predict_end: str,
+        signal_id: str,
+        signal_run_id: str,
+    ) -> pd.DataFrame:
+        import numpy as np
+        import pandas as pd
+        from datetime import datetime, timedelta
+
+        _all_dates: list[str] = []
+        try:
+            from qsys.data.calendar import get_trading_calendar
+            _all_dates = sorted(get_trading_calendar("2000-01-01", predict_end) or [])
+        except Exception:
+            pass
+        if not _all_dates:
+            _bdate_range = pd.bdate_range(start=predict_start, end=predict_end)
+            _extended_start = pd.bdate_range(end=predict_start, periods=11, inclusive="left")
+            _all_dates = sorted(
+                set(d.strftime("%Y-%m-%d") for d in _extended_start)
+                | set(d.strftime("%Y-%m-%d") for d in _bdate_range)
+            )
+
+        _predict_dates = [d for d in _all_dates if predict_start <= d <= predict_end]
+        _prev_map: dict[str, str] = {}
+        for i, d in enumerate(_all_dates):
+            _prev_map[d] = _all_dates[i - 1] if i > 0 else (
+                (pd.Timestamp(d) - pd.tseries.offsets.BDay(1)).strftime("%Y-%m-%d")
+            )
+
+        rng = np.random.default_rng(self._seed)
+        rows = []
+        for head_id in self._head_ids:
+            h_rng = np.random.default_rng(self._seed + hash(head_id) % 10000)
+            for td in _predict_dates:
+                prev = _prev_map.get(td,
+                    (pd.Timestamp(td) - pd.tseries.offsets.BDay(1)).strftime("%Y-%m-%d"))
+                for ii in range(self._n_inst):
+                    rows.append({
+                        "trade_date": td,
+                        "data_date": prev,
+                        "instrument": f"000{ii:04d}.SZ",
+                        "signal_id": head_id,
+                        "signal_run_id": signal_run_id,
+                        "score": float(h_rng.normal(0, 1)),
+                    })
+        return pd.DataFrame(rows)
+
+
 # ── Config dataclasses ─────────────────────────────────────────────────
 
 
@@ -209,12 +281,21 @@ class MatrixJob:
     """One cell in the matrix: a (generator, transform) pair with strategy configs.
 
     Each job produces one SignalRun (shared across all strategies).
+
+    Parameters
+    ----------
+    head_signal_id:
+        When set, filter the generator's output to rows whose ``signal_id``
+        matches this value before saving.  Used by multi-head generators
+        (e.g. DNN task towers) that return a single DataFrame containing
+        multiple signal_ids.
     """
     generator_id: str
     transform_id: str
     strategy_configs: list[dict[str, Any]]
     signal_id: str
     signal_run_id: str
+    head_signal_id: str | None = None
 
 
 @dataclass
@@ -482,6 +563,8 @@ def build_matrix_jobs(
         gen_id = gen_cfg["generator_id"]
         # Multi-label expanded entries carry an explicit per-label signal_id
         label_signal_id = gen_cfg.get("label_signal_id", None)
+        # Multi-head generators carry per-head config
+        heads = gen_cfg.get("params", {}).get("heads", None)
         for tf_cfg in config.transforms:
             tf_id = tf_cfg["transform_id"]
             if label_signal_id:
@@ -491,13 +574,32 @@ def build_matrix_jobs(
             signal_run_id = (
                 f"rolling__{experiment_id}__{gen_id}__{tf_id}__{start}_{end}"
             )
-            jobs.append(MatrixJob(
-                generator_id=gen_id,
-                transform_id=tf_id,
-                strategy_configs=config.strategies,
-                signal_id=signal_id,
-                signal_run_id=signal_run_id,
-            ))
+            if heads:
+                for head in heads:
+                    head_signal_id = head.get("signal_id", "").strip()
+                    if not head_signal_id:
+                        raise ValueError(
+                            f"multi-head generator '{gen_id}' has a head entry "
+                            f"with empty or missing signal_id"
+                        )
+                    head_slug = _slugify_id(head_signal_id)
+                    head_job_signal_id = f"{head_signal_id}__{tf_id}"
+                    jobs.append(MatrixJob(
+                        generator_id=gen_id,
+                        transform_id=tf_id,
+                        strategy_configs=config.strategies,
+                        signal_id=head_job_signal_id,
+                        signal_run_id=f"{signal_run_id}__{head_slug}",
+                        head_signal_id=head_signal_id,
+                    ))
+            else:
+                jobs.append(MatrixJob(
+                    generator_id=gen_id,
+                    transform_id=tf_id,
+                    strategy_configs=config.strategies,
+                    signal_id=signal_id,
+                    signal_run_id=signal_run_id,
+                ))
     return jobs
 
 
@@ -809,6 +911,10 @@ class RollingResearchRunner:
         for job in jobs:
             raw = raw_predictions[job.generator_id]
 
+            # Multi-head: filter to rows belonging to this head's signal_id
+            if job.head_signal_id:
+                raw = raw[raw["signal_id"] == job.head_signal_id].copy()
+
             # Find transform config
             tf_cfg = next(
                 (t for t in config.transforms if t["transform_id"] == job.transform_id),
@@ -888,6 +994,7 @@ class RollingResearchRunner:
                     "strategy_id": scfg.get("strategy_id", scfg.get("strategy_template_id", "")),
                     "signal_id": job.signal_id,
                     "signal_run_id": job.signal_run_id,
+                    "head_signal_id": job.head_signal_id or "",
                     "strategy_template_id": scfg.get("strategy_template_id", ""),
                     "top_n": scfg.get("top_n", ""),
                     "backtest_id": _bid,
@@ -1026,6 +1133,7 @@ class RollingResearchRunner:
                         ),
                         "signal_id": out_sig_id,
                         "signal_run_id": out_run_id,
+                        "head_signal_id": "",
                         "strategy_template_id": scfg.get(
                             "strategy_template_id", ""
                         ),
@@ -1074,6 +1182,7 @@ class RollingResearchRunner:
         job_cols = [
             "generator_id", "transform_id", "strategy_id",
             "signal_id", "signal_run_id",
+            "head_signal_id",
             "strategy_template_id", "top_n",
             "backtest_id", "strategy_run_id", "status",
         ]
