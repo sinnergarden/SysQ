@@ -474,13 +474,15 @@ class BacktestRunner:
             positions_frame(account, self._last_prices).to_csv(day_out / "positions_after.csv", index=False)
             from qsys.utils.json_io import write_json
 
-            _account_snapshot = {k: day_result[k] for k in (
-                "trade_date", "cash_after", "market_value_after",
-                "total_value_after",
-            )}
-            _account_snapshot["last_run_id"] = backtest_id
-            _account_snapshot["initial_capital"] = account.init_cash
-            write_json(day_out / "account_after.json", _account_snapshot)
+            write_json(day_out / "account_after.json", {
+                "trade_date": trade_date,
+                "cash": day_result["cash_after"],
+                "available_cash": day_result["cash_after"],
+                "market_value": day_result["market_value_after"],
+                "total_value": day_result["total_value_after"],
+                "last_run_id": backtest_id,
+                "initial_capital": account.init_cash,
+            })
             if predictions is not None and not predictions.empty:
                 predictions.to_csv(day_out / "predictions.csv", index=False)
 
