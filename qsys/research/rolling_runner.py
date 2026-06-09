@@ -245,19 +245,28 @@ class RollingResearchRunner:
                 label_id=eref.label_id,
             )
 
-        # ── Backtests (original backtest configs, not from pipeline) ──
-        from qsys.research.signal_pipeline import SignalResearchPipeline
-
+        # ── Backtests (from pipeline_result.signal_runs, not re-derived) ──
+        # SignalResearchPipeline produces SignalRunRefs.  Backtest consumes them.
         bt_count = 0
         all_bt_refs: list[tuple[str, str, str, str]] = []
         combined_bt_refs: list[tuple[str, str, str, str]] = []
         bt_job_rows_v2: list[dict[str, Any]] = []
 
         if _saved_strategies:
-            jobs = build_matrix_jobs(config)
-            if jobs and any(j.strategy_configs for j in jobs):
+            bt_jobs = [
+                MatrixJob(
+                    generator_id=sref.generator_id,
+                    transform_id=sref.transform_id,
+                    strategy_configs=_saved_strategies,
+                    signal_id=sref.signal_id,
+                    signal_run_id=sref.signal_run_id,
+                    head_signal_id=sref.head_signal_id,
+                )
+                for sref in pipeline_result.signal_runs
+            ]
+            if bt_jobs:
                 bt_job_rows, all_bt_refs = run_signal_backtests(
-                    self._signal_store, jobs, config,
+                    self._signal_store, bt_jobs, config,
                     overwrite=overwrite_backtest,
                     research_root=str(self.root),
                 )
@@ -291,33 +300,8 @@ class RollingResearchRunner:
                     config.experiment_id, strategy_run_id=_sid, backtest_id=_bid,
                 )
 
-        # ── Backtest for combined signals ──
-        if config.signal_combinations and _saved_strategies:
-            for sref in pipeline_result.signal_runs:
-                if sref.transform_id == "combined":
-                    cmb_jobs = [MatrixJob(
-                        generator_id=sref.generator_id,
-                        transform_id="combined",
-                        strategy_configs=_saved_strategies,
-                        signal_id=sref.signal_id,
-                        signal_run_id=sref.signal_run_id,
-                    )]
-                    cmb_cfg = RollingResearchConfig(
-                        experiment_id=config.experiment_id,
-                        calendar=config.calendar,
-                    )
-                    cmb_jr, cmb_bt = run_signal_backtests(
-                        self._signal_store, cmb_jobs, cmb_cfg,
-                        overwrite=overwrite_backtest,
-                        research_root=str(self.root),
-                    )
-                    bt_job_rows_v2.extend(cmb_jr)
-                    bt_count += len(cmb_bt)
-                    combined_bt_refs.extend(cmb_bt)
-                    for _, _, _sid, _bid in cmb_bt:
-                        self._experiment_index.add_backtest_run(
-                            config.experiment_id, strategy_run_id=_sid, backtest_id=_bid,
-                        )
+        # Combined signal refs are already part of pipeline_result.signal_runs,
+        # included in the backtest pass above (transform_id != "combined" check removed).
 
         # ── Rebuild indexes ──
         self._experiment_index.rebuild_indexes(config.experiment_id)
@@ -350,6 +334,8 @@ class RollingResearchRunner:
                 build_rolling_windows(
                     config.calendar.get("start_date", ""),
                     config.calendar.get("end_date", ""),
+                    train_window_days=config.calendar.get("train_window_days", 252),
+                    step_days=config.calendar.get("step_days", 5),
                 )
             ) if config.calendar else 0,
             "backtest_count": bt_count,
@@ -370,7 +356,7 @@ class RollingResearchRunner:
             "status": "passed",
             "experiment_id": config.experiment_id,
             "mode": "matrix" if config.generators else "single",
-            "window_count": 0,  # detail not critical for summary
+            "window_count": manifest.get("window_count", 0),
             "signal_run_count": len(pipeline_result.signal_runs),
             "signal_eval_count": eval_count,
             "backtest_count": bt_count,
@@ -378,5 +364,4 @@ class RollingResearchRunner:
         }
 
 
-# Import the pipeline at the bottom to avoid circular import
-from qsys.research.signal_pipeline import SignalResearchPipeline  # noqa: E402, F811
+

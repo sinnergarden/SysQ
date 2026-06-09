@@ -186,14 +186,30 @@ class TestSignalResearchPipelineMultiHead:
             transforms=[{"transform_id": "raw", "type": "identity"}],
         )
 
+        from qsys.research.generators.fixture import MultiHeadFixtureGenerator
+
         pipeline = SignalResearchPipeline(str(tmp_path))
-        result = pipeline.run(config, overwrite_signal=True, overwrite_eval=True)
+        result = pipeline.run(
+            config,
+            signal_generator=MultiHeadFixtureGenerator(
+                head_signal_ids=("head_a", "head_b"),
+                n_instruments=10,
+            ),
+            overwrite_signal=True,
+            overwrite_eval=True,
+        )
 
         # 1 generator × 1 transform × 2 heads = 2 signal runs
         assert len(result.signal_runs) == 2
         signal_ids = {r.signal_id for r in result.signal_runs}
         assert "head_a__raw" in signal_ids
         assert "head_b__raw" in signal_ids
+
+        # Assert each saved SignalRun is non-empty and has correct signal_id
+        for sref in result.signal_runs:
+            df = pipeline._signal_store.load_signal_run(sref.signal_id, sref.signal_run_id)
+            assert not df.empty, f"SignalRun {sref.signal_id}/{sref.signal_run_id} is empty"
+            assert set(df["signal_id"].unique()) == {sref.signal_id}
 
 
 class TestSignalResearchPipelineConfigValidation:
