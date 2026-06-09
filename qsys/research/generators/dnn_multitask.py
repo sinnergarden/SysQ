@@ -224,6 +224,19 @@ class DnnMultitaskGenerator:
 
         Blends model prediction columns via ``self.blend_weights``.
         """
+        # Legacy two-task generator: only 5d + 20d supported.
+        # Arbitrary tasks -> separate DNN task-tower PR (one SignalRun per task).
+        if len(self.label_ids) != 2:
+            raise ValueError(
+                f"DnnMultitaskGenerator is a legacy two-task blended generator "
+                f"that requires exactly two label_ids, "
+                f"got {len(self.label_ids)}: {self.label_ids}. "
+                f"Arbitrary tasks will be supported by a future DNN task-tower "
+                f"generator (one SignalRun per task)."
+            )
+        if abs(self.blend_weights.get("5d", 0.5) + self.blend_weights.get("20d", 0.5)) < 1e-12:
+            raise ValueError("blend_weights 5d + 20d must not sum to zero")
+
         self._ensure_qlib()
         features = self._resolve_features()
 

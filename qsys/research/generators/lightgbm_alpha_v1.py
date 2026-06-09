@@ -151,6 +151,21 @@ class LightGBMAlphaV1Generator:
         signal_id: str,
         signal_run_id: str,
     ) -> pd.DataFrame:
+        # Legacy blended generator: only 5d + 20d supported.
+        # Multi-label support -> MultiLabelLightGBMGenerator (separate PR),
+        # where each label produces an independent SignalRun.
+        horizons = sorted(_horizon_from_label_id(lid) for lid in self.label_ids)
+        if horizons != [5, 20]:
+            raise ValueError(
+                f"LightGBMAlphaV1Generator is a legacy blended generator "
+                f"that requires exactly (5d, 20d) label horizons, "
+                f"got {horizons}. "
+                f"Arbitrary labels will be supported by "
+                f"MultiLabelLightGBMGenerator (one SignalRun per label)."
+            )
+        if abs(self.blend_weights.get("5d", 0.8) + self.blend_weights.get("20d", 0.2)) < 1e-12:
+            raise ValueError("blend_weights 5d + 20d must not sum to zero")
+
         self._ensure_qlib()
 
         extended_end = (

@@ -374,33 +374,46 @@ class TestComputeLabelsCoverage:
 
 
 class TestDnnGeneratorEnforceExactlyTwo:
-    """DnnMultitaskGenerator no longer enforces exactly two label_ids.
+    """DnnMultitaskGenerator requires exactly two label_ids (legacy)."""
 
-    The label-count guard was removed.  ``generate()`` may still fail
-    downstream (model import / qlib init), but the validation itself
-    is gone.
-    """
-
-    def test_accepts_one_label(self) -> None:
+    def test_raises_on_one_label(self) -> None:
         from qsys.research.generators.dnn_multitask import DnnMultitaskGenerator
         gen = DnnMultitaskGenerator(label_ids=("fwd_ret_5d_xsz_clip3",))
-        assert gen.label_ids == ("fwd_ret_5d_xsz_clip3",)
-        # No ValueError raised for label count
+        with pytest.raises(ValueError, match="exactly two label_ids"):
+            gen.generate(
+                train_start="2024-01-01", train_end="2024-06-01",
+                predict_start="2024-06-01", predict_end="2024-06-05",
+                signal_id="test", signal_run_id="test",
+            )
 
-    def test_accepts_three_labels(self) -> None:
+    def test_raises_on_three_labels(self) -> None:
         from qsys.research.generators.dnn_multitask import DnnMultitaskGenerator
         gen = DnnMultitaskGenerator(
             label_ids=("fwd_ret_5d_xsz_clip3", "fwd_ret_10d_xsz_clip3", "fwd_ret_20d_xsz_clip3"),
         )
-        assert len(gen.label_ids) == 3
-        # No ValueError raised for label count
+        with pytest.raises(ValueError, match="exactly two label_ids"):
+            gen.generate(
+                train_start="2024-01-01", train_end="2024-06-01",
+                predict_start="2024-06-01", predict_end="2024-06-05",
+                signal_id="test", signal_run_id="test",
+            )
+
+    def test_raises_on_zero_blend_weight(self) -> None:
+        from qsys.research.generators.dnn_multitask import DnnMultitaskGenerator
+        gen = DnnMultitaskGenerator(blend_weights={"5d": 0.0, "20d": 0.0})
+        with pytest.raises(ValueError, match="must not sum to zero"):
+            gen.generate(
+                train_start="2024-01-01", train_end="2024-06-01",
+                predict_start="2024-06-01", predict_end="2024-06-05",
+                signal_id="test", signal_run_id="test",
+            )
 
     def test_two_labels_pass_label_count_check(self) -> None:
-        """With exactly two label_ids, no label-count issue."""
+        """With exactly two label_ids, the label-count check passes."""
         from qsys.research.generators.dnn_multitask import DnnMultitaskGenerator
         gen = DnnMultitaskGenerator()
         assert len(gen.label_ids) == 2
-        # The label-count ValueError should NOT be raised for 2 labels.
+        # The ValueError should NOT be raised for 2 labels.
         # (Full generate() may fail later on qlib/label dependencies.)
 
 
@@ -408,34 +421,45 @@ class TestDnnGeneratorEnforceExactlyTwo:
 
 
 class TestLightGBMGeneratorEnforce5d20d:
-    """LightGBMAlphaV1Generator no longer enforces exactly 5d/20d horizons.
+    """LightGBMAlphaV1Generator requires exactly 5d + 20d labels (legacy)."""
 
-    The horizon guard was removed.  ``generate()`` may still fail on
-    downstream dependencies (qlib, labels), but the generator itself
-    accepts any label_ids.
-    """
-
-    def test_accepts_only_5d(self) -> None:
+    def test_raises_on_only_5d(self) -> None:
         from qsys.research.generators.lightgbm_alpha_v1 import LightGBMAlphaV1Generator
         gen = LightGBMAlphaV1Generator(label_ids=("fwd_ret_5d_xsz_clip3",))
-        assert gen.label_ids == ("fwd_ret_5d_xsz_clip3",)
-        # No ValueError raised for horizons
+        with pytest.raises(ValueError, match="requires exactly"):
+            gen.generate(
+                train_start="2024-01-01", train_end="2024-06-01",
+                predict_start="2024-06-01", predict_end="2024-06-05",
+                signal_id="test", signal_run_id="test",
+            )
 
-    def test_accepts_5d_and_10d(self) -> None:
+    def test_raises_on_5d_and_10d(self) -> None:
         from qsys.research.generators.lightgbm_alpha_v1 import LightGBMAlphaV1Generator
         gen = LightGBMAlphaV1Generator(
             label_ids=("fwd_ret_5d_xsz_clip3", "fwd_ret_10d_raw"),
         )
-        assert len(gen.label_ids) == 2
-        # No ValueError raised for horizons
+        with pytest.raises(ValueError, match="requires exactly"):
+            gen.generate(
+                train_start="2024-01-01", train_end="2024-06-01",
+                predict_start="2024-06-01", predict_end="2024-06-05",
+                signal_id="test", signal_run_id="test",
+            )
+
+    def test_raises_on_zero_blend_weight(self) -> None:
+        from qsys.research.generators.lightgbm_alpha_v1 import LightGBMAlphaV1Generator
+        gen = LightGBMAlphaV1Generator(blend_weights={"5d": 0.0, "20d": 0.0})
+        with pytest.raises(ValueError, match="must not sum to zero"):
+            gen.generate(
+                train_start="2024-01-01", train_end="2024-06-01",
+                predict_start="2024-06-01", predict_end="2024-06-05",
+                signal_id="test", signal_run_id="test",
+            )
 
     def test_5d_20d_passes_label_check(self) -> None:
         """With 5d and 20d, the horizon check passes."""
         from qsys.research.generators.lightgbm_alpha_v1 import LightGBMAlphaV1Generator
         gen = LightGBMAlphaV1Generator()
-        horizons = sorted([5, 20])
-        assert horizons == [5, 20]
-        # The horizon ValueError should NOT be raised for 5d/20d.
+        # The ValueError should NOT be raised for 5d/20d.
         # (Full generate() may fail later on qlib/label dependencies.)
 
 
