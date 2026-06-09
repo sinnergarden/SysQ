@@ -424,18 +424,9 @@ class BacktestRunner:
 
         # 5. Execute — DailyRunner-equivalent vs legacy path
         if self._execution_price_mode == "open":
-            # DailyRunner-equiv: read saved order intents (close-based from
-            # build_plan_for_backtest), execute at open, MTM at close.
             mtm_prices, _ = fetch_market_snapshot(
                 trade_date, instruments, price_col="close",
             )
-            # Before-state: value existing positions at MTM (close) prices
-            pos_before = positions_frame(account, mtm_prices)
-            cash_before = float(account.cash)
-            mv_before = float(pos_before["market_value"].sum()) if not pos_before.empty else 0.0
-            tv_before = cash_before + mv_before
-
-            # Convert saved order intents → orders at open prices
             saved_intents = pd.read_csv(
                 plan_dir / "order_intents.csv",
                 dtype={"instrument": str},
@@ -454,80 +445,42 @@ class BacktestRunner:
                     "symbol": inst, "side": side, "amount": qty,
                     "price": price, "order_type": "market",
                 })
-
-            matcher = MatchEngine(slippage=0.0)
-            results = matcher.match(orders, account, market_status, exec_prices)
-            account.settlement()
-
-            # MTM at close
-            self._last_prices = mtm_prices
-            pos_frame = positions_frame(account, mtm_prices)
+            mtm_pr = mtm_prices
+            exec_pr = exec_prices
+            mtm_st = market_status
         else:
-            # Legacy close-price mode: execute and MTM both at close
-            orders, _, _, cash_before, mv_before, tv_before = (
-                build_order_intents(
-                    account, predictions, target_weights, exec_prices, trade_date,
-                )
-            )
+            orders = build_order_intents(
+                account, predictions, target_weights, exec_prices, trade_date,
+            )[0]
+            mtm_pr = exec_prices
+            exec_pr = exec_prices
+            mtm_st = market_status
 
-            matcher = MatchEngine(slippage=0.0)
-            results = matcher.match(orders, account, market_status, exec_prices)
-            account.settlement()
-
-            self._last_prices = exec_prices
-            pos_frame = positions_frame(account, exec_prices)
-
-        # 6. Record state
-        market_value_after = float(pos_frame["market_value"].sum()) if not pos_frame.empty else 0.0
-        cash_after = float(account.cash)
-        total_value_after = float(cash_after + market_value_after)
+        from qsys.backtest._execution import execute_trade_day
+        day_result = execute_trade_day(
+            account, orders, exec_pr, mtm_st, mtm_pr, trade_date,
+            slippage=0.0,
+            execution_price_mode=self._execution_price_mode,
+        )
+        day_result["data_date"] = data_date
+        self._last_prices = mtm_pr
         self._last_trade_date = trade_date
-
-        buy_count = sum(1 for o in orders if o["side"] == "buy")
-        sell_count = sum(1 for o in orders if o["side"] == "sell")
-        filled_count = sum(1 for r in results if r["status"] == "filled")
-        rejected_count = sum(1 for r in results if r["status"] == "rejected")
-        turnover = float(sum(
-            float(r.get("filled_amount", 0)) * float(r.get("deal_price", 0.0))
-            for r in results if r["status"] == "filled"
-        ))
-
-        day_result = {
-            "trade_date": trade_date,
-            "data_date": data_date,
-            "execution_price_mode": self._execution_price_mode,
-            "cash_before": float(cash_before),
-            "market_value_before": float(mv_before),
-            "total_value_before": float(tv_before),
-            "cash_after": cash_after,
-            "market_value_after": market_value_after,
-            "total_value_after": total_value_after,
-            "order_count": len(orders),
-            "buy_count": buy_count,
-            "sell_count": sell_count,
-            "filled_count": filled_count,
-            "rejected_count": rejected_count,
-            "turnover": turnover,
-            "position_count": len(account.positions),
-            "status": "success",
-        }
 
         # Write debug artifacts
         if debug_dir:
             with open(day_out / "execution_summary.json", "w") as f:
                 json.dump(day_result, f, indent=2, default=str)
-            pos_frame.to_csv(day_out / "positions_after.csv", index=False)
+            from qsys.ops.shadow_execution import positions_frame
+            positions_frame(account, self._last_prices).to_csv(day_out / "positions_after.csv", index=False)
             from qsys.utils.json_io import write_json
 
-            write_json(day_out / "account_after.json", {
-                "trade_date": trade_date,
-                "cash": cash_after,
-                "available_cash": cash_after,
-                "market_value": market_value_after,
-                "total_value": total_value_after,
-                "last_run_id": backtest_id,
-                "initial_capital": account.init_cash,
-            })
+            _account_snapshot = {k: day_result[k] for k in (
+                "trade_date", "cash_after", "market_value_after",
+                "total_value_after",
+            )}
+            _account_snapshot["last_run_id"] = backtest_id
+            _account_snapshot["initial_capital"] = account.init_cash
+            write_json(day_out / "account_after.json", _account_snapshot)
             if predictions is not None and not predictions.empty:
                 predictions.to_csv(day_out / "predictions.csv", index=False)
 
@@ -839,49 +792,17 @@ class BacktestRunner:
                 exec_prices, trade_date,
             )
 
-            matcher = MatchEngine(
+            # 6. Execute, settle, MTM via shared kernel
+            from qsys.backtest._execution import execute_trade_day
+
+            day_result = execute_trade_day(
+                account, orders, exec_prices, market_status, mtm_prices, trade_date,
                 commission=commission, stamp_duty=stamp_duty,
                 min_commission=min_commission, slippage=slippage,
+                execution_price_mode=self._execution_price_mode,
             )
-            results = matcher.match(orders, account, market_status, exec_prices)
-            account.settlement()
-
-            # 6. After-state (MTM)
             self._last_prices = mtm_prices
-            pos_after = positions_frame(account, mtm_prices)
-            mv_after = float(pos_after["market_value"].sum()) if not pos_after.empty else 0.0
-            cash_after = float(account.cash)
-            tv_after = cash_after + mv_after
             self._last_trade_date = trade_date
-
-            # 7. Record daily result
-            buy_count = sum(1 for o in orders if o["side"] == "buy")
-            sell_count = sum(1 for o in orders if o["side"] == "sell")
-            filled_count = sum(1 for r in results if r["status"] == "filled")
-            rejected_count = sum(1 for r in results if r["status"] == "rejected")
-            turnover = float(sum(
-                float(r.get("filled_amount", 0)) * float(r.get("deal_price", 0.0))
-                for r in results if r["status"] == "filled"
-            ))
-
-            day_result = {
-                "trade_date": trade_date,
-                "execution_price_mode": self._execution_price_mode,
-                "cash_before": cash_before,
-                "market_value_before": mv_before,
-                "total_value_before": tv_before,
-                "cash_after": cash_after,
-                "market_value_after": mv_after,
-                "total_value_after": tv_after,
-                "order_count": len(orders),
-                "buy_count": buy_count,
-                "sell_count": sell_count,
-                "filled_count": filled_count,
-                "rejected_count": rejected_count,
-                "turnover": turnover,
-                "position_count": len(account.positions),
-                "status": "success",
-            }
             daily_summaries.append(day_result)
 
             # 8. Debug artifacts
@@ -893,11 +814,10 @@ class BacktestRunner:
                 if len(orders) > 0:
                     pd.DataFrame(orders).to_csv(day_dir / "order_intents.csv", index=False)
                 from qsys.utils.json_io import write_json as _wj
-                _wj(day_dir / "mtm_snapshot.json", {
-                    "trade_date": trade_date, "cash_after": cash_after,
-                    "market_value_after": mv_after, "total_value_after": tv_after,
-                    "position_count": len(account.positions),
-                })
+                _wj(day_dir / "mtm_snapshot.json", {k: day_result[k] for k in (
+                    "trade_date", "cash_after", "market_value_after",
+                    "total_value_after", "position_count",
+                )})
                 _wj(day_dir / "execution_summary.json", day_result)
 
         # ── Compute final metrics ─────────────────────────────────────────

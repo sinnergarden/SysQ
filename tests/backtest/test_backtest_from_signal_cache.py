@@ -216,3 +216,54 @@ class TestRunFromSignalCache:
                          start_date="2026-06-15", end_date="2026-06-15",
                          top_n=5)
         assert result.status == "completed"
+
+
+class TestRunFromSignalCacheGolden:
+    """Golden tests: lock exact daily_summary and metrics.
+
+    These tests assert exact numeric values. Any change means the numerical
+    output of ``BacktestRunner.run_from_signal_cache`` has changed.
+    """
+
+    def test_golden_daily_summary(self, tmp_path: Path) -> None:
+        """Lock daily_summary structure for a deterministic 3-day backtest."""
+        import json
+        out = tmp_path / "golden_ds"
+        _run_bt(tmp_path, fixture_dates=3, fixture_inst=10,
+                signal_id="test_sig", signal_run_id="test_run",
+                start_date="2026-06-15", end_date="2026-06-17",
+                initial_capital=100000.0, top_n=5,
+                output_dir=out)
+        ds = pd.read_csv(out / "daily_summary.csv")
+        assert len(ds) == 3
+        assert ds["status"].tolist() == ["success", "success", "success"]
+        # Execution happens at open, MTM at close. Open=close in mock → flat intraday.
+        # Cross-day total_value change comes from position carry-over at the same
+        # mock prices.  With identical signal scores each day and identical prices,
+        # final == initial (flat market).
+        # Day 1 establishes positions; days 2-3 have no diff (identical signal scores
+        # and flat prices → no rebalancing needed)
+        assert ds["order_count"].iloc[0] == 5  # top_n=5
+        assert ds["order_count"].iloc[1] == 0
+        assert ds["order_count"].iloc[2] == 0
+        assert (ds["filled_count"] == ds["order_count"]).all()
+        # Flat mock prices → no P&L
+        assert abs(ds["total_value_after"].iloc[-1] - 100000.0) < 0.01
+        assert ds["position_count"].iloc[-1] == 5
+
+    def test_golden_metrics(self, tmp_path: Path) -> None:
+        """Lock metrics.json fields."""
+        import json
+        out = tmp_path / "golden_m"
+        _run_bt(tmp_path, fixture_dates=3, fixture_inst=10,
+                signal_id="test_sig", signal_run_id="test_run",
+                start_date="2026-06-15", end_date="2026-06-17",
+                initial_capital=100000.0, top_n=5,
+                output_dir=out)
+        m = json.loads((out / "metrics.json").read_text())
+        assert m["trading_day_count"] == 3
+        assert m["initial_capital"] == 100000.0
+        assert m["total_return"] == 0.0  # flat mock prices
+        assert m["order_count_total"] == 5  # top_n=5, orders only on day 1
+        assert m["filled_count_total"] == m["order_count_total"]
+        assert m["rejected_count_total"] == 0
