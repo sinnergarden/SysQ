@@ -21,13 +21,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-
-def _cs_zscore(s: pd.Series) -> pd.Series:
-    """Cross-sectional zscore, clip at ±3, handle constant."""
-    std = s.std(ddof=0)
-    if pd.isna(std) or std < 1e-12:
-        return pd.Series(0.0, index=s.index)
-    return ((s - s.mean()) / std).clip(-3, 3)
+from qsys.research.generators.utils import cs_zscore
 
 
 def _get_trading_calendar(start: str, end: str) -> list[str]:
@@ -157,7 +151,7 @@ class DnnMultitaskGenerator:
 
         # norm channel: daily cs_zscore
         normed = frame.groupby("trade_date")[features].transform(
-            lambda g: _cs_zscore(g.astype(float))
+            lambda g: cs_zscore(g.astype(float))
         )
 
         for feat in features:
@@ -293,8 +287,8 @@ class DnnMultitaskGenerator:
                     dt -= timedelta(days=1)
                 prev_td[d] = dt.strftime("%Y-%m-%d")
 
-        pred_frame["score_5d"] = pred_frame.groupby("trade_date")["pred_5d"].transform(_cs_zscore)
-        pred_frame["score_20d"] = pred_frame.groupby("trade_date")["pred_20d"].transform(_cs_zscore)
+        pred_frame["score_5d"] = pred_frame.groupby("trade_date")["pred_5d"].transform(cs_zscore)
+        pred_frame["score_20d"] = pred_frame.groupby("trade_date")["pred_20d"].transform(cs_zscore)
         w5 = self.blend_weights.get("5d", 0.5)
         w20 = self.blend_weights.get("20d", 0.5)
         total = w5 + w20

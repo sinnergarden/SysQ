@@ -1,207 +1,65 @@
-# AGENTS
+# AGENTS — AI 操作协议
 
-本文档是 SysQ 仓库给 AI 助手的操作协议。  
-系统设计见 docs/ARCHITECTURE.md，当前优先级见 ROADMAP.md。
+系统设计见 `docs/ARCHITECTURE.md`，当前优先级见 `ROADMAP.md`。
 
 ---
 
 ## 1. 当前工作模式
 
-SysQ 当前处于 Framework Stabilization + 投研研发迭代阶段。
-
-默认采用 人主导、AI 辅助执行：
+Framework Stabilization + 投研研发迭代。人主导、AI 辅助执行。
 
 - 人负责方向判断、验收标准、高风险裁决。
-- AI 负责读代码、提出方案、实施小步改动、跑测试、同步文档、汇报风险。
-- 不固定长期 Builder / Reviewer / Operator 角色；按任务临时承担实现、审查或运行职责。
+- AI 负责读代码、提出方案、实施小步改动、跑测试、同步文档。
 - 单轮尽量只解决一个主题，避免跨层大改。
 
 ---
 
-## 2. 系统意识
+## 2. 核心原则
 
-Qsys 有两条主链路：
-
-- Research / Backtest Chain：面向历史回放，评估 feature / model / signal / strategy 是否稳定、有增量。
-- Daily Ops Chain：面向未来逐日推进，基于已批准策略生成计划、记录执行、对账归档。
-
-核心原则：
-
-- Research 结果不能直接进入 Production。
-- Candidate / Shadow 是仿真验证阶段，不是真实交易阶段。
-- Production 必须经过人工确认、broker 对账和 artifact 记录。
-- data/trade.db 是目标账户状态与执行流水 SOT。
-- data/meta/real_account.db 和 shadow/ 当前仍是 legacy compatibility path，不能擅自删除。
-- run_daily.py / run_daily_batch.py 是当前 systemd 入口（systemd cutover 完成）。旧 legacy 入口不再被 systemd 调用。
+- **Research 不能直接进入 Production** — 必须经过 Candidate/Shadow。
+- **三条链路**：Research（回放）/ Daily Ops（推进）/ Candidate→Shadow→Production（晋级）。
+- **Ledger SOT**：`data/trade.db` 是目标账户状态 SOT。`data/meta/real_account.db` 和 `shadow/` 是 legacy，不能擅自删除。
+- **Data readiness check** 是训练、回测、daily ops 的前置条件。
 
 ---
 
 ## 3. 文档事实优先级
 
-发生冲突时，按以下顺序判断：
-
-```
-实际代码调用链 / 测试结果 → docs/ARCHITECTURE.md → ROADMAP.md → docs/adr/ → archive/docs/features/ 和 archive/docs/runbooks/
-```
-
-不得把目标态写成当前事实。  
-不得把历史 feature 文档自动视为 current truth。
+实际代码调用链 → `docs/ARCHITECTURE.md` → `ROADMAP.md` → `docs/adr/` → `archive/docs/features/`。
 
 ---
 
-## 4. Required Reading by Task
+## 4. 必读文档路由
 
-开始改动前，先查阅对应文档。不要跳过。
-
-| Task | Must read first |
-|------|----------------|
-| 系统架构、模块边界、主链路调整 | `docs/ARCHITECTURE.md`, `docs/CONTRACTS.md` |
-| 新增/修改数据对象、artifact、read model、字段语义 | `docs/CONTRACTS.md`, `docs/schema/`, `docs/REPO_LAYOUT.md` |
-| 新增策略、feature、label、model、signal、allocation | `docs/ops/RESEARCH_STRATEGY_SOP.md`, `docs/CONTRACTS.md`, `docs/REPO_LAYOUT.md` |
-| 运行或修改 daily ops、preopen、postclose、systemd 入口 | `docs/ops/DAILY_OPS_SOP.md`, `docs/ARCHITECTURE.md`, `docs/REPO_LAYOUT.md` |
-| 修改 ledger、portfolio、execution、broker、MiniQMT | `docs/CONTRACTS.md`, `docs/ARCHITECTURE.md`, `docs/ops/DAILY_OPS_SOP.md` |
-| 新增/移动/删除文件、目录、产物、实验结果 | `docs/REPO_LAYOUT.md`, `AGENTS.md` |
-| 新增 UI、monitoring、dashboard、read-only API | `docs/CONTRACTS.md`, `docs/REPO_LAYOUT.md`, `ROADMAP.md` |
-| 修改路线图、阶段目标、优先级 | `ROADMAP.md`, `docs/ARCHITECTURE.md` |
-| 修改 agent 行为、安全边界、协作方式 | `AGENTS.md`, `docs/ARCHITECTURE.md` |
-| 清理 legacy path、旧入口、shadow、real_account.db | `docs/ARCHITECTURE.md`, `docs/REPO_LAYOUT.md`, `docs/ops/DAILY_OPS_SOP.md` |
-
-补充规则：
-
-- 若任务涉及多个类别，必须读取所有相关文档。
-- 若文档之间冲突，以实际代码调用链和测试结果为最高事实源，然后参考 `docs/ARCHITECTURE.md` 的 Current Transition State。
-- 不得把 `archive/docs/features/` 中的历史设计自动当作 current truth。
-- 不得在未阅读对应 SOP / CONTRACT / REPO_LAYOUT 的情况下新增路径、改 artifact、切入口、动 ledger、改 broker bridge。
+| 任务 | 优先阅读 |
+|------|---------|
+| 系统架构、模块边界 | `docs/ARCHITECTURE.md`, `docs/CONTRACTS.md` |
+| 数据对象、artifact 字段 | `docs/CONTRACTS.md`, `docs/schema/`, `docs/REPO_LAYOUT.md` |
+| 新增策略/feature/label/signal | `docs/ops/RESEARCH_STRATEGY_SOP.md`, `docs/CONTRACTS.md`, `docs/GENERATOR_DEV_GUIDE.md` |
+| 新信号生成器 | `docs/GENERATOR_DEV_GUIDE.md` |
+| 运行 daily ops、修改入口 | `docs/ops/DAILY_OPS_SOP.md`, `docs/ARCHITECTURE.md` |
+| 修改 ledger/portfolio/execution | `docs/CONTRACTS.md`, `docs/ARCHITECTURE.md` |
+| 新增/移动文件或产物 | `docs/REPO_LAYOUT.md` |
+| 修改路线图 | `ROADMAP.md`, `docs/ARCHITECTURE.md` |
+| 清理 legacy/shadow/real_account | `docs/ARCHITECTURE.md`, `docs/REPO_LAYOUT.md` |
 
 ---
 
-## 4.1 数据层常用命令
+## 5. 许可
 
-### 健康检查
+AI 可直接处理：
+- 文档修订、bug fix、测试补充、只读审查
+- 不改变语义的重构、小范围研究实验
+- 在独立分支做低风险改动并运行测试
 
-```bash
-# 检查 qlib 数据健康（blocking/warning 分离）
-python -c "from qsys.data.health import inspect_qlib_data_health; r = inspect_qlib_data_health('YYYY-MM-DD', ['\$open','\$high','\$low','\$close','\$volume','\$factor'], universe='csi800'); print(r.to_markdown())"
-
-# 快速对齐状态
-python -c "from qsys.data.adapter import QlibAdapter; print(QlibAdapter().get_data_status_report())"
-```
-
-### 覆盖审计
-
-```bash
-# canonical → qlib 覆盖对比
-python scripts/ops/audit_raw_to_qlib_coverage.py --universe csi800 --start-date YYYY-MM-DD --end-date YYYY-MM-DD
-
-# qlib instrument 审计
-python scripts/ops/audit_qlib_instrument_coverage.py
-
-# 状态路径审计（只读）
-python scripts/ops/audit_state_paths.py
-```
-
-### 数据同步
-
-```bash
-# 手动触发 CSI800 同步（dry-run / apply）
-python scripts/ops/sync_csi800_daily.py
-python scripts/ops/sync_csi800_daily.py --apply
-python scripts/ops/sync_csi800_daily.py --apply --force-fetch
-
-# 回填历史
-python scripts/ops/backfill_csi800_history.py --apply
-
-# 指数日线回填（一次性，从 2010 年拉全量 OHLCV）
-python scripts/ops/backfill_index_daily.py --apply
-```
-
-### 检查最近审计记录
-
-```bash
-ls -t data/audit/ | head -3
-python -c "import json,os; a=json.load(open('data/audit/'+sorted(os.listdir('data/audit/'))[-1])); print(a['overall_status'], a['target_date'])"
-```
-
-### 测试
-
-```bash
-# 数据层相关测试
-python -m pytest tests/test_data_health.py tests/test_data_contract_ready.py tests/test_adapter_coverage.py -v
-python -m pytest tests/test_qlib_sync.py tests/test_shadow_presync.py tests/test_full_universe_backfill.py -v
-python -m pytest tests/test_data_update_integration.py tests/test_financial_derivation.py -v
-
-# 信号层 golden 测试（锁 generator 输入→输出，改变必须确认）
-python -m pytest tests/research/test_generators_golden.py -v
-```
+必须说明：改了什么、为什么改、如何验证、是否影响 Research / Daily Ops / Production。
 
 ---
 
-## 4.4 Generator 开发指南
-
-信号生成器是 research 管线的核心可插拔点。每个 generator 实现 `RollingSignalGenerator` Protocol（`qsys/research/generators/base.py`）。
-
-### 核心边界
-
-::
-
-   Generator:   label/task ─→ base signal (单个 score 列)
-   Combine:     多个 base signal ─→ final composite signal
-
-Generator 内部不做最终组合。多 label 模型应该每个 label 输出一个独立 `SignalRun`，通过 `signal_combine.py`（combine 层）组合。只有这样，每个 base signal 才能被单独评估 IC、回测、替换、调节权重。
-
-**例外**：`LightGBMAlphaV1Generator` 和 `DnnMultitaskGenerator` 的 `blend_weights` 参数是 legacy alpha_v1 兼容路径，将多个 label 预测混合成一个 score。新 generator 不应延续这个模式。
-
-### 契约
-
-- 输入：`(train_start, train_end, predict_start, predict_end, signal_id, signal_run_id)` — 全是 str YYYY-MM-DD
-- 输出：SignalStore 兼容 DataFrame，必选 6 列：
-  `trade_date, data_date, instrument, signal_id, signal_run_id, score`
-- `data_date` 必须是 `previous_trading_day(trade_date)` — SignalStore.save 会自动检查
-- 不允许改 `score` 的含义（值越大越好，可排序）
-
-### 依赖规则
-
-- 如果需要 label，从 `LabelStore` 读（`qsys/label/store.py`），不要自己计算 forward return
-- 如果需要特征，从 qlib `D.features()` 或 `QlibAdapter.get_features()` 获取
-- 不要引用 `qsys/strategy/` 下的具体策略模块（策略代码不应被 research 反向依赖）
-- 输出中不要用 `print()` — 用 `qsys.utils.logger.log`
-
-### 注册
-
-新增 generator 后必须在 `rolling_runner.py` 的 `_create_generator_from_config()` 注册，才能在 matrix experiment YAML 中按 `type` 引用。
-
-### 测试要求
-
-每个 generator 必须有 golden test：**确定性输入 → 断言精确 score 值**。参考 `tests/research/test_generators_golden.py`。
-
----
-
-## 5. 默认可直接做的事
-
-AI 可以直接处理：
-
-- 文档修订、错别字、链接修正、结构小调整；
-- 非公共 API 的 bug fix；
-- 测试补充和测试稳定性改进；
-- 只读代码审查、grep、日志分析；
-- 小范围 research / signal / feature / model 实验；
-- 不改变语义的重构；
-- 在独立分支上做低风险改动并运行测试。
-
-改动后必须说明：
-
-- 改了什么；
-- 为什么改；
-- 如何验证；
-- 是否影响 Research / Daily Ops / Production。
-
----
-
-## 5.1 PR Workflow Constraint
+## 6. PR Workflow
 
 **代码变更必须走 PR。禁止直接推送到 main 分支。零例外。**
 
-AI 操作 worktree 时，所有的 push 和 merge 必须通过以下流程：
 ```
 git checkout -b pr-<topic>
 git add -A && git commit -m "..."
@@ -211,78 +69,40 @@ gh pr create --title "..." --body "..."
 gh pr merge <number> --squash --delete-branch
 ```
 
-违反后果：用户要求回滚，并修复约束本身。这是硬性 protocol violation。
+---
+
+## 7. 必须先讨论
+
+以下不能自动改，必须先说明影响并等待确认：
+- DB schema、ledger/account/position/cash/order/fill 语义变化
+- `data/trade.db`、`data/meta/real_account.db`、`shadow/` 的迁移或删除
+- systemd、production entry、broker bridge、MiniQMT
+- 交易规则变更（手续费、T+1、撮合规则）
+- 公共接口删除或重命名
+- Protected Core 核心语义变更
+- 不可逆清理
+- 真实下单/撤单/持仓修正
 
 ---
 
-## 6. 必须先讨论的事
+## 8. Protected Core
 
-以下事项不能自动改，必须先说明影响并等待确认：
+以下路径默认只允许只读分析、测试补充和文档说明：
+`qsys/ledger/`、`qsys/backtest/`、`qsys/trader/`、`qsys/ops/daily_runner.py`、`qsys/broker/`、`qsys/strategy/alpha_v1/`、`scripts/ops/`、systemd 配置、artifact contract schema。
 
-- 数据库 schema 变更；
-- ledger / account / position / cash / order / fill 语义变化；
-- data/trade.db、data/meta/real_account.db、shadow/ 的迁移、删除或默认路径切换；
-- systemd、production entry、broker bridge、MiniQMT 相关改动；
-- 交易规则变更，例如手续费、T+1、最小交易单位、滑点、撮合规则；
-- 公共接口删除、重命名或行为变化；
-- Protected Core 的核心语义变更；
-- 大量删除文件、移动目录或不可逆清理；
-- 真实下单、撤单、成交确认、持仓修正、现金修改。
-
-不确定是否高风险时，按高风险处理。
+修改必须给出：修改原因、影响范围、回滚方式、最小验证命令、是否影响 production。
 
 ---
 
-## 7. Protected Core
+## 9. 新功能与文档规则
 
-以下路径属于 Protected Core，默认只允许只读分析、测试补充、日志改善和文档说明。
-
-- qsys/ledger/
-- qsys/backtest/
-- qsys/trader/
-- qsys/ops/daily_runner.py
-- qsys/broker/
-- qsys/strategy/alpha_v1/
-- production daily entry 相关脚本
-- scripts/ops/ 核心运营脚本
-- systemd service / timer 配置
-- artifact contract schema
-
-若必须修改 Protected Core，必须先给出：
-
-- 修改原因；
-- 影响范围；
-- 回滚方式；
-- 最小验证命令；
-- 是否影响 production daily ops。
+- 影响架构边界、引入新长期接口、改 schema/artifact、影响 Candidate/Shadow/Production、改 ledger/daily entry/broker → 先补设计文档。
+- 普通实验、bugfix、小脚本可以直接实现并在 PR 里说明。
+- `docs/adr/` 放长期架构决策；`docs/schema/` 放 artifact 字段约束。
 
 ---
 
-## 8. 新功能与文档规则
-
-不是所有新功能都必须先写长 feature 文档。
-
-必须先补设计文档的情况：
-
-- 影响架构边界；
-- 引入新的长期接口；
-- 修改数据 schema 或 artifact contract；
-- 影响 Candidate / Shadow / Production 流程；
-- 影响 ledger、daily entry、broker bridge、systemd；
-- 引入新的策略生命周期规则。
-
-普通 research 实验、小 bugfix、小脚本、小文档修正，可以直接实现并在 PR 里说明。
-
-如需新增功能规格：
-
-- 必须先由人类确认目标位置；不得写入 archive/，不得自行恢复 docs/features/ 体系。
-- 优先更新 ROADMAP / CONTRACTS / SOP / ADR。
-- 长期架构决策写入 docs/adr/；
-- artifact 字段约束写入 docs/schema/。
-
----
-
-## 9. 测试要求
+## 10. 测试
 
 提交前默认执行：
 
@@ -291,76 +111,31 @@ python -m compileall qsys scripts tests
 python -m unittest discover tests
 ```
 
-可按改动范围增加最小回归：
-
-| 改动范围 | 测试命令 |
-|---|---|
-| qsys/trader/ | python -m unittest tests/trader/ |
-| qsys/backtest/ | python -m unittest tests/backtest/ |
-| qsys/ledger/ | python -m unittest tests/ledger/ |
-| qsys/research/ | python -m unittest tests/research/ |
-| qsys/signal/ | python -m unittest tests/signal/ |
-| qsys/ops/ | python -m unittest tests/ops/ |
-
-如果测试不存在或无法运行，必须明确说明原因，不能假装已验证。
+按改动范围可用 `python -m unittest tests/<module>/`。
 
 ---
 
-## 10. 日期与数据语义
+## 11. 日期与数据语义
 
-- signal_date：信号来源日期，通常是最近一个已收盘交易日。
-- execution_date：实际计划执行日期。
-- 盘前推荐必须基于 T-1 收盘。
-- 数据 readiness 不满足时，流程应显式失败，不给假推荐。
+- `signal_date`：信号来源日期（最近已收盘交易日）。
+- `execution_date`：实际计划执行日期。
+- 盘前推荐基于 T-1 收盘。数据 readiness 不满足时显式失败。
 - 训练、回测、推理必须避免未来数据泄露。
 
 ---
 
-## 11. 输出方式
+## 12. 输出方式
 
-默认先给：
-
-```
-结论
-关键依据
-风险 / 阻塞点
-下一步动作
-```
-
-要求：
-
-- 引用代码时给出明确路径；
-- 不把推测写成事实；
-- 不用空泛总结替代验证证据；
-- 涉及文件移动、删除、入口切换、DB 变更时，必须先列影响范围；
-- 涉及新增目录、移动文件、删除产物、改变 artifact 位置时，必须参考 `docs/REPO_LAYOUT.md`；
-- 文档引用统一使用仓库相对路径，禁止 file:// 绝对路径。
+结论 → 关键依据 → 风险/阻塞点 → 下一步动作。引用代码给明确路径。不把推测写成事实。
 
 ---
 
-## 12. 禁止事项
+## 13. 禁止事项
 
-以下事项禁止自动执行。违反任何一条属于 agent protocol violation，用户可能要求回滚并放弃当前 session。
+**PR/分支**：禁止直接推送或合并到 main。零例外。
 
-### 12.1 PR / 分支
+**数据/状态**：禁止删除 `shadow/`；删除或迁移 `real_account.db`；绕过 LedgerService 直接写生产状态；直接编辑 `data/trade.db`（只能通过 `run_daily.py` / `LedgerService` 写入）；切换 production systemd 入口。
 
-- **禁止直接推送或合并到 main 分支。** 零例外。所有变更必须通过 `gh pr create` 流程。
+**交易/生产**：禁止绕过 artifact contract 接入 Candidate/Production；让 Research artifact 直接进入 Production；自动提交真实券商订单；修改生产密钥。
 
-### 12.2 数据与状态
-
-- 删除 `shadow/`；
-- 删除或迁移 `data/meta/real_account.db`；
-- 绕过 LedgerService 直接写生产状态；
-- 直接编辑 `data/trade.db`（只能通过 `run_daily.py` / `LedgerService` 写入）；
-- 切换 production systemd 入口。
-
-### 12.3 交易与生产
-
-- 绕过 artifact contract 接入 Candidate / Production；
-- 让 Research artifact 直接进入 Production；
-- 自动提交真实券商订单；
-- 修改生产密钥、本地私密配置或外部授权信息。
-
-### 12.4 代码与依赖
-
-- **从 `archive/` import 或调用脚本**——archive/ 是只读历史参考，不保证可运行，新代码不得依赖 archive/。
+**代码/依赖**：禁止从 `archive/` import 或调用脚本。
