@@ -51,6 +51,10 @@ def main() -> None:
         "--start-date", default=BACKFILL_START,
         help="Backfill start date (YYYYMMDD, default 20100101)",
     )
+    parser.add_argument(
+        "--force", action="store_true",
+        help="Re-fetch even when CSV already exists",
+    )
     args = parser.parse_args()
 
     output_dir = cfg.project_root / "data" / "raw" / "index"
@@ -71,7 +75,7 @@ def main() -> None:
         start = args.start_date
         out_path = output_dir / f"{code}.csv"
 
-        if out_path.exists():
+        if out_path.exists() and not args.force:
             # Show existing date range
             import pandas as pd
             existing = pd.read_csv(out_path)
@@ -82,11 +86,13 @@ def main() -> None:
                     code, existing_dates[0], existing_dates[-1], len(existing),
                 )
                 if args.apply:
-                    log.info("%s: skipping (already exists, use --force to re-fetch)", code)
+                    log.info("%s: skipping (exists, use --force to re-fetch)", code)
                     summary["indices"][code] = {"status": "skipped", "reason": "already_exists"}
                     continue
             else:
                 log.info("%s: exists but empty, will re-fetch", code)
+        elif out_path.exists() and args.force:
+            log.info("%s: --force, will re-fetch", code)
 
         log.info("%s: fetching %s → %s ...", code, start, end_dt)
         try:

@@ -85,21 +85,44 @@ def load_index_daily(
     return _read_index_csv(path)
 
 
+def load_index_close(
+    index_name: str = "hs300",
+    root: str | None = None,
+) -> pd.DataFrame:
+    """Load only ``trade_date`` and ``close`` — legacy close-only contract.
+
+    Useful for callers that do not need OHLCV and want a predictable
+    two-column result regardless of what columns the underlying CSV has.
+    """
+    df = load_index_daily(index_name, root=root)
+    result = df[["trade_date", "close"]].copy()
+    return result
+
+
 def load_index_ohlcv(
     index_name: str = "hs300",
     root: str | None = None,
 ) -> pd.DataFrame:
-    """Load index with standard OHLCV columns, rename to short names.
+    """Load index with standard OHLCV columns, in fixed order.
 
-    Filters down to ``trade_date, open, high, low, close, volume``.
+    Returns columns ``trade_date, open, high, low, close, volume``
+    in that order.  ``volume`` is sourced from ``vol`` when the
+    ``volume`` column is absent.
     """
     df = load_index_daily(index_name, root=root)
-    keep = {"trade_date", "open", "high", "low", "close", "volume"}
-    cols = keep & set(df.columns)
-    out = df[list(cols)].copy()
-    if "volume" not in cols and "vol" in df.columns:
-        out["volume"] = df["vol"]
-    return out
+    result = pd.DataFrame()
+    result["trade_date"] = df["trade_date"]
+    result["open"] = df.get("open", pd.NA)
+    result["high"] = df.get("high", pd.NA)
+    result["low"] = df.get("low", pd.NA)
+    result["close"] = df.get("close", pd.NA)
+    if "volume" in df.columns:
+        result["volume"] = df["volume"]
+    elif "vol" in df.columns:
+        result["volume"] = df["vol"]
+    else:
+        result["volume"] = pd.NA
+    return result
 
 
 def load_multi_index(
@@ -146,6 +169,8 @@ def load_multi_index(
         else:
             merged = pd.merge(merged, df, on="trade_date", how="outer")
 
+    if merged is None:
+        return pd.DataFrame()
     merged = merged.sort_values("trade_date").reset_index(drop=True)
     return merged
 
@@ -161,10 +186,8 @@ def attach_index_context(df: pd.DataFrame, index_name: str = "hs300") -> pd.Data
     contract.  Prefer using ``load_index_daily`` or ``load_multi_index``
     directly.
     """
-    idx = load_index_daily(index_name=index_name)
-    rename_close = idx[["trade_date", "close"]].rename(
-        columns={"close": f"{index_name}_close"}
-    )
+    idx = load_index_close(index_name=index_name)
+    rename_close = idx.rename(columns={"close": f"{index_name}_close"})
     out = df.merge(rename_close, on="trade_date", how="left")
     out["index_close"] = out[f"{index_name}_close"]
     return out
