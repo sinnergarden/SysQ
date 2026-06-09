@@ -1,10 +1,14 @@
-"""RollingResearchRunner — rolling research pipeline orchestrator.
+"""RollingResearchRunner — DEPRECATED rolling research pipeline orchestrator.
+
+.. deprecated::
+   Use :class:`~qsys.research.signal_pipeline.SignalResearchPipeline`
+   for new signal research.  ``RollingResearchRunner`` is a backward-
+   compatible wrapper that delegates signal generation + IC evaluation
+   to ``SignalResearchPipeline``, then appends backtest + experiment
+   index on top.
 
 v1: single-path rolling research (signal → eval → backtest → index).
 v2: matrix experiment (generators × signal_transforms × strategies).
-
-Both modes share rolling windows, SignalStore, SignalEvaluator,
-BacktestRunner, and ExperimentIndex.
 
 Backward-compatible re-exports
 -------------------------------
@@ -28,6 +32,7 @@ import pandas as pd
 
 from qsys.research.experiment import ExperimentIndex, ExperimentSpec
 from qsys.research.generators.base import RollingSignalGenerator
+from qsys.research.signal_pipeline import SignalResearchPipeline
 from qsys.research.generators.fixture import (
     FixtureSignalGenerator,
     MultiHeadFixtureGenerator,
@@ -151,16 +156,19 @@ def run_signal_backtests(
     return job_rows, all_bt_refs
 
 
-# ── RollingResearchRunner ──────────────────────────────────────────────
+# ── RollingResearchRunner (deprecated wrapper) ────────────────────────
 
 
 class RollingResearchRunner:
-    """Rolling research pipeline orchestrator.
+    """DEPRECATED rolling research pipeline orchestrator.
 
-    Parameters
-    ----------
-    root:
-        Research root path (default ``data/research``).
+    .. deprecated::
+       Use ``SignalResearchPipeline`` for new signal research + evaluation.
+       This class is retained for backward compatibility.
+
+    Delegates signal generation + IC evaluation to
+    :class:`~qsys.research.signal_pipeline.SignalResearchPipeline`, then
+    runs backtests and registers results in ``ExperimentIndex``.
     """
 
     def __init__(self, root: str | Path = "data/research") -> None:
@@ -168,6 +176,8 @@ class RollingResearchRunner:
         self._paths = ResearchPaths(str(self.root))
         self._signal_store = SignalStore(str(self.root))
         self._experiment_index = ExperimentIndex(str(self.root))
+        # Internal pipeline for signal generation + evaluation
+        self._signal_pipeline = SignalResearchPipeline(root)
 
     def run(
         self,
@@ -179,148 +189,38 @@ class RollingResearchRunner:
         overwrite_backtest: bool = False,
         overwrite_experiment: bool = False,
     ) -> dict[str, Any]:
-        """Execute a rolling research run.
+        """Execute a rolling research run (deprecated).
 
-        Parameters
-        ----------
-        config:
-            Rolling research configuration.
-        signal_generator:
-            Callable for per-window signal generation.  When ``None``,
-            uses ``FixtureSignalGenerator`` (v1) or config-driven
-            generators (v2 matrix).
-        overwrite_signal:
-            Allow overwriting existing SignalRun.
-        overwrite_eval:
-            Allow overwriting existing SignalEvaluations.
-        overwrite_backtest:
-            Allow overwriting existing BacktestRuns.
-        overwrite_experiment:
-            Allow overwriting existing Experiment index.
-
-        Returns
-        -------
-        dict
-            Summary of the run.
+        For new code, use ``SignalResearchPipeline.run()`` for signal + IC
+        evaluation, then run backtests separately.
         """
         if isinstance(config, (str, Path)):
             config = RollingResearchConfig.from_file(Path(config))
         elif isinstance(config, dict):
             config = RollingResearchConfig.from_dict(config)
 
-        exp_dir = self._paths.experiment_dir(config.experiment_id)
+        # ── Delegate signal generation + evaluation to SignalResearchPipeline ──
+        # We call the pipeline even when backtests are present, since the
+        # pipeline only refuses if config.strategies or config.backtests
+        # are set.  We temporarily strip them, then add back after.
+        _saved_strategies = config.strategies
+        _saved_backtests = config.backtests
+        config.strategies = []
+        config.backtests = []
 
-        # -- 0. Pre-flight: validate label artifacts --
-        if config.labels:
-            from qsys.label.store import LabelStore
-            _ls = LabelStore(str(self.root))
-            _start = config.calendar.get("start_date")
-            _end = config.calendar.get("end_date")
-            for lcfg in config.labels:
-                lid = lcfg["label_id"]
-                _kwargs: dict[str, Any] = {"start": _start, "end": _end}
-                if "universe" in lcfg:
-                    _kwargs["universe"] = lcfg["universe"]
-                elif config.generators:
-                    _first_gen = config.generators[0]
-                    _univ = _first_gen.get("params", {}).get("universe")
-                    if _univ:
-                        _kwargs["universe"] = _univ
-                mc = lcfg.get("min_coverage")
-                if mc is not None:
-                    _kwargs["min_coverage"] = mc
-                _ls.validate_label(lid, **_kwargs)
-                print(f"  Label {lid}: pre-flight OK")
-
-        # ── 1. Build rolling windows ──
-        windows = build_rolling_windows(
-            config.calendar.get("start_date", ""),
-            config.calendar.get("end_date", ""),
-            train_window_days=config.calendar.get("train_window_days", 252),
-            step_days=config.calendar.get("step_days", 5),
-        )
-        window_df = pd.DataFrame([{
-            "window_id": w.window_id,
-            "train_start": w.train_start,
-            "train_end": w.train_end,
-            "predict_start": w.predict_start,
-            "predict_end": w.predict_end,
-        } for w in windows])
-        exp_dir.mkdir(parents=True, exist_ok=True)
-        window_df.to_csv(exp_dir / "rolling_windows.csv", index=False)
-
-        # ── Dispatch: v2 matrix vs v1 single ──
-        if config.generators:
-            return self._run_matrix(
-                config, windows,
+        try:
+            pipeline_result = self._signal_pipeline.run(
+                config,
                 signal_generator=signal_generator,
                 overwrite_signal=overwrite_signal,
                 overwrite_eval=overwrite_eval,
-                overwrite_backtest=overwrite_backtest,
-                overwrite_experiment=overwrite_experiment,
             )
+        finally:
+            config.strategies = _saved_strategies
+            config.backtests = _saved_backtests
 
-        # ── v1 single-signal path ──
-        signal_id = config.signal.get("signal_id", "rolling_signal")
-        signal_run_id = config.signal.get("signal_run_id", "rolling_run")
-        gen = signal_generator or FixtureSignalGenerator()
-        all_preds: list[pd.DataFrame] = []
-        for w in windows:
-            pred = gen.generate(
-                train_start=w.train_start,
-                train_end=w.train_end,
-                predict_start=w.predict_start,
-                predict_end=w.predict_end,
-                signal_id=signal_id,
-                signal_run_id=signal_run_id,
-            )
-            all_preds.append(pred)
-
-        predictions = pd.concat(all_preds, ignore_index=True)
-        self._signal_store.save_signal_run(
-            signal_id, signal_run_id, predictions,
-            manifest={
-                "model_mode": "rolling_train",
-                "window_count": len(windows),
-                "train_window_days": config.calendar.get("train_window_days"),
-            },
-            overwrite=overwrite_signal,
-        )
-
-        # ── Evaluate ──
-        from qsys.research.evaluation import SignalEvaluator
-
-        evaluator = SignalEvaluator(str(self.root))
-        eval_count = 0
-        for lcfg in config.labels:
-            evaluator.evaluate(
-                signal_id=signal_id,
-                signal_run_id=signal_run_id,
-                label_id=lcfg["label_id"],
-                score_column=config.signal.get("score_column", "score"),
-                overwrite=overwrite_eval,
-            )
-            eval_count += 1
-
-        # ── Backtest (delegated) ──
-        bt_count = 0
-        bt_manifest_refs: list[tuple[str, str]] = []
-        if config.backtests:
-            jobs = [MatrixJob(
-                generator_id="single",
-                transform_id="raw",
-                strategy_configs=config.backtests,
-                signal_id=signal_id,
-                signal_run_id=signal_run_id,
-            )]
-            bt_job_rows, bt_all_refs = run_signal_backtests(
-                self._signal_store, jobs, config,
-                overwrite=overwrite_backtest,
-                research_root=str(self.root),
-            )
-            bt_count = len(bt_all_refs)
-            # bt_all_refs format: [(signal_id, signal_run_id, strategy_run_id, backtest_id)]
-            bt_manifest_refs = [(sr, bt) for _, _, sr, bt in bt_all_refs]
+        exp_dir = self._paths.experiment_dir(config.experiment_id)
+        eval_count = len(pipeline_result.eval_refs)
 
         # ── Experiment index ──
         self._experiment_index.create(
@@ -331,301 +231,82 @@ class RollingResearchRunner:
             ),
             overwrite=overwrite_experiment,
         )
-
-        self._experiment_index.add_signal_run(
-            config.experiment_id, signal_id=signal_id, signal_run_id=signal_run_id,
-        )
-        for lcfg in config.labels:
-            self._experiment_index.add_signal_eval(
-                config.experiment_id,
-                signal_id=signal_id, signal_run_id=signal_run_id,
-                label_id=lcfg["label_id"],
-            )
-        for _sid, _bid in bt_manifest_refs:
-            self._experiment_index.add_backtest_run(config.experiment_id, strategy_run_id=_sid, backtest_id=_bid)
-
-        self._experiment_index.rebuild_indexes(config.experiment_id)
-
-        # ── Rolling research manifest ──
-        manifest = with_standard_metadata({
-            "artifact_type": "rolling_research",
-            "experiment_id": config.experiment_id,
-            "signal_id": signal_id,
-            "signal_run_id": signal_run_id,
-            "window_count": len(windows),
-            "date_range": {
-                "start": config.calendar.get("start_date"),
-                "end": config.calendar.get("end_date"),
-            },
-            "labels": config.labels,
-            "backtests": config.backtests,
-            "output_signal_path": str(self._paths.signal_dir(signal_id, signal_run_id)),
-        })
-        write_manifest(exp_dir / "rolling_research_manifest.json", manifest)
-
-        return {
-            "status": "passed",
-            "experiment_id": config.experiment_id,
-            "signal_id": signal_id,
-            "signal_run_id": signal_run_id,
-            "window_count": len(windows),
-            "prediction_row_count": len(predictions),
-            "signal_eval_count": eval_count,
-            "backtest_count": bt_count,
-            "output_dir": str(exp_dir),
-        }
-
-    # ── v2: matrix experiment ──────────────────────────────────────────
-
-    def _run_matrix(
-        self,
-        config: RollingResearchConfig,
-        windows: list[RollingWindow],
-        *,
-        signal_generator: RollingSignalGenerator | None = None,
-        overwrite_signal: bool = False,
-        overwrite_eval: bool = False,
-        overwrite_backtest: bool = False,
-        overwrite_experiment: bool = False,
-    ) -> dict[str, Any]:
-        """Matrix experiment: generators × transforms × strategies."""
-        from qsys.research.evaluation import SignalEvaluator
-
-        exp_dir = self._paths.experiment_dir(config.experiment_id)
-
-        # ── 1. Create experiment index ──
-        self._experiment_index.create(
-            ExperimentSpec(
-                experiment_id=config.experiment_id,
-                title=config.title,
-                description=config.description,
-            ),
-            overwrite=overwrite_experiment,
-        )
-
-        # ── 2. Expand multi-label generators into per-label entries ──
-        effective_generators = expand_multi_label_generators(config.generators)
-
-        # ── 3. Build matrix jobs ──
-        jobs = build_matrix_jobs(config, effective_generators=effective_generators)
-        explicit_generator = signal_generator is not None
-
-        # ── 4. Generate raw predictions once per generator ──
-        evaluator = SignalEvaluator(str(self.root))
-
-        raw_predictions: dict[str, pd.DataFrame] = {}
-        eval_count = 0
-
-        for gen_cfg in effective_generators:
-            gen_id = gen_cfg["generator_id"]
-            gen = signal_generator if explicit_generator else _create_generator_from_config(gen_cfg)
-
-            all_preds: list[pd.DataFrame] = []
-            for w in windows:
-                pred = gen.generate(
-                    train_start=w.train_start,
-                    train_end=w.train_end,
-                    predict_start=w.predict_start,
-                    predict_end=w.predict_end,
-                    signal_id="__internal__",
-                    signal_run_id="__internal__",
-                )
-                all_preds.append(pred)
-            raw_predictions[gen_id] = pd.concat(all_preds, ignore_index=True)
-
-        # ── 5. For each job: transform → save → eval → index ──
-        job_rows: list[dict[str, Any]] = []
-        bt_refs_for_experiment: list[tuple[str, str, str, str]] = []
-
-        for job in jobs:
-            raw = raw_predictions[job.generator_id]
-
-            # Multi-head: filter to rows belonging to this head's signal_id
-            if job.head_signal_id:
-                raw = raw[raw["signal_id"] == job.head_signal_id].copy()
-
-            # Find transform config
-            tf_cfg = next(
-                (t for t in config.transforms if t["transform_id"] == job.transform_id),
-                None,
-            )
-            if tf_cfg is None:
-                raise ValueError(f"Transform config not found: {job.transform_id}")
-
-            # Apply transform
-            transformed = apply_signal_transform(raw, tf_cfg)
-            transformed["signal_id"] = job.signal_id
-            transformed["signal_run_id"] = job.signal_run_id
-
-            # Save SignalRun
-            self._signal_store.save_signal_run(
-                job.signal_id, job.signal_run_id, transformed,
-                manifest={
-                    "model_mode": "rolling_matrix",
-                    "window_count": len(windows),
-                    "generator_id": job.generator_id,
-                    "transform_id": job.transform_id,
-                    "train_window_days": config.calendar.get("train_window_days"),
-                },
-                overwrite=overwrite_signal,
-            )
-
-            # Evaluate all labels
-            for lcfg in config.labels:
-                evaluator.evaluate(
-                    signal_id=job.signal_id,
-                    signal_run_id=job.signal_run_id,
-                    label_id=lcfg["label_id"],
-                    score_column=config.signal.get("score_column", "score"),
-                    overwrite=overwrite_eval,
-                )
-                eval_count += 1
-
-            # Register signal run and evals in experiment index
+        for sref in pipeline_result.signal_runs:
             self._experiment_index.add_signal_run(
                 config.experiment_id,
-                signal_id=job.signal_id,
-                signal_run_id=job.signal_run_id,
+                signal_id=sref.signal_id,
+                signal_run_id=sref.signal_run_id,
             )
-            for lcfg in config.labels:
-                self._experiment_index.add_signal_eval(
-                    config.experiment_id,
-                    signal_id=job.signal_id,
-                    signal_run_id=job.signal_run_id,
-                    label_id=lcfg["label_id"],
-                )
+        for eref in pipeline_result.eval_refs:
+            self._experiment_index.add_signal_eval(
+                config.experiment_id,
+                signal_id=eref.signal_id,
+                signal_run_id=eref.signal_run_id,
+                label_id=eref.label_id,
+            )
 
-        # ── Backtest (delegated) ──
+        # ── Backtests (from pipeline_result.signal_runs, not re-derived) ──
+        # SignalResearchPipeline produces SignalRunRefs.  Backtest consumes them.
         bt_count = 0
         all_bt_refs: list[tuple[str, str, str, str]] = []
-        if config.strategies and any(j.strategy_configs for j in jobs):
-            bt_job_rows, all_bt_refs = run_signal_backtests(
+        combined_bt_refs: list[tuple[str, str, str, str]] = []
+        bt_job_rows_v2: list[dict[str, Any]] = []
+
+        if _saved_strategies:
+            bt_jobs = [
+                MatrixJob(
+                    generator_id=sref.generator_id,
+                    transform_id=sref.transform_id,
+                    strategy_configs=_saved_strategies,
+                    signal_id=sref.signal_id,
+                    signal_run_id=sref.signal_run_id,
+                    head_signal_id=sref.head_signal_id,
+                )
+                for sref in pipeline_result.signal_runs
+            ]
+            if bt_jobs:
+                bt_job_rows, all_bt_refs = run_signal_backtests(
+                    self._signal_store, bt_jobs, config,
+                    overwrite=overwrite_backtest,
+                    research_root=str(self.root),
+                )
+                bt_job_rows_v2.extend(bt_job_rows)
+                bt_count = len(all_bt_refs)
+                for _, _, _sid, _bid in all_bt_refs:
+                    self._experiment_index.add_backtest_run(
+                        config.experiment_id, strategy_run_id=_sid, backtest_id=_bid,
+                    )
+
+        if _saved_backtests:
+            # v1 single-signal backtests
+            signal_id = config.signal.get("signal_id", "rolling_signal")
+            signal_run_id = config.signal.get("signal_run_id", "rolling_run")
+            jobs = [MatrixJob(
+                generator_id="single",
+                transform_id="raw",
+                strategy_configs=_saved_backtests,
+                signal_id=signal_id,
+                signal_run_id=signal_run_id,
+            )]
+            v1_job_rows, v1_bt_refs = run_signal_backtests(
                 self._signal_store, jobs, config,
                 overwrite=overwrite_backtest,
                 research_root=str(self.root),
             )
-            job_rows.extend(bt_job_rows)
-            bt_count = len(all_bt_refs)
-            for _, _, _sid, _bid in all_bt_refs:
+            bt_job_rows_v2.extend(v1_job_rows)
+            bt_count += len(v1_bt_refs)
+            for _, _, _sid, _bid in v1_bt_refs:
                 self._experiment_index.add_backtest_run(
                     config.experiment_id, strategy_run_id=_sid, backtest_id=_bid,
                 )
 
-        # ── 6 (cont). Signal combinations ──────────────────────────────
-        combine_count = 0
-        combined_signal_run_ids: list[str] = []
-        if config.signal_combinations:
-            from qsys.research.signal_combine import (
-                CombineSpec,
-                build_combine_spec_from_config,
-                combine_signals,
-            )
+        # Combined signal refs are already part of pipeline_result.signal_runs,
+        # included in the backtest pass above (transform_id != "combined" check removed).
 
-            signal_id_map: dict[str, str] = {}
-            signal_run_id_map: dict[str, str] = {}
-            for job in jobs:
-                key = f"{job.generator_id}__{job.transform_id}"
-                signal_id_map[key] = job.signal_id
-                signal_run_id_map[key] = job.signal_run_id
-
-            combine_specs: list[CombineSpec] = []
-            combined_output_ids: list[str] = []
-            combined_output_run_ids: list[str] = []
-
-            for comb_cfg in config.signal_combinations:
-                spec = build_combine_spec_from_config(
-                    comb_cfg, signal_id_map, signal_run_id_map,
-                )
-                combine_specs.append(spec)
-
-                out_sig_id = (
-                    config.signal.get("signal_id", "matrix_signal")
-                    + f"__{spec.combine_id}"
-                )
-                cal = config.calendar
-                out_run_id = (
-                    f"rolling__{config.experiment_id}__{spec.combine_id}"
-                    f"__{cal.get('start_date', '')}_{cal.get('end_date', '')}"
-                )
-                combined_output_ids.append(out_sig_id)
-                combined_output_run_ids.append(out_run_id)
-
-                combined_df = combine_signals(
-                    spec,
-                    output_signal_id=out_sig_id,
-                    output_signal_run_id=out_run_id,
-                    signal_store=self._signal_store,
-                    research_paths=self._paths,
-                    overwrite=overwrite_signal,
-                )
-
-                # Evaluate combined signal
-                for lcfg in config.labels:
-                    evaluator.evaluate(
-                        signal_id=out_sig_id,
-                        signal_run_id=out_run_id,
-                        label_id=lcfg["label_id"],
-                        score_column=config.signal.get("score_column", "score"),
-                        overwrite=overwrite_eval,
-                    )
-                    eval_count += 1
-
-                # Backtest combined signals (delegated)
-                if config.strategies:
-                    cmb_jobs = [MatrixJob(
-                        generator_id=spec.combine_id,
-                        transform_id="combined",
-                        strategy_configs=config.strategies,
-                        signal_id=out_sig_id,
-                        signal_run_id=out_run_id,
-                    )]
-                    cmb_cfg = RollingResearchConfig(
-                        experiment_id=config.experiment_id,
-                        calendar=config.calendar,
-                    )
-                    cmb_job_rows, cmb_bt_refs = run_signal_backtests(
-                        self._signal_store, cmb_jobs, cmb_cfg,
-                        overwrite=overwrite_backtest,
-                        research_root=str(self.root),
-                    )
-                    job_rows.extend(cmb_job_rows)
-                    bt_count += len(cmb_bt_refs)
-                    all_bt_refs.extend(cmb_bt_refs)
-                    for _, _, _sid, _bid in cmb_bt_refs:
-                        self._experiment_index.add_backtest_run(
-                            config.experiment_id, strategy_run_id=_sid, backtest_id=_bid,
-                        )
-
-                # Register combined signal in experiment index
-                self._experiment_index.add_signal_run(
-                    config.experiment_id,
-                    signal_id=out_sig_id,
-                    signal_run_id=out_run_id,
-                )
-                for lcfg in config.labels:
-                    self._experiment_index.add_signal_eval(
-                        config.experiment_id,
-                        signal_id=out_sig_id,
-                        signal_run_id=out_run_id,
-                        label_id=lcfg["label_id"],
-                    )
-
-                combine_count += 1
-                combined_signal_run_ids.append(out_run_id)
-
-            # Write cross_signal_index.csv
-            build_cross_signal_index(
-                combine_specs,
-                combined_output_ids,
-                combined_output_run_ids,
-                self._paths,
-                config.experiment_id,
-            )
-
-        # ── 7. Rebuild indexes ──
+        # ── Rebuild indexes ──
         self._experiment_index.rebuild_indexes(config.experiment_id)
 
-        # ── 8. Write matrix_jobs.csv ──
+        # ── Write matrix_jobs.csv ──
         job_cols = [
             "generator_id", "transform_id", "strategy_id",
             "signal_id", "signal_run_id",
@@ -633,35 +314,35 @@ class RollingResearchRunner:
             "strategy_template_id", "top_n",
             "backtest_id", "strategy_run_id", "status",
         ]
-        job_df = pd.DataFrame(job_rows, columns=job_cols) if job_rows else pd.DataFrame(columns=job_cols)
+        job_df = (
+            pd.DataFrame(bt_job_rows_v2, columns=job_cols)
+            if bt_job_rows_v2 else pd.DataFrame(columns=job_cols)
+        )
         job_df.to_csv(exp_dir / "matrix_jobs.csv", index=False)
 
-        # ── 9. Rolling research manifest ──
-        signal_runs_summary = [
-            {
-                "generator_id": j.generator_id,
-                "transform_id": j.transform_id,
-                "signal_id": j.signal_id,
-                "signal_run_id": j.signal_run_id,
-            }
-            for j in jobs
-        ]
+        # ── Rolling research manifest ──
+        refs_key = "backtest_refs"
         manifest = with_standard_metadata({
             "artifact_type": "rolling_research",
-            "mode": "matrix",
-            "matrix_purpose": "framework_boundary_smoke",
             "experiment_id": config.experiment_id,
-            "generator_count": len(effective_generators),
-            "transform_count": len(config.transforms),
-            "combination_count": len(config.signal_combinations),
-            "strategy_count": len(config.strategies),
-            "job_count": len(jobs),
-            "window_count": len(windows),
-            "signal_runs": signal_runs_summary,
-            "backtest_refs": [
+            "signal_runs": [
+                {"generator_id": s.generator_id, "transform_id": s.transform_id,
+                 "signal_id": s.signal_id, "signal_run_id": s.signal_run_id}
+                for s in pipeline_result.signal_runs
+            ],
+            "window_count": len(
+                build_rolling_windows(
+                    config.calendar.get("start_date", ""),
+                    config.calendar.get("end_date", ""),
+                    train_window_days=config.calendar.get("train_window_days", 252),
+                    step_days=config.calendar.get("step_days", 5),
+                )
+            ) if config.calendar else 0,
+            "backtest_count": bt_count,
+            refs_key: [
                 {"signal_id": sid, "signal_run_id": srid,
                  "strategy_run_id": srid2, "backtest_id": bid}
-                for sid, srid, srid2, bid in all_bt_refs
+                for sid, srid, srid2, bid in all_bt_refs + combined_bt_refs
             ],
             "labels": config.labels,
             "date_range": {
@@ -674,16 +355,13 @@ class RollingResearchRunner:
         return {
             "status": "passed",
             "experiment_id": config.experiment_id,
-            "mode": "matrix",
-            "window_count": len(windows),
-            "generator_count": len(effective_generators),
-            "transform_count": len(config.transforms),
-            "combination_count": len(config.signal_combinations),
-            "strategy_count": len(config.strategies),
-            "job_count": len(jobs),
-            "signal_run_count": len(jobs) + combine_count,
-            "combined_signal_run_count": combine_count,
+            "mode": "matrix" if config.generators else "single",
+            "window_count": manifest.get("window_count", 0),
+            "signal_run_count": len(pipeline_result.signal_runs),
             "signal_eval_count": eval_count,
             "backtest_count": bt_count,
             "output_dir": str(exp_dir),
         }
+
+
+
