@@ -31,13 +31,29 @@ def _fake_predict_model(model, center, scale, X):
 class TestLightGBMSingleLabelContract:
     """Verify output matches SignalStore 6-column contract."""
 
+    @staticmethod
+    def _fake_labels(label_id: str = "fwd_ret_5d_xsz_clip3") -> pd.DataFrame:
+        """Fake label DataFrame covering same dates and instruments as _make_fake_data."""
+        rows = []
+        inst_labels = {"000001.SZ": 0.01, "000002.SZ": 0.02, "000003.SZ": 0.03}
+        for td in [f"2026-01-{d:02d}" for d in range(2, 17)]:
+            for inst, val in inst_labels.items():
+                rows.append({
+                    "trade_date": td,
+                    "instrument": inst,
+                    "label_id": label_id,
+                    "horizon": 5,
+                    "label_value": val,
+                })
+        return pd.DataFrame(rows)
+
     @patch("qsys.signal.alpha_v1.training.train_model", _fake_train_model)
     @patch("qsys.signal.alpha_v1.training.predict_model", _fake_predict_model)
-    def test_generate_returns_valid_signalrun(self) -> None:
+    @patch("qsys.label.store.LabelStore.load_labels")
+    def test_generate_returns_valid_signalrun(self, mock_labels) -> None:
         """generate() output has required columns."""
-        gen = LightGBMSingleLabelGenerator(
-            label_id="fwd_ret_5d_xsz_clip3",
-        )
+        mock_labels.return_value = self._fake_labels()
+        gen = LightGBMSingleLabelGenerator(label_id="fwd_ret_5d_xsz_clip3")
         with patch.object(gen, "_load_data") as mock_load:
             mock_load.return_value = self._make_fake_data(), ["f1", "f2"]
             with patch.object(gen, "_ensure_qlib"):
@@ -59,8 +75,12 @@ class TestLightGBMSingleLabelContract:
 
     @patch("qsys.signal.alpha_v1.training.train_model", _fake_train_model)
     @patch("qsys.signal.alpha_v1.training.predict_model", _fake_predict_model)
-    def test_generate_output_filtered_by_predict_window(self) -> None:
+    @patch("qsys.label.store.LabelStore.load_labels")
+    def test_generate_output_filtered_by_predict_window(
+        self, mock_labels,
+    ) -> None:
         """generate() only returns dates in predict window."""
+        mock_labels.return_value = self._fake_labels()
         gen = LightGBMSingleLabelGenerator(label_id="fwd_ret_5d_xsz_clip3")
         with patch.object(gen, "_load_data") as mock_load:
             mock_load.return_value = self._make_fake_data(), ["f1", "f2"]

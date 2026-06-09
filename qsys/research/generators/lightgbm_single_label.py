@@ -95,11 +95,10 @@ class LightGBMSingleLabelGenerator:
 
     _qlib_inited: bool = field(default=False, repr=False)
 
-    # LabelStore default root = "data/research" (see LabelStore.__init__).
-    # If your research root differs, use RollingResearchRunner(root=...) which
-    # creates its own SignalEvalutor with the matching root.  LabelStore inside
-    # this generator uses the same root convention; the two stay in sync as
-    # long as the runner's research root is the default or both are overridden.
+    # Note: LabelStore() defaults to root="data/research" (see LabelStore.__init__).
+    # Custom root injection is not yet wired through this generator — the default
+    # path matches the RollingResearchRunner default.  If a custom research root
+    # is needed, this generator should accept an explicit LabelStore instance.
     _clean_features: list[str] = field(default_factory=list, repr=False)
 
     def _ensure_qlib(self) -> None:
