@@ -185,3 +185,70 @@ class TestSingleLabelFactory:
         assert gen.label_id == "fwd_ret_5d_xsz_clip3"
         assert gen.universe == "csi800"
         assert gen.n_estimators == 100
+
+
+class TestMultiLabelBuildMatrixJobs:
+    """Integration: multi_label_lightgbm → expand → build_matrix_jobs."""
+
+    def test_expand_then_build_produces_independent_jobs(self) -> None:
+        from qsys.research.rolling_runner import (
+            RollingResearchConfig,
+            build_matrix_jobs,
+            expand_multi_label_generators,
+        )
+
+        config = RollingResearchConfig(
+            experiment_id="exp1",
+            generators=[
+                {
+                    "generator_id": "multi",
+                    "type": "multi_label_lightgbm",
+                    "params": {
+                        "universe": "csi300",
+                        "labels": [
+                            {"label_id": "fwd_ret_5d_xsz_clip3", "signal_id": "lgbm_5d"},
+                            {"label_id": "fwd_ret_20d_xsz_clip3", "signal_id": "lgbm_20d"},
+                        ],
+                    },
+                },
+            ],
+            transforms=[{"transform_id": "raw", "type": "identity"}],
+            strategies=[{"strategy_id": "s1", "strategy_template_id": "rank_weight_top20"}],
+            calendar={"start_date": "2026-01-01", "end_date": "2026-01-10"},
+        )
+
+        effective = expand_multi_label_generators(config.generators)
+        jobs = build_matrix_jobs(config, effective_generators=effective)
+
+        assert len(jobs) == 2, f"expected 2 jobs, got {len(jobs)}"
+
+        # Job 0: first label
+        assert jobs[0].generator_id == "multi__fwd_ret_5d_xsz_clip3"
+        assert jobs[0].transform_id == "raw"
+        # signal_id should use the label entry's signal_id (lgbm_5d) + transform
+        assert jobs[0].signal_id == "lgbm_5d__raw"
+
+        # Job 1: second label
+        assert jobs[1].generator_id == "multi__fwd_ret_20d_xsz_clip3"
+        assert jobs[1].signal_id == "lgbm_20d__raw"
+
+        # Both jobs carry the same strategy configs
+        assert len(jobs[0].strategy_configs) == 1
+        assert len(jobs[1].strategy_configs) == 1
+
+    def test_original_config_not_mutated(self) -> None:
+        """expand_multi_label_generators does not modify its input."""
+        from qsys.research.rolling_runner import expand_multi_label_generators
+
+        original = [
+            {
+                "generator_id": "multi",
+                "type": "multi_label_lightgbm",
+                "params": {
+                    "labels": [{"label_id": "fwd_ret_5d_xsz_clip3", "signal_id": "lgbm_5d"}],
+                },
+            },
+        ]
+        _ = expand_multi_label_generators(original)
+        assert len(original) == 1  # unchanged
+        assert original[0]["type"] == "multi_label_lightgbm"

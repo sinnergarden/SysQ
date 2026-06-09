@@ -19,6 +19,8 @@ from datetime import datetime, timedelta
 import numpy as np
 import pandas as pd
 
+from qsys.utils.logger import log
+
 
 def _build_prev_trading_date_lookup(predict_start: str, predict_end: str) -> dict[str, str]:
     try:
@@ -92,6 +94,12 @@ class LightGBMSingleLabelGenerator:
     lgb_params: dict | None = None
 
     _qlib_inited: bool = field(default=False, repr=False)
+
+    # LabelStore default root = "data/research" (see LabelStore.__init__).
+    # If your research root differs, use RollingResearchRunner(root=...) which
+    # creates its own SignalEvalutor with the matching root.  LabelStore inside
+    # this generator uses the same root convention; the two stay in sync as
+    # long as the runner's research root is the default or both are overridden.
     _clean_features: list[str] = field(default_factory=list, repr=False)
 
     def _ensure_qlib(self) -> None:
@@ -143,7 +151,7 @@ class LightGBMSingleLabelGenerator:
             datetime.strptime(predict_end, "%Y-%m-%d") + timedelta(days=30)
         ).strftime("%Y-%m-%d")
 
-        print(f"\n  Loading data [{train_start}, {extended_end}] ...")
+        log.info("Loading data [%s, %s]", train_start, extended_end)
         frame, clean_features = self._load_data(train_start, extended_end)
 
         from qsys.label.store import LabelStore
@@ -153,7 +161,7 @@ class LightGBMSingleLabelGenerator:
         label_df = LabelStore().load_labels(self.label_id)
 
         # Train
-        print(f"  Training window: {train_start} → {train_end}")
+        log.info("Training window: %s → %s", train_start, train_end)
         train = frame[
             (frame["trade_date"] >= train_start) &
             (frame["trade_date"] <= train_end)
@@ -203,5 +211,5 @@ class LightGBMSingleLabelGenerator:
                 })
 
         result = pd.DataFrame(rows)
-        print(f"  Generated {len(result)} rows across {result['trade_date'].nunique()} trade dates\n")
+        log.info("Generated %d rows across %d trade dates", len(result), result["trade_date"].nunique())
         return result

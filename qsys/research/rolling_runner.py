@@ -297,6 +297,16 @@ class RollingResearchConfig:
 # ── Generator factory ──────────────────────────────────────────────────
 
 
+def _slugify_id(raw: str) -> str:
+    """Sanitize an identifier for use in file paths and run IDs.
+
+    Replaces any non-alphanumeric, non-underscore, non-dash character
+    with underscore.
+    """
+    import re
+    return re.sub(r"[^a-zA-Z0-9_-]", "_", raw)
+
+
 def expand_multi_label_generators(generators: list[dict]) -> list[dict]:
     """Expand ``multi_label_lightgbm`` entries into per-label ``single_label_lightgbm``.
 
@@ -325,7 +335,7 @@ def expand_multi_label_generators(generators: list[dict]) -> list[dict]:
             label_id = entry["label_id"]
             label_signal_id = entry.get("signal_id", label_id)
             expanded.append({
-                "generator_id": f"{base_id}__{label_id}",
+                "generator_id": _slugify_id(f"{base_id}__{label_id}"),
                 "type": "single_label_lightgbm",
                 "params": {
                     "label_id": label_id,
@@ -443,12 +453,24 @@ def apply_signal_transform(
 # ── Matrix job builder ────────────────────────────────────────────────
 
 
-def build_matrix_jobs(config: RollingResearchConfig) -> list[MatrixJob]:
+def build_matrix_jobs(
+    config: RollingResearchConfig,
+    effective_generators: list[dict] | None = None,
+) -> list[MatrixJob]:
     """Expand a matrix config into individual (generator, transform) jobs.
 
     Each job carries the full list of strategy configs so that generation
     and transform are performed once and backtests are run per strategy.
+
+    Parameters
+    ----------
+    config:
+        Full research config.
+    effective_generators:
+        Pre-expanded generator list (e.g. after multi-label expansion).
+        When ``None``, uses ``config.generators``.
     """
+    generators = effective_generators if effective_generators is not None else config.generators
     base_signal_id = config.signal.get("signal_id", "matrix_signal")
     experiment_id = config.experiment_id
     cal = config.calendar
@@ -456,7 +478,7 @@ def build_matrix_jobs(config: RollingResearchConfig) -> list[MatrixJob]:
     end = cal.get("end_date", "")
 
     jobs: list[MatrixJob] = []
-    for gen_cfg in config.generators:
+    for gen_cfg in generators:
         gen_id = gen_cfg["generator_id"]
         # Multi-label expanded entries carry an explicit per-label signal_id
         label_signal_id = gen_cfg.get("label_signal_id", None)
@@ -749,10 +771,10 @@ class RollingResearchRunner:
         )
 
         # ── 2. Expand multi-label generators into per-label entries ──
-        config.generators = expand_multi_label_generators(config.generators)
+        effective_generators = expand_multi_label_generators(config.generators)
 
         # ── 3. Build matrix jobs ──
-        jobs = build_matrix_jobs(config)
+        jobs = build_matrix_jobs(config, effective_generators=effective_generators)
         explicit_generator = signal_generator is not None
 
         # ── 4. Generate raw predictions once per generator ──
@@ -764,7 +786,7 @@ class RollingResearchRunner:
         bt_count = 0
         all_bt_refs: list[tuple[str, str, str, str]] = []
 
-        for gen_cfg in config.generators:
+        for gen_cfg in effective_generators:
             gen_id = gen_cfg["generator_id"]
             gen = signal_generator if explicit_generator else _create_generator_from_config(gen_cfg)
 
@@ -1082,7 +1104,7 @@ class RollingResearchRunner:
             "mode": "matrix",
             "matrix_purpose": "framework_boundary_smoke",
             "experiment_id": config.experiment_id,
-            "generator_count": len(config.generators),
+            "generator_count": len(effective_generators),
             "transform_count": len(config.transforms),
             "combination_count": len(config.signal_combinations),
             "strategy_count": len(config.strategies),
@@ -1103,7 +1125,7 @@ class RollingResearchRunner:
             "experiment_id": config.experiment_id,
             "mode": "matrix",
             "window_count": len(windows),
-            "generator_count": len(config.generators),
+            "generator_count": len(effective_generators),
             "transform_count": len(config.transforms),
             "combination_count": len(config.signal_combinations),
             "strategy_count": len(config.strategies),
