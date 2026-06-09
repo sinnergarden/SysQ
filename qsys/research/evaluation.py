@@ -167,7 +167,8 @@ def _ic_distribution_stats(ic_series: pd.Series) -> dict[str, Any]:
                      ("75%", 0.75), ("95%", 0.95)]
     }
     std = float(valid.std(ddof=1))
-    extreme_ratio = float((valid.abs() > 2 * std).sum() / len(valid)) if std > 1e-12 else 0.0
+    mean = float(valid.mean())
+    extreme_ratio = float((valid - mean).abs().gt(2 * std).sum() / len(valid)) if std > 1e-12 else 0.0
     return {
         "positive_ratio": pos_ratio,
         "quantiles": quantiles,
@@ -242,6 +243,7 @@ def compute_regime_ic(
         DataFrame with columns ``date`` and ``ic`` (from ``compute_daily_ic``).
     index_code:
         Tushare index code for regime classification (default 000300.SH).
+        Accepts ``000300.SH``, ``hs300``, or any key from ``INDEX_CODE_MAP``.
     bull_threshold:
         Minimum index daily return to classify as bull (default 0.01 = 1%).
     bear_threshold:
@@ -256,9 +258,21 @@ def compute_regime_ic(
     if ic_df.empty:
         return pd.DataFrame(columns=["regime", "n_days", "ic_mean", "ic_std", "icir", "positive_ratio"])
 
+    # Map Tushare code to index_context alias if needed
+    _CODE_TO_ALIAS = {
+        "000300.SH": "hs300",
+        "000906.SH": "csi800",
+        "000905.SH": "zz500",
+        "000852.SH": "zz1000",
+        "000001.SH": "sse",
+        "000688.SH": "kc50",
+        "399006.SZ": "cyb",
+    }
+    lookup_key = _CODE_TO_ALIAS.get(index_code, index_code)
+
     try:
         from qsys.feature.groups.index_context import load_index_daily
-        idx = load_index_daily(index_code)
+        idx = load_index_daily(lookup_key)
     except Exception:
         return pd.DataFrame(columns=["regime", "n_days", "ic_mean", "ic_std", "icir", "positive_ratio"])
 
@@ -272,7 +286,7 @@ def compute_regime_ic(
     merged["index_return"] = merged["_td"].map(idx_map)
 
     def _classify(r: float | None) -> str:
-        if r is None:
+        if r is None or (isinstance(r, float) and pd.isna(r)):
             return "unknown"
         if r > bull_threshold:
             return "bull"

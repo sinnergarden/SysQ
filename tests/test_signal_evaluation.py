@@ -302,7 +302,35 @@ class TestSignalEvaluator:
         )
         output_dir = tmp_path / "signals" / "s" / "r" / "eval" / "test_label"
         assert (output_dir / "decay.parquet").exists() or (output_dir / "decay.csv").exists()
-        # regime_ic may be absent if index CSV not available — not asserting
+        assert (output_dir / "regime_ic.parquet").exists() or (output_dir / "regime_ic.csv").exists()
+
+    def test_regime_ic_in_summary(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """With valid index CSV, regime IC appears in summary."""
+        # Fake index data covering the evaluation dates
+        idx_df = pd.DataFrame({
+            "trade_date": pd.to_datetime(["2026-06-15", "2026-06-16", "2026-06-17",
+                                          "2026-06-18", "2026-06-19"]),
+            "close": [4000.0, 4100.0, 3900.0, 3950.0, 3850.0],
+        })
+        monkeypatch.setattr(
+            "qsys.feature.groups.index_context.load_index_daily",
+            lambda *a, **kw: idx_df,
+        )
+
+        sstore = SignalStore(str(tmp_path))
+        sstore.save_signal_run("s", "r",
+                               _signal(n_dates=5, n_inst=30, signal_id="s", signal_run_id="r"),
+                               check_no_lookahead=False)
+        lstore = LabelStore(str(tmp_path))
+        lstore.save_labels("test_label", _labels(n_dates=5, n_inst=30))
+
+        evaluator = SignalEvaluator(str(tmp_path))
+        result = evaluator.evaluate(
+            signal_id="s", signal_run_id="r", label_id="test_label", overwrite=True,
+        )
+        assert result.regime_ic is not None, f"regime_ic is None; regime_df empty or except triggered"
+        assert "bull" in result.regime_ic
+        assert "bear" in result.regime_ic
 
 
 class TestIcDistributionStats:
@@ -324,9 +352,10 @@ class TestIcDistributionStats:
 
     def test_extreme_ratio(self) -> None:
         from qsys.research.evaluation import _ic_distribution_stats
+        # mean=10, std≈31.6; 100 is > 2σ from mean, zeros aren't
         s = pd.Series([0.0, 0.0, 0.0, 100.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
         stats = _ic_distribution_stats(s)
-        assert stats["extreme_ratio"] > 0
+        assert stats["extreme_ratio"] == 0.1
 
     def test_short_series_none(self) -> None:
         from qsys.research.evaluation import _ic_distribution_stats
@@ -382,19 +411,34 @@ class TestIcDecay:
 class TestComputeRegimeIC:
     """Tests for compute_regime_ic."""
 
-    def test_general_availability(self) -> None:
-        """compute_regime_ic should not crash when index data is available or not."""
+    def test_regime_classification(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """With known index returns, regime split is correct."""
         from qsys.research.evaluation import compute_regime_ic
-        dates = [f"2026-06-{d:02d}" for d in range(10, 20)]
-        ic_df = pd.DataFrame({"date": dates, "ic": [0.1, 0.0, -0.1, 0.2, -0.05, 0.15, 0.0, 0.05, -0.02, 0.08]})
-        # May return empty if index CSV unavailable; should not crash
-        regime_df = compute_regime_ic(ic_df)
-        assert isinstance(regime_df, pd.DataFrame)
-        if not regime_df.empty:
-            assert "regime" in regime_df.columns
-            assert "n_days" in regime_df.columns
-        else:
-            assert list(regime_df.columns) == ["regime", "n_days", "ic_mean", "ic_std", "icir", "positive_ratio"]
+        # Fake index: +3%, -2%, +1%, -3%, +0.5%
+        idx_df = pd.DataFrame({
+            "trade_date": pd.to_datetime(["2026-01-02", "2026-01-03", "2026-01-04",
+                                          "2026-01-05", "2026-01-06"]),
+            "close": [100.0, 103.0, 100.94, 101.95, 98.89],
+        })
+        monkeypatch.setattr(
+            "qsys.feature.groups.index_context.load_index_daily",
+            lambda *a, **kw: idx_df,
+        )
+        ic_df = pd.DataFrame({
+            "date": ["2026-01-03", "2026-01-04", "2026-01-05", "2026-01-06"],
+            "ic": [0.1, -0.05, 0.2, -0.1],
+        })
+        regime_df = compute_regime_ic(ic_df, bull_threshold=0.01, bear_threshold=-0.01)
+        assert not regime_df.empty, "regime_df should not be empty with valid index data"
+        regimes = set(regime_df["regime"])
+        assert "bull" in regimes, "should have bull days"
+        assert "bear" in regimes, "should have bear days"
+        # day1→2: +3% → bull, day2→3: -2% → bear,
+        # day3→4: +1% → bull, day4→5: -3% → bear
+        bull_row = regime_df[regime_df["regime"] == "bull"].iloc[0]
+        bear_row = regime_df[regime_df["regime"] == "bear"].iloc[0]
+        assert bull_row["n_days"] == 2
+        assert bear_row["n_days"] == 2
 
     def test_empty_ic(self) -> None:
         from qsys.research.evaluation import compute_regime_ic
