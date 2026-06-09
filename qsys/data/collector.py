@@ -874,7 +874,7 @@ class TushareCollector:
             ts_code=index_code,
             start_date=start_date,
             end_date=end_date,
-            fields="ts_code,trade_date,close",
+            fields="ts_code,trade_date,open,high,low,close,pre_close,change,pct_chg,vol,amount",
         )
         return df
 

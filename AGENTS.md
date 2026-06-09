@@ -110,6 +110,9 @@ python scripts/ops/sync_csi800_daily.py --apply --force-fetch
 
 # 回填历史
 python scripts/ops/backfill_csi800_history.py --apply
+
+# 指数日线回填（一次性，从 2010 年拉全量 OHLCV）
+python scripts/ops/backfill_index_daily.py --apply
 ```
 
 ### 检查最近审计记录
