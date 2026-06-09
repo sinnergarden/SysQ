@@ -25,11 +25,9 @@ def _populate_research_root(tmp_path: Path) -> None:
             rows_sig.append({
                 "trade_date": td, "data_date": td, "instrument": inst,
                 "signal_id": "sig_a", "signal_run_id": "run_001",
-                "score": 1.0 if inst.endswith("000.SZ") else 0.5,
+                "score": 1.0 if inst == "0000000.SZ" else 0.5,
             })
-    sig_cfg = rows_sig
-    # sig_a/run_001
-    pq.write_table(pa.Table.from_pylist(sig_cfg), str(sig_run_dir / "predictions.parquet"))
+    pq.write_table(pa.Table.from_pylist(rows_sig), str(sig_run_dir / "predictions.parquet"))
 
     # ── Labels ──
     lbl_dir = tmp_path / "labels" / "l1"
@@ -40,7 +38,7 @@ def _populate_research_root(tmp_path: Path) -> None:
             rows_lbl.append({
                 "trade_date": td, "instrument": inst,
                 "label_id": "l1", "horizon": 5,
-                "label_value": 0.02 if inst.endswith("000.SZ") else -0.01,
+                "label_value": 0.02 if inst == "0000000.SZ" else -0.01,
             })
     pq.write_table(pa.Table.from_pylist(rows_lbl), str(lbl_dir / "labels.parquet"))
 
@@ -67,8 +65,8 @@ class TestSignalAnalytics:
         assert len(result) == 1
         assert result["signal_id"].iloc[0] == "sig_a"
         assert result["label_id"].iloc[0] == "l1"
+        # sig_a has higher score for 0000000.SZ, which has positive label → positive IC
         assert result["ic_mean"].iloc[0] is not None
-        # sig_a has higher score for 0000.SZ, which has positive label → positive IC
         assert result["ic_mean"].iloc[0] > 0
 
     def test_compute_rank_ic_matrix(self) -> None:
@@ -88,6 +86,14 @@ class TestSignalAnalytics:
         assert len(result) == 1
         assert result["ic_mean"].iloc[0] is not None
 
+    def test_min_count_filters_insufficient_dates(self) -> None:
+        """high min_count should exclude all pairs."""
+        result_loose = self.sa.compute_ic_matrix(min_count=5)
+        assert len(result_loose) == 1
+
+        result_strict = self.sa.compute_ic_matrix(min_count=999)
+        assert len(result_strict) == 0
+
     def test_query(self) -> None:
         df = self.sa.query("SELECT 1 AS a")
         assert df["a"].iloc[0] == 1
@@ -100,9 +106,7 @@ class TestSignalAnalytics:
 
     def test_close_and_reopen(self) -> None:
         self.sa.close()
-        # Re-init with same root (creates new connection)
         sa2 = SignalAnalytics(str(self.sa.root))
-        # Should work: new connection
         df = sa2.list_signals()
         assert len(df) == 1
         sa2.close()

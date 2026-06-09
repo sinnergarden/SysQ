@@ -13,7 +13,6 @@ Usage
     sa.list_labels()
     sa.compute_ic_matrix()         # N×M IC/ICIR matrix
     sa.compute_rank_ic_matrix()    # Spearman rank IC
-    sa.compute_icir_matrix()       # ICIR (IC mean / IC std)
 """
 
 from __future__ import annotations
@@ -24,8 +23,19 @@ from typing import Any
 import pandas as pd
 
 
+# ── Quote helper ──────────────────────────────────────────────────────
+
+
+def _sq(s: str) -> str:
+    """Wrap a string in single quotes for safe SQL literal use."""
+    return "'" + s.replace("'", "''") + "'"
+
+
 class SignalAnalytics:
     """DuckDB-powered cross-signal analytics.
+
+    Only supports parquet artifacts (``predictions.parquet``,
+    ``labels.parquet``).  CSV artifacts are not scanned.
 
     Parameters
     ----------
@@ -65,14 +75,12 @@ class SignalAnalytics:
                 if not run_dir.is_dir():
                     continue
                 parquet = run_dir / "predictions.parquet"
-                csv_file = run_dir / "predictions.csv"
-                data_path = parquet if parquet.exists() else csv_file if csv_file.exists() else None
-                if data_path is None:
+                if not parquet.exists():
                     continue
                 try:
                     df = self._con.execute(
                         f"SELECT count(*) AS cnt, min(trade_date) AS dmin, max(trade_date) AS dmax "
-                        f"FROM read_parquet({str(data_path)!r})"
+                        f"FROM read_parquet({_sq(str(parquet))})"
                     ).fetchdf()
                     rows.append({
                         "signal_id": sid,
@@ -108,14 +116,12 @@ class SignalAnalytics:
                 continue
             lid = lbl_dir.name
             parquet = lbl_dir / "labels.parquet"
-            csv_file = lbl_dir / "labels.csv"
-            data_path = parquet if parquet.exists() else csv_file if csv_file.exists() else None
-            if data_path is None:
+            if not parquet.exists():
                 continue
             try:
                 df = self._con.execute(
                     f"SELECT count(*) AS cnt, min(trade_date) AS dmin, max(trade_date) AS dmax "
-                    f"FROM read_parquet({str(data_path)!r})"
+                    f"FROM read_parquet({_sq(str(parquet))})"
                 ).fetchdf()
                 rows.append({
                     "label_id": lid,
@@ -146,7 +152,7 @@ class SignalAnalytics:
             Signals to include.  ``None`` = all discovered.
         signal_run_ids:
             Optional mapping from ``signal_id`` to specific ``signal_run_id``.
-            When absent, uses the latest run for each signal.
+            When absent, uses the most recently created run for each signal.
         label_ids:
             Labels to include.  ``None`` = all discovered.
         start_date, end_date:
@@ -157,8 +163,7 @@ class SignalAnalytics:
         Returns
         -------
         pd.DataFrame
-            Index = signal_id, columns = label_id, values = mean IC.
-            Additional columns: ``ic_std``, ``icir`` (per signal-label pair).
+            Columns: ``signal_id``, ``label_id``, ``ic_mean``, ``ic_std``, ``icir``.
         """
         sigs = self._resolve_signals(signal_ids, signal_run_ids)
         lbls = self._resolve_labels(label_ids)
@@ -191,7 +196,7 @@ class SignalAnalytics:
         end_date: str | None = None,
         min_count: int = 5,
     ) -> pd.DataFrame:
-        """Spearman rank IC matrix (ICIR variant)."""
+        """Spearman rank IC matrix."""
         sigs = self._resolve_signals(signal_ids, signal_run_ids)
         lbls = self._resolve_labels(label_ids)
 
@@ -213,23 +218,6 @@ class SignalAnalytics:
         if not rows:
             return pd.DataFrame(columns=["signal_id", "label_id", "rank_ic_mean", "rank_ic_std", "rank_icir"])
         return pd.DataFrame(rows)
-
-    def compute_icir_matrix(
-        self,
-        signal_ids: list[str] | None = None,
-        signal_run_ids: dict[str, str] | None = None,
-        label_ids: list[str] | None = None,
-        start_date: str | None = None,
-        end_date: str | None = None,
-        min_count: int = 5,
-    ) -> pd.DataFrame:
-        """Convenience: alias for ``compute_ic_matrix`` with ICIR focus."""
-        return self.compute_ic_matrix(
-            signal_ids=signal_ids, signal_run_ids=signal_run_ids,
-            label_ids=label_ids,
-            start_date=start_date, end_date=end_date,
-            min_count=min_count,
-        )
 
     # ── Single-signal IC queries ────────────────────────────────────────
 
@@ -263,7 +251,6 @@ class SignalAnalytics:
     def query(self, sql: str) -> pd.DataFrame:
         """Execute arbitrary DuckDB SQL.
 
-        Useful for ad-hoc analytics beyond the pre-built methods.
         Signal/label parquet files are accessible via ``read_parquet('/path/to/file.parquet')``.
         """
         return self._con.execute(sql).fetchdf()
@@ -285,20 +272,25 @@ class SignalAnalytics:
         signal_ids: list[str] | None,
         signal_run_ids: dict[str, str] | None,
     ) -> list[dict[str, Any]]:
-        """Resolve signal paths.  Returns list of {path, signal_id}."""
+        """Resolve signal paths by most-recently-created run."""
         discovered = self.list_signals()
         if discovered.empty:
             return []
-        # Filter by signal_ids if specified
         if signal_ids:
             discovered = discovered[discovered["signal_id"].isin(signal_ids)]
-        # Pick latest run per signal (or specified run)
         result: list[dict[str, Any]] = []
         for sig_id in discovered["signal_id"].unique():
             runs = discovered[discovered["signal_id"] == sig_id]
             run_id = (signal_run_ids or {}).get(sig_id)
             if run_id is None:
-                run_id = runs.sort_values("signal_run_id", ascending=False).iloc[0]["signal_run_id"]
+                # Pick most recently created run directory (mtime)
+                run_dirs = [
+                    run_dir for run_dir in sorted(
+                        (self._signals_dir / sig_id).iterdir()
+                    ) if run_dir.is_dir()
+                ]
+                run_dirs.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+                run_id = run_dirs[0].name if run_dirs else runs.sort_values("signal_run_id", ascending=False).iloc[0]["signal_run_id"]
             path = self._signal_path(sig_id, run_id)
             if path.exists():
                 result.append({"path": str(path), "signal_id": sig_id, "signal_run_id": run_id})
@@ -330,7 +322,14 @@ class SignalAnalytics:
             runs = runs[runs["signal_run_id"] == signal_run_id]
             if runs.empty:
                 raise FileNotFoundError(f"No signal run {signal_id}/{signal_run_id}")
-        run_id = runs.sort_values("signal_run_id", ascending=False).iloc[0]["signal_run_id"]
+        # Use mtime for latest-run
+        sig_dir = self._signals_dir / signal_id
+        if sig_dir.exists():
+            run_dirs = [d for d in sig_dir.iterdir() if d.is_dir()]
+            run_dirs.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+            run_id = run_dirs[0].name
+        else:
+            run_id = runs.sort_values("signal_run_id", ascending=False).iloc[0]["signal_run_id"]
         path = self._signal_path(signal_id, run_id)
         if not path.exists():
             raise FileNotFoundError(f"Signal parquet not found: {path}")
@@ -346,6 +345,7 @@ class SignalAnalytics:
         end_date: str | None = None,
         *,
         as_series: bool = False,
+        min_count: int = 5,
     ) -> str:
         """Build SQL for daily IC aggregation.
 
@@ -354,18 +354,18 @@ class SignalAnalytics:
         """
         date_filter = ""
         if start_date and end_date:
-            date_filter = f"AND s.trade_date BETWEEN '{start_date}' AND '{end_date}'"
+            date_filter = f"AND s.trade_date BETWEEN {_sq(start_date)} AND {_sq(end_date)}"
         elif start_date:
-            date_filter = f"AND s.trade_date >= '{start_date}'"
+            date_filter = f"AND s.trade_date >= {_sq(start_date)}"
         elif end_date:
-            date_filter = f"AND s.trade_date <= '{end_date}'"
+            date_filter = f"AND s.trade_date <= {_sq(end_date)}"
 
         joined_sql = f"""
         SELECT s.trade_date, s.score, l.label_value
-        FROM read_parquet('{signal_path}') s
-        JOIN read_parquet('{label_path}') l
+        FROM read_parquet({_sq(signal_path)}) s
+        JOIN read_parquet({_sq(label_path)}) l
           ON s.trade_date = l.trade_date AND s.instrument = l.instrument
-        WHERE l.label_id = '{label_id}'
+        WHERE l.label_id = {_sq(label_id)}
           AND s.score IS NOT NULL
           AND l.label_value IS NOT NULL
           {date_filter}
@@ -387,7 +387,7 @@ class SignalAnalytics:
                    count(*) AS n
             FROM ({joined_sql})
             GROUP BY trade_date
-            HAVING count(*) >= 5
+            HAVING count(*) >= {int(min_count)}
         )
         SELECT AVG(ic) AS ic_mean,
                COALESCE(STDDEV(ic), 0) AS ic_std,
@@ -404,21 +404,23 @@ class SignalAnalytics:
         min_count: int = 5,
     ) -> dict[str, Any] | None:
         """Compute IC result for one signal-label pair."""
-        sql = self._build_daily_ic_sql(signal_path, sid, label_path, lid, start_date, end_date)
+        sql = self._build_daily_ic_sql(
+            signal_path, sid, label_path, lid,
+            start_date, end_date, min_count=min_count,
+        )
         try:
             df = self._con.execute(sql).fetchdf()
         except Exception:
             return None
         if df.empty or df["ic_mean"].isna().all():
             return None
-        row = {
+        return {
             "signal_id": sid,
             "label_id": lid,
             "ic_mean": float(df["ic_mean"].iloc[0]) if pd.notna(df["ic_mean"].iloc[0]) else None,
             "ic_std": float(df["ic_std"].iloc[0]) if pd.notna(df["ic_std"].iloc[0]) else None,
             "icir": float(df["icir"].iloc[0]) if pd.notna(df["icir"].iloc[0]) else None,
         }
-        return row
 
     def _rank_ic_single(
         self,
@@ -431,19 +433,19 @@ class SignalAnalytics:
         """Compute Spearman rank IC for one signal-label pair."""
         date_filter = ""
         if start_date and end_date:
-            date_filter = f"AND s.trade_date BETWEEN '{start_date}' AND '{end_date}'"
+            date_filter = f"AND s.trade_date BETWEEN {_sq(start_date)} AND {_sq(end_date)}"
         elif start_date:
-            date_filter = f"AND s.trade_date >= '{start_date}'"
+            date_filter = f"AND s.trade_date >= {_sq(start_date)}"
         elif end_date:
-            date_filter = f"AND s.trade_date <= '{end_date}'"
+            date_filter = f"AND s.trade_date <= {_sq(end_date)}"
 
         sql = f"""
         WITH joined AS (
             SELECT s.trade_date, s.score, l.label_value
-            FROM read_parquet('{signal_path}') s
-            JOIN read_parquet('{label_path}') l
+            FROM read_parquet({_sq(signal_path)}) s
+            JOIN read_parquet({_sq(label_path)}) l
               ON s.trade_date = l.trade_date AND s.instrument = l.instrument
-            WHERE l.label_id = '{lid}'
+            WHERE l.label_id = {_sq(lid)}
               AND s.score IS NOT NULL
               AND l.label_value IS NOT NULL
               {date_filter}
@@ -452,8 +454,8 @@ class SignalAnalytics:
             SELECT trade_date,
                    score,
                    label_value,
-                   row_number() OVER (PARTITION BY trade_date ORDER BY score) AS score_rank,
-                   row_number() OVER (PARTITION BY trade_date ORDER BY label_value) AS label_rank
+                   rank() OVER (PARTITION BY trade_date ORDER BY score) AS score_rank,
+                   rank() OVER (PARTITION BY trade_date ORDER BY label_value) AS label_rank
             FROM joined
         ),
         daily_rank_ic AS (
@@ -462,7 +464,7 @@ class SignalAnalytics:
                    count(*) AS n
             FROM ranked
             GROUP BY trade_date
-            HAVING count(*) >= {min_count}
+            HAVING count(*) >= {int(min_count)}
         )
         SELECT AVG(rank_ic) AS rank_ic_mean,
                COALESCE(STDDEV(rank_ic), 0) AS rank_ic_std,
