@@ -457,6 +457,15 @@ class TestRunRangeExecution:
             assert exec_summary["status"] == "success"
             assert exec_summary["trade_date"] == "2026-01-02"
 
+            # account_after.json schema must match run_range contract
+            with open(daily_dir / "account_after.json") as f:
+                acc = json.load(f)
+            for key in ("trade_date", "cash", "available_cash",
+                        "market_value", "total_value",
+                        "last_run_id", "initial_capital"):
+                assert key in acc, f"account_after.json missing key: {key}"
+            assert acc["cash"] == acc["available_cash"]
+
     @patch("qsys.backtest.strategy_runner.positions_frame")
     @patch("qsys.backtest.strategy_runner.MatchEngine")
     @patch("qsys.backtest.strategy_runner.build_order_intents")
