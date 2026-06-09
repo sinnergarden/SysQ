@@ -17,6 +17,7 @@ from typing import Any, Protocol
 import pandas as pd
 
 from qsys.research.experiment import ExperimentIndex, ExperimentSpec
+from qsys.research.generators.base import RollingSignalGenerator
 from qsys.research.manifest import write_manifest, with_standard_metadata
 from qsys.research.paths import ResearchPaths
 from qsys.signal.store import SignalStore
@@ -102,26 +103,6 @@ def build_rolling_windows(
 
 
 # ── Signal generator protocol ──────────────────────────────────────────
-
-
-class RollingSignalGenerator(Protocol):
-    """Protocol for per-window signal generation.
-
-    Implementations must return a SignalStore-compatible DataFrame with
-    columns: trade_date, data_date, instrument, signal_id, signal_run_id, score.
-    """
-
-    def generate(
-        self,
-        *,
-        train_start: str,
-        train_end: str,
-        predict_start: str,
-        predict_end: str,
-        signal_id: str,
-        signal_run_id: str,
-    ) -> pd.DataFrame:
-        ...
 
 
 class FixtureSignalGenerator:

@@ -83,6 +83,11 @@ class DnnMultitaskGenerator:
         Qlib universe identifier.
     label_ids: tuple[str, ...]
         LabelStore label IDs to use as training targets.
+    blend_weights:
+        Weight per model prediction column for the final blended score.
+        Each column is cross-sectionally z-scored then weighted.
+        Default ``{"5d": 0.5, "20d": 0.5}`` preserves the existing
+        ``(score_5d + score_20d) / 2.0`` behaviour.
     """
 
     project_root: Path | None = None
@@ -90,6 +95,7 @@ class DnnMultitaskGenerator:
     universe: str = "csi300"
     feature_set: list[str] | None = None
     label_ids: tuple[str, ...] = ("fwd_ret_5d_xsz_clip3", "fwd_ret_20d_xsz_clip3")
+    blend_weights: dict[str, float] = field(default_factory=lambda: {"5d": 0.5, "20d": 0.5})
 
     _feature_set: list[str] = field(default_factory=list, repr=False)
     _qlib_inited: bool = field(default=False, repr=False)
@@ -206,14 +212,8 @@ class DnnMultitaskGenerator:
     ) -> pd.DataFrame:
         """Generate blended signal for the given window.
 
-        Currently requires exactly two label_ids (5d and 20d forward
-        returns) because the internal model always produces two outputs.
+        Blends model prediction columns via ``self.blend_weights``.
         """
-        if len(self.label_ids) != 2:
-            raise ValueError(
-                f"DnnMultitaskGenerator currently requires exactly two label_ids, "
-                f"got {len(self.label_ids)}: {self.label_ids}"
-            )
         self._ensure_qlib()
         features = self._resolve_features()
 
@@ -272,7 +272,10 @@ class DnnMultitaskGenerator:
 
         pred_frame["score_5d"] = pred_frame.groupby("trade_date")["pred_5d"].transform(_cs_zscore)
         pred_frame["score_20d"] = pred_frame.groupby("trade_date")["pred_20d"].transform(_cs_zscore)
-        pred_frame["score"] = (pred_frame["score_5d"] + pred_frame["score_20d"]) / 2.0
+        w5 = self.blend_weights.get("5d", 0.5)
+        w20 = self.blend_weights.get("20d", 0.5)
+        total = w5 + w20
+        pred_frame["score"] = (w5 * pred_frame["score_5d"] + w20 * pred_frame["score_20d"]) / total
 
         # Assemble output
         rows = []

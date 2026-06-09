@@ -1,8 +1,8 @@
 """Base protocol for per-window signal generation.
 
-Matches the existing ``RollingSignalGenerator`` protocol used in
-``rolling_runner.py`` so that generators in this package are
-interchangeable with ``FixtureSignalGenerator``.
+This is the **single canonical definition** of ``RollingSignalGenerator``.
+All generators in this package implement it.  Do not redefine this
+Protocol elsewhere — import it from here.
 """
 
 from __future__ import annotations
@@ -17,6 +17,8 @@ class RollingSignalGenerator(Protocol):
 
     Implementations must return a SignalStore-compatible DataFrame with
     columns: trade_date, data_date, instrument, signal_id, signal_run_id, score.
+
+    See ``AGENTS.md §4.4`` for the full generator development guide.
     """
 
     def generate(
