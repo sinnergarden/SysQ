@@ -84,23 +84,25 @@ def run_signal_backtests(
     *,
     overwrite: bool = False,
     research_root: str | Path = "data/research",
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], list[tuple[str, str, str, str]]]:
     """Run backtest for each job's strategy configs.
 
-    This is a standalone function extracted from ``RollingResearchRunner._run_matrix``.
-    It can be called independently after signal generation is complete.
-    Returns a list of job_rows (suitable for ``matrix_jobs.csv``) and a list of
-    backtest refs for experiment index registration.
+    This is a standalone function — it only runs BacktestRunner and returns
+    results.  Callers are responsible for experiment index registration.
+
+    Returns
+    -------
+    tuple (job_rows, bt_refs)
+        job_rows: list of dicts for matrix_jobs.csv
+        bt_refs: list of (signal_id, signal_run_id, strategy_run_id, backtest_id)
     """
     from qsys.backtest.strategy_runner import BacktestRunner
 
     bt_runner = BacktestRunner()
-    bt_count = 0
     all_bt_refs: list[tuple[str, str, str, str]] = []
     job_rows: list[dict[str, Any]] = []
 
     for job in jobs:
-        bt_refs_for_job: list[tuple[str, str]] = []
         for scfg in job.strategy_configs:
             bt_result = bt_runner.run_from_signal_cache(
                 signal_id=job.signal_id,
@@ -130,9 +132,7 @@ def run_signal_backtests(
                 raise RuntimeError(
                     f"Backtest manifest missing strategy_run_id or backtest_id in {_mf_path}"
                 )
-            bt_refs_for_job.append((_sid, _bid))
             all_bt_refs.append((job.signal_id, job.signal_run_id, _sid, _bid))
-            bt_count += 1
 
             job_rows.append({
                 "generator_id": job.generator_id,
@@ -147,16 +147,6 @@ def run_signal_backtests(
                 "strategy_run_id": _sid,
                 "status": "completed",
             })
-
-        # Register backtest refs in experiment index
-        from qsys.research.experiment import ExperimentIndex
-        ei = ExperimentIndex(str(research_root))
-        for _sid, _bid in bt_refs_for_job:
-            ei.add_backtest_run(
-                config.experiment_id,
-                strategy_run_id=_sid,
-                backtest_id=_bid,
-            )
 
     return job_rows, all_bt_refs
 
@@ -507,14 +497,19 @@ class RollingResearchRunner:
 
         # ── Backtest (delegated) ──
         bt_count = 0
+        all_bt_refs: list[tuple[str, str, str, str]] = []
         if config.strategies and any(j.strategy_configs for j in jobs):
-            bt_job_rows, bt_all_refs = run_signal_backtests(
+            bt_job_rows, all_bt_refs = run_signal_backtests(
                 self._signal_store, jobs, config,
                 overwrite=overwrite_backtest,
                 research_root=str(self.root),
             )
             job_rows.extend(bt_job_rows)
-            bt_count = len(bt_all_refs)
+            bt_count = len(all_bt_refs)
+            for _, _, _sid, _bid in all_bt_refs:
+                self._experiment_index.add_backtest_run(
+                    config.experiment_id, strategy_run_id=_sid, backtest_id=_bid,
+                )
 
         # ── 6 (cont). Signal combinations ──────────────────────────────
         combine_count = 0
@@ -588,54 +583,15 @@ class RollingResearchRunner:
                         experiment_id=config.experiment_id,
                         calendar=config.calendar,
                     )
-                    from qsys.backtest.strategy_runner import BacktestRunner
-                    bt_runner = BacktestRunner()
-                    for scfg in config.strategies:
-                        bt_result = bt_runner.run_from_signal_cache(
-                            signal_id=out_sig_id,
-                            signal_run_id=out_run_id,
-                            start_date=scfg.get("start_date", cal.get("start_date")),
-                            end_date=scfg.get("end_date", cal.get("end_date")),
-                            initial_capital=scfg.get("initial_capital", 1_000_000.0),
-                            top_n=scfg.get("top_n", 20),
-                            max_weight=scfg.get("max_weight"),
-                            strategy_template_id=scfg.get("strategy_template_id", "rank_weight_top20"),
-                            allocation_method=scfg.get("allocation_method", "rank_weight"),
-                            rebalance_freq=scfg.get("rebalance_freq", "weekly"),
-                            artifact_mode=scfg.get("artifact_mode", "summary"),
-                            overwrite=overwrite_backtest,
-                            research_root=str(self.root),
-                        )
-
-                        if not hasattr(bt_result, "artifacts") or not bt_result.artifacts:
-                            raise RuntimeError("BacktestRunResult missing artifacts dict")
-                        _mf_path = bt_result.artifacts.get("manifest")
-                        if not _mf_path or not Path(_mf_path).exists():
-                            raise RuntimeError(f"Backtest manifest not found: {_mf_path}")
-                        _mf = json.loads(Path(_mf_path).read_text())
-                        _sid = _mf.get("strategy_run_id")
-                        _bid = _mf.get("backtest_id")
-                        if not _sid or not _bid:
-                            raise RuntimeError(
-                                f"Backtest manifest missing strategy_run_id or "
-                                f"backtest_id in {_mf_path}"
-                            )
-                        bt_count += 1
-
-                        job_rows.append({
-                            "generator_id": spec.combine_id,
-                            "transform_id": "combined",
-                            "strategy_id": scfg.get("strategy_id", scfg.get("strategy_template_id", "")),
-                            "signal_id": out_sig_id,
-                            "signal_run_id": out_run_id,
-                            "head_signal_id": "",
-                            "strategy_template_id": scfg.get("strategy_template_id", ""),
-                            "top_n": scfg.get("top_n", ""),
-                            "backtest_id": _bid,
-                            "strategy_run_id": _sid,
-                            "status": "completed",
-                        })
-
+                    cmb_job_rows, cmb_bt_refs = run_signal_backtests(
+                        self._signal_store, cmb_jobs, cmb_cfg,
+                        overwrite=overwrite_backtest,
+                        research_root=str(self.root),
+                    )
+                    job_rows.extend(cmb_job_rows)
+                    bt_count += len(cmb_bt_refs)
+                    all_bt_refs.extend(cmb_bt_refs)
+                    for _, _, _sid, _bid in cmb_bt_refs:
                         self._experiment_index.add_backtest_run(
                             config.experiment_id, strategy_run_id=_sid, backtest_id=_bid,
                         )
@@ -677,9 +633,8 @@ class RollingResearchRunner:
             "strategy_template_id", "top_n",
             "backtest_id", "strategy_run_id", "status",
         ]
-        if job_rows:
-            job_df = pd.DataFrame(job_rows, columns=job_cols)
-            job_df.to_csv(exp_dir / "matrix_jobs.csv", index=False)
+        job_df = pd.DataFrame(job_rows, columns=job_cols) if job_rows else pd.DataFrame(columns=job_cols)
+        job_df.to_csv(exp_dir / "matrix_jobs.csv", index=False)
 
         # ── 9. Rolling research manifest ──
         signal_runs_summary = [
@@ -703,6 +658,11 @@ class RollingResearchRunner:
             "job_count": len(jobs),
             "window_count": len(windows),
             "signal_runs": signal_runs_summary,
+            "backtest_refs": [
+                {"signal_id": sid, "signal_run_id": srid,
+                 "strategy_run_id": srid2, "backtest_id": bid}
+                for sid, srid, srid2, bid in all_bt_refs
+            ],
             "labels": config.labels,
             "date_range": {
                 "start": config.calendar.get("start_date"),
