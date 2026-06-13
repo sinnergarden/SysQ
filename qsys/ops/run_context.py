@@ -26,10 +26,20 @@ class DailyRunContext:
     strategy_id: str
     account_id: str
 
+    # UC-8/UC-9 run mode
+    run_mode: str = "shadow"  # "shadow" | "production"
+
     # Optional overrides
     data_date: str | None = None  # reference_date for inference prices
     ledger_db_path: str | None = None
     output_dir: Path | None = None  # --output-dir override
+
+    # UC-8/UC-9 identity lineage (promotion-pointer-driven daily ops)
+    candidate_id: str | None = None
+    signal_run_id: str | None = None
+    strategy_config_id: str | None = None
+    backtest_id: str | None = None
+    promotion_pointer_path: str | None = None
 
     # Flags
     debug_run: bool = False

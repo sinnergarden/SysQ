@@ -1,5 +1,13 @@
 from __future__ import annotations
 
+import warnings
+warnings.warn(
+    "DEPRECATED: run_intent_staging_example.py is a demo-only script with no "
+    "operational purpose. No replacement needed. "
+    "Scheduled for removal.",
+    DeprecationWarning, stacklevel=2,
+)
+
 import argparse
 import sys
 from pathlib import Path

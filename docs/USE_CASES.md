@@ -155,20 +155,25 @@ data/reports/data_quality/<data_sync_id>/data_quality_report.json
 
 ### 当前状态
 
-已有多个分散脚本可完成部分流程：
+已有：
 
 ```text
-run_update.py
-sync_csi800_daily.py
-create_instrument_universe.py
-dump_bin.py
+scripts/data_sync.py          # UC-1 canonical entrypoint (--config / --universe)
+scripts/ops/sync_csi800_daily.py  # daily qlib sync backend
+scripts/dump_bin.py           # qlib bin utility
+```
+
+遗留分散脚本（待废弃）：
+
+```text
+run_update.py                 # → data_sync.py 取代
+rebuild_qlib_bin.py           # → data_sync.py 取代
+create_instrument_universe.py # → data_sync.py 取代
 ```
 
 ### 缺口
 
-- 缺少统一数据同步入口。
-- 缺少标准数据质量报告。
-- 需要把已有数据脚本收敛到 `scripts/data_sync.py`。
+- 需要标准数据质量报告。
 - 需要统一 data sync manifest。
 
 ---
@@ -625,7 +630,8 @@ constraints:
 Planned canonical entrypoint:
 
 ```bash
-python scripts/run_daily.py --strategy <strategy_id> --mode shadow --trade-date <YYYY-MM-DD>
+python scripts/run_daily.py --strategy <strategy_id> --mode preopen --run-mode shadow --trade-date <YYYY-MM-DD>
+python scripts/run_daily.py --strategy <strategy_id> --mode postclose --run-mode shadow --trade-date <YYYY-MM-DD>
 ```
 
 Non-existent today; `scripts/run_daily.py` exists but its `--mode` semantics
@@ -685,9 +691,15 @@ data/daily/<strategy_id>/shadow/<trade_date>/
 
 ### 当前状态
 
-NOT IMPLEMENTED  — 当前文档定义目标的 UC-8 语义，`scripts/run_daily.py` 的
-preopen/postclose/train 模式是此方向的早期实现但尚未达到 Promotion-Pointer-driven、
-manifest-tracked 的标准。
+EARLY PARTIAL IMPLEMENTATION — `daily_manifest.json` schema + write path ready;
+promotion pointer / hard block / idempotency still pending.
+
+`DailyRunContext` 包含 `run_mode` 字段（shadow|production）和 identity lineage
+字段（candidate_id、signal_run_id、strategy_config_id、backtest_id）。
+`DailyRunner.run_preopen/postclose` 末尾写入 `daily_manifest.json`。
+
+当前运行路径（preopen/postclose/train）已增强 manifest，但入口尚无 `--run-mode` CLI 参数，
+promotion pointer 解析和 hard block conditions 尚未实现。
 
 ### 缺口
 
@@ -695,7 +707,7 @@ manifest-tracked 的标准。
 - 需要标准化的 TargetPortfolio / OrderIntent schema 和幂等校验。
 - 需要 pre-trade lot-size 和停牌/涨跌停校验。
 - 需要 shadow fills 的仿真执行引擎与真实成交回填的双模式。
-- 需要统一每日运行 manifest。
+- 需要完善 stage_status 追踪：当前 preopen/postclose 结束时各自写入单阶段状态，缺跨阶段 manifest 合并。
 - 当前 `run_daily.py` 的 `--mode preopen|postclose|train` 语义需要重构或扩展为 shadow-specific mode。
 
 ---
@@ -778,7 +790,7 @@ checks:
 Planned canonical entrypoint:
 
 ```bash
-python scripts/run_daily.py --strategy <strategy_id> --mode production --execution-mode operator_confirm --trade-date <YYYY-MM-DD>
+python scripts/run_daily.py --strategy <strategy_id> --mode preopen --run-mode production --execution-mode operator_confirm --trade-date <YYYY-MM-DD>
 ```
 
 Non-existent today — `scripts/run_daily.py` predates UC-9 semantics.
