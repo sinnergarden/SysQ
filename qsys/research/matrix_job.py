@@ -99,6 +99,9 @@ class RollingResearchConfig:
     strategies: list[dict[str, Any]] = field(default_factory=list)
     # each strategy: strategy_id, strategy_template_id, top_n, ...
 
+    # ── Feature list reference ─────────────────────────────────────────
+    feature_list_id: str | None = None
+
     # ── v2 signal combinations ──────────────────────────────────────────
     signal_combinations: list[dict[str, Any]] = field(default_factory=list)
     # each combination: combine_id, type, inputs
@@ -127,8 +130,10 @@ class RollingResearchConfig:
         transforms = payload.get("signal_transforms", [])
         strategies = payload.get("strategies", [])
         signal_combinations = payload.get("signal_combinations", [])
+        feature_list_id = payload.get("feature_list_id")
         return cls(
             experiment_id=payload.get("experiment_id", "rolling_run"),
+            feature_list_id=feature_list_id,
             title=payload.get("title"),
             description=payload.get("description"),
             calendar=cal,
@@ -207,7 +212,7 @@ def expand_multi_label_generators(generators: list[dict]) -> list[dict]:
 # ── Generator factory ──────────────────────────────────────────────────
 
 
-def _create_generator_from_config(gen_config: dict) -> RollingSignalGenerator:
+def _create_generator_from_config(gen_config: dict, feature_list_id: str | None = None) -> RollingSignalGenerator:
     """Create a generator instance from a config dict.
 
     Supported types:
@@ -259,6 +264,7 @@ def _create_generator_from_config(gen_config: dict) -> RollingSignalGenerator:
             label_id=params["label_id"],
             universe=params.get("universe", "csi300"),
             n_estimators=params.get("n_estimators", 200),
+            feature_list_id=feature_list_id or params.get("feature_list_id"),
             lgb_params=params.get("lgb_params"),
         )
     raise ValueError(f"Unknown generator type: {gen_type!r}")
