@@ -50,13 +50,13 @@ from __future__ import annotations
 import hashlib
 import json
 import tempfile
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 
 from qsys.backtest.result import BacktestRunResult
+from qsys.backtest.daily_kernel import should_skip_weekly_rebalance
 from qsys.ops.market_snapshot import fetch_market_snapshot
 from qsys.ops.plan_builder import build_order_intents
 from qsys.ops.shadow_execution import positions_frame
@@ -332,43 +332,40 @@ class BacktestRunner:
         # ── Rebalance frequency check ───────────────────────────────
         # For weekly rebalance, only execute on the first trading day of
         # each ISO week.  Subsequent days MTM at close without trading.
-        if self._rebalance_freq == "weekly" and self._last_trade_date is not None:
-            last_iso = datetime.strptime(self._last_trade_date, "%Y-%m-%d").date().isocalendar()
-            this_iso = datetime.strptime(trade_date, "%Y-%m-%d").date().isocalendar()
-            if (last_iso[0], last_iso[1]) == (this_iso[0], this_iso[1]):
-                # Same ISO week — skip execution but still MTM at close,
-                # matching DR's postclose behavior on non-rebalance days.
-                if account.positions:
-                    instruments = list(account.positions.keys())
-                    try:
-                        mtm_prices, _ = fetch_market_snapshot(
-                            trade_date, instruments, price_col="close",
-                        )
-                        self._last_prices = mtm_prices
-                        pos_frame = positions_frame(account, mtm_prices)
-                        mv = float(pos_frame["market_value"].sum()) if not pos_frame.empty else 0.0
-                        tv = float(account.cash + mv)
-                    except Exception:
-                        return self._empty_day(trade_date, data_date, account, "weekly_rebalance_skip")
-                else:
-                    mv = 0.0
-                    tv = float(account.cash)
-                self._last_trade_date = trade_date
-                return {
-                    "trade_date": trade_date,
-                    "data_date": data_date,
-                    "execution_price_mode": self._execution_price_mode,
-                    "cash_before": float(account.cash),
-                    "market_value_before": mv,
-                    "total_value_before": tv,
-                    "cash_after": float(account.cash),
-                    "market_value_after": mv,
-                    "total_value_after": tv,
-                    "order_count": 0, "buy_count": 0, "sell_count": 0,
-                    "filled_count": 0, "rejected_count": 0, "turnover": 0.0,
-                    "position_count": len(account.positions),
-                    "status": "weekly_rebalance_skip",
-                }
+        if should_skip_weekly_rebalance(self._rebalance_freq, trade_date, self._last_trade_date):
+            # Same ISO week — skip execution but still MTM at close,
+            # matching DR's postclose behavior on non-rebalance days.
+            if account.positions:
+                instruments = list(account.positions.keys())
+                try:
+                    mtm_prices, _ = fetch_market_snapshot(
+                        trade_date, instruments, price_col="close",
+                    )
+                    self._last_prices = mtm_prices
+                    pos_frame = positions_frame(account, mtm_prices)
+                    mv = float(pos_frame["market_value"].sum()) if not pos_frame.empty else 0.0
+                    tv = float(account.cash + mv)
+                except Exception:
+                    return self._empty_day(trade_date, data_date, account, "weekly_rebalance_skip")
+            else:
+                mv = 0.0
+                tv = float(account.cash)
+            self._last_trade_date = trade_date
+            return {
+                "trade_date": trade_date,
+                "data_date": data_date,
+                "execution_price_mode": self._execution_price_mode,
+                "cash_before": float(account.cash),
+                "market_value_before": mv,
+                "total_value_before": tv,
+                "cash_after": float(account.cash),
+                "market_value_after": mv,
+                "total_value_after": tv,
+                "order_count": 0, "buy_count": 0, "sell_count": 0,
+                "filled_count": 0, "rejected_count": 0, "turnover": 0.0,
+                "position_count": len(account.positions),
+                "status": "weekly_rebalance_skip",
+            }
 
         # 1. Generate predictions
         predictions = strategy.generate_predictions_for_date(
@@ -681,49 +678,44 @@ class BacktestRunner:
 
         for trade_date in trading_dates:
             # 1. Weekly rebalance check
-            if rebalance_freq == "weekly" and self._last_trade_date is not None:
-                from datetime import datetime as _dt
-
-                last_iso = _dt.strptime(self._last_trade_date, "%Y-%m-%d").date().isocalendar()
-                this_iso = _dt.strptime(trade_date, "%Y-%m-%d").date().isocalendar()
-                if (last_iso[0], last_iso[1]) == (this_iso[0], this_iso[1]):
-                    # Same ISO week — MTM at close, skip trading
-                    if account.positions:
-                        insts = list(account.positions.keys())
-                        try:
-                            if self._execution_price_mode == "open":
-                                mtm_prices, _ = fetch_market_snapshot(trade_date, insts, price_col="close")
-                            else:
-                                mtm_prices, _ = fetch_market_snapshot(trade_date, insts)
-                            self._last_prices = mtm_prices
-                            pos_frame = positions_frame(account, mtm_prices)
-                            mv = float(pos_frame["market_value"].sum()) if not pos_frame.empty else 0.0
-                            tv = float(account.cash + mv)
-                        except Exception:
-                            daily_summaries.append(self._empty_day(
-                                trade_date, trade_date, account, "no_market_data"
-                            ))
-                            self._last_trade_date = trade_date
-                            continue
-                    else:
-                        mv = 0.0
-                        tv = float(account.cash)
-                    self._last_trade_date = trade_date
-                    daily_summaries.append({
-                        "trade_date": trade_date,
-                        "execution_price_mode": self._execution_price_mode,
-                        "cash_before": float(account.cash),
-                        "market_value_before": mv,
-                        "total_value_before": tv,
-                        "cash_after": float(account.cash),
-                        "market_value_after": mv,
-                        "total_value_after": tv,
-                        "order_count": 0, "buy_count": 0, "sell_count": 0,
-                        "filled_count": 0, "rejected_count": 0, "turnover": 0.0,
-                        "position_count": len(account.positions),
-                        "status": "weekly_rebalance_skip",
-                    })
-                    continue
+            if should_skip_weekly_rebalance(rebalance_freq, trade_date, self._last_trade_date):
+                # Same ISO week — MTM at close, skip trading
+                if account.positions:
+                    insts = list(account.positions.keys())
+                    try:
+                        if self._execution_price_mode == "open":
+                            mtm_prices, _ = fetch_market_snapshot(trade_date, insts, price_col="close")
+                        else:
+                            mtm_prices, _ = fetch_market_snapshot(trade_date, insts)
+                        self._last_prices = mtm_prices
+                        pos_frame = positions_frame(account, mtm_prices)
+                        mv = float(pos_frame["market_value"].sum()) if not pos_frame.empty else 0.0
+                        tv = float(account.cash + mv)
+                    except Exception:
+                        daily_summaries.append(self._empty_day(
+                            trade_date, trade_date, account, "no_market_data"
+                        ))
+                        self._last_trade_date = trade_date
+                        continue
+                else:
+                    mv = 0.0
+                    tv = float(account.cash)
+                self._last_trade_date = trade_date
+                daily_summaries.append({
+                    "trade_date": trade_date,
+                    "execution_price_mode": self._execution_price_mode,
+                    "cash_before": float(account.cash),
+                    "market_value_before": mv,
+                    "total_value_before": tv,
+                    "cash_after": float(account.cash),
+                    "market_value_after": mv,
+                    "total_value_after": tv,
+                    "order_count": 0, "buy_count": 0, "sell_count": 0,
+                    "filled_count": 0, "rejected_count": 0, "turnover": 0.0,
+                    "position_count": len(account.positions),
+                    "status": "weekly_rebalance_skip",
+                })
+                continue
 
             # 2. Load signal for this date
             day_signal = signal_store.load_signal_for_date(signal_id, signal_run_id, trade_date)

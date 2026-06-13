@@ -618,6 +618,8 @@ qsys/backtest/strategy_runner.py :: BacktestRunner
 - BacktestRunner 中存在两套 daily-loop 实现（`run_range` vs `run_from_signal_cache`），
   约 340 行近乎重复的周频判断、行情拉取、execute_trade_day 逻辑，违反了
   ARCHITECTURE.md §3.3 "shared execution kernel" 不变式。
+  - 已完成：weekly rebalance skip 判断已抽出到 `qsys/backtest/daily_kernel.py::should_skip_weekly_rebalance()`。
+  - 未完成：daily-loop 整体尚未合并，execute_trade_day / market snapshot / result assembly 仍有两套。
 - 需要 benchmark-aware metrics。
 - 需要更标准的 backtest manifest schema。
 
