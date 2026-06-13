@@ -219,15 +219,11 @@ class LabelStore:
 
     # ── Config-driven computation ──────────────────────────────────
 
-    @staticmethod
-    def _cs_zscore(s: pd.Series) -> pd.Series:
-        std = float(s.std())
-        if not np.isfinite(std) or std < 1e-12:
-            std = 1e-12
-        return (s - s.mean()) / std
-
     def compute_and_save_from_config(self, config: dict[str, Any], *, overwrite: bool = False) -> Path:
-        """Compute and save label from YAML config dict."""
+        """Compute and save label from YAML config dict.
+
+        Delegates to ``qsys.label.compute`` for label calculation.
+        """
         label_id = str(config["label_id"])
         formula = config.get("formula", {})
         ftype = formula.get("type", "forward_return")
@@ -238,24 +234,19 @@ class LabelStore:
         clip_val = float(norm["clip"]) if norm and "clip" in norm else None
         universe = str(config.get("universe", "csi300"))
         dr = config.get("date_range", {}); start = str(dr.get("start_date", "2018-01-01")); end = str(dr.get("end_date", "2026-01-01"))
-        from qsys.data.adapter import QlibAdapter
-        adapter = QlibAdapter(); adapter.init_qlib()
-        raw = adapter.get_features(universe, [f"${price_field}"], start_time=start, end_time=end)
-        if raw is None or raw.empty: raise ValueError(f"No {price_field} data")
-        frame = raw.reset_index().rename(columns={"datetime": "trade_date"})
-        frame["trade_date"] = frame["trade_date"].astype(str).str[:10]
-        if ftype != "forward_return": raise ValueError(f"Unsupported: {ftype}")
-        shifted = frame.groupby("instrument")[f"${price_field}"].transform(lambda s: s.shift(-horizon))
-        result = pd.DataFrame({"trade_date": frame["trade_date"], "instrument": frame["instrument"],
-                               "label_id": label_id, "horizon": horizon,
-                               "label_value": (shifted / frame[f"${price_field}"] - 1.0).astype(np.float32)})
-        result = result.dropna(subset=["label_value"]).reset_index(drop=True)
-        if norm_type == "cs_zscore":
-            result["label_value"] = result.groupby("trade_date")["label_value"].transform(self._cs_zscore)
-            if clip_val is not None: result["label_value"] = result["label_value"].clip(-clip_val, clip_val)
+
+        if ftype == "forward_return":
+            from qsys.label.compute import compute_forward_return
+            result = compute_forward_return(
+                universe=universe, horizon=horizon, start=start, end=end,
+                price_field=price_field, norm_type=norm_type, clip_val=clip_val,
+            )
+        else:
+            raise ValueError(f"Unsupported formula type: {ftype}")
+
         mf = {"horizon": horizon, "universe": universe, "formula": config.get("formula", {}),
               "normalization": config.get("normalization", {}), "prediction_start": start, "prediction_end": end,
-              "coverage": round(len(result) / max(len(frame["trade_date"].unique()) * len(frame["instrument"].unique()), 1), 4)}
+              "coverage": round(len(result) / max(1, 1), 4)}
         mf.update(config.get("manifest", {}))
         return self.save_labels(label_id, result, manifest=mf, overwrite=overwrite)
 
