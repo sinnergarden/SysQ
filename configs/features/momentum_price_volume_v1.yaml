@@ -1,9 +1,10 @@
+# Momentum + Price-Volume features (qlib expressions)
 feature_list_id: momentum_price_volume_v1
 description: "Momentum + price-volume features"
 features:
-  - ret_5d
-  - ret_20d
-  - stock_minus_index_ret_5d
-  - turnover_rate
-  - volume_shock_5
-  - illiquidity
+  - "Ref($close, 5) / $close - 1"
+  - "Ref($close, 20) / $close - 1"
+  - "$turnover_rate"
+  - "$amount"
+  - "Std($volume, 5) / Mean($volume, 5)"
+  - "($close - $open) / $open"
