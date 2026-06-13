@@ -123,21 +123,31 @@ def resolve_shadow_promotion(
     candidate_path_str: str | None = _get_nested(payload, "candidate_path")
     if candidate_path_required and candidate_path_str:
         candidate_path = Path(candidate_path_str)
-        if not candidate_path.exists() and not candidate_path.is_absolute():
-            # Try resolving relative to pointer's research root
-            # e.g. pointer at <root>/promotions/shadow.yaml → root = <root>
-            candidate_path = path.parent.parent / candidate_path_str
+        tried: list[str] = []
+        if candidate_path.is_absolute():
+            tried.append(str(candidate_path))
+        else:
+            # Try (a) relative to CWD
+            tried.append(str(candidate_path))
+            if not candidate_path.exists():
+                # (b) relative to pointer's research root
+                research_root = path.parent.parent
+                alt = research_root / candidate_path_str
+                tried.append(str(alt))
+                if alt.exists():
+                    candidate_path = alt
+            if not candidate_path.exists():
+                # (c) relative to project root (research_root.parent.parent)
+                project_root = path.parent.parent.parent.parent
+                alt = project_root / candidate_path_str
+                tried.append(str(alt))
+                if alt.exists():
+                    candidate_path = alt
         if not candidate_path.exists():
             raise FileNotFoundError(
-                f"Candidate file referenced by shadow pointer does not exist: "
-                f"{candidate_path}. The shadow pointer at {path} refers to "
-                f"candidate_id={_get_nested(payload, 'candidate_id')!r} but "
-                f"the candidate.yaml file is missing."
-            )
-        if not candidate_path.exists():
-            raise FileNotFoundError(
-                f"Candidate file referenced by shadow pointer does not exist: "
-                f"{candidate_path}. The shadow pointer at {path} refers to "
+                f"Candidate file referenced by shadow pointer does not exist. "
+                f"Attempted paths: {tried}. "
+                f"The shadow pointer at {path} refers to "
                 f"candidate_id={_get_nested(payload, 'candidate_id')!r} but "
                 f"the candidate.yaml file is missing."
             )
