@@ -1,5 +1,16 @@
 #!/usr/bin/env python3
+"""Weekly shadow retrain — legacy entrypoint.
+
+DEPRECATED: Use ``run_daily_batch.py --stage candidate --mode train`` instead.
+"""
 from __future__ import annotations
+
+import warnings
+warnings.warn(
+    "DEPRECATED: run_shadow_retrain_weekly.py is superseded by "
+    "run_daily_batch.py --mode train. Scheduled for removal.",
+    DeprecationWarning, stacklevel=2,
+)
 
 import argparse
 import json

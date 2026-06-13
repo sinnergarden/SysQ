@@ -49,6 +49,7 @@ class DailyRunContext:
 
     # Audit trail
     reason: str | None = None
+    triggered_by: str = "manual"
 
     @property
     def output_dir_resolved(self) -> Path:

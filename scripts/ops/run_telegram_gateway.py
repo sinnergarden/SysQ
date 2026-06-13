@@ -128,10 +128,17 @@ def _handle_confirm(base_dir: Path, chat_id: str, command_name: str, timeout: in
         _reply(chat_id, f"No pending {command_name} confirmation.")
         return ("rejected", None, "no pending confirmation")
     _clear_pending(base_dir, chat_id)
-    script = "scripts/ops/run_shadow_daily.py" if command_name == "daily" else "scripts/ops/run_shadow_retrain_weekly.py"
+    if command_name == "daily":
+        script = "scripts/run_daily_batch.py"
+        args = ["--stage", "candidate", "--mode", "preopen",
+                "--trade-date", "auto", "--triggered-by", "telegram"]
+    else:
+        script = "scripts/run_daily_batch.py"
+        args = ["--stage", "candidate", "--mode", "train",
+                "--triggered-by", "telegram"]
     proc = _run_command(
         base_dir,
-        [str(base_dir / ".envs" / "test" / "bin" / "python"), script, "--base-dir", ".", "--triggered-by", "telegram"],
+        [str(base_dir / ".envs" / "test" / "bin" / "python"), script, *args, "--output-root", "."],
         timeout,
     )
     output = (proc.stdout or proc.stderr or "").strip()

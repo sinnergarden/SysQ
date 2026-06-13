@@ -1,5 +1,18 @@
 #!/usr/bin/env python3
+"""Daily shadow runner — UC-8 entrypoint (legacy).
+
+DEPRECATED: Use ``run_daily_batch.py --stage candidate --mode preopen``
+or ``scripts/run_daily.py --strategy <id> --mode preopen`` instead.
+"""
 from __future__ import annotations
+
+import warnings
+warnings.warn(
+    "DEPRECATED: run_shadow_daily.py is superseded by "
+    "run_daily_batch.py --mode preopen / run_daily.py --mode preopen. "
+    "Scheduled for removal.",
+    DeprecationWarning, stacklevel=2,
+)
 
 import argparse
 import json
@@ -13,8 +26,6 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from qsys.config import cfg
-from qsys.data.adapter import QlibAdapter
-from qsys.data.health import inspect_qlib_data_health
 from qsys.ops import (
     finalize_run,
     format_run_id,
@@ -32,16 +43,23 @@ from qsys.ops import (
     write_notification_result,
     write_telegram_notification_result,
 )
+from qsys.ops.daily_health import (
+    build_latest_presync_payload,
+    build_data_freshness_status,
+    build_feature_readiness_status,
+    load_latest_presync,
+    resolve_feature_stage_status,
+    select_latest_shadow_model,
+)
 from qsys.ops.inference import InferenceArtifacts, InferenceInvocationError, write_failed_inference_summary
-from qsys.ops.instrument_coverage import DEFAULT_MIN_ACTIVE_INSTRUMENTS as INSTRUMENT_COVERAGE_MIN_ACTIVE, summarize_universe_registry
+from qsys.ops.instrument_coverage import DEFAULT_MIN_ACTIVE_INSTRUMENTS as INSTRUMENT_COVERAGE_MIN_ACTIVE
 from qsys.ops.shadow_rebalance import (
     DEFAULT_MIN_PREDICTION_COUNT as SHADOW_DEFAULT_MIN_PREDICTION_COUNT,
     ShadowRebalanceArtifacts,
     ShadowRebalanceError,
 )
 from qsys.ops.state import atomic_write_json, load_json, summarize_overall_status
-from qsys.research.mainline import MAINLINE_OBJECTS, resolve_mainline_feature_config
-from qsys.research.readiness import build_feature_coverage, build_model_input_frame, build_readiness_summary
+from qsys.research.mainline import MAINLINE_OBJECTS
 
 DEFAULT_MAINLINE_OBJECT_NAME = "feature_173"
 DEFAULT_UNIVERSE = "csi300"
@@ -50,28 +68,13 @@ DEFAULT_MIN_ACTIVE_INSTRUMENTS = INSTRUMENT_COVERAGE_MIN_ACTIVE
 
 
 def _load_latest_presync(base_dir: Path) -> dict[str, Any]:
-    latest = load_json(base_dir / "runs" / "latest_shadow_presync.json")
-    if not latest:
-        return {}
-    summary_path = latest.get("presync_summary_path")
-    if summary_path:
-        summary_payload = load_json(Path(str(summary_path)))
-        if summary_payload:
-            latest["summary"] = summary_payload
-            latest.setdefault("ready_for_daily_shadow", summary_payload.get("ready_for_daily_shadow"))
-            latest.setdefault("overall_status", summary_payload.get("overall_status"))
-    return latest
+    """Load the latest presync run metadata. Delegates to qsys.ops.daily_health."""
+    return load_latest_presync(base_dir)
 
 
 def _build_latest_presync_payload(latest_presync: dict[str, Any]) -> dict[str, Any] | None:
-    if not latest_presync:
-        return None
-    summary = latest_presync.get("summary") or {}
-    return {
-        "run_id": latest_presync.get("run_id") or summary.get("run_id"),
-        "overall_status": latest_presync.get("overall_status") or summary.get("overall_status"),
-        "ready_for_daily_shadow": bool(latest_presync.get("ready_for_daily_shadow") or summary.get("ready_for_daily_shadow")),
-    }
+    """Build presync payload summary. Delegates to qsys.ops.daily_health."""
+    return build_latest_presync_payload(latest_presync)
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> Path:
@@ -117,141 +120,31 @@ def _write_date_resolution(context, payload: dict[str, Any]) -> None:
 
 
 def _build_data_status(*, trade_date: str, universe: str, mainline_object_name: str, latest_presync: dict[str, Any] | None = None, require_presync_ready: bool = False) -> dict[str, Any]:
-    data_root = cfg.get_path("root")
-    qlib_dir = cfg.get_path("qlib_bin")
-    latest_presync_payload = _build_latest_presync_payload(latest_presync or {})
-    if require_presync_ready:
-        if latest_presync_payload is None:
-            return {
-                "trade_date": trade_date,
-                "status": "failed",
-                "mode": "freshness_check_only",
-                "lightweight_check_only": True,
-                "universe": universe,
-                "mainline_object_name": mainline_object_name,
-                "data_root": str(data_root),
-                "qlib_dir": str(qlib_dir),
-                "data_root_exists": bool(data_root.exists()),
-                "qlib_dir_exists": bool(qlib_dir.exists()),
-                "last_qlib_date": None,
-                "health_report": {"blocking_issues": ["presync_required_but_missing"]},
-                "active_instruments": 0,
-                "min_active_instruments": DEFAULT_MIN_ACTIVE_INSTRUMENTS,
-                "instrument_coverage_status": "unknown",
-                "instrument_coverage": {},
-                "latest_presync": None,
-                "require_presync_ready": True,
-                "error": "presync_required_but_missing",
-            }
-        if not bool(latest_presync_payload.get("ready_for_daily_shadow")):
-            return {
-                "trade_date": trade_date,
-                "status": "failed",
-                "mode": "freshness_check_only",
-                "lightweight_check_only": True,
-                "universe": universe,
-                "mainline_object_name": mainline_object_name,
-                "data_root": str(data_root),
-                "qlib_dir": str(qlib_dir),
-                "data_root_exists": bool(data_root.exists()),
-                "qlib_dir_exists": bool(qlib_dir.exists()),
-                "last_qlib_date": None,
-                "health_report": {"blocking_issues": ["presync_required_but_not_ready"]},
-                "active_instruments": 0,
-                "min_active_instruments": DEFAULT_MIN_ACTIVE_INSTRUMENTS,
-                "instrument_coverage_status": "unknown",
-                "instrument_coverage": {},
-                "latest_presync": latest_presync_payload,
-                "require_presync_ready": True,
-                "error": "presync_required_but_not_ready",
-            }
-    feature_fields = resolve_mainline_feature_config(mainline_object_name) or ["$close"]
-    adapter = QlibAdapter()
-    adapter.init_qlib()
-    last_qlib_date = adapter.get_last_qlib_date()
-    report = inspect_qlib_data_health(trade_date, feature_fields, universe=universe)
-    instrument_summary = summarize_universe_registry(adapter, universe=universe, trade_date=trade_date)
-    blocking_issues = list(report.to_dict().get("blocking_issues", []))
-    if instrument_summary.active_on_trade_date < DEFAULT_MIN_ACTIVE_INSTRUMENTS:
-        blocking_issues.append(
-            f"instrument_coverage_mismatch: active_instruments={instrument_summary.active_on_trade_date} < min_active_instruments={DEFAULT_MIN_ACTIVE_INSTRUMENTS}"
-        )
-    return {
-        "trade_date": trade_date,
-        "status": "success" if not blocking_issues else "failed",
-        "mode": "freshness_check_only",
-        "lightweight_check_only": True,
-        "universe": universe,
-        "mainline_object_name": mainline_object_name,
-        "data_root": str(data_root),
-        "qlib_dir": str(qlib_dir),
-        "data_root_exists": bool(data_root.exists()),
-        "qlib_dir_exists": bool(qlib_dir.exists()),
-        "last_qlib_date": last_qlib_date.strftime("%Y-%m-%d") if last_qlib_date is not None else None,
-        "health_report": {**report.to_dict(), "blocking_issues": blocking_issues},
-        "active_instruments": instrument_summary.active_on_trade_date,
-        "min_active_instruments": DEFAULT_MIN_ACTIVE_INSTRUMENTS,
-        "instrument_coverage_status": instrument_summary.coverage_status,
-        "instrument_coverage": instrument_summary.to_dict(),
-        "latest_presync": latest_presync_payload,
-        "require_presync_ready": require_presync_ready,
-        "error": None if not blocking_issues else "; ".join(blocking_issues),
-    }
+    """Check data freshness. Delegates to qsys.ops.daily_health."""
+    return build_data_freshness_status(
+        trade_date=trade_date, universe=universe,
+        mainline_object_name=mainline_object_name,
+        latest_presync=latest_presync,
+        require_presync_ready=require_presync_ready,
+    )
 
 
 def _build_feature_status(*, trade_date: str, universe: str, mainline_object_name: str) -> dict[str, Any]:
-    feature_config = resolve_mainline_feature_config(mainline_object_name)
-    if not feature_config:
-        return {
-            "trade_date": trade_date,
-            "status": "failed",
-            "mode": "readiness_check_only",
-            "lightweight_check_only": True,
-            "mainline_object_name": mainline_object_name,
-            "field_count": 0,
-            "usable_field_count": 0,
-            "degradation_level": "blocked",
-            "notes": [f"No feature config found for {mainline_object_name}"],
-            "error": f"No feature config found for {mainline_object_name}",
-        }
-
-    adapter = QlibAdapter()
-    adapter.init_qlib()
-    frame = adapter.get_features(universe, feature_config, start_time=trade_date, end_time=trade_date)
-    model_path = cfg.get_path("root") / "models" / MAINLINE_OBJECTS[mainline_object_name].model_name
-    model_input_frame = build_model_input_frame(feature_frame=frame, model_path=model_path if model_path.exists() else None)
-    coverage = build_feature_coverage(
-        spec=MAINLINE_OBJECTS[mainline_object_name],
-        frame=frame,
-        model_input_frame=model_input_frame,
+    """Check feature readiness. Delegates to qsys.ops.daily_health."""
+    return build_feature_readiness_status(
+        trade_date=trade_date, universe=universe,
+        mainline_object_name=mainline_object_name,
     )
-    summary = build_readiness_summary(spec=MAINLINE_OBJECTS[mainline_object_name], coverage=coverage)
-    return {
-        "trade_date": trade_date,
-        "status": "success",
-        "mode": "readiness_check_only",
-        "lightweight_check_only": True,
-        "mainline_object_name": mainline_object_name,
-        **summary,
-        "error": None,
-    }
 
 
 def _select_latest_model(base_dir: Path) -> tuple[dict[str, Any] | None, str | None]:
-    payload = read_latest_shadow_model(base_dir)
-    if not latest_shadow_model_is_usable(base_dir, payload):
-        return None, "no usable latest model"
-    return payload, None
+    """Select the latest usable shadow model. Delegates to qsys.ops.daily_health."""
+    return select_latest_shadow_model(base_dir)
 
 
 def _resolve_feature_stage_status(payload: dict[str, Any]) -> str:
-    degradation_level = str(payload.get("degradation_level", "") or "")
-    status_value = str(payload.get("status", "failed") or "failed")
-    if degradation_level in {"blocked", "extended_blocked"}:
-        return "failed"
-    if degradation_level == "extended_warn":
-        return "success"
-    return "success" if status_value == "success" else "failed"
+    """Map feature readiness payload to stage status. Delegates to qsys.ops.daily_health."""
+    return resolve_feature_stage_status(payload)
 
 
 def _resolve_daily_decision_status(manifest: dict[str, Any]) -> str:

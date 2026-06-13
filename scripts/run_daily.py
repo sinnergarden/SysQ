@@ -86,6 +86,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--train-end-date",
         help="训练数据截止日期 YYYY-MM-DD（仅 train 模式）",
     )
+    parser.add_argument(
+        "--triggered-by", default="manual",
+        help="调用来源标识 (manual / scheduler / systemd / telegram / agent)",
+    )
     return parser
 
 
@@ -150,6 +154,7 @@ def run_daily_main(argv: list[str] | None = None) -> None:
             force_rerun=False,
             reason=args.reason,
             output_dir=Path(args.output_dir) if args.output_dir else None,
+            triggered_by=args.triggered_by,
         )
         runner.run_train(ctx, strategy)
         return
@@ -176,6 +181,7 @@ def run_daily_main(argv: list[str] | None = None) -> None:
         force_rerun=args.force_rerun,
         reason=args.reason,
         output_dir=Path(args.output_dir) if args.output_dir else None,
+        triggered_by=args.triggered_by,
     )
 
     # ── Notify-only ──────────────────────────────────────────────────
