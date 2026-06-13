@@ -257,9 +257,9 @@ class DailyRunner:
         stage_status = {"preopen": "skipped" if rebalance_skipped else "completed"}
         write_daily_manifest(
             run_root,
-            trade_date=ctx.trade_date, mode="preopen",
+            trade_date=ctx.trade_date, stage="preopen",
+            run_mode=ctx.run_mode,
             strategy_id=ctx.strategy_id, account_id=ctx.account_id,
-            execution_mode=ctx.execution_mode,
             candidate_id=ctx.candidate_id,
             signal_run_id=ctx.signal_run_id,
             strategy_config_id=ctx.strategy_config_id,
@@ -441,9 +441,9 @@ class DailyRunner:
             stage_status["postclose"] = "skipped_no_execution"
         write_daily_manifest(
             run_root,
-            trade_date=ctx.trade_date, mode="postclose",
+            trade_date=ctx.trade_date, stage="postclose",
+            run_mode=ctx.run_mode,
             strategy_id=ctx.strategy_id, account_id=ctx.account_id,
-            execution_mode=ctx.execution_mode,
             candidate_id=ctx.candidate_id,
             signal_run_id=ctx.signal_run_id,
             strategy_config_id=ctx.strategy_config_id,

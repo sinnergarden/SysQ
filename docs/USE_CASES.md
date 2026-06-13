@@ -630,7 +630,8 @@ constraints:
 Planned canonical entrypoint:
 
 ```bash
-python scripts/run_daily.py --strategy <strategy_id> --mode shadow --trade-date <YYYY-MM-DD>
+python scripts/run_daily.py --strategy <strategy_id> --mode preopen --run-mode shadow --trade-date <YYYY-MM-DD>
+python scripts/run_daily.py --strategy <strategy_id> --mode postclose --run-mode shadow --trade-date <YYYY-MM-DD>
 ```
 
 Non-existent today; `scripts/run_daily.py` exists but its `--mode` semantics
@@ -690,13 +691,15 @@ data/daily/<strategy_id>/shadow/<trade_date>/
 
 ### 当前状态
 
-EARLY IMPLEMENTATION — `DailyRunner` 现在在 preopen/postclose 阶段写入
-`daily_manifest.json`，包含 UC-8 identity lineage（candidate_id、signal_run_id、
-strategy_config_id、backtest_id）。`DailyRunContext` 已包含 UC-8/UC-9 字段
-（candidate_id、signal_run_id、execution_mode 等）。
+EARLY PARTIAL IMPLEMENTATION — `daily_manifest.json` schema + write path ready;
+promotion pointer / hard block / idempotency still pending.
 
-当前运行路径（preopen/postclose/train）已增强 manifest，但入口尚需重构为
-`--mode shadow` / `--mode production` 以对齐 UC-8 语义。
+`DailyRunContext` 包含 `run_mode` 字段（shadow|production）和 identity lineage
+字段（candidate_id、signal_run_id、strategy_config_id、backtest_id）。
+`DailyRunner.run_preopen/postclose` 末尾写入 `daily_manifest.json`。
+
+当前运行路径（preopen/postclose/train）已增强 manifest，但入口尚无 `--run-mode` CLI 参数，
+promotion pointer 解析和 hard block conditions 尚未实现。
 
 ### 缺口
 
@@ -787,7 +790,7 @@ checks:
 Planned canonical entrypoint:
 
 ```bash
-python scripts/run_daily.py --strategy <strategy_id> --mode production --execution-mode operator_confirm --trade-date <YYYY-MM-DD>
+python scripts/run_daily.py --strategy <strategy_id> --mode preopen --run-mode production --execution-mode operator_confirm --trade-date <YYYY-MM-DD>
 ```
 
 Non-existent today — `scripts/run_daily.py` predates UC-9 semantics.

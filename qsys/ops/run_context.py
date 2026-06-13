@@ -20,11 +20,14 @@ class DailyRunContext:
     """
 
     trade_date: str
-    mode: str  # "preopen" | "postclose" | "train" | "shadow" | "production"
+    mode: str  # "preopen" | "postclose" | "train"
     run_root: Path  # actual artifact directory (resolved by resolve_run_root)
     project_root: Path
     strategy_id: str
     account_id: str
+
+    # UC-8/UC-9 run mode
+    run_mode: str = "shadow"  # "shadow" | "production"
 
     # Optional overrides
     data_date: str | None = None  # reference_date for inference prices
@@ -37,7 +40,6 @@ class DailyRunContext:
     strategy_config_id: str | None = None
     backtest_id: str | None = None
     promotion_pointer_path: str | None = None
-    execution_mode: str = "shadow"  # "shadow" | "production"
 
     # Flags
     debug_run: bool = False

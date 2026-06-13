@@ -42,10 +42,10 @@ def write_daily_manifest(
     run_root: Path,
     *,
     trade_date: str,
-    mode: str,
+    stage: str,
+    run_mode: str = "shadow",
     strategy_id: str,
     account_id: str,
-    execution_mode: str = "shadow",
     candidate_id: str | None = None,
     signal_run_id: str | None = None,
     strategy_config_id: str | None = None,
@@ -61,14 +61,19 @@ def write_daily_manifest(
     run.  It records the promotion pointer, candidate, signal, and strategy
     config that produced the run, satisfying the UC-8/UC-9 guardrails for
     ID chain auditability.
+
+    Parameters
+    ----------
+    stage: preopen | postclose | train
+    run_mode: shadow | production
     """
     manifest: dict[str, Any] = {
         "artifact_type": "daily_run",
         "trade_date": trade_date,
-        "mode": mode,
+        "stage": stage,
+        "run_mode": run_mode,
         "strategy_id": strategy_id,
         "account_id": account_id,
-        "execution_mode": execution_mode,
     }
     if candidate_id:
         manifest["candidate_id"] = candidate_id
