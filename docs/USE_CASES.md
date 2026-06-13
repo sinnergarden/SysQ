@@ -707,7 +707,7 @@ promotion pointer 解析和 hard block conditions 尚未实现。
 - 需要标准化的 TargetPortfolio / OrderIntent schema 和幂等校验。
 - 需要 pre-trade lot-size 和停牌/涨跌停校验。
 - 需要 shadow fills 的仿真执行引擎与真实成交回填的双模式。
-- 需要统一每日运行 manifest 的 stage_status 追踪（当前只记录最终状态）。
+- 需要完善 stage_status 追踪：当前 preopen/postclose 结束时各自写入单阶段状态，缺跨阶段 manifest 合并。
 - 当前 `run_daily.py` 的 `--mode preopen|postclose|train` 语义需要重构或扩展为 shadow-specific mode。
 
 ---
