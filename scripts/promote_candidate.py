@@ -195,6 +195,18 @@ def _handle_create(args: argparse.Namespace) -> None:
         "path": str(Path(args.backtest_path).resolve()),
     }
 
+    # Pre-check: when promoting to shadow, ensure pointer is writable
+    # before writing any artifacts (avoid orphan candidate.yaml).
+    if args.promote_to == "shadow":
+        pointer_path = Path(research_root) / "promotions" / "shadow.yaml"
+        if pointer_path.exists() and not args.overwrite_pointer:
+            print(
+                f"ERROR: Shadow promotion pointer already exists at {pointer_path}. "
+                f"Use --overwrite-pointer to replace.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
     candidate = build_candidate_payload(
         candidate_id=args.candidate_id,
         signal_ref=signal_ref,
