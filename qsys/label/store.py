@@ -246,7 +246,9 @@ class LabelStore:
 
         mf = {"horizon": horizon, "universe": universe, "formula": config.get("formula", {}),
               "normalization": config.get("normalization", {}), "prediction_start": start, "prediction_end": end,
-              "coverage": round(len(result) / max(1, 1), 4)}
+              "n_dates": int(result["trade_date"].nunique()),
+              "n_instruments": int(result["instrument"].nunique()),
+              "coverage": round(len(result) / max(result["trade_date"].nunique() * result["instrument"].nunique(), 1), 4)}
         mf.update(config.get("manifest", {}))
         return self.save_labels(label_id, result, manifest=mf, overwrite=overwrite)
 
