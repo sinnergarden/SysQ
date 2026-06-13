@@ -1,3 +1,9 @@
+import warnings
+warnings.warn(
+    "DEPRECATED: rebuild_qlib_bin.py is superseded by UC-standard entrypoints. Scheduled for removal.",
+    DeprecationWarning, stacklevel=2,
+)
+
 import sys
 from pathlib import Path
 import shutil

@@ -4,7 +4,12 @@ Generate BacktestReport JSONs for smooth135 / xs5 rolling results so the UI can 
 Reads from experiments/mainline_rolling_runs/<run>/, builds a BacktestReport + synthetic
 daily equity curve, and writes to experiments/reports/backtest_<run_id>.json.
 """
-from __future__ import annotations
+
+import warnings
+warnings.warn(
+    "DEPRECATED: generate_ui_reports.py is superseded by UC-standard entrypoints. Scheduled for removal.",
+    DeprecationWarning, stacklevel=2,
+)
 
 import json
 import sys

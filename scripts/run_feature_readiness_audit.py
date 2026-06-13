@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+import warnings
+warnings.warn(
+    "DEPRECATED: run_feature_readiness_audit.py is superseded by UC-standard entrypoints. Scheduled for removal.",
+    DeprecationWarning, stacklevel=2,
+)
+
 import sys
 from pathlib import Path
 import pandas as pd

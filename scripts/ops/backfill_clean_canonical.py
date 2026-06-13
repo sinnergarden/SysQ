@@ -7,7 +7,12 @@ were persisted into feather by _save_batch_results after merges.
 
 Safe to run multiple times (idempotent).
 """
-from __future__ import annotations
+
+import warnings
+warnings.warn(
+    "DEPRECATED: backfill_clean_canonical.py is superseded by UC-standard entrypoints. Scheduled for removal.",
+    DeprecationWarning, stacklevel=2,
+)
 
 import argparse
 import sys

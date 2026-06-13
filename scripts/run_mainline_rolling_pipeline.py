@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import warnings
+warnings.warn(
+    "DEPRECATED: run_mainline_rolling_pipeline.py is superseded by UC-standard entrypoints. Scheduled for removal.",
+    DeprecationWarning, stacklevel=2,
+)
+
 import sys
 from pathlib import Path
 

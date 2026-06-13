@@ -10,6 +10,11 @@ Usage:
   python scripts/create_instrument_universe.py --universe csi300 --output csi300.txt
 """
 
+import warnings
+warnings.warn(
+    "DEPRECATED: create_instrument_universe.py is superseded by UC-standard entrypoints. Scheduled for removal.",
+    DeprecationWarning, stacklevel=2,
+)
 import argparse
 import sys
 from pathlib import Path

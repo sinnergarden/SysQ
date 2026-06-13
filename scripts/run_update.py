@@ -18,6 +18,11 @@ Key args:
 - --date / --start: date controls (accept YYYYMMDD or YYYY-MM-DD)
 """
 
+import warnings
+warnings.warn(
+    "DEPRECATED: run_update.py is superseded by UC-standard entrypoints. Scheduled for removal.",
+    DeprecationWarning, stacklevel=2,
+)
 import click
 import datetime
 import sys
