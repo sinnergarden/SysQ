@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from pathlib import Path
+from typing import Any
+
 FEATURE_GROUPS = {
     "microstructure": {
         "enabled_by": "enable_microstructure_features",
@@ -159,3 +162,25 @@ def get_feature_fields(name: str) -> list[str]:
         f"Unknown feature set: '{name}'. "
         f"Known: {list(_FEATURE_SET_METHODS)} + {list(FEATURE_GROUPS)}"
     )
+
+
+class FeatureListRegistry:
+    """Load feature lists from ``configs/features/<feature_list_id>.yaml``."""
+
+    _CONFIG_DIR = Path(__file__).resolve().parents[2] / "configs" / "features"
+
+    @classmethod
+    def list_ids(cls) -> list[str]:
+        if not cls._CONFIG_DIR.exists():
+            return []
+        return sorted(p.stem for p in cls._CONFIG_DIR.glob("*.yaml") if p.stem != "__init__")
+
+    @classmethod
+    def load(cls, feature_list_id: str) -> list[str]:
+        """Load feature list, return qlib field expressions."""
+        path = cls._CONFIG_DIR / f"{feature_list_id}.yaml"
+        if not path.exists():
+            raise FileNotFoundError(f"Feature list '{feature_list_id}' not found. Available: {cls.list_ids()}")
+        import yaml
+        data: dict[str, Any] = yaml.safe_load(path.read_text(encoding="utf-8"))
+        return list(data.get("features", []))

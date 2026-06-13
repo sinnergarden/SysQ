@@ -137,17 +137,27 @@ def _coverage(row_count: int, expected: int) -> float:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
+    p = argparse.ArgumentParser(
         description="Compute and persist label artifacts to LabelStore",
     )
-    parser.add_argument("--universe", default="csi300", help="Qlib universe")
-    parser.add_argument("--start", default="2023-06-01", help="Start date (YYYY-MM-DD)")
-    parser.add_argument("--end", default="2026-06-01", help="End date (YYYY-MM-DD)")
-    parser.add_argument("--horizons", type=int, nargs="+", default=[5, 20],
+    p.add_argument("--universe", default="csi300", help="Qlib universe")
+    p.add_argument("--start", default="2023-06-01", help="Start date (YYYY-MM-DD)")
+    p.add_argument("--end", default="2026-06-01", help="End date (YYYY-MM-DD)")
+    p.add_argument("--horizons", type=int, nargs="+", default=[5, 20],
                         help="Forward return horizons")
-    parser.add_argument("--overwrite", action="store_true",
+    p.add_argument("--config", default=None,
+                        help="Path to label YAML config")
+    p.add_argument("--overwrite", action="store_true",
                         help="Overwrite existing label data")
-    args = parser.parse_args()
+    args = p.parse_args()
+    if args.config:
+        import yaml
+        config = yaml.safe_load(Path(args.config).read_text())
+        config.setdefault("date_range", {"start_date": args.start, "end_date": args.end})
+        from qsys.label.store import LabelStore
+        LabelStore().compute_and_save_from_config(config, overwrite=args.overwrite)
+        print(f"Done: {config['label_id']}")
+        return
 
     from qsys.data.calendar import get_trading_calendar
     from qsys.label.store import LabelStore
