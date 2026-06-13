@@ -47,10 +47,16 @@ def write_daily_manifest(
     strategy_id: str,
     account_id: str,
     candidate_id: str | None = None,
+    candidate_path: str | None = None,
+    signal_id: str | None = None,
     signal_run_id: str | None = None,
     strategy_config_id: str | None = None,
+    strategy_template_id: str | None = None,
+    strategy_run_id: str | None = None,
     backtest_id: str | None = None,
     promotion_pointer_path: str | None = None,
+    promoted_at: str | None = None,
+    promoted_by: str | None = None,
     triggered_by: str = "manual",
     debug_run: bool = False,
     stage_status: dict[str, str] | None = None,
@@ -78,14 +84,26 @@ def write_daily_manifest(
     }
     if candidate_id:
         manifest["candidate_id"] = candidate_id
+    if candidate_path:
+        manifest["candidate_path"] = candidate_path
+    if signal_id:
+        manifest["signal_id"] = signal_id
     if signal_run_id:
         manifest["signal_run_id"] = signal_run_id
     if strategy_config_id:
         manifest["strategy_config_id"] = strategy_config_id
+    if strategy_template_id:
+        manifest["strategy_template_id"] = strategy_template_id
+    if strategy_run_id:
+        manifest["strategy_run_id"] = strategy_run_id
     if backtest_id:
         manifest["backtest_id"] = backtest_id
     if promotion_pointer_path:
         manifest["promotion_pointer_path"] = promotion_pointer_path
+    if promoted_at:
+        manifest["promoted_at"] = promoted_at
+    if promoted_by:
+        manifest["promoted_by"] = promoted_by
     manifest["triggered_by"] = triggered_by
     if stage_status:
         manifest["stage_status"] = stage_status

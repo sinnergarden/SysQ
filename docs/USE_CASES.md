@@ -756,24 +756,25 @@ promotion pointer / hard block / idempotency still pending.
 - `triggered_by` 已穿透到 daily_manifest（`run_daily.py --triggered-by` 参数）
 - Health check 已沉入 `qsys/ops/daily_health.py`（data freshness、feature readiness、model pointer）
 - 遗留 `scripts/ops/run_shadow_daily.py` 已废弃（已添加 DeprecationWarning，功能迁至 `run_daily_batch.py`）
+- `--run-mode` CLI 参数（`run_daily.py` / `run_daily_batch.py` 均支持）
+- Promotion pointer resolver（`qsys/ops/promotion_resolver.py`）— shadow.yaml 解析 + 字段 11 项校验
+- Hard block：shadow pointer 缺失 / candidate_path 不存在 / production mode → 硬失败
+- manifest lineage 已扩展到全部 UC-8 Identity Lineage 字段（candidate_path、signal_id、strategy_template_id、strategy_run_id、promoted_at、promoted_by）
 
 仍未完成：
-- `scripts/run_daily.py` 尚无 `--run-mode` CLI 参数（`DailyRunContext` 有字段但 CLI 未暴露）。
-- Promotion pointer 解析和 hard block conditions 尚未实现。
-- 缺少标准化的 TargetPortfolio / OrderIntent schema 和幂等校验。
-- 缺少 pre-trade lot-size 和停牌/涨跌停校验。
-- 缺少 shadow fills 的仿真执行引擎与真实成交回填的双模式。
-- 跨阶段 manifest 合并（preopen/postclose 各自写单阶段状态，缺合并）。
+- Promotion pointer 驱动的 signal selection（当前仍使用 strategy-level config 和 strategy adapter，未强制从 SignalRunRef 消费）。
+- 标准化的 TargetPortfolio / OrderIntent schema 和幂等校验。
+- pre-trade lot-size 和停牌/涨跌停校验。
+- shadow fills 的仿真执行引擎与真实成交回填的双模式。
+- 跨阶段 manifest 合并（preopen/postclose 各自写单阶段状态）。
 
 ### 缺口
 
 - 需要 promotion pointer 驱动的 daily signal selection（当前 run_daily.py 使用 strategy-level config）。
-- 需要 `--run-mode` CLI 参数暴露（`DailyRunContext.run_mode` 已有但 CLI 未开放）。
 - 需要标准化的 TargetPortfolio / OrderIntent schema 和幂等校验。
 - 需要 pre-trade lot-size 和停牌/涨跌停校验。
 - 需要 shadow fills 的仿真执行引擎与真实成交回填的双模式。
 - 需要跨阶段 manifest 合并（当前 preopen/postclose 结束时各自写入单阶段状态）。
-- 需要 hard block condition 检测框架（missing promotion pointer、duplicate run、stale data 等）。
 
 ---
 

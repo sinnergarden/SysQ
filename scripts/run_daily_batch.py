@@ -93,6 +93,8 @@ def _build_command(
     no_notify: bool = False,
     output_root: str | None = None,
     triggered_by: str = "manual",
+    run_mode: str = "shadow",
+    promotion_pointer: str | None = None,
 ) -> list[str]:
     """Build the subprocess argv for dispatching a single strategy."""
     cmd = [
@@ -118,6 +120,10 @@ def _build_command(
         cmd.extend(["--output-dir", out_dir])
     if triggered_by and triggered_by != "manual":
         cmd.extend(["--triggered-by", triggered_by])
+    if run_mode:
+        cmd.extend(["--run-mode", run_mode])
+    if promotion_pointer:
+        cmd.extend(["--promotion-pointer", promotion_pointer])
     return cmd
 
 
@@ -145,6 +151,8 @@ def run_batch(
     fail_fast: bool = False,
     allow_production: bool = False,
     triggered_by: str = "manual",
+    run_mode: str = "shadow",
+    promotion_pointer: str | None = None,
 ) -> dict:
     """Execute a daily batch for all strategies matching *stage*.
 
@@ -259,6 +267,7 @@ def run_batch(
                 spec.strategy_id, mode, trade_date_resolved,
                 debug_run=debug_run, no_notify=no_notify,
                 output_root=output_root, triggered_by=triggered_by,
+                run_mode=run_mode, promotion_pointer=promotion_pointer,
             )
             preview = _command_preview(cmd)
             print(f"  [{spec.strategy_id}] {preview}")
@@ -278,6 +287,7 @@ def run_batch(
                         s.strategy_id, mode, trade_date_resolved,
                         debug_run=debug_run, no_notify=no_notify,
                         output_root=output_root, triggered_by=triggered_by,
+                        run_mode=run_mode, promotion_pointer=promotion_pointer,
                     )),
                     "error": None,
                 }
@@ -293,6 +303,7 @@ def run_batch(
             spec.strategy_id, mode, trade_date_resolved,
             debug_run=debug_run, no_notify=no_notify,
             output_root=output_root, triggered_by=triggered_by,
+            run_mode=run_mode, promotion_pointer=promotion_pointer,
         )
         preview = _command_preview(cmd)
 
@@ -443,6 +454,7 @@ def _build_summary(
     failed_count: int | None = None,
     skipped_count: int | None = None,
     output_root: str | None = None,
+    triggered_by: str = "manual",
 ) -> dict:
     """Build the batch summary dict."""
     duration = (finished_at - started_at).total_seconds()
@@ -547,6 +559,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Allow production-stage dispatch (required for --stage production)",
     )
     parser.add_argument(
+        "--run-mode", choices=["shadow", "production"], default="shadow",
+        help="运行模式 (shadow=已promote候选, production=未实现)",
+    )
+    parser.add_argument(
+        "--promotion-pointer", default=None,
+        help="promotion pointer 路径（默认: data/research/promotions/shadow.yaml）",
+    )
+    parser.add_argument(
         "--triggered-by", default="manual",
         help="调用来源标识 (manual / scheduler / systemd / telegram / agent)",
     )
@@ -578,6 +598,8 @@ def main() -> None:
         fail_fast=args.fail_fast,
         allow_production=args.allow_production,
         triggered_by=args.triggered_by,
+        run_mode=args.run_mode,
+        promotion_pointer=args.promotion_pointer,
     )
     print(json.dumps(summary, indent=2, ensure_ascii=False, default=str))
 

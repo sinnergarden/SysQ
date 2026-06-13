@@ -43,6 +43,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from qsys.common.config import load_strategy_config
 from qsys.ops.daily_runner import DailyRunner
 from qsys.ops.run_context import DailyRunContext, resolve_run_root
+from qsys.ops.promotion_resolver import resolve_shadow_promotion
 from qsys.strategy.registry import create_strategy
 
 
@@ -87,6 +88,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="训练数据截止日期 YYYY-MM-DD（仅 train 模式）",
     )
     parser.add_argument(
+        "--run-mode", choices=["shadow", "production"], default="shadow",
+        help="运行模式 (shadow=已promote候选, production=未实现)",
+    )
+    parser.add_argument(
+        "--promotion-pointer", default=None,
+        help="promotion pointer 路径（默认: data/research/promotions/shadow.yaml）",
+    )
+    parser.add_argument(
         "--triggered-by", default="manual",
         help="调用来源标识 (manual / scheduler / systemd / telegram / agent)",
     )
@@ -96,6 +105,11 @@ def build_parser() -> argparse.ArgumentParser:
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.run_mode == "production":
+        parser.error(
+            "Production run mode (--run-mode production) is not implemented. "
+            "Only --run-mode shadow is supported."
+        )
     if args.force_rerun and not args.reason:
         parser.error("--force-rerun 必须配合 --reason 提供原因")
     if args.mode == "train":
@@ -149,6 +163,7 @@ def run_daily_main(argv: list[str] | None = None) -> None:
             project_root=PROJECT_ROOT,
             strategy_id=strategy.strategy_id,
             account_id=strategy.account_id,
+            run_mode=args.run_mode,
             debug_run=args.debug_run,
             no_notify=args.no_notify,
             force_rerun=False,
@@ -161,6 +176,20 @@ def run_daily_main(argv: list[str] | None = None) -> None:
 
     # ── Modes requiring trade-date ────────────────────────────────────
     trade_date = args.trade_date  # guaranteed non-None by parse_args above
+
+    # Resolve shadow promotion pointer (UC-8 lineage)
+    promotion_lineage: dict[str, object] = {}
+    if args.run_mode == "shadow":
+        pointer_path = args.promotion_pointer or "data/research/promotions/shadow.yaml"
+        try:
+            promotion_lineage = resolve_shadow_promotion(pointer_path)
+        except FileNotFoundError as e:
+            print(f"  ❌ {e}", file=sys.stderr)
+            sys.exit(1)
+        except ValueError as e:
+            print(f"  ❌ Shadow promotion pointer validation failed: {e}", file=sys.stderr)
+            sys.exit(1)
+
     run_root = resolve_run_root(
         PROJECT_ROOT,
         strategy.strategy_id,
@@ -176,12 +205,25 @@ def run_daily_main(argv: list[str] | None = None) -> None:
         project_root=PROJECT_ROOT,
         strategy_id=strategy.strategy_id,
         account_id=strategy.account_id,
+        run_mode=args.run_mode,
         debug_run=args.debug_run,
         no_notify=args.no_notify,
         force_rerun=args.force_rerun,
         reason=args.reason,
         output_dir=Path(args.output_dir) if args.output_dir else None,
         triggered_by=args.triggered_by,
+        # Promotion lineage
+        candidate_id=promotion_lineage.get("candidate_id"),
+        candidate_path=promotion_lineage.get("candidate_path"),
+        signal_id=promotion_lineage.get("signal_id"),
+        signal_run_id=promotion_lineage.get("signal_run_id"),
+        strategy_config_id=promotion_lineage.get("strategy_config_id"),
+        strategy_template_id=promotion_lineage.get("strategy_template_id"),
+        strategy_run_id=promotion_lineage.get("strategy_run_id"),
+        backtest_id=promotion_lineage.get("backtest_id"),
+        promotion_pointer_path=promotion_lineage.get("promotion_pointer_path"),
+        promoted_at=promotion_lineage.get("promoted_at"),
+        promoted_by=promotion_lineage.get("promoted_by"),
     )
 
     # ── Notify-only ──────────────────────────────────────────────────
