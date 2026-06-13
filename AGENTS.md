@@ -94,7 +94,11 @@ gh pr merge <number> --squash --delete-branch
 
 ---
 
-## 9. 新功能与文档规则
+## 9. 零造轮子原则
+
+**禁止在已有代码路径的情况下，手写一份等价的业务逻辑。**
+
+## 9a. 新功能与文档规则
 
 - 影响架构边界、引入新长期接口、改 schema/artifact、影响 Candidate/Shadow/Production、改 ledger/daily entry/broker → 先补设计文档。
 - 普通实验、bugfix、小脚本可以直接实现并在 PR 里说明。
@@ -121,6 +125,14 @@ python -m unittest discover tests
 - `execution_date`：实际计划执行日期。
 - 盘前推荐基于 T-1 收盘。数据 readiness 不满足时显式失败。
 - 训练、回测、推理必须避免未来数据泄露。
+
+### 11a. Lookahead 铁律（违反 = 无效结果）
+
+**任何推理任务使用的模型训练截止日（train_end）必须不晚于推理目标日期（trade_date）。**
+
+- 正常 daily ops：用 latest 模型做当天 prediction，OK。
+- **回溯 backfill**：必须显式指定目标日期当时的模型版本，禁止用 latest。
+- 禁止用 target_date 之后才产生的数据来预测 target_date 的信号。
 
 ---
 
