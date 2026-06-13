@@ -9,6 +9,7 @@ Usage::
 """
 
 from __future__ import annotations
+import warnings; warnings.warn("Use scripts/run_research.py instead (UC-4)", DeprecationWarning, stacklevel=2)
 
 import argparse
 import json
