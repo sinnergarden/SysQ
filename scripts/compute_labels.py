@@ -51,7 +51,7 @@ def main() -> None:
         effective_dates = max(n_dates - h, 0)
         expected_rows = effective_dates * n_insts if n_dates and n_insts else 0
 
-        label_id = f"fwd_ret_{h}d_xsz_clip3"
+        label_id = f"fwd_ret_{h}d_cs_zscore_clip3"
         print(f"Computing {label_id} ...")
         df = compute_forward_return(args.universe, h, args.start, args.end)
         cov = coverage(len(df), expected_rows)
