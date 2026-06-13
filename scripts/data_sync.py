@@ -25,8 +25,6 @@ def main():
             cmd = [sys.executable, str(PROJ / "scripts/ops/sync_csi800_daily.py"), "--target-date", td]
             if do_apply: cmd.append("--apply")
             subprocess.run(cmd, cwd=str(PROJ), check=True)
-        if c.get("tasks", {}).get("index_constituents", False):
-            subprocess.run([sys.executable, str(PROJ / "scripts/create_instrument_universe.py"), "--universe", str(c.get("universe", "csi800"))], cwd=str(PROJ), check=True)
         return
     if args.universe == "csi800":
         cmd = [sys.executable, str(PROJ / "scripts/ops/sync_csi800_daily.py"), "--target-date", args.target_date or datetime.now().strftime("%Y-%m-%d")]
