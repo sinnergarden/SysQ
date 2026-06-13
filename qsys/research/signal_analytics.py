@@ -17,10 +17,13 @@ Usage
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
+
+log = logging.getLogger(__name__)
 
 
 # ── Quote helper ──────────────────────────────────────────────────────
@@ -389,11 +392,15 @@ class SignalAnalytics:
             FROM ({joined_sql})
             GROUP BY trade_date
             HAVING count(*) >= {int(min_count)}
+        ),
+        daily_clean AS (
+            SELECT ic, n FROM daily
+            WHERE ic IS NOT NULL AND NOT isnan(ic)
         )
         SELECT AVG(ic) AS ic_mean,
                COALESCE(STDDEV(ic), 0) AS ic_std,
                AVG(ic) / NULLIF(STDDEV(ic), 0) AS icir
-        FROM daily
+        FROM daily_clean
         """
 
     def _ic_single(
@@ -411,7 +418,8 @@ class SignalAnalytics:
         )
         try:
             df = self._con.execute(sql).fetchdf()
-        except Exception:
+        except Exception as e:
+            log.warning("IC computation failed for %s vs %s: %s", sid, lid, e)
             return None
         if df.empty or df["ic_mean"].isna().all():
             return None
@@ -466,17 +474,23 @@ class SignalAnalytics:
             FROM ranked
             GROUP BY trade_date
             HAVING count(*) >= {int(min_count)}
+        ),
+        daily_clean AS (
+            SELECT rank_ic, n FROM daily_rank_ic
+            WHERE rank_ic IS NOT NULL AND NOT isnan(rank_ic)
         )
         SELECT AVG(rank_ic) AS rank_ic_mean,
                COALESCE(STDDEV(rank_ic), 0) AS rank_ic_std,
                AVG(rank_ic) / NULLIF(STDDEV(rank_ic), 0) AS rank_icir
-        FROM daily_rank_ic
+        FROM daily_clean
         """
         try:
             df = self._con.execute(sql).fetchdf()
-        except Exception:
+        except Exception as e:
+            log.warning("Rank IC computation failed for %s vs %s: %s", sid, lid, e)
             return None
         if df.empty or df["rank_ic_mean"].isna().all():
+            log.warning("Rank IC result empty for %s vs %s", sid, lid)
             return None
         return {
             "signal_id": sid,

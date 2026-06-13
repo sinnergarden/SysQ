@@ -1,0 +1,179 @@
+# Alpha V1 clean 132 features — matches get_clean_features() output.
+feature_list_id: alpha_v1_clean_132
+description: "Alpha V1 production feature set, 132 expressions after NaN filtering"
+features:
+  # ── Raw price/volume (alpha158 core) ──
+  - $open
+  - $high
+  - $low
+  - $close
+  - $factor
+  - $vwap
+
+  # ── Intraday structure (alpha158) ──
+  - ($high-$low)/$open
+  - ($close-$open)/($high-$low+1e-12)
+  - ($high-Greater($open, $close))/$open
+  - ($high-Greater($open, $close))/($high-$low+1e-12)
+  - (Less($open, $close)-$low)/$open
+  - (Less($open, $close)-$low)/($high-$low+1e-12)
+  - (2*$close-$high-$low)/$open
+  - (2*$close-$high-$low)/($high-$low+1e-12)
+  - $high/$close
+  - $low/$close
+  - $vwap/$close
+
+  # ── Momentum: Ref ──
+  - Ref($close, 5)/$close
+  - Ref($close, 10)/$close
+  - Ref($close, 20)/$close
+  - Ref($close, 30)/$close
+  - Ref($close, 60)/$close
+
+  # ── Momentum: Mean ──
+  - Mean($close, 5)/$close
+  - Mean($close, 10)/$close
+  - Mean($close, 20)/$close
+  - Mean($close, 30)/$close
+  - Mean($close, 60)/$close
+
+  # ── Volatility: Std ──
+  - Std($close, 5)/$close
+  - Std($close, 10)/$close
+  - Std($close, 20)/$close
+  - Std($close, 30)/$close
+  - Std($close, 60)/$close
+
+  # ── Trend: Slope ──
+  - Slope($close, 5)/$close
+  - Slope($close, 10)/$close
+  - Slope($close, 20)/$close
+  - Slope($close, 30)/$close
+  - Slope($close, 60)/$close
+
+  # ── Fit quality: Rsquare ──
+  - Rsquare($close, 5)
+  - Rsquare($close, 10)
+  - Rsquare($close, 20)
+  - Rsquare($close, 30)
+  - Rsquare($close, 60)
+
+  # ── Residual: Resi ──
+  - Resi($close, 5)/$close
+  - Resi($close, 10)/$close
+  - Resi($close, 20)/$close
+  - Resi($close, 30)/$close
+  - Resi($close, 60)/$close
+
+  # ── Cross-sectional rank ──
+  - Rank($close, 5)
+  - Rank($close, 10)
+  - Rank($close, 20)
+  - Rank($close, 30)
+  - Rank($close, 60)
+
+  # ── Binary directional ──
+  - Mean($close>Ref($close, 1), 5)
+  - Mean($close>Ref($close, 1), 10)
+  - Mean($close>Ref($close, 1), 20)
+  - Mean($close>Ref($close, 1), 30)
+  - Mean($close>Ref($close, 1), 60)
+  - Mean($close<Ref($close, 1), 5)
+  - Mean($close<Ref($close, 1), 10)
+  - Mean($close<Ref($close, 1), 20)
+  - Mean($close<Ref($close, 1), 30)
+  - Mean($close<Ref($close, 1), 60)
+
+  # ── Net up/down ratio ──
+  - Mean($close>Ref($close, 1), 5)-Mean($close<Ref($close, 1), 5)
+  - Mean($close>Ref($close, 1), 10)-Mean($close<Ref($close, 1), 10)
+  - Mean($close>Ref($close, 1), 20)-Mean($close<Ref($close, 1), 20)
+  - Mean($close>Ref($close, 1), 30)-Mean($close<Ref($close, 1), 30)
+  - Mean($close>Ref($close, 1), 60)-Mean($close<Ref($close, 1), 60)
+
+  # ── Gain/loss ratio (RSI-like) ──
+  - Sum(Greater($close-Ref($close, 1), 0), 5)/(Sum(Abs($close-Ref($close, 1)), 5)+1e-12)
+  - Sum(Greater($close-Ref($close, 1), 0), 10)/(Sum(Abs($close-Ref($close, 1)), 10)+1e-12)
+  - Sum(Greater($close-Ref($close, 1), 0), 20)/(Sum(Abs($close-Ref($close, 1)), 20)+1e-12)
+  - Sum(Greater($close-Ref($close, 1), 0), 30)/(Sum(Abs($close-Ref($close, 1)), 30)+1e-12)
+  - Sum(Greater($close-Ref($close, 1), 0), 60)/(Sum(Abs($close-Ref($close, 1)), 60)+1e-12)
+  - Sum(Greater(Ref($close, 1)-$close, 0), 5)/(Sum(Abs($close-Ref($close, 1)), 5)+1e-12)
+  - Sum(Greater(Ref($close, 1)-$close, 0), 10)/(Sum(Abs($close-Ref($close, 1)), 10)+1e-12)
+  - Sum(Greater(Ref($close, 1)-$close, 0), 20)/(Sum(Abs($close-Ref($close, 1)), 20)+1e-12)
+  - Sum(Greater(Ref($close, 1)-$close, 0), 30)/(Sum(Abs($close-Ref($close, 1)), 30)+1e-12)
+  - Sum(Greater(Ref($close, 1)-$close, 0), 60)/(Sum(Abs($close-Ref($close, 1)), 60)+1e-12)
+
+  # ── Net gain-loss ratio ──
+  - (Sum(Greater($close-Ref($close, 1), 0), 5)-Sum(Greater(Ref($close, 1)-$close, 0), 5))/(Sum(Abs($close-Ref($close, 1)), 5)+1e-12)
+  - (Sum(Greater($close-Ref($close, 1), 0), 10)-Sum(Greater(Ref($close, 1)-$close, 0), 10))/(Sum(Abs($close-Ref($close, 1)), 10)+1e-12)
+  - (Sum(Greater($close-Ref($close, 1), 0), 20)-Sum(Greater(Ref($close, 1)-$close, 0), 20))/(Sum(Abs($close-Ref($close, 1)), 20)+1e-12)
+  - (Sum(Greater($close-Ref($close, 1), 0), 30)-Sum(Greater(Ref($close, 1)-$close, 0), 30))/(Sum(Abs($close-Ref($close, 1)), 30)+1e-12)
+  - (Sum(Greater($close-Ref($close, 1), 0), 60)-Sum(Greater(Ref($close, 1)-$close, 0), 60))/(Sum(Abs($close-Ref($close, 1)), 60)+1e-12)
+
+  # ── Market value / fundamental ──
+  - $total_mv
+  - $circ_mv
+  - $total_assets
+  - $equity
+
+  # ── Money flow ──
+  - $net_inflow
+  - $big_inflow
+  - $lend_sell_volume
+  - $lend_repay_volume
+
+  # ── Liquidity (computed) ──
+  - amount_log
+  - amount_zscore_20
+  - volume_shock_3
+  - volume_shock_5
+  - turnover_acceleration
+
+  # ── Microstructure (computed) ──
+  - close_pos_in_range
+  - open_pos_in_range
+  - upper_shadow_ratio
+  - lower_shadow_ratio
+  - intraday_reversal_strength
+
+  # ── Tradability ──
+  - is_limit_up
+  - is_limit_down
+  - limit_up_count_5d
+  - opened_from_limit_up
+  - tradability_score
+
+  # ── Relative strength (computed) ──
+  - ret_1d
+  - ret_3d
+  - ret_5d
+  - ret_1d_rank
+  - ret_3d_rank
+  - ret_5d_rank
+  - stock_minus_index_ret_3d
+  - stock_minus_index_ret_5d
+
+  # ── Industry context (computed) ──
+  - industry_ret_1d
+  - industry_ret_3d
+  - industry_ret_5d
+  - industry_breadth
+  - stock_minus_industry_ret
+  - stock_minus_industry_ret_3d
+  - stock_minus_industry_ret_5d
+
+  # ── Regime (computed) ──
+  - market_breadth
+  - limit_up_breadth
+  - index_volatility_5
+  - index_volatility_10
+  - index_volatility_20
+  - market_trend_strength
+  - small_vs_large_strength
+  - growth_vs_value_proxy
+
+  # ── Fundamental (computed) ──
+  - log_mktcap
+  - float_mktcap
+  - gross_margin
+  - debt_to_asset
