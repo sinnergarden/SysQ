@@ -1,0 +1,35 @@
+experiment_id: alpha_v1_mom_vol_raw_5d_smoke
+title: "Alpha V1 Minimal Feature Raw Label 6M Weekly Rolling"
+description: |
+  LightGBM single_label_lightgbm with momentum_price_volume_v1 (6 features),
+  trained against fwd_ret_5d_raw.  Same rolling windows as alpha_v1_raw_5d_smoke
+  for direct comparison — tests whether the 132-feature alpha_v1 set adds
+  predictive value over minimalist momentum/volume features.
+
+calendar:
+  start_date: "2026-01-01"
+  end_date: "2026-06-01"
+  train_window_days: 252
+  step_days: 5
+
+feature_list_id: momentum_price_volume_v1
+
+signal:
+  signal_id: alpha_v1_mom_vol_raw
+  signal_run_id: mom_vol_raw_2026h1
+  score_column: score
+
+generators:
+  - generator_id: lgb_mom_vol
+    type: single_label_lightgbm
+    params:
+      label_id: fwd_ret_5d_raw
+      universe: csi800
+      n_estimators: 200
+
+signal_transforms:
+  - transform_id: raw
+    type: identity
+
+labels:
+  - label_id: fwd_ret_5d_raw
