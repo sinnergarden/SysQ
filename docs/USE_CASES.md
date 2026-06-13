@@ -995,15 +995,21 @@ Research 结果（SignalRun、BacktestRun）产出后无自动机制能晋级到
 strategy_config_id、backtest_id、promotion_pointer_path），但**从未被填入**。
 当前 preopen 走的是 strategy-level config（`--strategy alpha_v1`），不是 promotion pointer。
 
-`data/research/candidates/` 和 `data/research/promotions/` 目录不存在。
-`scripts/promote_candidate.py` 不存在。
+`data/research/candidates/` 和 `data/research/promotions/` 目录尚为空，
+但 `qsys/research/candidate.py` 和 `scripts/promote_candidate.py` 已提供
+create / promote 子命令。`promote_candidate.py create` + `promote` 可生成标准
+candidate artifact 和 shadow promotion pointer，但后续与 DailyRunner
+的自动衔接尚未实现。
+
+已实现：
+
+- Candidate manifest schema + YAML 读写（`qsys/research/candidate.py`）。
+- Promotion pointer 文件（shadow.yaml）的读写机制。
+- `scripts/promote_candidate.py create|promote` CLI 入口。
 
 ### 缺口
 
-- 缺少 Candidate manifest schema（candidate.yaml）。
-- 缺少 promotion pointer 文件（shadow.yaml、production.yaml）的读写机制。
 - 缺少 gating rule evaluator（基于 IC、IR、drawdown、turnover 等指标的晋级判断）。
-- 缺少 `scripts/promote_candidate.py --candidate-config` 或 `--from-backtest` CLI 入口。
 - 缺少 Candidate 冻结语义（shadow 使用中的 candidate 不应在 trading hours 内被更新）。
 - 缺少从 promotion pointer 到 daily ops（UC-8）的自动衔接。
 
