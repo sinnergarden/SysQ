@@ -12,7 +12,12 @@ Usage:
     python scripts/ops/migrate_raw_to_canonical.py     # dry-run
     python scripts/ops/migrate_raw_to_canonical.py --apply   # real run
 """
-from __future__ import annotations
+
+import warnings
+warnings.warn(
+    "DEPRECATED: migrate_raw_to_canonical.py is superseded by UC-standard entrypoints. Scheduled for removal.",
+    DeprecationWarning, stacklevel=2,
+)
 
 import argparse
 import shutil

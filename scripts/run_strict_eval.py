@@ -16,7 +16,12 @@ Key args:
 - --top_k: portfolio breadth (default 5)
 - --no_report: skip JSON run report
 """
-import json
+
+import warnings
+warnings.warn(
+    "DEPRECATED: run_strict_eval.py is superseded by UC-standard entrypoints. Scheduled for removal.",
+    DeprecationWarning, stacklevel=2,
+)
 import sys
 import time
 from pathlib import Path

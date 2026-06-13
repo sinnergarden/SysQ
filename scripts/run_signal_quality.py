@@ -1,3 +1,9 @@
+import warnings
+warnings.warn(
+    "DEPRECATED: run_signal_quality.py is superseded by UC-standard entrypoints. Scheduled for removal.",
+    DeprecationWarning, stacklevel=2,
+)
+
 import argparse
 import json
 import sys
