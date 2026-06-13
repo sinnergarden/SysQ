@@ -2,7 +2,8 @@
 
 See Also
 --------
-docs/contracts/research-artifact-contract.md : required columns and layout
+docs/CONTRACTS.md : required columns and layout
+docs/USE_CASES.md UC-4 : signal research lifecycle
 """
 
 from __future__ import annotations

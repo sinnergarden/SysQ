@@ -225,15 +225,21 @@ list[str] qlib field expressions
 已有：
 
 ```text
-FeatureLibrary
-get_clean_features()
+FeatureLibrary — feature group definitions
+FeatureListRegistry — YAML-based feature list loading
+  FeatureListRegistry.load("alpha_v1_clean_132")
+  → list[str] qlib fields from configs/features/<feature_list_id>.yaml
 ```
+
+FeatureListRegistry（`qsys/feature/registry.py:167`）已能从 `configs/features/` 目录
+加载 YAML 文件并返回 qlib expression list。当前有 2 个 feature config 文件。
 
 ### 缺口
 
-- 缺少外部 YAML feature list registry。
-- 缺少从 `feature_list_id` 到 qlib expression list 的标准解析器。
-- 需要让研究配置通过 `feature_list_id` 引用 feature 集合。
+- 缺 CLI entrypoint for feature list inspection / validation。
+- 缺 schema validation for feature YAML 文件。
+- 缺 feature metadata / governance（定义、表达式溯源、预期取值区间）。
+- 研究配置中 `feature_list_id` 的引用校验尚不严格。
 
 ---
 
@@ -280,15 +286,19 @@ data/research/labels/<label_id>/manifest.json
 已有：
 
 ```text
-compute_labels.py
+scripts/compute_labels.py --config configs/labels/<label_id>.yaml
 LabelStore
+LabelStore.compute_and_save_from_config()
 ```
+
+`scripts/compute_labels.py --config` 和 `LabelStore.compute_and_save_from_config()`
+已实现在 `configs/labels/` 目录配置 label 并计算。当前有 3 个 label YAML 文件。
 
 ### 缺口
 
-- 需要支持 Label YAML 配置。
-- 需要 Label Registry 管理公式、horizon、normalization、universe。
-- 需要 manifest 固化 Label 配置和生成时间范围。
+- 配置样例不足（当前仅 v1 labels，缺不同 horizon / normalization 的配置）。
+- 缺 schema enforcement for label YAML。
+- 缺 label registry / governance 追踪。
 
 ---
 
@@ -371,16 +381,21 @@ data/research/experiments/<experiment_id>/matrix_jobs.csv
 已有：
 
 ```text
-SignalResearchPipeline
-RollingResearchConfig
+scripts/run_research.py --config configs/research/<config>.yaml
+qsys/research/signal_pipeline.py :: SignalResearchPipeline
+qsys/research/rolling_config.py :: RollingResearchConfig
+SignalResearchPipeline — fully functional
 ```
+
+`scripts/run_research.py` 和 `SignalResearchPipeline` 已可用。当前有 9 个 research
+config 文件（包括 lightgbm, dnn, momentum_reversal_blend, rolling_matrix 等）。
 
 ### 缺口
 
-- 缺少 `scripts/run_research.py`。
-- Feature List 尚未完全接入 generator 训练流程。
-- 需要规范 research config schema。
-- 需要明确 matrix experiment 与 hyperparameter search 的配置展开方式。
+- Research config schema 无强制校验（field typo 或缺失需运行时才能暴露）。
+- Generator registry 使用 if/elif 硬编码链（`matrix_job.py:_create_generator_from_config`），
+  需插件化注册机制。
+- Matrix / hyperparameter 配置治理仍需增强。
 
 ---
 
@@ -446,14 +461,22 @@ data/research/experiments/<experiment_id>/analytics/
 已有：
 
 ```text
-SignalAnalytics
+scripts/run_signal_analytics.py [--experiment-id | --signal-id + --signal-run-id + --label-id]
+qsys/research/signal_analytics.py :: SignalAnalytics
 ```
+
+`scripts/run_signal_analytics.py` 已实现。支持通过 `--experiment-id` 自动解析
+SignalRunRef 和 Label，也支持显式指定 `--signal-id --signal-run-id --label-id`。
+IC / RankIC / ICIR 查询和比较功能可用。
 
 ### 缺口
 
-- 缺少 `scripts/run_signal_analytics.py`。
-- 需要支持从 `experiment_id` 自动解析 SignalRunRef 和 Label。
-- 需要统一 analytics 输出路径。
+- `qsys/research/signal_analytics.py` 与 `qsys/research/evaluation.py` 存在两套
+  并行 IC 计算实现，语义未统一：
+  - `evaluation.py` 的 `join_signal_label` + grouped IC 计算
+  - `signal_analytics.py` 的 DuckDB SQL-driven IC / RankIC 查询
+- 需要统一的 IC contract：min_count、NaN/null 过滤、rank method、
+  valid daily count、ICIR std 口径。
 
 ---
 
@@ -548,7 +571,15 @@ date_range:
 
 ### 标准入口
 
-目标 CLI：
+已有 CLI（直接消费 SignalRunRef）：
+
+```bash
+python scripts/research/backtest_from_signal.py \
+  --signal-id <signal_id> --signal-run-id <signal_run_id> \
+  --start-date 2024-01-01 --end-date 2025-12-31
+```
+
+目标 CLI（config-driven，`configs/backtest/` 尚未准备好）：
 
 ```bash
 python scripts/run_backtest.py --config configs/backtest/lgbm_csi800_10d_top20.yaml
@@ -569,12 +600,24 @@ data/research/backtests/<strategy_run_id>/<backtest_id>/fills.csv
 已有：
 
 ```text
-BacktestRunner.run_from_signal_cache
+scripts/research/backtest_from_signal.py — consumes SignalRunRef
+scripts/run_backtest.py — dispatcher for backtest configs
+qsys/backtest/engine.py    — BacktestEngine.run()
+qsys/backtest/strategy_runner.py :: BacktestRunner
+  BacktestRunner.run_range()
+  BacktestRunner.run_from_signal_cache()
 ```
+
+`scripts/research/backtest_from_signal.py` 已可消费 SignalRunRef 运行回测。
+`scripts/run_backtest.py` 存在但 `--config configs/backtest/*.yaml` 路径尚未完善
+（`configs/backtest/` 目录不存在）。
 
 ### 缺口
 
-- `run_backtest.py` 需要支持 config-driven SignalRunRef 模式。
+- `configs/backtest/` 目录和 YAML 配置尚不存在。
+- BacktestRunner 中存在两套 daily-loop 实现（`run_range` vs `run_from_signal_cache`），
+  约 340 行近乎重复的周频判断、行情拉取、execute_trade_day 逻辑，违反了
+  ARCHITECTURE.md §3.3 "shared execution kernel" 不变式。
 - 需要 benchmark-aware metrics。
 - 需要更标准的 backtest manifest schema。
 
@@ -627,16 +670,26 @@ constraints:
 
 ### 标准入口
 
-Planned canonical entrypoint:
+已有 CLI：
+
+```bash
+python scripts/run_daily.py --strategy <strategy_id> --mode preopen --trade-date <YYYY-MM-DD>
+python scripts/run_daily.py --strategy <strategy_id> --mode postclose --trade-date <YYYY-MM-DD>
+python scripts/run_daily_batch.py --stage candidate --mode preopen --trade-date <YYYY-MM-DD>
+```
+
+`scripts/run_daily.py` 的 preopen/postclose/train 模式已在生产使用（通过 systemd timer），
+末尾写入 `daily_manifest.json`。`--triggered-by` 已穿透到 manifest。
+
+未实现目标：
 
 ```bash
 python scripts/run_daily.py --strategy <strategy_id> --mode preopen --run-mode shadow --trade-date <YYYY-MM-DD>
 python scripts/run_daily.py --strategy <strategy_id> --mode postclose --run-mode shadow --trade-date <YYYY-MM-DD>
 ```
 
-Non-existent today; `scripts/run_daily.py` exists but its `--mode` semantics
-(preopen / postclose / train) predate UC-8 and do not conform to the
-promotion-pointer-driven, manifest-tracked design described here.
+`--run-mode` CLI 参数尚未开放。当前路径为 strategy-level config 驱动，
+非 promotion-pointer-driven 设计。
 
 ### 工作流
 
@@ -698,18 +751,29 @@ promotion pointer / hard block / idempotency still pending.
 字段（candidate_id、signal_run_id、strategy_config_id、backtest_id）。
 `DailyRunner.run_preopen/postclose` 末尾写入 `daily_manifest.json`。
 
-当前运行路径（preopen/postclose/train）已增强 manifest，但入口尚无 `--run-mode` CLI 参数，
-promotion pointer 解析和 hard block conditions 尚未实现。
+已实现：
+- `daily_manifest.json` scaffold（`qsys/ops/daily_artifacts.py :: write_daily_manifest()`）
+- `triggered_by` 已穿透到 daily_manifest（`run_daily.py --triggered-by` 参数）
+- Health check 已沉入 `qsys/ops/daily_health.py`（data freshness、feature readiness、model pointer）
+- 遗留 `scripts/ops/run_shadow_daily.py` 已废弃（已添加 DeprecationWarning，功能迁至 `run_daily_batch.py`）
+
+仍未完成：
+- `scripts/run_daily.py` 尚无 `--run-mode` CLI 参数（`DailyRunContext` 有字段但 CLI 未暴露）。
+- Promotion pointer 解析和 hard block conditions 尚未实现。
+- 缺少标准化的 TargetPortfolio / OrderIntent schema 和幂等校验。
+- 缺少 pre-trade lot-size 和停牌/涨跌停校验。
+- 缺少 shadow fills 的仿真执行引擎与真实成交回填的双模式。
+- 跨阶段 manifest 合并（preopen/postclose 各自写单阶段状态，缺合并）。
 
 ### 缺口
 
 - 需要 promotion pointer 驱动的 daily signal selection（当前 run_daily.py 使用 strategy-level config）。
+- 需要 `--run-mode` CLI 参数暴露（`DailyRunContext.run_mode` 已有但 CLI 未开放）。
 - 需要标准化的 TargetPortfolio / OrderIntent schema 和幂等校验。
 - 需要 pre-trade lot-size 和停牌/涨跌停校验。
 - 需要 shadow fills 的仿真执行引擎与真实成交回填的双模式。
-- 需要完善 stage_status 追踪：当前 preopen/postclose 结束时各自写入单阶段状态，缺跨阶段 manifest 合并。
-- `scripts/ops/run_shadow_daily.py` 已废弃（迁移至 `run_daily_batch.py`），其 health check 逻辑已沉入 `qsys/ops/daily_health.py`。
-- 当前 `run_daily.py` 的 `--mode preopen|postclose|train` 语义需要重构或扩展为 shadow-specific mode。
+- 需要跨阶段 manifest 合并（当前 preopen/postclose 结束时各自写入单阶段状态）。
+- 需要 hard block condition 检测框架（missing promotion pointer、duplicate run、stale data 等）。
 
 ---
 
@@ -874,6 +938,8 @@ NOT IMPLEMENTED — 当前文档定义目标的 UC-9 语义。`scripts/run_daily
 的 preopen/postclose 模式提供早期每日运行能力但不满足生产级 guardrails、
 promotion-pointer、hard-block 和 ledger-first 要求。
 
+`live/` 目录包含早期实盘方向代码，但属于 legacy / early implementation，不构成 UC-9 完成。
+
 ### 缺口
 
 - 需要 production promotion pointer 驱动。
@@ -922,13 +988,24 @@ python scripts/promote_candidate.py --config configs/promotion/cand_lgbm_csi800_
 
 ### 当前状态
 
-NOT IMPLEMENTED
+NOT IMPLEMENTED — **这是当前 Research → Backtest → Shadow 整条链路的最大断点**。
+
+Research 结果（SignalRun、BacktestRun）产出后无自动机制能晋级到 shadow daily。
+`DailyRunContext` 已定义了 identity lineage 字段（candidate_id、signal_run_id、
+strategy_config_id、backtest_id、promotion_pointer_path），但**从未被填入**。
+当前 preopen 走的是 strategy-level config（`--strategy alpha_v1`），不是 promotion pointer。
+
+`data/research/candidates/` 和 `data/research/promotions/` 目录不存在。
+`scripts/promote_candidate.py` 不存在。
 
 ### 缺口
 
-- 缺少 Candidate manifest。
-- 缺少 promotion pointer。
-- 缺少 gating rule evaluator。
+- 缺少 Candidate manifest schema（candidate.yaml）。
+- 缺少 promotion pointer 文件（shadow.yaml、production.yaml）的读写机制。
+- 缺少 gating rule evaluator（基于 IC、IR、drawdown、turnover 等指标的晋级判断）。
+- 缺少 `scripts/promote_candidate.py --candidate-config` 或 `--from-backtest` CLI 入口。
+- 缺少 Candidate 冻结语义（shadow 使用中的 candidate 不应在 trading hours 内被更新）。
+- 缺少从 promotion pointer 到 daily ops（UC-8）的自动衔接。
 
 ---
 
