@@ -1,8 +1,0 @@
-data_sync_id: csi800_daily_sync
-universe: csi800
-mode: incremental
-tasks:
-  daily_bar: true
-  qlib_bin: true
-execution:
-  apply: false
