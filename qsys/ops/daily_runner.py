@@ -265,6 +265,7 @@ class DailyRunner:
             strategy_config_id=ctx.strategy_config_id,
             backtest_id=ctx.backtest_id,
             promotion_pointer_path=ctx.promotion_pointer_path,
+            triggered_by=ctx.triggered_by,
             debug_run=ctx.debug_run,
             stage_status=stage_status,
         )
@@ -449,6 +450,7 @@ class DailyRunner:
             strategy_config_id=ctx.strategy_config_id,
             backtest_id=ctx.backtest_id,
             promotion_pointer_path=ctx.promotion_pointer_path,
+            triggered_by=ctx.triggered_by,
             debug_run=ctx.debug_run,
             stage_status=stage_status,
         )

@@ -130,10 +130,12 @@ def _handle_confirm(base_dir: Path, chat_id: str, command_name: str, timeout: in
     _clear_pending(base_dir, chat_id)
     if command_name == "daily":
         script = "scripts/run_daily_batch.py"
-        args = ["--stage", "candidate", "--mode", "preopen", "--trade-date", "auto"]
+        args = ["--stage", "candidate", "--mode", "preopen",
+                "--trade-date", "auto", "--triggered-by", "telegram"]
     else:
         script = "scripts/run_daily_batch.py"
-        args = ["--stage", "candidate", "--mode", "train"]
+        args = ["--stage", "candidate", "--mode", "train",
+                "--triggered-by", "telegram"]
     proc = _run_command(
         base_dir,
         [str(base_dir / ".envs" / "test" / "bin" / "python"), script, *args, "--output-root", "."],

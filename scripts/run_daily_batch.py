@@ -92,6 +92,7 @@ def _build_command(
     debug_run: bool = False,
     no_notify: bool = False,
     output_root: str | None = None,
+    triggered_by: str = "manual",
 ) -> list[str]:
     """Build the subprocess argv for dispatching a single strategy."""
     cmd = [
@@ -115,6 +116,8 @@ def _build_command(
     if output_root:
         out_dir = str(Path(output_root) / trade_date / strategy_id)
         cmd.extend(["--output-dir", out_dir])
+    if triggered_by and triggered_by != "manual":
+        cmd.extend(["--triggered-by", triggered_by])
     return cmd
 
 
@@ -141,6 +144,7 @@ def run_batch(
     continue_on_error: bool = True,
     fail_fast: bool = False,
     allow_production: bool = False,
+    triggered_by: str = "manual",
 ) -> dict:
     """Execute a daily batch for all strategies matching *stage*.
 
@@ -205,7 +209,7 @@ def run_batch(
         return _build_summary(
             stage=stage, mode=mode, trade_date=trade_date_resolved,
             started_at=started_at, finished_at=finished_at,
-            status="blocked", strategy_results=[], output_root=output_root,
+            status="blocked", strategy_results=[], output_root=output_root, triggered_by=triggered_by,
         )
 
     if fail_fast and continue_on_error:
@@ -235,7 +239,7 @@ def run_batch(
             stage=stage, mode=mode, trade_date=trade_date_resolved,
             started_at=started_at, finished_at=finished_at,
             status="skipped", strategy_results=strategy_results,
-            output_root=output_root,
+            output_root=output_root, triggered_by=triggered_by,
         )
 
     print(f"\n{'=' * 60}")
@@ -254,7 +258,7 @@ def run_batch(
             cmd = _build_command(
                 spec.strategy_id, mode, trade_date_resolved,
                 debug_run=debug_run, no_notify=no_notify,
-                output_root=output_root,
+                output_root=output_root, triggered_by=triggered_by,
             )
             preview = _command_preview(cmd)
             print(f"  [{spec.strategy_id}] {preview}")
@@ -273,13 +277,13 @@ def run_batch(
                     "command": _command_preview(_build_command(
                         s.strategy_id, mode, trade_date_resolved,
                         debug_run=debug_run, no_notify=no_notify,
-                        output_root=output_root,
+                        output_root=output_root, triggered_by=triggered_by,
                     )),
                     "error": None,
                 }
                 for s in specs
             ],
-            output_root=output_root,
+            output_root=output_root, triggered_by=triggered_by,
         )
 
     # ── Dispatch ─────────────────────────────────────────────────────
@@ -288,7 +292,7 @@ def run_batch(
         cmd = _build_command(
             spec.strategy_id, mode, trade_date_resolved,
             debug_run=debug_run, no_notify=no_notify,
-            output_root=output_root,
+            output_root=output_root, triggered_by=triggered_by,
         )
         preview = _command_preview(cmd)
 
@@ -416,7 +420,7 @@ def run_batch(
         success_count=success_count,
         failed_count=failed_count,
         skipped_count=skipped_count,
-        output_root=output_root,
+        output_root=output_root, triggered_by=triggered_by,
     )
 
     # Write summary to disk
@@ -542,6 +546,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--allow-production", action="store_true", default=False,
         help="Allow production-stage dispatch (required for --stage production)",
     )
+    parser.add_argument(
+        "--triggered-by", default="manual",
+        help="调用来源标识 (manual / scheduler / systemd / telegram / agent)",
+    )
     return parser
 
 
@@ -569,6 +577,7 @@ def main() -> None:
         continue_on_error=args.continue_on_error,
         fail_fast=args.fail_fast,
         allow_production=args.allow_production,
+        triggered_by=args.triggered_by,
     )
     print(json.dumps(summary, indent=2, ensure_ascii=False, default=str))
 

@@ -51,6 +51,7 @@ def write_daily_manifest(
     strategy_config_id: str | None = None,
     backtest_id: str | None = None,
     promotion_pointer_path: str | None = None,
+    triggered_by: str = "manual",
     debug_run: bool = False,
     stage_status: dict[str, str] | None = None,
     extra: dict[str, Any] | None = None,
@@ -85,6 +86,7 @@ def write_daily_manifest(
         manifest["backtest_id"] = backtest_id
     if promotion_pointer_path:
         manifest["promotion_pointer_path"] = promotion_pointer_path
+    manifest["triggered_by"] = triggered_by
     if stage_status:
         manifest["stage_status"] = stage_status
     if extra:
