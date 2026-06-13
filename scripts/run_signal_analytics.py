@@ -36,14 +36,15 @@ def main():
         if args.experiment_id:
             refs, lids = _resolve_manifest(args.experiment_id, args.research_root)
             print(f"Experiment: {args.experiment_id}")
+            if lids: print(f"  Labels: {lids}")
             for sid, srid in refs.items():
                 print(f"\n--- {sid} / {srid} vs {lids} ---")
-                ic = sa.compute_ic_matrix(signal_ids=[sid], signal_run_ids=[srid], label_ids=lids if lids else None, start_date=args.start_date, end_date=args.end_date, min_count=args.min_count)
+                ic = sa.compute_ic_matrix(signal_ids=[sid], signal_run_ids={sid: srid} if srid else None, label_ids=lids if lids else None, start_date=args.start_date, end_date=args.end_date, min_count=args.min_count)
                 if ic is not None and not ic.empty: print(ic.to_string(index=False))
         elif args.signal_id and args.label_id:
-            srids = [args.signal_run_id] if args.signal_run_id else None
+            signal_run_ids = {args.signal_id: args.signal_run_id} if args.signal_run_id else None
             print(f"\n--- IC: {args.signal_id} vs {args.label_id} ---")
-            ic = sa.compute_ic_matrix(signal_ids=[args.signal_id], signal_run_ids=srids, label_ids=[args.label_id], start_date=args.start_date, end_date=args.end_date, min_count=args.min_count)
+            ic = sa.compute_ic_matrix(signal_ids=[args.signal_id], signal_run_ids=signal_run_ids, label_ids=[args.label_id], start_date=args.start_date, end_date=args.end_date, min_count=args.min_count)
             if ic is not None and not ic.empty: print(ic.to_string(index=False))
         if args.output_dir:
             Path(args.output_dir).mkdir(parents=True, exist_ok=True)
