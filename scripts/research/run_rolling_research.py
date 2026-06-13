@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Run a rolling research pipeline from a config file.
 
+import warnings; warnings.warn("Use scripts/run_research.py instead (UC-4)", DeprecationWarning, stacklevel=2)
 Usage::
 
     python scripts/research/run_rolling_research.py \\

@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from qsys.research.paths import ResearchPaths
@@ -260,6 +261,88 @@ class LabelStore:
             return self._resolve_data_path(label_id, must_exist=False) is not None
         except Exception:
             return False
+
+    # ── Config-driven computation ──────────────────────────────────
+
+    def compute_and_save_from_config(
+        self,
+        config: dict[str, Any],
+        *,
+        overwrite: bool = False,
+    ) -> Path:
+        """Compute and save a label from a YAML config dict.
+
+        Supported formula types:
+            ``forward_return`` — ``shift(-horizon) / price - 1``
+
+        Supported normalizations:
+            ``cs_zscore`` — cross-sectional zscore, optional clip
+        """
+        label_id = str(config["label_id"])
+        formula = config.get("formula", {})
+        ftype = formula.get("type", "forward_return")
+        horizon = int(formula.get("horizon", 5))
+        price_field = str(formula.get("price", "close"))
+        norm = config.get("normalization", {})
+        norm_type = str(norm.get("type", "")) if norm else ""
+        clip_val = float(norm["clip"]) if norm and "clip" in norm else None
+        universe = str(config.get("universe", "csi300"))
+        date_range = config.get("date_range", {})
+        start = str(date_range.get("start_date", "2018-01-01"))
+        end = str(date_range.get("end_date", "2026-01-01"))
+
+        from qsys.data.adapter import QlibAdapter  # noqa: PLC0415
+
+        adapter = QlibAdapter()
+        adapter.init_qlib()
+
+        raw = adapter.get_features(
+            universe, [f"${price_field}"],
+            start_time=start, end_time=end,
+        )
+        if raw is None or raw.empty:
+            raise ValueError(f"No {price_field} data for {universe} {start} → {end}")
+        frame = raw.reset_index().rename(columns={"datetime": "trade_date"})
+        frame["trade_date"] = frame["trade_date"].astype(str).str[:10]
+
+        if ftype == "forward_return":
+            shifted = frame.groupby("instrument")[f"${price_field}"].transform(
+                lambda s: s.shift(-horizon)
+            )
+            fwd = shifted / frame[f"${price_field}"] - 1.0
+        else:
+            raise ValueError(f"Unsupported formula type: {ftype}")
+
+        result = pd.DataFrame({
+            "trade_date": frame["trade_date"],
+            "instrument": frame["instrument"],
+            "label_id": label_id,
+            "horizon": horizon,
+            "label_value": fwd.astype(np.float32),
+        })
+        result = result.dropna(subset=["label_value"]).reset_index(drop=True)
+
+        if norm_type == "cs_zscore":
+            valid = result.copy()
+            grp = valid.groupby("trade_date")["label_value"]
+            valid["label_value"] = grp.transform(
+                lambda s: (s - s.mean()) / s.std().clip(lower=1e-12)
+            )
+            if clip_val is not None:
+                valid["label_value"] = valid["label_value"].clip(-clip_val, clip_val)
+            result = valid
+
+        mf = {
+            "horizon": horizon,
+            "universe": universe,
+            "formula": config.get("formula", {}),
+            "normalization": config.get("normalization", {}),
+            "prediction_start": start,
+            "prediction_end": end,
+            "coverage": round(len(result) / max(len(frame["trade_date"].unique()) * len(frame["instrument"].unique()), 1), 4),
+        }
+        mf.update(config.get("manifest", {}))
+        return self.save_labels(label_id, result, manifest=mf, overwrite=overwrite)
 
     # ── Validation ─────────────────────────────────────────────────
 

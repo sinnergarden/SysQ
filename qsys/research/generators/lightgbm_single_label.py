@@ -48,6 +48,7 @@ class LightGBMSingleLabelGenerator:
     universe: str = "csi300"
     n_estimators: int = 200
     lgb_params: dict | None = None
+    feature_list_id: str | None = None
 
     _qlib_inited: bool = field(default=False, repr=False)
 
@@ -65,11 +66,15 @@ class LightGBMSingleLabelGenerator:
 
     def _load_data(self, start: str, end: str) -> tuple[pd.DataFrame, list[str]]:
         from qsys.data.adapter import QlibAdapter
-        from qsys.feature.registry import get_feature_fields
-        from qsys.strategy.alpha_v1.spec import get_clean_features
+        from qsys.feature.registry import get_feature_fields, FeatureListRegistry
 
-        all_features = get_feature_fields("semantic_all_features")
-        clean = get_clean_features(all_features)
+        if self.feature_list_id:
+            clean = FeatureListRegistry.load(self.feature_list_id)
+            all_features = clean  # Feature list is the full set
+        else:
+            from qsys.strategy.alpha_v1.spec import get_clean_features
+            all_features = get_feature_fields("semantic_all_features")
+            clean = get_clean_features(all_features)
         self._clean_features = clean
 
         adapter = QlibAdapter()

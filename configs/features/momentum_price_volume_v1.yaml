@@ -1,0 +1,10 @@
+# Momentum + Price-Volume feature list
+feature_list_id: momentum_price_volume_v1
+description: "Momentum + price-volume features, no fundamental"
+features:
+  - ret_5d
+  - ret_20d
+  - stock_minus_index_ret_5d
+  - turnover_rate
+  - volume_shock_5
+  - illiquidity

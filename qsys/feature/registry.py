@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from pathlib import Path
+from typing import Any
+
 FEATURE_GROUPS = {
     "microstructure": {
         "enabled_by": "enable_microstructure_features",
@@ -159,3 +162,60 @@ def get_feature_fields(name: str) -> list[str]:
         f"Unknown feature set: '{name}'. "
         f"Known: {list(_FEATURE_SET_METHODS)} + {list(FEATURE_GROUPS)}"
     )
+
+
+class FeatureListRegistry:
+    """Load feature lists from ``configs/features/<feature_list_id>.yaml``.
+
+    Usage::
+
+        feats = FeatureListRegistry.load("momentum_price_volume_v1")
+    """
+
+    _CONFIG_DIR = Path(__file__).resolve().parents[2] / "configs" / "features"
+
+    @classmethod
+    def list_ids(cls) -> list[str]:
+        """Return all available feature list IDs."""
+        if not cls._CONFIG_DIR.exists():
+            return []
+        return sorted(p.stem for p in cls._CONFIG_DIR.glob("*.yaml") if p.stem != "__init__")
+
+    @classmethod
+    def load(cls, feature_list_id: str) -> list[str]:
+        """Load a feature list from ``configs/features/<feature_list_id>.yaml``.
+
+        Returns a list of feature short names (resolved by
+        ``get_feature_fields`` if needed).
+
+        Raises ``FileNotFoundError`` if the file does not exist.
+        """
+        path = cls._CONFIG_DIR / f"{feature_list_id}.yaml"
+        if not path.exists():
+            raise FileNotFoundError(
+                f"Feature list '{feature_list_id}' not found at {path}. "
+                f"Available: {cls.list_ids()}"
+            )
+        import yaml  # noqa: PLC0415
+        data: dict[str, Any] = yaml.safe_load(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError(f"Feature list YAML must be a dict, got {type(data).__name__}")
+        features: list[str] = data.get("features", [])
+        if not isinstance(features, list):
+            raise ValueError(f"Feature list YAML 'features' must be a list, got {type(features).__name__}")
+        # Resolve each entry: if it's a known named set, expand; otherwise keep as-is
+        resolved: list[str] = []
+        for f in features:
+            if isinstance(f, str) and f.startswith("$"):
+                # Named reference, e.g. "$semantic_all_features"
+                resolved.extend(get_feature_fields(f[1:]))
+            else:
+                resolved.append(str(f))
+        # Deduplicate preserving order
+        seen: set[str] = set()
+        unique: list[str] = []
+        for f in resolved:
+            if f not in seen:
+                seen.add(f)
+                unique.append(f)
+        return unique

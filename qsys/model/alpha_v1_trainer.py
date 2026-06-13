@@ -18,7 +18,7 @@ from typing import Any
 
 from qsys.model.training import TrainingResult
 
-_TRAIN_SCRIPT = "scripts/run_alpha_v1_weekly_train.py"
+_TRAIN_SCRIPT = "scripts/run_daily.py"
 
 
 def _discover_artifacts(project_root: Path, model_dir_str: str) -> dict[str, str]:
