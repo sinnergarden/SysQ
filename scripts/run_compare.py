@@ -12,6 +12,14 @@ Note:
 - keep for research/debug use; do not treat as production workflow.
 """
 
+import warnings
+warnings.warn(
+    "DEPRECATED: run_compare.py is an exploratory tool with no operational "
+    "use case. Use UC-5 SignalAnalytics or UC-7 backtest from config instead. "
+    "Scheduled for removal.",
+    DeprecationWarning, stacklevel=2,
+)
+
 import pandas as pd
 import matplotlib.pyplot as plt
 import sys

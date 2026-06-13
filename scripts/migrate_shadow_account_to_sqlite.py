@@ -12,6 +12,14 @@ Idempotent: safe to run multiple times.
 """
 from __future__ import annotations
 
+import warnings
+warnings.warn(
+    "DEPRECATED: migrate_shadow_account_to_sqlite.py is a one-time migration "
+    "script. Shadow CSV/JSON migration to SQLite ledger is complete. "
+    "Scheduled for removal.",
+    DeprecationWarning, stacklevel=2,
+)
+
 import argparse
 import sys
 from pathlib import Path

@@ -9,6 +9,14 @@ except for run_id and timestamps.
 """
 from __future__ import annotations
 
+import warnings
+warnings.warn(
+    "DEPRECATED: replay_alpha_v1_5day.py is a one-time comparison tool. "
+    "Use UC-7 backtest_from_signal.py for reproducible backtests instead. "
+    "Scheduled for removal.",
+    DeprecationWarning, stacklevel=2,
+)
+
 import csv
 import hashlib
 import json

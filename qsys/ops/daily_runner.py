@@ -24,7 +24,7 @@ from qsys.ops.commit_guard import (
     committing_marker,
     is_execution_committed,
 )
-from qsys.ops.daily_artifacts import archive_execution, save_run_meta
+from qsys.ops.daily_artifacts import archive_execution, save_run_meta, write_daily_manifest
 from qsys.ops.mtm import (
     StaleDataError,
     check_stale_prices,
@@ -253,6 +253,22 @@ class DailyRunner:
             )
             strategy.send_notification(msg)
 
+        # Write daily manifest (UC-8/UC-9 identity lineage)
+        stage_status = {"preopen": "skipped" if rebalance_skipped else "completed"}
+        write_daily_manifest(
+            run_root,
+            trade_date=ctx.trade_date, mode="preopen",
+            strategy_id=ctx.strategy_id, account_id=ctx.account_id,
+            execution_mode=ctx.execution_mode,
+            candidate_id=ctx.candidate_id,
+            signal_run_id=ctx.signal_run_id,
+            strategy_config_id=ctx.strategy_config_id,
+            backtest_id=ctx.backtest_id,
+            promotion_pointer_path=ctx.promotion_pointer_path,
+            debug_run=ctx.debug_run,
+            stage_status=stage_status,
+        )
+
         elapsed = time.time() - t0
         print(f"\n✅ Pre-open {ctx.trade_date} completed in {elapsed:.0f}s")
 
@@ -415,6 +431,27 @@ class DailyRunner:
                 stale_check=stale_check,
             )
             strategy.send_notification(msg)
+
+        # Write daily manifest (UC-8/UC-9 identity lineage)
+        stage_status = {"preopen": "completed" if has_plan else "skipped",
+                        "postclose": "completed"}
+        if already_committed and not ctx.force_rerun:
+            stage_status["postclose"] = "skipped_idempotent"
+        elif has_skip:
+            stage_status["postclose"] = "skipped_no_execution"
+        write_daily_manifest(
+            run_root,
+            trade_date=ctx.trade_date, mode="postclose",
+            strategy_id=ctx.strategy_id, account_id=ctx.account_id,
+            execution_mode=ctx.execution_mode,
+            candidate_id=ctx.candidate_id,
+            signal_run_id=ctx.signal_run_id,
+            strategy_config_id=ctx.strategy_config_id,
+            backtest_id=ctx.backtest_id,
+            promotion_pointer_path=ctx.promotion_pointer_path,
+            debug_run=ctx.debug_run,
+            stage_status=stage_status,
+        )
 
         elapsed = time.time() - t0
         print(f"\n✅ Post-close {ctx.trade_date} completed in {elapsed:.0f}s")
