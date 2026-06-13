@@ -36,10 +36,16 @@ class DailyRunContext:
 
     # UC-8/UC-9 identity lineage (promotion-pointer-driven daily ops)
     candidate_id: str | None = None
+    candidate_path: str | None = None
+    signal_id: str | None = None
     signal_run_id: str | None = None
     strategy_config_id: str | None = None
+    strategy_template_id: str | None = None
+    strategy_run_id: str | None = None
     backtest_id: str | None = None
     promotion_pointer_path: str | None = None
+    promoted_at: str | None = None
+    promoted_by: str | None = None
 
     # Flags
     debug_run: bool = False
