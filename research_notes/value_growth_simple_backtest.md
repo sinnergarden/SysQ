@@ -2,6 +2,8 @@
 
 > NOT a pull request. Research note only. Do not merge.
 
+This backtest evaluates a **20d rolling rebalance** portfolio driven by a 180d prediction score; it is **not** a literal 180d buy-and-hold simulation. Each period the model re-scores all stocks and rebalances the topK — the 180d horizon is the label the model was trained on, not the holding period.
+
 ## Setup
 
 | Parameter | Value |

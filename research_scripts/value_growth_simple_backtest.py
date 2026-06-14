@@ -26,6 +26,10 @@ Limitations:
   - Industry cap at 25% has minimal effect due to granularity
   - 180d forward return is NOT the same as 20d return;
     this backtest uses actual 20d price change between rebalance dates
+  - Hardcoded Phase 1 artifact paths (SIGNAL_PATH, RUN_ID);
+    update manually if artifacts move or regenerate
+  - Industry cap drops excess names without refill;
+    if cap binds, actual holdings may be below topK
 
 Usage:
   cd <project_root>
