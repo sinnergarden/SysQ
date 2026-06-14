@@ -57,6 +57,20 @@ def write_daily_manifest(
     promotion_pointer_path: str | None = None,
     promoted_at: str | None = None,
     promoted_by: str | None = None,
+    # Attempt versioning
+    attempt_id: str | None = None,
+    attempt_seq: int | None = None,
+    supersedes_attempt_id: str | None = None,
+    rerun_reason: str | None = None,
+    active_attempt: bool = False,
+    # Promotion snapshot
+    promotion_snapshot_path: str | None = None,
+    # Ledger boundary
+    ledger_commit_status: str | None = None,
+    ledger_run_id: str | None = None,
+    ledger_commit_at: str | None = None,
+    ledger_error: str | None = None,
+    # Common
     triggered_by: str = "manual",
     debug_run: bool = False,
     stage_status: dict[str, str] | None = None,
@@ -104,6 +118,29 @@ def write_daily_manifest(
         manifest["promoted_at"] = promoted_at
     if promoted_by:
         manifest["promoted_by"] = promoted_by
+    # Attempt fields
+    if attempt_id:
+        manifest["attempt_id"] = attempt_id
+    if attempt_seq is not None:
+        manifest["attempt_seq"] = attempt_seq
+    if supersedes_attempt_id:
+        manifest["supersedes_attempt_id"] = supersedes_attempt_id
+    if rerun_reason:
+        manifest["rerun_reason"] = rerun_reason
+    manifest["active_attempt"] = active_attempt
+    # Promotion snapshot
+    if promotion_snapshot_path:
+        manifest["promotion_snapshot_path"] = promotion_snapshot_path
+    # Ledger boundary
+    if ledger_commit_status:
+        manifest["ledger_commit_status"] = ledger_commit_status
+    if ledger_run_id:
+        manifest["ledger_run_id"] = ledger_run_id
+    if ledger_commit_at:
+        manifest["ledger_commit_at"] = ledger_commit_at
+    if ledger_error:
+        manifest["ledger_error"] = ledger_error
+    # Common
     manifest["triggered_by"] = triggered_by
     if stage_status:
         manifest["stage_status"] = stage_status

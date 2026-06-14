@@ -47,6 +47,22 @@ class DailyRunContext:
     promoted_at: str | None = None
     promoted_by: str | None = None
 
+    # Attempt versioning (UC-8 rerun semantics)
+    attempt_id: str | None = None
+    attempt_seq: int | None = None
+    supersedes_attempt_id: str | None = None
+    rerun_reason: str | None = None
+    active_attempt: bool = False
+
+    # Promotion snapshot (frozen pointer for the day)
+    promotion_snapshot_path: str | None = None
+
+    # Ledger boundary
+    ledger_commit_status: str | None = None  # not_applicable|pending|committed|failed|blocked
+    ledger_run_id: str | None = None
+    ledger_commit_at: str | None = None
+    ledger_error: str | None = None
+
     # Flags
     debug_run: bool = False
     force_rerun: bool = False
