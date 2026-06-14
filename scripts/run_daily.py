@@ -42,6 +42,15 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from qsys.common.config import load_strategy_config
 from qsys.ops.daily_runner import DailyRunner
+from qsys.ops.attempts import (
+    build_attempt_id,
+    make_active_attempt_payload,
+    next_attempt_seq,
+    read_active_attempt,
+    resolve_promotion_snapshot,
+    snapshot_promotion_pointer,
+    write_active_attempt,
+)
 from qsys.ops.run_context import DailyRunContext, resolve_run_root
 from qsys.ops.promotion_resolver import resolve_shadow_promotion
 from qsys.strategy.registry import create_strategy
@@ -140,7 +149,7 @@ def run_daily_main(argv: list[str] | None = None) -> None:
     runner = DailyRunner()
 
     # ── Resolve shadow promotion pointer (UC-8 lineage) — all modes ───
-    promotion_lineage: dict[str, object] = {}
+    promotion_lineage: dict[str, str | None] = {}
     if args.run_mode == "shadow":
         raw_pointer = args.promotion_pointer or "data/research/promotions/shadow.yaml"
         pointer_path = Path(raw_pointer)
@@ -213,6 +222,70 @@ def run_daily_main(argv: list[str] | None = None) -> None:
         output_dir=Path(args.output_dir) if args.output_dir else None,
     )
 
+    # ── Attempt management + promotion snapshot ──────────────────────
+    attempt_id: str | None = None
+    attempt_seq: int | None = None
+    supersedes_attempt_id: str | None = None
+    active_attempt_val = False
+    promotion_snapshot_path_val: str | None = None
+
+    if args.mode == "preopen":
+        existing = read_active_attempt(run_root) if not args.debug_run else None
+        attempt_seq = next_attempt_seq(run_root)
+
+        if existing and not args.debug_run:
+            if not args.force_rerun:
+                print(
+                    f"⛔ Active attempt {existing.get('attempt_id', '?')} already exists.",
+                    file=sys.stderr,
+                )
+                print(
+                    "   Use --force-rerun --reason to replace the active attempt.",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+            supersedes_attempt_id = existing["attempt_id"]
+
+        if not args.debug_run:
+            attempt_id = build_attempt_id(
+                args.mode, args.run_mode, trade_date, strategy.strategy_id, attempt_seq,
+            )
+            active_attempt_val = True
+            snap_path = snapshot_promotion_pointer(run_root, promotion_lineage)
+            promotion_snapshot_path_val = str(snap_path)
+            active_payload = make_active_attempt_payload(
+                attempt_id, attempt_seq, args.mode, args.run_mode,
+                trade_date, strategy.strategy_id,
+                supersedes_attempt_id=supersedes_attempt_id,
+                rerun_reason=args.reason,
+            )
+            write_active_attempt(run_root, active_payload)
+            print(f"  📝 Active attempt: {attempt_id}")
+        else:
+            attempt_id = build_attempt_id(
+                args.mode, args.run_mode, trade_date, strategy.strategy_id, attempt_seq,
+            )
+            active_attempt_val = False
+            snap_path = snapshot_promotion_pointer(run_root, promotion_lineage)
+            promotion_snapshot_path_val = str(snap_path)
+            print(f"  🔧 Debug attempt: {attempt_id} (not active)")
+
+    elif args.mode == "postclose":
+        active = read_active_attempt(run_root)
+        if active:
+            attempt_id = active.get("attempt_id")
+            attempt_seq = active.get("attempt_seq")
+            promotion_snapshot_path_val = str(run_root / "promotion_snapshot.yaml")
+
+    # ── Build DailyRunContext ────────────────────────────────────────
+    # Default ledger_commit_status per mode
+    if args.mode == "preopen":
+        default_ledger_status = "not_applicable"
+    elif args.debug_run:
+        default_ledger_status = "not_applicable"
+    else:
+        default_ledger_status = "pending"
+
     ctx = DailyRunContext(
         trade_date=trade_date,
         mode=args.mode,
@@ -239,7 +312,45 @@ def run_daily_main(argv: list[str] | None = None) -> None:
         promotion_pointer_path=promotion_lineage.get("promotion_pointer_path"),
         promoted_at=promotion_lineage.get("promoted_at"),
         promoted_by=promotion_lineage.get("promoted_by"),
+        # Attempt fields
+        attempt_id=attempt_id,
+        attempt_seq=attempt_seq,
+        supersedes_attempt_id=supersedes_attempt_id,
+        rerun_reason=args.reason,
+        active_attempt=active_attempt_val,
+        # Promotion snapshot
+        promotion_snapshot_path=promotion_snapshot_path_val,
+        # Ledger boundary
+        ledger_commit_status=default_ledger_status,
     )
+
+    # ── Postclose: override lineage from frozen promotion snapshot ────
+    if args.mode == "postclose":
+        active = read_active_attempt(run_root)
+        if not active:
+            print(
+                "⛔ No active preopen attempt found. Run preopen first.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        snap = resolve_promotion_snapshot(run_root)
+        if snap:
+            for field in (
+                "candidate_id", "candidate_path", "signal_id", "signal_run_id",
+                "strategy_config_id", "strategy_template_id", "strategy_run_id",
+                "backtest_id", "promoted_at", "promoted_by",
+            ):
+                val = snap.get(field)
+                if val is not None:
+                    setattr(ctx, field, val)
+            p_path = snap.get("promotion_pointer_path")
+            if p_path is not None:
+                ctx.promotion_pointer_path = p_path
+            print("  📋 Lineage from promotion snapshot (frozen at preopen)")
+        else:
+            print(
+                "  ⚠ No promotion_snapshot.yaml found — using global pointer lineage",
+            )
 
     # ── Notify-only ──────────────────────────────────────────────────
     if args.notify_only:
@@ -268,6 +379,8 @@ def run_daily_for_strategy(
     reason: str | None = None,
     notify_only: bool = False,
     train_end_date: str | None = None,
+    run_mode: str = "shadow",
+    promotion_pointer: str | None = None,
 ) -> dict:
     """Dispatch DailyRunner for a single strategy, returning a status dict.
 
@@ -291,6 +404,10 @@ def run_daily_for_strategy(
         argv.append("--notify-only")
     if train_end_date:
         argv.extend(["--train-end-date", train_end_date])
+    if run_mode:
+        argv.extend(["--run-mode", run_mode])
+    if promotion_pointer:
+        argv.extend(["--promotion-pointer", promotion_pointer])
 
     try:
         run_daily_main(argv)

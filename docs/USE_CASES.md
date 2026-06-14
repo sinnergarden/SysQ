@@ -762,6 +762,11 @@ promotion pointer / hard block / idempotency still pending.
 - Promotion pointer resolver（`qsys/ops/promotion_resolver.py`）— shadow.yaml 解析 + 字段 11 项校验
 - Hard block：shadow pointer 缺失 / candidate_path 不存在 / production mode → 硬失败
 - manifest lineage 已扩展到全部 UC-8 Identity Lineage 字段（candidate_path、signal_id、strategy_template_id、strategy_run_id、promoted_at、promoted_by）
+- **preopen versioned attempt** — 首次运行生成 attempt_001，无 --force-rerun 时禁止静默替换 active attempt，有 --force-rerun --reason 则生成新 attempt 并 supersedes 旧 attempt
+- **promotion snapshot freeze** — preopen 将全局 shadow.yaml 冻结为 promotion_snapshot.yaml，postclose 优先使用冻结 snapshot，防止同日 candidate 漂移
+- **ledger boundary manifest fields** — manifest 包含 attempt_id/seq/supersedes/rerun_reason/active_attempt/promotion_snapshot_path 以及 ledger_commit_status/ledger_run_id/ledger_commit_at/ledger_error
+- SQLite ledger 已实现并接入 postclose — LedgerService.apply_fills() 原子事务；commit_guard 已有 COMMITTING/COMMITTED marker 和幂等跳过
+- `run_daily_for_strategy()` 已补齐 run_mode/promotion_pointer 参数，结构化调用和 CLI 调用语义一致
 
 仍未完成：
 - Promotion pointer 驱动的 signal selection（当前仍使用 strategy-level config 和 strategy adapter，未强制从 SignalRunRef 消费）。
@@ -769,6 +774,7 @@ promotion pointer / hard block / idempotency still pending.
 - pre-trade lot-size 和停牌/涨跌停校验。
 - shadow fills 的仿真执行引擎与真实成交回填的双模式。
 - 跨阶段 manifest 合并（preopen/postclose 各自写单阶段状态）。
+- legacy shadow CSV/JSON 迁移到 trade.db（双重 SOT 问题）。
 
 ### 缺口
 
