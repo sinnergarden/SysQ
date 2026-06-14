@@ -61,6 +61,14 @@ FEATURE_GROUPS = {
             "stock_minus_index_ret_5d",
             "stock_minus_industry_ret_3d",
             "stock_minus_industry_ret_5d",
+            # value-growth: market_confirmation
+            "ret_20d",
+            "ret_60d",
+            "ret_120d",
+            "volume_ratio_20d",
+            "volume_ratio_60d",
+            "distance_to_120d_high",
+            "distance_to_250d_high",
         ],
     },
     "regime": {
@@ -106,6 +114,16 @@ FEATURE_GROUPS = {
             "profit_yoy",
             "inventory_yoy",
             "ar_yoy",
+            # value-growth: growth_quality
+            "roe_delta_252d",
+            "grossprofit_margin_delta_252d",
+            "debt_to_assets_delta_252d",
+            "op_cashflow_delta_252d",
+            # value-growth: valuation_repair
+            "pe_rank_252d",
+            "pb_rank_252d",
+            "pe_delta_120d",
+            "pb_delta_120d",
         ],
     },
 }

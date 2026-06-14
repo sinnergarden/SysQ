@@ -45,4 +45,40 @@ def build_fundamental_context_features(df: pd.DataFrame) -> pd.DataFrame:
         prev = out.groupby("ts_code")["accounts_receiv"].shift(252)
         out["ar_yoy"] = out["accounts_receiv"] / prev.replace(0, np.nan) - 1
 
+    # ── Value-growth specific: fundamental improvement (252d delta) ──
+    # NOTE: 252d shift is a calendar-day approximation of 4 quarters, NOT
+    # a strict fiscal-period (同比) comparison. Actual fiscal YoY requires
+    # aligning by end_date via ann_date merge_asof — this does not do that.
+    # Use for directional signal only; do not claim exact fiscal changes.
+    _delta_pairs = [
+        ("roe", "roe_delta_252d"),
+        ("grossprofit_margin", "grossprofit_margin_delta_252d"),
+        ("debt_to_assets", "debt_to_assets_delta_252d"),
+        ("op_cashflow", "op_cashflow_delta_252d"),
+    ]
+    for src, dst in _delta_pairs:
+        if src in out.columns:
+            prev = out.groupby("ts_code")[src].shift(252)
+            out[dst] = out[src] - prev
+
+    # ── Valuation percentiles (current value's rank in own 252d history) ──
+    _val_rank_pairs = [
+        ("pe", "pe_rank_252d"),
+        ("pb", "pb_rank_252d"),
+        ("ps_ttm", "ps_rank_252d"),
+    ]
+    for src, dst in _val_rank_pairs:
+        if src in out.columns:
+            out[dst] = out.groupby("ts_code")[src].transform(
+                lambda s: s.rolling(252, min_periods=60).rank(pct=True)
+            )
+
+    # ── Valuation deltas ──
+    if "pe" in out.columns:
+        prev_pe = out.groupby("ts_code")["pe"].shift(120)
+        out["pe_delta_120d"] = out["pe"] - prev_pe
+    if "pb" in out.columns:
+        prev_pb = out.groupby("ts_code")["pb"].shift(120)
+        out["pb_delta_120d"] = out["pb"] - prev_pb
+
     return out

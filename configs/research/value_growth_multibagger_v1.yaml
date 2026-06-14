@@ -14,9 +14,8 @@ title: "Value Growth Multibagger — Long-horizon right-tail return research"
 description: >
   Research baseline for A-share medium-to-long cycle right-tail candidate discovery.
   Single-task LightGBM per horizon on raw forward returns (60d/120d/180d).
-  Uses existing alpha_v1_clean_132 feature set (price/volume/momentum/volatility).
-  No fundamental as-of data yet.  Classification labels (is_top5pct, is_top1pct)
-  and future_max_return labels are not yet implemented — see PR description gaps.
+  Uses value_growth_multibagger_v1_features (3-group: growth_quality,
+  valuation_repair, market_confirmation). No fundamental as-of audit yet — see PR description gaps.
 
 calendar:
   start_date: "2024-06-01"
@@ -28,7 +27,7 @@ signal:
   signal_id: vgb_multibagger_signal
   score_column: score
 
-feature_list_id: alpha_v1_clean_132
+feature_list_id: value_growth_multibagger_v1_features
 
 generators:
   - generator_id: vgb_multibagger
@@ -36,7 +35,7 @@ generators:
     params:
       universe: csi800
       n_estimators: 300
-      feature_list_id: alpha_v1_clean_132
+      feature_list_id: value_growth_multibagger_v1_features
       labels:
         - label_id: fwd_ret_60d_raw
         - label_id: fwd_ret_120d_raw

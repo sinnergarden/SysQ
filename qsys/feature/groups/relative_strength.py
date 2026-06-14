@@ -38,4 +38,16 @@ def build_relative_strength_features(df: pd.DataFrame) -> pd.DataFrame:
         out["stock_minus_industry_ret_3d"] = out["ret_3d"] - out["industry_ret_3d"]
     if "industry_ret_5d" in out.columns:
         out["stock_minus_industry_ret_5d"] = out["ret_5d"] - out["industry_ret_5d"]
+
+    # ── Value-growth: market confirmation (medium/long-horizon) ──
+    out["ret_20d"] = close_grp.pct_change(20)
+    out["ret_60d"] = close_grp.pct_change(60)
+    out["ret_120d"] = close_grp.pct_change(120)
+
+    out["volume_ratio_20d"] = out[volume_col] / vol_grp.transform(lambda s: s.rolling(20).mean()).replace(0, pd.NA)
+    out["volume_ratio_60d"] = out[volume_col] / vol_grp.transform(lambda s: s.rolling(60).mean()).replace(0, pd.NA)
+
+    out["distance_to_120d_high"] = out["close"] / close_grp.transform(lambda s: s.rolling(120).max()) - 1
+    out["distance_to_250d_high"] = out["close"] / close_grp.transform(lambda s: s.rolling(250).max()) - 1
+
     return out

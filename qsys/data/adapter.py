@@ -319,6 +319,7 @@ class QlibAdapter:
             "$op_cashflow",
             "$inventory",
             "$accounts_receiv",
+            "$roe",
         ]
 
     @staticmethod
@@ -361,6 +362,7 @@ class QlibAdapter:
             "$op_cashflow": "op_cashflow",
             "$inventory": "inventory",
             "$accounts_receiv": "accounts_receiv",
+            "$roe": "roe",
         }
         out = out.rename(columns=rename_map)
         if "trade_date" in out.columns:

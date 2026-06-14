@@ -15,7 +15,7 @@ signal:
   signal_id: vgb_multibagger_smoke
   score_column: score
 
-feature_list_id: alpha_v1_clean_132
+feature_list_id: value_growth_multibagger_v1_features
 
 generators:
   - generator_id: vgb_smoke
@@ -23,7 +23,7 @@ generators:
     params:
       universe: csi800
       n_estimators: 50
-      feature_list_id: alpha_v1_clean_132
+      feature_list_id: value_growth_multibagger_v1_features
       labels:
         - label_id: fwd_ret_60d_raw
         - label_id: fwd_ret_120d_raw
