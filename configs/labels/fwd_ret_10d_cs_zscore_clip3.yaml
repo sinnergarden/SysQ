@@ -3,6 +3,8 @@ formula:
   type: forward_return
   horizon: 10
   price: close
+  price_basis: adjusted_close
+  adjustment_factor: factor
 normalization:
   type: cs_zscore
   clip: 3.0

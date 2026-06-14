@@ -1,7 +1,7 @@
-label_id: fwd_ret_5d_raw
+label_id: fwd_ret_10d_raw
 formula:
   type: forward_return
-  horizon: 5
+  horizon: 10
   price: close
   price_basis: adjusted_close
   adjustment_factor: factor

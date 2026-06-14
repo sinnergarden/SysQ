@@ -563,14 +563,26 @@ Label 是从原始行情数据到模型训练目标的标准化 artifact。同�
 
 ### Label IDs
 
-| label_id | horizon | formula | normalization | clip |
-|----------|---------|---------|---------------|------|
-| `fwd_ret_5d_xsz_clip3` | 5 | shift(-5) / close - 1 → cs_zscore | per-date cs_zscore | [-3, 3] |
-| `fwd_ret_20d_xsz_clip3` | 20 | shift(-20) / close - 1 → cs_zscore | per-date cs_zscore | [-3, 3] |
-| `fwd_ret_5d_raw` | 5 | shift(-5) / close - 1 | none | none |
-| `fwd_ret_20d_raw` | 20 | shift(-20) / close - 1 | none | none |
+All forward return labels use **adjusted close** (`$close * $factor`) as the price basis.
+`$close` is the raw (unadjusted) close from the Tushare ``daily`` API.
+`$factor` is the cumulative adjustment factor from the Tushare ``adj_factor`` API.
+The ``raw`` suffix means **no normalization** — it does **not** mean raw (unadjusted) price.
 
-Generator 默认消费 `xsz_clip3` 系列。`raw` 系列仅作历史参考，不保证被 generator 使用。
+| label_id | horizon | formula (price_basis=adjusted_close) | normalization | clip |
+|----------|---------|-|-|-|
+| `fwd_ret_5d_xsz_clip3` | 5 | shift(-5) / adjusted_close - 1 → cs_zscore | per-date cs_zscore | [-3, 3] |
+| `fwd_ret_5d_cs_zscore_clip3` | 5 | shift(-5) / adjusted_close - 1 → cs_zscore | per-date cs_zscore | [-3, 3] |
+| `fwd_ret_5d_raw` | 5 | shift(-5) / adjusted_close - 1 | none | none |
+| `fwd_ret_10d_xsz_clip3` | 10 | shift(-10) / adjusted_close - 1 → cs_zscore | per-date cs_zscore | [-3, 3] |
+| `fwd_ret_10d_cs_zscore_clip3` | 10 | shift(-10) / adjusted_close - 1 → cs_zscore | per-date cs_zscore | [-3, 3] |
+| `fwd_ret_10d_raw` | 10 | shift(-10) / adjusted_close - 1 | none | none |
+| `fwd_ret_20d_xsz_clip3` | 20 | shift(-20) / adjusted_close - 1 → cs_zscore | per-date cs_zscore | [-3, 3] |
+| `fwd_ret_20d_raw` | 20 | shift(-20) / adjusted_close - 1 | none | none |
+| `fwd_ret_60d_raw` | 60 | shift(-60) / adjusted_close - 1 | none | none |
+| `fwd_ret_120d_raw` | 120 | shift(-120) / adjusted_close - 1 | none | none |
+| `fwd_ret_180d_raw` | 180 | shift(-180) / adjusted_close - 1 | none | none |
+
+Generator 默认消费 `xsz_clip3` / `cs_zscore_clip3` 系列。`raw` 系列用于 research generator 的直接训练（generator 内部做 zscore 归一化）。
 
 ### Manifest Semantics
 

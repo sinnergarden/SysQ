@@ -32,6 +32,20 @@ def compute_forward_return(
 ) -> pd.DataFrame:
     """Compute forward return label.
 
+    Price basis is adjusted close (``$close * $factor``) so that dividends,
+    stock splits, and rights issues do not distort the return calculation:
+
+        adjusted_close = close * factor
+        forward_return = shift(-horizon, adjusted_close) / adjusted_close - 1
+
+    ``$close`` is the raw (unadjusted) close from the Tushare ``daily`` API.
+    ``$factor`` is the cumulative adjustment factor from the Tushare
+    ``adj_factor`` API, stored as an independent qlib field.
+
+    The ``raw`` suffix in the label ID means *no normalization*, not
+    *unadjusted price*. All forward return labels use adjusted prices
+    regardless of normalization.
+
     Parameters
     ----------
     norm_type: "" for raw, "cs_zscore" for cross-sectional normalization.
@@ -46,12 +60,17 @@ def compute_forward_return(
     adapter.init_qlib()
 
     price_col = f"${price_field}"
-    raw = adapter.get_features(universe, [price_col], start_time=start, end_time=end)
+    # Fetch both price and adjustment factor — factor is the cumulative
+    # adjustment factor from Tushare (1.0 = no adjustment).
+    raw = adapter.get_features(universe, [price_col, "$factor"], start_time=start, end_time=end)
     frame = raw.reset_index().rename(columns={"datetime": "trade_date"})
     frame["trade_date"] = frame["trade_date"].astype(str).str[:10]
 
-    shifted = frame.groupby("instrument")[price_col].transform(lambda s: s.shift(-horizon))
-    fwd = shifted / frame[price_col] - 1.0
+    # Forward-adjusted close — essential for correct long-horizon returns
+    frame["_adj_price"] = frame[price_col] * frame["$factor"]
+
+    shifted = frame.groupby("instrument")["_adj_price"].transform(lambda s: s.shift(-horizon))
+    fwd = shifted / frame["_adj_price"] - 1.0
     frame["_fwd"] = fwd
 
     suffix = "raw"

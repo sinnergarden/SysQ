@@ -1,0 +1,39 @@
+# value_growth_multibagger_v1_smoke — 快速验证研究管道
+# 仅 2 个 rolling window，用于验证 label 加载、generator 训练、IC 评估。
+
+experiment_id: value_growth_multibagger_v1_smoke
+title: "Value Growth Multibagger Smoke"
+description: "Smoke test: 60d/120d/180d forward return labels via multi_label_lightgbm."
+
+calendar:
+  start_date: "2025-11-01"
+  end_date: "2025-12-31"
+  train_window_days: 252
+  step_days: 20
+
+signal:
+  signal_id: vgb_multibagger_smoke
+  score_column: score
+
+feature_list_id: alpha_v1_clean_132
+
+generators:
+  - generator_id: vgb_smoke
+    type: multi_label_lightgbm
+    params:
+      universe: csi800
+      n_estimators: 50
+      feature_list_id: alpha_v1_clean_132
+      labels:
+        - label_id: fwd_ret_60d_raw
+        - label_id: fwd_ret_120d_raw
+        - label_id: fwd_ret_180d_raw
+
+signal_transforms:
+  - transform_id: daily_zscore
+    type: daily_zscore
+
+labels:
+  - label_id: fwd_ret_60d_raw
+  - label_id: fwd_ret_120d_raw
+  - label_id: fwd_ret_180d_raw

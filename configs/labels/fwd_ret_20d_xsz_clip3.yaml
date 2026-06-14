@@ -1,8 +1,11 @@
-label_id: fwd_ret_5d_raw
+label_id: fwd_ret_20d_xsz_clip3
 formula:
   type: forward_return
-  horizon: 5
+  horizon: 20
   price: close
   price_basis: adjusted_close
   adjustment_factor: factor
+normalization:
+  type: cs_zscore
+  clip: 3.0
 universe: csi800

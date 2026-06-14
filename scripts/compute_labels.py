@@ -59,8 +59,9 @@ def main() -> None:
         store.save_labels(label_id, df, manifest={
             "horizon": h, "universe": args.universe,
             "prediction_start": args.start, "prediction_end": args.end,
-            "formula": f"shift(-{h}) / close - 1, then per-date cs_zscore",
-            "normalization": "cross-sectional zscore", "clip": 3.0,
+            "formula": f"shift(-{h}) / adjusted_close - 1, then per-date cs_zscore",
+            "price_basis": "adjusted_close", "adjustment_factor": "factor",
+            "normalization": "cs_zscore", "clip": 3.0,
             "n_dates": n_dates, "effective_dates": effective_dates, "coverage": round(cov, 4),
         }, overwrite=args.overwrite)
         print(f"  Saved {label_id}")
@@ -71,7 +72,9 @@ def main() -> None:
         store.save_labels(raw_id, df_raw, manifest={
             "horizon": h, "universe": args.universe,
             "prediction_start": args.start, "prediction_end": args.end,
-            "formula": f"shift(-{h}) / close - 1", "normalization": "none",
+            "formula": f"shift(-{h}) / adjusted_close - 1",
+            "price_basis": "adjusted_close", "adjustment_factor": "factor",
+            "normalization": "none",
             "n_dates": n_dates, "effective_dates": effective_dates,
             "coverage": round(coverage(len(df_raw), expected_rows), 4),
         }, overwrite=args.overwrite)
