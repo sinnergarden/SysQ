@@ -1,0 +1,59 @@
+# value_growth_multibagger_v1_features — 3-group feature set for right-tail research
+#
+# Groups:
+#   1. growth_quality: 基本面质量与改善（原始 + 派生 + 252d delta）
+#   2. valuation_repair: 估值修复空间（PE/PB/PS 历史百分位 + 变化方向）
+#   3. market_confirmation: 量价确认（中长周期 return / volume / price pattern）
+#
+# PIT note:
+#   $-prefixed fields are PIT-safe via qlib ann_date forward-fill at data layer.
+#   派生特征基于 shift/rolling，均为 backward-only，无 lookahead。
+#   252d delta 是日历日近似，非严格财报同比。详见 builder 注释。
+
+feature_list_id: value_growth_multibagger_v1_features
+description: "3-group feature set for A-share right-tail multibagger candidate discovery — growth_quality(13) + valuation_repair(6) + market_confirmation(7) = 26"
+
+features:
+  # ═══════════════════════════════════════════════════════════════════
+  # 1. growth_quality — 基本面质量与改善
+  # ═══════════════════════════════════════════════════════════════════
+  - $roe                              # ROE（PIT-safe，fina_indicator 接口）
+  - $grossprofit_margin               # 毛利率
+  - $debt_to_assets                   # 资产负债率
+  - $op_cashflow                      # 经营活动现金流净额
+
+  - operating_cf_to_profit            # 经营现金流 / 净利润
+  - net_margin                        # 净利润 / 营业收入
+  - roa                               # 净利润 / 总资产
+
+  - roe_delta_252d                    # ROE 252d 变化（日频近似，非严格同比）
+  - grossprofit_margin_delta_252d     # 毛利率 252d 变化
+  - debt_to_assets_delta_252d         # 负债率 252d 变化
+  - op_cashflow_delta_252d            # 经营现金流 252d 变化
+  - revenue_yoy                       # 营业收入 YoY（252d shift 近似）
+  - profit_yoy                        # 净利润 YoY（252d shift 近似）
+
+  # ═══════════════════════════════════════════════════════════════════
+  # 2. valuation_repair — 估值修复空间
+  # ═══════════════════════════════════════════════════════════════════
+  - $pe                               # 市盈率 PE（PIT-safe）
+  - $pb                               # 市净率 PB
+
+  - pe_rank_252d                      # PE 在自身 252d 历史中的百分位
+  - pb_rank_252d                      # PB 在自身 252d 历史中的百分位
+
+  - pe_delta_120d                     # PE 近 120d 变化
+  - pb_delta_120d                     # PB 近 120d 变化
+
+  # ═══════════════════════════════════════════════════════════════════
+  # 3. market_confirmation — 量价确认
+  # ═══════════════════════════════════════════════════════════════════
+  - ret_20d                           # 20d 收益
+  - ret_60d                           # 60d 收益
+  - ret_120d                          # 120d 收益
+
+  - volume_ratio_20d                  # 成交量 / 20d 均量
+  - volume_ratio_60d                  # 成交量 / 60d 均量
+
+  - distance_to_120d_high             # 距 120d 最高价的距离
+  - distance_to_250d_high             # 距 250d 最高价的距离
