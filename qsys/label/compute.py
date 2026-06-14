@@ -32,10 +32,19 @@ def compute_forward_return(
 ) -> pd.DataFrame:
     """Compute forward return label.
 
-    Uses forward-adjusted prices (``$close * $factor``) so that dividends,
-    stock splits, and rights issues do not distort the return calculation.
-    ``$factor`` is the cumulative adjustment factor stored as an independent
-    field in the qlib bin (Tushare ``adj_factor`` API, ingested unchanged).
+    Price basis is adjusted close (``$close * $factor``) so that dividends,
+    stock splits, and rights issues do not distort the return calculation:
+
+        adjusted_close = close * factor
+        forward_return = shift(-horizon, adjusted_close) / adjusted_close - 1
+
+    ``$close`` is the raw (unadjusted) close from the Tushare ``daily`` API.
+    ``$factor`` is the cumulative adjustment factor from the Tushare
+    ``adj_factor`` API, stored as an independent qlib field.
+
+    The ``raw`` suffix in the label ID means *no normalization*, not
+    *unadjusted price*. All forward return labels use adjusted prices
+    regardless of normalization.
 
     Parameters
     ----------

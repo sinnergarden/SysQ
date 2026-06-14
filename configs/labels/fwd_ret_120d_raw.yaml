@@ -3,4 +3,6 @@ formula:
   type: forward_return
   horizon: 120
   price: close
+  price_basis: adjusted_close
+  adjustment_factor: factor
 universe: csi800
