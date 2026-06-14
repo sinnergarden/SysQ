@@ -13,11 +13,11 @@ Tested via smoke experiment (2023-2025, 504d rolling, 180d raw label).
 |---------|----------|--------|-----|------|------------|
 | v1 phase1 | 26 | 2023-06 → 2025-12 | 0.2757 | 2.01 | single_label_lightgbm |
 | v1 extended | 26 | 2013 → 2025 | 0.3240 | 2.32 | single_label_lightgbm |
-| **v2 smoke** | **64** | **2023 → 2025** | **0.4132** | **3.59** | single_label_lightgbm |
+| **v2 smoke (after semantic cleanup)** | **64** | **2023 → 2025** | **0.4178** | **3.97** | single_label_lightgbm |
 
 V2 shows ~50% IC improvement over same-period v1 baseline. The improvement is not from overfitting — v2 features capture continuation and repair dynamics that v1's simpler features miss.
 
-## Semantic Fixes Applied (PR #169 amendments)
+## Semantic Fixes Applied in PR #170
 
 | Issue | Fix |
 |-------|-----|
