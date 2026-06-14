@@ -25,18 +25,15 @@ generators:
       n_estimators: 50
       feature_list_id: alpha_v1_clean_132
       labels:
-        - label_id: fwd_ret_60d_cs_zscore_clip3
-        - label_id: fwd_ret_120d_cs_zscore_clip3
-        - label_id: fwd_ret_180d_cs_zscore_clip3
+        - label_id: fwd_ret_60d_raw
+        - label_id: fwd_ret_120d_raw
+        - label_id: fwd_ret_180d_raw
 
 signal_transforms:
   - transform_id: daily_zscore
     type: daily_zscore
 
 labels:
-  - label_id: fwd_ret_60d_cs_zscore_clip3
-  - label_id: fwd_ret_120d_cs_zscore_clip3
-  - label_id: fwd_ret_180d_cs_zscore_clip3
   - label_id: fwd_ret_60d_raw
   - label_id: fwd_ret_120d_raw
   - label_id: fwd_ret_180d_raw

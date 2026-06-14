@@ -13,7 +13,7 @@ experiment_id: value_growth_multibagger_v1
 title: "Value Growth Multibagger — Long-horizon right-tail return research"
 description: >
   Research baseline for A-share medium-to-long cycle right-tail candidate discovery.
-  Multi-task LightGBM on 60d/120d/180d forward returns (cross-sectional z-score).
+  Single-task LightGBM per horizon on raw forward returns (60d/120d/180d).
   Uses existing alpha_v1_clean_132 feature set (price/volume/momentum/volatility).
   No fundamental as-of data yet.  Classification labels (is_top5pct, is_top1pct)
   and future_max_return labels are not yet implemented — see PR description gaps.
@@ -38,20 +38,15 @@ generators:
       n_estimators: 300
       feature_list_id: alpha_v1_clean_132
       labels:
-        - label_id: fwd_ret_60d_cs_zscore_clip3
-        - label_id: fwd_ret_120d_cs_zscore_clip3
-        - label_id: fwd_ret_180d_cs_zscore_clip3
+        - label_id: fwd_ret_60d_raw
+        - label_id: fwd_ret_120d_raw
+        - label_id: fwd_ret_180d_raw
 
 signal_transforms:
   - transform_id: daily_zscore
     type: daily_zscore
 
 labels:
-  # Normalized labels (training targets)
-  - label_id: fwd_ret_60d_cs_zscore_clip3
-  - label_id: fwd_ret_120d_cs_zscore_clip3
-  - label_id: fwd_ret_180d_cs_zscore_clip3
-  # Raw labels (evaluation only)
   - label_id: fwd_ret_60d_raw
   - label_id: fwd_ret_120d_raw
   - label_id: fwd_ret_180d_raw
