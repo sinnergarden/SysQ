@@ -1,0 +1,30 @@
+diagnostics_id: value_growth_multibagger_v2_diagnostics
+experiment_id: value_growth_v2_feature_smoke
+feature_list_id: value_growth_multibagger_v2_features
+universe: csi800
+start_date: "2024-06-01"
+end_date: "2025-12-31"
+
+labels:
+  - fwd_ret_180d_raw
+
+focus_features: []
+
+diagnostics:
+  coverage: true
+  feature_ic: true
+  bucket_return: true
+  correlation: true
+  exposure_breakdown: true
+
+exposure:
+  industry_field_candidates:
+    - industry
+    - industry_code
+    - sw_l1
+  size_field_candidates:
+    - circ_mv
+    - total_mv
+  size_buckets: 5
+
+correlation_threshold: 0.85

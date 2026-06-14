@@ -326,7 +326,7 @@ class QlibAdapter:
     @staticmethod
     def _semantic_lookback_start(start_time, end_time):
         anchor = pd.Timestamp(start_time or end_time)
-        return (anchor - pd.Timedelta(days=400)).strftime("%Y-%m-%d")
+        return (anchor - pd.Timedelta(days=820)).strftime("%Y-%m-%d")
 
     @staticmethod
     def _to_semantic_builder_frame(df: pd.DataFrame) -> pd.DataFrame:

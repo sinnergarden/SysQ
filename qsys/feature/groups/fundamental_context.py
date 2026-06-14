@@ -81,4 +81,110 @@ def build_fundamental_context_features(df: pd.DataFrame) -> pd.DataFrame:
         prev_pb = out.groupby("ts_code")["pb"].shift(120)
         out["pb_delta_120d"] = out["pb"] - prev_pb
 
+    # ═══════════════════════════════════════════════════════════════
+    # v2: valuation_repair_setup
+    # ═══════════════════════════════════════════════════════════════
+
+    # 3-year valuation percentiles
+    for src, dst in [("pe", "pe_percentile_756d"), ("pb", "pb_percentile_756d")]:
+        if src in out.columns:
+            out[dst] = out.groupby("ts_code")[src].transform(
+                lambda s: s.rolling(756, min_periods=180).rank(pct=True)
+            )
+
+    # Valuation repair room: current vs historical low
+    if "pe" in out.columns:
+        _pe_min_756 = out.groupby("ts_code")["pe"].transform(
+            lambda s: s.rolling(756, min_periods=180).min()
+        )
+        out["valuation_repair_room_pe"] = out["pe"] / _pe_min_756.replace(0, np.nan) - 1
+    if "pb" in out.columns:
+        _pb_min_756 = out.groupby("ts_code")["pb"].transform(
+            lambda s: s.rolling(756, min_periods=180).min()
+        )
+        out["valuation_repair_room_pb"] = out["pb"] / _pb_min_756.replace(0, np.nan) - 1
+
+    # Earnings yield: net_income / total_mv
+    if {"net_income", "total_mv"}.issubset(out.columns):
+        out["earnings_yield_proxy"] = out["net_income"] / out["total_mv"].replace(0, np.nan)
+
+    # PEG proxy: PE / profit_yoy
+    if "pe" in out.columns and "profit_yoy" in out.columns:
+        _growth = out["profit_yoy"].replace(0, np.nan).abs()
+        out["peg_proxy"] = out["pe"] / _growth
+
+    # ═══════════════════════════════════════════════════════════════
+    # v2: fundamental_acceleration_quality
+    # ═══════════════════════════════════════════════════════════════
+
+    # YoY acceleration
+    for src, dst in [("revenue_yoy", "revenue_yoy_accel"), ("profit_yoy", "profit_yoy_accel")]:
+        if src in out.columns:
+            prev = out.groupby("ts_code")[src].shift(252)
+            out[dst] = out[src] - prev
+
+    # 4-quarter deltas (756d approx)
+    for src, dst in [("roe", "roe_delta_756d"), ("net_margin", "net_margin_delta_756d")]:
+        if src in out.columns:
+            prev = out.groupby("ts_code")[src].shift(756)
+            out[dst] = out[src] - prev
+
+    # OCF margin
+    if {"op_cashflow", "revenue"}.issubset(out.columns):
+        out["ocf_margin"] = out["op_cashflow"] / out["revenue"].replace(0, np.nan)
+
+    # ═══════════════════════════════════════════════════════════════
+    # v2: path_classifier_scores
+    # Note: depend on features from BOTH builders; silently NaN
+    # if called standalone without relative_strength running first.
+    # ═══════════════════════════════════════════════════════════════
+
+    _ts60 = out.get("trend_smoothness_60d", None)
+    _rps120 = out.get("rps_120d", None)
+    _rps20 = out.get("rps_20d", None)
+    _pp252 = out.get("price_percentile_252d", None)
+
+    if all(x is not None for x in [_ts60, _rps120, _rps20, _pp252]):
+        cont = (_ts60.fillna(0).clip(-1, 1).rank(pct=True) * 1.0
+                + _rps120.fillna(0) * 1.0
+                + _pp252.fillna(0) * 0.5
+                + (1 - _rps20.fillna(0)) * 0.3)
+        out["continuation_candidate_score"] = cont / (1.0 + 1.0 + 0.5 + 0.3)
+
+    _pepct = out.get("pe_percentile_756d", None)
+    _d2l = out.get("distance_to_252d_low", None)
+    _pct252 = out.get("price_percentile_252d", None)
+    if all(x is not None for x in [_pepct, _d2l, _pct252]):
+        low_val = (1 - _pepct.fillna(0.5))
+        near_low = _d2l.fillna(0).clip(0, 1)
+        score = (low_val * 1.0 + near_low * 0.5
+                 + (_rps120.fillna(0) if _rps120 is not None else 0) * 0.3)
+        out["repair_candidate_score"] = score / 1.8
+
+    _pp252 = out.get("price_percentile_252d", None)
+    _rps120 = out.get("rps_120d", None)
+    _vs20 = out.get("volume_spike_20d", None)
+    if all(x is not None for x in [_pp252, _rps120]):
+        heat = (_pp252.fillna(0) * 0.4 + _rps120.fillna(0) * 0.4
+                + (_vs20.fillna(0).clip(0, 3) / 3 if _vs20 is not None else 0) * 0.2)
+        out["overheat_risk_score"] = heat
+
+    _pepct = out.get("pe_percentile_756d", None)
+    _pct252 = out.get("price_percentile_252d", None)
+    _rn756 = out.get("roe_delta_756d", None)
+    _nm756 = out.get("net_margin_delta_756d", None)
+    if all(x is not None for x in [_pepct, _pct252]):
+        trap = ((1 - _pepct.fillna(0.5)) * 0.3
+                + (1 - _pct252.fillna(0.5)) * 0.3)
+        if _rn756 is not None:
+            trap += (_rn756.fillna(0) < -0.01).astype(float) * 0.2
+        if _nm756 is not None:
+            trap += (_nm756.fillna(0) < -0.01).astype(float) * 0.2
+        out["value_trap_risk_score"] = trap
+
+    # Clean up intermediates
+    for c in list(out.columns):
+        if c.startswith("_"):
+            out = out.drop(columns=[c])
+
     return out

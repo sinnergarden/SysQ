@@ -1,0 +1,107 @@
+# value_growth_multibagger_v2_features — v2 feature set for right-tail research
+#
+# Groups:
+#   1. growth_quality (v1, 13 features): basic financial ratios + improvement deltas
+#   2. valuation_repair (v1+v2, 14 features): PE/PB percentiles + repair room + PEG
+#   3. continuation_trend_quality (v2, 15 features): RPS, trend smoothness, volatility-adj return
+#   4. volume_participation_quality (v2, 6 features): volume up/down ratio, spike, stability
+#   5. fundamental_acceleration (v2, 5 features): YoY acceleration, 756d deltas, OCF margin
+#   6. market_confirmation (v1, 7 features): ret_20/60/120d, volume_ratio, distance_to_high
+#   7. path_classifier_scores (v2, 4 features): composite scores
+# Total: ~64 features
+#
+# PIT: $-prefixed fields safe via ann_date. Shifts/rolling backward-only.
+
+feature_list_id: value_growth_multibagger_v2_features
+description: "v2 feature set: continuation + repair path features (growth_quality=13 + valuation_repair=14 + continuation_trend=15 + volume_quality=6 + fundamental_accel=5 + market_confirmation=7 + path_classifiers=4 = total 64)"
+
+features:
+  # ═══════════════════════════════════════════════════════════════════
+  # 1. growth_quality — v1
+  # ═══════════════════════════════════════════════════════════════════
+  - $roe
+  - $grossprofit_margin
+  - $debt_to_assets
+  - $op_cashflow
+  - operating_cf_to_profit
+  - net_margin
+  - roa
+  - roe_delta_252d
+  - grossprofit_margin_delta_252d
+  - debt_to_assets_delta_252d
+  - op_cashflow_delta_252d
+  - revenue_yoy
+  - profit_yoy
+
+  # ═══════════════════════════════════════════════════════════════════
+  # 2. valuation_repair — v1 + v2
+  # ═══════════════════════════════════════════════════════════════════
+  - $pe
+  - $pb
+  - pe_rank_252d
+  - pb_rank_252d
+  - pe_delta_120d
+  - pb_delta_120d
+  - pe_percentile_756d
+  - pb_percentile_756d
+  - valuation_repair_room_pe
+  - valuation_repair_room_pb
+  - earnings_yield_proxy
+  - peg_proxy
+
+  # ═══════════════════════════════════════════════════════════════════
+  # 3. continuation_trend_quality — v2
+  # ═══════════════════════════════════════════════════════════════════
+  - up_day_ratio_60d
+  - up_day_ratio_120d
+  - trend_smoothness_60d
+  - trend_smoothness_120d
+  - max_pullback_120d
+  - volatility_adjusted_return_60d
+  - volatility_adjusted_return_120d
+  - rps_60d
+  - rps_120d
+  - rps_20d
+  - rps_20d_minus_rps_60d
+  - rps_industry_60d
+  - rps_industry_120d
+  - price_percentile_252d
+  - distance_to_252d_low
+
+  # ═══════════════════════════════════════════════════════════════════
+  # 4. volume_participation_quality — v2
+  # ═══════════════════════════════════════════════════════════════════
+  - volume_up_down_ratio_60d
+  - positive_volume_ratio_60d
+  - amount_ratio_20d
+  - amount_ratio_60d
+  - volume_spike_20d
+  - volume_stability_60d
+
+  # ═══════════════════════════════════════════════════════════════════
+  # 5. fundamental_acceleration — v2
+  # ═══════════════════════════════════════════════════════════════════
+  - revenue_yoy_accel
+  - profit_yoy_accel
+  - roe_delta_756d
+  - net_margin_delta_756d
+  - ocf_margin
+
+  # ═══════════════════════════════════════════════════════════════════
+  # 6. market_confirmation — v1
+  # ═══════════════════════════════════════════════════════════════════
+  - ret_20d
+  - ret_60d
+  - ret_120d
+  - volume_ratio_20d
+  - volume_ratio_60d
+  - distance_to_120d_high
+  - distance_to_250d_high
+
+  # ═══════════════════════════════════════════════════════════════════
+  # 7. path_classifier_scores — v2
+  # ═══════════════════════════════════════════════════════════════════
+  - continuation_candidate_score
+  - repair_candidate_score
+  - overheat_risk_score
+  - value_trap_risk_score
