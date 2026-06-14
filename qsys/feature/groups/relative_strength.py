@@ -68,12 +68,10 @@ def build_relative_strength_features(df: pd.DataFrame) -> pd.DataFrame:
     out["trend_smoothness_60d"] = out["ret_60d"] / _abs_sum_60.replace(0, np.nan)
     out["trend_smoothness_120d"] = out["ret_120d"] / _abs_sum_120.replace(0, np.nan)
 
-    # Max pullback: largest drawdown from 120d high over the past 120d
-    # drawdown = 120d_high / close - 1 (negative when above high, positive when below)
-    # max_pullback = rolling max of drawdown — higher value = deeper drawdown
+    # Max pullback from rolling high
     _rmax_120 = close_grp.transform(lambda s: s.rolling(120, min_periods=40).max())
     _drawdown = _rmax_120 / out["close"] - 1
-    out["max_pullback_120d"] = _drawdown.groupby(out["ts_code"]).transform(lambda s: s.rolling(120, min_periods=40).max())
+    out["max_pullback_120d"] = _drawdown.groupby(out["ts_code"]).transform(lambda s: s.rolling(120, min_periods=40).min())
 
     # Volatility-adjusted return
     _vol_60 = daily_ret.groupby(out["ts_code"]).transform(lambda s: s.rolling(60, min_periods=20).std())
@@ -114,10 +112,10 @@ def build_relative_strength_features(df: pd.DataFrame) -> pd.DataFrame:
     _down_count = (_up == 0).astype(float).groupby(out["ts_code"]).transform(lambda s: s.rolling(60, min_periods=20).sum())
     out["volume_up_down_ratio_60d"] = (_up_vol / _up_count) / (_down_vol / _down_count.replace(0, pd.NA))
 
-    # Above-average volume ratio: fraction of days with volume > 60d mean
+    # Positive volume ratio (fraction of days with above-mean volume)
     _vol_mean_60 = vol_grp.transform(lambda s: s.rolling(60, min_periods=20).mean())
     _vol_above = (out[volume_col] > _vol_mean_60).astype(float)
-    out["above_avg_volume_ratio_60d"] = _vol_above.groupby(out["ts_code"]).transform(
+    out["positive_volume_ratio_60d"] = _vol_above.groupby(out["ts_code"]).transform(
         lambda s: s.rolling(60, min_periods=20).mean()
     )
 

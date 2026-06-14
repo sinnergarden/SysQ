@@ -13,7 +13,7 @@
 # PIT: $-prefixed fields safe via ann_date. Shifts/rolling backward-only.
 
 feature_list_id: value_growth_multibagger_v2_features
-description: "v2 feature set: continuation + repair path features (64 features total)"
+description: "v2 feature set: continuation + repair path features (growth_quality=13 + valuation_repair=14 + continuation_trend=15 + volume_quality=6 + fundamental_accel=5 + market_confirmation=7 + path_classifiers=4 = total 64)"
 
 features:
   # ═══════════════════════════════════════════════════════════════════
@@ -44,10 +44,8 @@ features:
   - pb_delta_120d
   - pe_percentile_756d
   - pb_percentile_756d
-  - pe_distance_from_756d_low
-  - pb_distance_from_756d_low
-  - pe_repair_room_to_median
-  - pb_repair_room_to_median
+  - valuation_repair_room_pe
+  - valuation_repair_room_pb
   - earnings_yield_proxy
   - peg_proxy
 
@@ -74,7 +72,7 @@ features:
   # 4. volume_participation_quality — v2
   # ═══════════════════════════════════════════════════════════════════
   - volume_up_down_ratio_60d
-  - above_avg_volume_ratio_60d
+  - positive_volume_ratio_60d
   - amount_ratio_20d
   - amount_ratio_60d
   - volume_spike_20d

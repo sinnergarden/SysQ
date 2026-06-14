@@ -87,7 +87,7 @@ FEATURE_GROUPS = {
             "distance_to_252d_low",
             # v2: volume_participation_quality
             "volume_up_down_ratio_60d",
-            "above_avg_volume_ratio_60d",
+            "positive_volume_ratio_60d",
             "amount_ratio_20d",
             "amount_ratio_60d",
             "volume_spike_20d",
@@ -150,10 +150,8 @@ FEATURE_GROUPS = {
             # v2: valuation_repair_setup
             "pe_percentile_756d",
             "pb_percentile_756d",
-            "pe_distance_from_756d_low",
-            "pb_distance_from_756d_low",
-            "pe_repair_room_to_median",
-            "pb_repair_room_to_median",
+            "valuation_repair_room_pe",
+            "valuation_repair_room_pb",
             "earnings_yield_proxy",
             "peg_proxy",
             # v2: fundamental_acceleration
