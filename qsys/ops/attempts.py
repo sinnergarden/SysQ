@@ -26,21 +26,24 @@ def build_attempt_id(
     return f"{stage}_{run_mode}_{trade_date}_{strategy_id}_{seq:04d}"
 
 
+def _seq_from(data: Any) -> int:
+    """Extract a valid attempt_seq from unknown data."""
+    if isinstance(data, dict):
+        s = data.get("attempt_seq", 0)
+        return s if isinstance(s, int) and s >= 0 else 0
+    return 0
+
+
 def next_attempt_seq(run_root: Path) -> int:
     """Determine the next attempt sequence number for *run_root*.
 
-    Reads the existing ``daily_manifest.json`` and returns
-    ``max(existing_seq, 0) + 1``.  Returns 1 when the manifest
-    does not exist or has no ``attempt_seq`` field.
+    Reads both ``daily_manifest.json`` and ``active_attempt.json``
+    and returns ``max(existing seqs, 0) + 1``.  Returns 1 when
+    neither file exists or has an ``attempt_seq`` field.
     """
-    path = run_root / "daily_manifest.json"
-    data = read_json(path, {})
-    if not isinstance(data, dict):
-        return 1
-    seq = data.get("attempt_seq", 0)
-    if not isinstance(seq, int) or seq < 0:
-        return 1
-    return seq + 1
+    manifest_seq = _seq_from(read_json(run_root / "daily_manifest.json", {}))
+    active_seq = _seq_from(read_json(active_attempt_path(run_root), {}))
+    return max(manifest_seq, active_seq, 0) + 1
 
 
 def active_attempt_path(run_root: Path) -> Path:

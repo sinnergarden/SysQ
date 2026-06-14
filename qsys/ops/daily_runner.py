@@ -324,6 +324,12 @@ class DailyRunner:
         has_skip = has_skip_meta and not has_plan
         already_committed = is_execution_committed(run_root)
 
+        # Determine stage_status early for COMMITTED skip manifest write
+        stage_status: dict[str, str] = {
+            "preopen": "completed" if has_plan else "skipped",
+            "postclose": "completed",
+        }
+
         # ── COMMITTING crash recovery check ──
         committing_path = committing_marker(run_root)
         if committing_path.exists() and not already_committed:
@@ -342,6 +348,37 @@ class DailyRunner:
             ctx.ledger_commit_status = "committed"
             artifacts = strategy.load_artifacts_for_notification(ctx)
             mtm = load_mtm_snapshot(run_root / "mtm" / "mtm_snapshot.json")
+            stage_status["postclose"] = "skipped_idempotent"
+            write_daily_manifest(
+                run_root,
+                trade_date=ctx.trade_date, stage="postclose",
+                run_mode=ctx.run_mode,
+                strategy_id=ctx.strategy_id, account_id=ctx.account_id,
+                candidate_id=ctx.candidate_id,
+                candidate_path=ctx.candidate_path,
+                signal_id=ctx.signal_id,
+                signal_run_id=ctx.signal_run_id,
+                strategy_config_id=ctx.strategy_config_id,
+                strategy_template_id=ctx.strategy_template_id,
+                strategy_run_id=ctx.strategy_run_id,
+                backtest_id=ctx.backtest_id,
+                promotion_pointer_path=ctx.promotion_pointer_path,
+                promoted_at=ctx.promoted_at,
+                promoted_by=ctx.promoted_by,
+                attempt_id=ctx.attempt_id,
+                attempt_seq=ctx.attempt_seq,
+                supersedes_attempt_id=ctx.supersedes_attempt_id,
+                rerun_reason=ctx.rerun_reason,
+                active_attempt=ctx.active_attempt,
+                promotion_snapshot_path=ctx.promotion_snapshot_path,
+                ledger_commit_status=ctx.ledger_commit_status,
+                ledger_run_id=ctx.ledger_run_id,
+                ledger_commit_at=ctx.ledger_commit_at,
+                ledger_error=ctx.ledger_error,
+                triggered_by=ctx.triggered_by,
+                debug_run=ctx.debug_run,
+                stage_status=stage_status,
+            )
             if not ctx.no_notify:
                 msg = strategy.build_postclose_message(
                     ctx, mtm=mtm, artifacts=artifacts,
@@ -454,11 +491,7 @@ class DailyRunner:
             strategy.send_notification(msg)
 
         # Write daily manifest (UC-8/UC-9 identity lineage)
-        stage_status = {"preopen": "completed" if has_plan else "skipped",
-                        "postclose": "completed"}
-        if already_committed and not ctx.force_rerun:
-            stage_status["postclose"] = "skipped_idempotent"
-        elif has_skip:
+        if has_skip:
             stage_status["postclose"] = "skipped_no_execution"
         write_daily_manifest(
             run_root,

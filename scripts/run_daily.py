@@ -148,9 +148,11 @@ def run_daily_main(argv: list[str] | None = None) -> None:
 
     runner = DailyRunner()
 
-    # ── Resolve shadow promotion pointer (UC-8 lineage) — all modes ───
+    # ── Resolve shadow promotion pointer — per mode ─────────────────
+    # preopen / train: reads args.promotion_pointer (global shadow.yaml).
+    # postclose: reads only active_attempt.json + promotion_snapshot.yaml (below).
     promotion_lineage: dict[str, str | None] = {}
-    if args.run_mode == "shadow":
+    if args.run_mode == "shadow" and args.mode in ("preopen", "train"):
         raw_pointer = args.promotion_pointer or "data/research/promotions/shadow.yaml"
         pointer_path = Path(raw_pointer)
         if not pointer_path.is_absolute() and not pointer_path.exists():
@@ -222,7 +224,7 @@ def run_daily_main(argv: list[str] | None = None) -> None:
         output_dir=Path(args.output_dir) if args.output_dir else None,
     )
 
-    # ── Attempt management + promotion snapshot ──────────────────────
+    # ── Attempt / snapshot ────────────────────────────────────────────
     attempt_id: str | None = None
     attempt_seq: int | None = None
     supersedes_attempt_id: str | None = None
@@ -246,22 +248,8 @@ def run_daily_main(argv: list[str] | None = None) -> None:
                 sys.exit(1)
             supersedes_attempt_id = existing["attempt_id"]
 
-        if not args.debug_run:
-            attempt_id = build_attempt_id(
-                args.mode, args.run_mode, trade_date, strategy.strategy_id, attempt_seq,
-            )
-            active_attempt_val = True
-            snap_path = snapshot_promotion_pointer(run_root, promotion_lineage)
-            promotion_snapshot_path_val = str(snap_path)
-            active_payload = make_active_attempt_payload(
-                attempt_id, attempt_seq, args.mode, args.run_mode,
-                trade_date, strategy.strategy_id,
-                supersedes_attempt_id=supersedes_attempt_id,
-                rerun_reason=args.reason,
-            )
-            write_active_attempt(run_root, active_payload)
-            print(f"  📝 Active attempt: {attempt_id}")
-        else:
+        # Promotion snapshot written before runner for plan audit trail
+        if args.debug_run:
             attempt_id = build_attempt_id(
                 args.mode, args.run_mode, trade_date, strategy.strategy_id, attempt_seq,
             )
@@ -269,16 +257,51 @@ def run_daily_main(argv: list[str] | None = None) -> None:
             snap_path = snapshot_promotion_pointer(run_root, promotion_lineage)
             promotion_snapshot_path_val = str(snap_path)
             print(f"  🔧 Debug attempt: {attempt_id} (not active)")
+        else:
+            attempt_id = build_attempt_id(
+                args.mode, args.run_mode, trade_date, strategy.strategy_id, attempt_seq,
+            )
+            active_attempt_val = True
+            snap_path = snapshot_promotion_pointer(run_root, promotion_lineage)
+            promotion_snapshot_path_val = str(snap_path)
+            print(f"  📝 Preopen attempt: {attempt_id}")
 
     elif args.mode == "postclose":
         active = read_active_attempt(run_root)
-        if active:
-            attempt_id = active.get("attempt_id")
-            attempt_seq = active.get("attempt_seq")
-            promotion_snapshot_path_val = str(run_root / "promotion_snapshot.yaml")
+        if not active:
+            print(
+                "⛔ No active preopen attempt found. Run preopen first.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        attempt_id = active.get("attempt_id")
+        attempt_seq = active.get("attempt_seq")
+        promotion_snapshot_path_val = str(run_root / "promotion_snapshot.yaml")
+
+        # postclose must NOT read global shadow.yaml — use frozen snapshot
+        snap = resolve_promotion_snapshot(run_root)
+        if not snap:
+            print(
+                "⛔ Active preopen attempt has no promotion_snapshot.yaml. "
+                "Re-run preopen to create it.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        # Apply snapshot lineage fields
+        snapshot_path = snap.get("promotion_pointer_path")
+        for field in (
+            "candidate_id", "candidate_path", "signal_id", "signal_run_id",
+            "strategy_config_id", "strategy_template_id", "strategy_run_id",
+            "backtest_id", "promoted_at", "promoted_by",
+        ):
+            val = snap.get(field)
+            if val is not None:
+                promotion_lineage[field] = val  # type: ignore[literal-required]
+        if snapshot_path is not None:
+            promotion_lineage["promotion_pointer_path"] = snapshot_path
+        print("  📋 Lineage from promotion snapshot (frozen at preopen)")
 
     # ── Build DailyRunContext ────────────────────────────────────────
-    # Default ledger_commit_status per mode
     if args.mode == "preopen":
         default_ledger_status = "not_applicable"
     elif args.debug_run:
@@ -324,34 +347,6 @@ def run_daily_main(argv: list[str] | None = None) -> None:
         ledger_commit_status=default_ledger_status,
     )
 
-    # ── Postclose: override lineage from frozen promotion snapshot ────
-    if args.mode == "postclose":
-        active = read_active_attempt(run_root)
-        if not active:
-            print(
-                "⛔ No active preopen attempt found. Run preopen first.",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-        snap = resolve_promotion_snapshot(run_root)
-        if snap:
-            for field in (
-                "candidate_id", "candidate_path", "signal_id", "signal_run_id",
-                "strategy_config_id", "strategy_template_id", "strategy_run_id",
-                "backtest_id", "promoted_at", "promoted_by",
-            ):
-                val = snap.get(field)
-                if val is not None:
-                    setattr(ctx, field, val)
-            p_path = snap.get("promotion_pointer_path")
-            if p_path is not None:
-                ctx.promotion_pointer_path = p_path
-            print("  📋 Lineage from promotion snapshot (frozen at preopen)")
-        else:
-            print(
-                "  ⚠ No promotion_snapshot.yaml found — using global pointer lineage",
-            )
-
     # ── Notify-only ──────────────────────────────────────────────────
     if args.notify_only:
         runner.run_notify_only(ctx, strategy)
@@ -360,6 +355,18 @@ def run_daily_main(argv: list[str] | None = None) -> None:
     # ── Preopen / Postclose ──────────────────────────────────────────
     if args.mode == "preopen":
         runner.run_preopen(ctx, strategy)
+        # Only persist active pointer AFTER a successful preopen
+        # (manifest written = preopen completed without early return).
+        if not args.debug_run and args.run_mode == "shadow":
+            if (run_root / "daily_manifest.json").exists():
+                active_payload = make_active_attempt_payload(
+                    ctx.attempt_id, ctx.attempt_seq, args.mode, args.run_mode,
+                    trade_date, strategy.strategy_id,
+                    supersedes_attempt_id=ctx.supersedes_attempt_id,
+                    rerun_reason=args.reason,
+                )
+                write_active_attempt(run_root, active_payload)
+                print(f"  📝 Active attempt: {ctx.attempt_id}")
     elif args.mode == "postclose":
         runner.run_postclose(ctx, strategy)
 
