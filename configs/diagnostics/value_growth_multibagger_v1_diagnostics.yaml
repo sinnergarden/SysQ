@@ -1,0 +1,53 @@
+# value_growth_multibagger_v1_diagnostics — config-driven research diagnostics
+#
+# UC-5 diagnostics: 对已有 experiment 做轻量诊断。
+# 本 config 只控制诊断范围，不控制 feature/模型行为。
+# 后续新投研 idea 只需复制并修改此文件。
+
+diagnostics_id: value_growth_multibagger_v1_diagnostics
+experiment_id: value_growth_multibagger_v1
+feature_list_id: value_growth_multibagger_v1_features
+universe: csi800
+start_date: "2024-06-01"
+end_date: "2025-12-31"
+
+labels:
+  - fwd_ret_60d_raw
+  - fwd_ret_120d_raw
+  - fwd_ret_180d_raw
+
+focus_features:
+  - $pe
+  - $pb
+  - revenue_yoy
+  - profit_yoy
+  - roe_delta_252d
+  - debt_to_assets_delta_252d
+  - ret_120d
+  - distance_to_120d_high
+
+diagnostics:
+  coverage: true
+  feature_ic: true
+  bucket_return: true
+  correlation: true
+  exposure_breakdown: true
+
+exposure:
+  industry_field_candidates:
+    - industry
+    - industry_code
+    - sw_l1
+  size_field_candidates:
+    - circ_mv
+    - total_mv
+  size_buckets: 5
+
+correlation_threshold: 0.8
+
+top_candidates:
+  enabled: true
+  top_n:
+    - 20
+    - 50
+    - 100
