@@ -569,8 +569,14 @@ Label 是从原始行情数据到模型训练目标的标准化 artifact。同�
 | `fwd_ret_20d_xsz_clip3` | 20 | shift(-20) / close - 1 → cs_zscore | per-date cs_zscore | [-3, 3] |
 | `fwd_ret_5d_raw` | 5 | shift(-5) / close - 1 | none | none |
 | `fwd_ret_20d_raw` | 20 | shift(-20) / close - 1 | none | none |
+| `fwd_ret_60d_cs_zscore_clip3` | 60 | shift(-60) / close - 1 → cs_zscore | per-date cs_zscore | [-3, 3] |
+| `fwd_ret_120d_cs_zscore_clip3` | 120 | shift(-120) / close - 1 → cs_zscore | per-date cs_zscore | [-3, 3] |
+| `fwd_ret_180d_cs_zscore_clip3` | 180 | shift(-180) / close - 1 → cs_zscore | per-date cs_zscore | [-3, 3] |
+| `fwd_ret_60d_raw` | 60 | shift(-60) / close - 1 | none | none |
+| `fwd_ret_120d_raw` | 120 | shift(-120) / close - 1 | none | none |
+| `fwd_ret_180d_raw` | 180 | shift(-180) / close - 1 | none | none |
 
-Generator 默认消费 `xsz_clip3` 系列。`raw` 系列仅作历史参考，不保证被 generator 使用。
+Generator 默认消费 `xsz_clip3` 系列（legacy naming）或 `cs_zscore_clip3` 系列（current canonical naming）。两者计算方式相同。`raw` 系列仅作评估参考，不用于训练。
 
 ### Manifest Semantics
 

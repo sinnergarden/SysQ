@@ -1,0 +1,6 @@
+label_id: fwd_ret_120d_raw
+formula:
+  type: forward_return
+  horizon: 120
+  price: close
+universe: csi800

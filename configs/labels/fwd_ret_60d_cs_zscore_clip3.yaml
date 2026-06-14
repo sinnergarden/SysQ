@@ -1,0 +1,9 @@
+label_id: fwd_ret_60d_cs_zscore_clip3
+formula:
+  type: forward_return
+  horizon: 60
+  price: close
+normalization:
+  type: cs_zscore
+  clip: 3.0
+universe: csi800

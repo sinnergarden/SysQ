@@ -1,0 +1,57 @@
+# value_growth_multibagger_v1 — 中长周期右尾收益研究配置
+#
+# UC-4 Signal Research / UC-5 Signal Analytics
+# 研究未来 60/120/180 交易日横截面右尾收益。
+# 本配置只做 research，不接 daily/ledger/production。
+#
+# ## Lookahead 声明
+# 本配置使用的 label (fwd_ret_{60,120,180}d*) 基于未来价格，
+# 只能用于训练/评估，绝不注册为 inference feature。
+# 它们不能被 daily/preopen 调用，不能进入 feature registry。
+
+experiment_id: value_growth_multibagger_v1
+title: "Value Growth Multibagger — Long-horizon right-tail return research"
+description: >
+  Research baseline for A-share medium-to-long cycle right-tail candidate discovery.
+  Multi-task LightGBM on 60d/120d/180d forward returns (cross-sectional z-score).
+  Uses existing alpha_v1_clean_132 feature set (price/volume/momentum/volatility).
+  No fundamental as-of data yet.  Classification labels (is_top5pct, is_top1pct)
+  and future_max_return labels are not yet implemented — see PR description gaps.
+
+calendar:
+  start_date: "2024-06-01"
+  end_date: "2025-12-31"
+  train_window_days: 504
+  step_days: 20
+
+signal:
+  signal_id: vgb_multibagger_signal
+  score_column: score
+
+feature_list_id: alpha_v1_clean_132
+
+generators:
+  - generator_id: vgb_multibagger
+    type: multi_label_lightgbm
+    params:
+      universe: csi800
+      n_estimators: 300
+      feature_list_id: alpha_v1_clean_132
+      labels:
+        - label_id: fwd_ret_60d_cs_zscore_clip3
+        - label_id: fwd_ret_120d_cs_zscore_clip3
+        - label_id: fwd_ret_180d_cs_zscore_clip3
+
+signal_transforms:
+  - transform_id: daily_zscore
+    type: daily_zscore
+
+labels:
+  # Normalized labels (training targets)
+  - label_id: fwd_ret_60d_cs_zscore_clip3
+  - label_id: fwd_ret_120d_cs_zscore_clip3
+  - label_id: fwd_ret_180d_cs_zscore_clip3
+  # Raw labels (evaluation only)
+  - label_id: fwd_ret_60d_raw
+  - label_id: fwd_ret_120d_raw
+  - label_id: fwd_ret_180d_raw
