@@ -320,6 +320,7 @@ class QlibAdapter:
             "$inventory",
             "$accounts_receiv",
             "$roe",
+            "$industry",
         ]
 
     @staticmethod
@@ -363,6 +364,7 @@ class QlibAdapter:
             "$inventory": "inventory",
             "$accounts_receiv": "accounts_receiv",
             "$roe": "roe",
+            "$industry": "industry",
         }
         out = out.rename(columns=rename_map)
         if "trade_date" in out.columns:

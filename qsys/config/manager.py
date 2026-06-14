@@ -192,6 +192,7 @@ class ConfigManager:
                     # Margin financing (两融) - first batch
                     "margin_balance", "margin_buy_amount", "margin_repay_amount",
                     "margin_total_balance", "lend_volume", "lend_sell_volume", "lend_repay_volume",
+                    "industry",
                 ]
             }
         }
