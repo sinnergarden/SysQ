@@ -92,17 +92,26 @@ def build_fundamental_context_features(df: pd.DataFrame) -> pd.DataFrame:
                 lambda s: s.rolling(756, min_periods=180).rank(pct=True)
             )
 
-    # Valuation repair room: current vs historical low
+    # Valuation distance from 3-year low (pe_distance_from_756d_low = 0 at low, >0 above low)
+    # Repair room vs historical median (>0 means median is above current — room to repair up)
     if "pe" in out.columns:
         _pe_min_756 = out.groupby("ts_code")["pe"].transform(
             lambda s: s.rolling(756, min_periods=180).min()
         )
-        out["valuation_repair_room_pe"] = out["pe"] / _pe_min_756.replace(0, np.nan) - 1
+        out["pe_distance_from_756d_low"] = out["pe"] / _pe_min_756.replace(0, np.nan) - 1
+        _pe_med_756 = out.groupby("ts_code")["pe"].transform(
+            lambda s: s.rolling(756, min_periods=180).median()
+        )
+        out["pe_repair_room_to_median"] = _pe_med_756 / out["pe"].replace(0, np.nan) - 1
     if "pb" in out.columns:
         _pb_min_756 = out.groupby("ts_code")["pb"].transform(
             lambda s: s.rolling(756, min_periods=180).min()
         )
-        out["valuation_repair_room_pb"] = out["pb"] / _pb_min_756.replace(0, np.nan) - 1
+        out["pb_distance_from_756d_low"] = out["pb"] / _pb_min_756.replace(0, np.nan) - 1
+        _pb_med_756 = out.groupby("ts_code")["pb"].transform(
+            lambda s: s.rolling(756, min_periods=180).median()
+        )
+        out["pb_repair_room_to_median"] = _pb_med_756 / out["pb"].replace(0, np.nan) - 1
 
     # Earnings yield: net_income / total_mv
     if {"net_income", "total_mv"}.issubset(out.columns):
@@ -155,11 +164,15 @@ def build_fundamental_context_features(df: pd.DataFrame) -> pd.DataFrame:
     _d2l = out.get("distance_to_252d_low", None)
     _pct252 = out.get("price_percentile_252d", None)
     if all(x is not None for x in [_pepct, _d2l, _pct252]):
-        low_val = (1 - _pepct.fillna(0.5))
-        near_low = _d2l.fillna(0).clip(0, 1)
-        score = (low_val * 1.0 + near_low * 0.5
+        # Components:
+        # - low_val_penalty:  higher when pe at low percentile (1-percentile)
+        # - near_low_bonus:   higher when close to 252d low (d2l near 0)
+        #   Example: d2l=0 (at low) → near_low_bonus=0.5; d2l=1 → near_low_bonus=0
+        low_val_penalty = (1 - _pepct.fillna(0.5)) * 1.0
+        near_low_bonus = (1 - _d2l.fillna(0).clip(0, 1)) * 0.5
+        score = (low_val_penalty + near_low_bonus
                  + (_rps120.fillna(0) if _rps120 is not None else 0) * 0.3)
-        out["repair_candidate_score"] = score / 1.8
+        out["repair_candidate_score"] = score / (1.0 + 0.5 + 0.3)
 
     _pp252 = out.get("price_percentile_252d", None)
     _rps120 = out.get("rps_120d", None)
