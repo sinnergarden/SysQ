@@ -10,10 +10,10 @@ Key findings:
 - **Short-term stability is strong** — Top20 overlap 95% (1d), Top50 overlap 88% (1w)
 - **1-month turnover is expected** — 56% retention for 20d rebalance strategy
 - **Survivor rank delta is modest** — < 15 across all windows
-- **Major rank movers are attributable** — mostly SELF_IMPROVEMENT (not noise)
-- **002126 银轮股份 example**: rank 9 → 34 is a combination of revenue_yoy deceleration (80%→20%) and cross-sectional crowding
+- **Major rank improvements are mostly classified as SELF_IMPROVEMENT by rank/score movement, but detailed feature-delta attribution is still incomplete.**
+- **002126 银轮股份 example**: rank 9 to 34 is a combination of revenue_yoy deceleration (80% to 20%) and cross-sectional crowding
 
-**Decision: RANK_STABILITY_ACCEPTABLE.**
+**Decision: RANK_STABILITY_ACCEPTABLE based on overlap/retention metrics; attribution details remain provisional.**
 
 ## Method
 
@@ -30,11 +30,13 @@ Rank movement computed from v2 extended validation signal predictions. Feature s
 | 3 months | 2025-09-02 | 9/20 | 21/50 | 42% | 29 | 13.4 | ACCEPTABLE |
 | 6 months | 2025-06-05 | 4/20 | 18/50 | 36% | 32 | 14.1 | ACCEPTABLE |
 
-**Interpretation:** Survivor rank delta < 15 across all windows — stocks that remain in top50 are highly stable. Turnover is driven by new candidates entering as market conditions evolve. This is normal for a 180d horizon model with 20d rebalancing.
+**Interpretation:** Survivor rank delta < 15 across all windows. Stocks that remain in top50 are highly stable. Turnover is driven by new candidates entering as market conditions evolve. This is normal for a 180d horizon model with 20d rebalancing.
 
 ## Major Rank Movers (1 month, abs delta >= 15)
 
-| Code | Name | Prev Rank | Current Rank | Delta | Attribution |
+The attribution labels in this table are provisional unless feature deltas are shown. They are based on rank/score movement and available snapshot evidence, not full per-feature delta decomposition.
+
+| Code | Name | Prev Rank | Current Rank | Delta | Provisional Attribution |
 |:---:|:---:|:---:|:---:|:---|:---|
 | 601865 | 福莱特 | 308 | 12 | +296 | SELF_IMPROVEMENT |
 | 688772 | 珠海冠宇 | 224 | 39 | +185 | SELF_IMPROVEMENT |
@@ -49,37 +51,37 @@ Rank movement computed from v2 extended validation signal predictions. Feature s
 | 600977 | 中国电影 | 130 | 42 | +88 | SELF_IMPROVEMENT |
 | 688037 | 芯源微 | 132 | 48 | +84 | SELF_IMPROVEMENT |
 
-All major rank improvements (delta >= 80) are SELF_IMPROVEMENT — stocks with materially improved features that drove them from outside top100 into top50. This is healthy model behavior.
+All major rank improvements (delta >= 80) are classified as SELF_IMPROVEMENT based on rank/score evidence, but detailed feature-delta attribution per stock is not included in this note.
 
-## Case Study 1: 002126 银轮股份 (Rank 9 → 34)
+## Case Study 1: 002126 银轮股份 (Rank 9 to 34)
 
 **Rank change: -25 over 1 month. Attribution: SELF_DETERIORATION + CROSS_SECTIONAL_CROWDING_OUT.**
 
 | Feature | 2025-11-07 | 2025-12-08 | Delta | Impact |
 |---------|-----------|-----------|-------|--------|
-| Revenue YoY | ~80% | ~20% | -60pp | **Major** — earnings growth deceleration |
-| ret_120d | +32% | +41% | +9pp | Positive — price trend actually improved |
-| RPS_120d | 1.0 | 1.0 | 0 | No change — still top of the universe |
+| Revenue YoY | ~80% | ~20% | -60pp | Major — earnings growth deceleration |
+| ret_120d | +32% | +41% | +9pp | Positive — price trend improved |
+| RPS_120d | 1.0 | 1.0 | 0 | No change |
 | Continuation score | ~0.71 | ~0.63 | -0.08 | Modest decline |
-| Overheat risk | ~0.71 | ~0.78 | +0.07 | Rising — more overextended |
+| Overheat risk | ~0.71 | ~0.78 | +0.07 | Rising |
 
-Interpretation: Price trend (ret120, RPS) actually strengthened. The rank drop is driven by **revenue_yoy deceleration from ~80% to ~20%** — a material fundamental signal change. The model correctly picked up that the hyper-growth phase is ending. This is SELF_DETERIORATION (fundamental signal worsened) compounded by CROSS_SECTIONAL_CROWDING_OUT (new stocks with stronger features entered top50).
+Interpretation: Price trend (ret120, RPS) strengthened. The rank drop is driven by revenue_yoy deceleration from ~80% to ~20% — a material fundamental signal change. This is SELF_DETERIORATION (fundamental signal worsened) compounded by CROSS_SECTIONAL_CROWDING_OUT (new stocks with stronger features entered top50).
 
-## Case Study 2: 601865 福莱特 (Rank 308 → 12)
+## Case Study 2: 601865 福莱特 (Rank 308 to 12)
 
-New entry into top50 from outside top200. SELF_IMPROVEMENT: likely driven by strong price momentum recovery in glass/solar sector combined with improving fundamentals. Exact feature deltas require full snapshot merge.
+SELF_IMPROVEMENT / provisional: entered top50 from outside top200. Detailed feature deltas are not included in this note, so the exact driver remains to be verified.
 
 ## Case Study 3: Dropped Stocks
 
-Not computed in detail due to scope. The 22 dropout stocks over 1 month were primarily out-competed by stronger candidates. Most show stable or mildly deteriorating features — CROSS_SECTIONAL_CROWDING_OUT rather than SELF_DETERIORATION.
+Dropped stocks were not computed in detail in this PR. Therefore dropout attribution remains provisional and should not be treated as evidence until feature-delta comparison is added.
 
 ## Rank Stability Interpretation
 
-- **Short-term (1d-1w):** Strong — rank noise is limited, model inference is stable
+- **Short-term (1d-1w):** Strong — rank noise is limited
 - **Medium-term (2w-1m):** 56-66% retention — expected for 20d rebalance strategy
-- **Long-term (3m-6m):** 36-42% retention — substantial turnover but survivors are stable
+- **Long-term (3m-6m):** 36-42% retention — survivors are stable
 - **Survivor delta < 15:** Stocks that stay in top50 have highly stable ranking
-- **Major movers mostly SELF_IMPROVEMENT:** Rank changes are driven by real feature changes, not noise
+- **Major movers classified as SELF_IMPROVEMENT:** Provisional label based on rank evidence; full attribution requires per-stock feature delta
 
 ## Risks and Caveats
 
@@ -94,15 +96,15 @@ Not computed in detail due to scope. The 22 dropout stocks over 1 month were pri
 
 ## Decision
 
-**RANK_STABILITY_ACCEPTABLE**
+**RANK_STABILITY_ACCEPTABLE based on overlap/retention metrics; attribution details remain provisional.**
 
 Rationale:
 - Short-term stability is strong (top20 95%, top50 88% at 1d)
 - 1-month 56% retention is expected for 20d rebalance strategy
 - Survivor rank delta modest (< 15 across all windows)
-- Major rank movers are attributable (SELF_IMPROVEMENT dominates)
+- Major rank improvements are provisionally explainable, but full feature-delta attribution remains incomplete
 - 002126 case study shows explainable fundamental-driven rank change
-- No evidence of noisy or artifact-driven rank movement
+- No obvious evidence of short-term rank noise from overlap metrics; full artifact/noise diagnosis requires feature-delta attribution
 
 ## Next Steps
 
