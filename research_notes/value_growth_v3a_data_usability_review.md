@@ -13,13 +13,16 @@ Stricter usability review for v3-a candidate data: margin financing (already in 
 - NaN = non-margin-eligible stocks, not missing data
 - Requires explicit `margin_eligible` flag to avoid size/liquidity bias
 
-**Shareholder count analysis (not yet fetched):**
-- Tushare has `stk_holdernumber` and `top10_holders` APIs available
+**Shareholder count analysis (measured via data probe):**
+- Tushare `stk_holdernumber` API: **Available. ann_date and end_date present.** ✅
+- **ann_date null rate: 0%** — all 940 disclosures across 10 stocks have ann_date ✅
+- **Coverage:** 10/10 sampled stocks have data for 2020-2024 (100%) ✅
+- **Disclosure lag (ann_date - end_date):** median 30d, mean 45d, P90 93d. 25% > 60d — acceptable for 180d horizon but requires stale-days tracking
+- **Top10 holders:** API available with ann_date. Hold ratio per-investor available.
+- **Historical depth:** At least 5 years of quarterly data for all sampled stocks ✅
 - **Not yet in collector configuration** — requires new interface registration
-- PIT depends on `ann_date` — must verify before feature design
-- Coverage and history length unknown — requires data probe
 
-**Decision: PROCEED_TO_SMALL_DATA_PROBE** — data probe required for shareholder count before full v3-a feature design.
+**Decision: PROCEED_TO_V3A_FEATURE_DESIGN** — both margin and shareholder count data pass usability review. Shareholder count requires new Tushare collector registration before feature implementation.
 
 ## Scope
 
