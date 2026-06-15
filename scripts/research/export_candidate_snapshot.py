@@ -103,18 +103,6 @@ def _get_prev_topk(
     return {r["instrument"]: i + 1 for i, (_, r) in enumerate(sub.head(top_k).iterrows())}
 
 
-def _classify_path(row: pd.Series, high_q: float, extreme_q: float) -> tuple[str, str]:
-    """Classify path using builder-derived path scores (percentile within snapshot)."""
-    cs = row.get("continuation_candidate_score")
-    rs = row.get("repair_candidate_score")
-    oh = row.get("overheat_risk_score")
-    vt = row.get("value_trap_risk_score")
-
-    # We'll use the raw scores if present; thresholds are applied after percentile ranking
-    # This function is called after percentile columns are computed
-    return ("unclear", "path scores unavailable")
-
-
 def main() -> None:
     p = argparse.ArgumentParser(description="Export candidate feature snapshot")
     p.add_argument("--experiment-id", default=None, help="Resolve run from experiment manifest")
