@@ -22,7 +22,36 @@ Stricter usability review for v3-a candidate data: margin financing (already in 
 - **Historical depth:** At least 5 years of quarterly data for all sampled stocks ✅
 - **Not yet in collector configuration** — requires new interface registration
 
-**Decision: PROCEED_TO_V3A_FEATURE_DESIGN** — both margin and shareholder count data pass usability review. Shareholder count requires new Tushare collector registration before feature implementation.
+## Quick Alpha Test: holder_num_change_qoq
+
+**Single-feature RankIC:** holder_num_change_qoq vs fwd_ret_180d_raw
+
+| Metric | Value |
+|--------|-------|
+| RankIC mean | **-0.0061** |
+| IR | -0.05 |
+| Positive IC ratio | 39.83% |
+| N dates | 575 |
+| N stocks | 197 |
+| Note | **Essentially zero.** No predictive power for 180d forward returns. |
+
+**Interpretation:** Holder count changes (quarterly frequency, ~30d disclosure lag) do not predict 180d returns in this sample. The signal is already priced in by the time it becomes public.
+
+**Impact on decision:** Downgrade shareholder count from v3-a to diagnostics-only. Focus v3-a on margin financing only (RankIC 0.0112-0.0245, weak but positive).
+
+## Margin Quick Alpha Test: margin_balance_change_20d
+
+| Metric | Value |
+|--------|-------|
+| RankIC mean | **0.0112** |
+| IR | 0.17 |
+| Positive IC ratio | 53.39% |
+| N dates | 221 |
+| Coverage (2024-2025) | 98.8% |
+
+Weak positive. Margin balance as a standalone feature is borderline for 180d horizon.
+
+**Decision: PROCEED_TO_V3A_FEATURE_DESIGN_WITH_CAVEATS** — both margin and shareholder count data pass usability review. Shareholder count requires new Tushare collector registration before feature implementation.
 
 ## Scope
 
