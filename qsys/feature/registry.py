@@ -169,6 +169,35 @@ FEATURE_GROUPS = {
             "value_trap_risk_score",
         ],
     },
+    "v3a_margin": {
+        "enabled_by": "enable_v3a_margin_features",
+        "features": [
+            "margin_eligible",
+            "margin_balance_to_float_mv",
+            "margin_balance_chg_20d",
+            "margin_balance_chg_60d",
+            "margin_buy_intensity_20d",
+            "margin_repay_to_buy_20d",
+            "margin_crowding_score",
+            "margin_trend_confirm_score",
+            "margin_overheat_risk_score",
+        ],
+    },
+    "v3a_shareholder": {
+        "enabled_by": "enable_v3a_shareholder_features",
+        "features": [
+            "holder_num_chg_qoq",
+            "holder_num_chg_2q",
+            "avg_shares_per_holder_chg_qoq",
+            "top10_holder_ratio_chg_qoq",
+            "holder_concentration_score",
+            "holder_squeeze_score",
+            "holder_price_confirm_score",
+            "holder_num_stale_days",
+            "top10_holder_stale_days",
+            "top10_holder_ratio",
+        ],
+    },
 }
 
 
