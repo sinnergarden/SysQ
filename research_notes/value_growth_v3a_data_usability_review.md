@@ -35,9 +35,9 @@ Stricter usability review for v3-a candidate data: margin financing (already in 
 | N stocks | 197 |
 | Note | **Essentially zero.** No predictive power for 180d forward returns. |
 
-**Interpretation:** Holder count changes (quarterly frequency, ~30d disclosure lag) do not predict 180d returns in this sample. The signal is already priced in by the time it becomes public.
+**Interpretation:** Raw holder_num_change_qoq has near-zero single-feature IC. This is expected — quarterly frequency and disclosure lag mean the raw change is not a standalone alpha source. However, holder data may still contribute through composite features such as holder_squeeze_score (concentration + price confirmation) or interaction with overheat/value-trap signals. Raw single-factor IC is not the correct test for feature value in a multi-feature model.
 
-**Impact on decision:** Downgrade shareholder count from v3-a to diagnostics-only. Focus v3-a on margin financing only (RankIC 0.0112-0.0245, weak but positive).
+**Impact on decision:** Downgrade raw holder_num_change_qoq from v3-a standalone alpha to composite-only. Proceed to v3-a feature engineering for composite holder features, not raw delta.
 
 ## Margin Quick Alpha Test: margin_balance_change_20d
 
@@ -49,9 +49,9 @@ Stricter usability review for v3-a candidate data: margin financing (already in 
 | N dates | 221 |
 | Coverage (2024-2025) | 98.8% |
 
-Weak positive. Margin balance as a standalone feature is borderline for 180d horizon.
+Weak positive as standalone feature. This is expected — margin financing is an auxiliary capital-participation / crowding signal, not a primary alpha source. Its value likely comes from interaction with existing features (e.g., margin expansion + trend confirmation = continuation; margin contraction + overheat = reversal). Should be tested as an auxiliary feature group, not standalone.
 
-**Decision: PROCEED_TO_V3A_FEATURE_DESIGN_WITH_CAVEATS** — both margin and shareholder count data pass usability review. Shareholder count requires new Tushare collector registration before feature implementation.
+**Decision: PROCEED_TO_V3A_FEATURE_ENGINEERING_AND_ABLATION** — both margin and shareholder count data pass usability review. Shareholder count requires new Tushare collector registration before feature implementation.
 
 ## Scope
 
@@ -223,7 +223,7 @@ If v3-a proceeds, the following must be implemented:
 | Shareholder count fetched? | ❌ Not yet |
 | Shareholder ann_date verified? | ❌ Not yet |
 | Shareholder coverage measured? | ❌ Not yet |
-| Decision | PROCEED_TO_SMALL_DATA_PROBE |
+| Decision | PROCEED_TO_V3A_FEATURE_ENGINEERING_AND_ABLATION |
 
 ## Next Steps
 
