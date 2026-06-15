@@ -1147,7 +1147,121 @@ scripts/
 - 配置文件是实验事实源。
 - 产物通过 manifest 和稳定 ID 引用。
 
-# 8. 全局约束与共用语
+## UC-12: Research Diagnostics & Candidate Explanation
+
+### 目的
+
+对已有 SignalRun 和 Feature List 做只读诊断分析，回答候选池解释、特征质量、rank 稳定性及归因问题。
+
+该 Use Case **不生成新信号、不训练模型、不运行策略回测**。分析产物的消费者是研究员（人工决策），不是 daily pipeline。
+
+### 典型输入
+
+```yaml
+diagnostics_id: my_signal_diagnostics
+experiment_id: my_experiment
+feature_list_id: my_feature_list
+universe: csi800
+start_date: "2024-06-01"
+end_date: "2025-12-31"
+labels:
+  - fwd_ret_180d_raw
+diagnostics:
+  coverage: true
+  feature_ic: true
+  bucket_return: true
+  correlation: true
+  exposure_breakdown: true
+exposure:
+  industry_field_candidates:
+    - industry
+  size_field_candidates:
+    - circ_mv
+    - total_mv
+```
+
+### 标准入口
+
+核心模块（config-driven，通用）：
+
+```text
+qsys/analysis/research_diagnostics.py :: ResearchDiagnostics
+```
+
+候选池快照脚本（参数化，通用）：
+
+```text
+scripts/research/export_candidate_snapshot.py
+```
+
+### 可审计的分析类型
+
+1. **特征 coverage / IC / 分桶收益** — ResearchDiagnostics（config-driven，通用）
+2. **行业暴露 / 行业内 IC / 市值暴露** — ResearchDiagnostics（同上）
+3. **候选池快照（raw_score + 64 特征 + 路径 score）** — `export_candidate_snapshot.py`（`--feature-list-id` 可配置）
+4. **路径分类（continuation / repair / overheat / value_trap）** — 依赖模型 composite score，分类器逻辑通用
+5. **Rank 稳定性（cross-date topK 重叠 + 幸存者偏移）** — 通用，只依赖 predictions.parquet
+6. **Rank 归因（特征 delta 驱动分类法）** — 通用，需两日期快照 merge
+
+### 输出
+
+```text
+# ResearchDiagnostics
+experiments/<experiment_id>/diagnostics/
+  coverage.csv, feature_ic.csv, bucket_return.csv
+  correlation.csv, exposure_breakdown.csv, summary.json
+
+# Candidate snapshot (CLI)
+stdout OR research_outputs/<name>.csv  (NOT committed)
+```
+
+### 通用性说明
+
+| 组件 | 是否通用 | 依赖 |
+|------|---------|------|
+| `ResearchDiagnostics` | ✅ 通用 | config-driven，不写死特征 |
+| `export_candidate_snapshot.py` | ✅ 通用 | `--feature-list-id` + `--experiment-id` 参数驱动 |
+| 路径分类规则 | ⚠️ 部分通用 | 框架通用；阈值和字段名需按模型调整 |
+| Rank 稳定性/归因 | ✅ 通用 | 只依赖 signal + trade_date + score |
+| 审计方法论 | ✅ 通用 | 与具体特征集无关 |
+
+切换投研 idea 时只改 config：
+
+```bash
+# 1. 新建实验
+cp configs/research/exp_a.yaml configs/research/exp_b.yaml
+# 改 experiment_id / feature_list_id / label
+python scripts/run_research.py --config configs/research/exp_b.yaml
+
+# 2. 诊断
+cp configs/diagnostics/diag_a.yaml configs/diagnostics/diag_b.yaml
+python -c "from qsys.analysis.research_diagnostics import ResearchDiagnostics; \
+  r=ResearchDiagnostics.from_config('configs/diagnostics/diag_b.yaml'); r.run()"
+
+# 3. 候选池快照
+python scripts/research/export_candidate_snapshot.py --experiment-id exp_b
+```
+
+### 当前状态
+
+已有：
+
+```text
+qsys/analysis/research_diagnostics.py :: ResearchDiagnostics   (PR #166)
+scripts/research/export_candidate_snapshot.py                   (PR #173)
+configs/diagnostics/                                           (example configs)
+```
+
+### 缺口
+
+- diagnostics 和 candidate snapshot 暂未统一入口。
+- Rank 归因的自动特征 delta 计算尚未标准化。
+- 路径分类 quantile 阈值（0.70 / 0.80）需针对不同模型验证。
+- 候选池快照的输出 schema 未纳入 artifact lineage。
+
+---
+
+# 7. Global Constraints & Conventions
 
 - **Promotion pointer 驱动**：所有 UC-8 和 UC-9 的 daily 运行必须由 promotion pointer 驱动，不得直接使用 `latest` 语义。
 - **ID 链可审计**：每个 daily run manifest 必须包含 signal_run_id、strategy_config_id、backtest_id、candidate_id。
