@@ -321,6 +321,13 @@ class QlibAdapter:
             "$accounts_receiv",
             "$roe",
             "$industry",
+            "$margin_balance",
+            "$margin_buy_amount",
+            "$margin_repay_amount",
+            "$margin_total_balance",
+            "$lend_volume",
+            "$lend_sell_volume",
+            "$lend_repay_volume",
         ]
 
     @staticmethod
@@ -365,6 +372,13 @@ class QlibAdapter:
             "$accounts_receiv": "accounts_receiv",
             "$roe": "roe",
             "$industry": "industry",
+            "$margin_balance": "margin_balance",
+            "$margin_buy_amount": "margin_buy_amount",
+            "$margin_repay_amount": "margin_repay_amount",
+            "$margin_total_balance": "margin_total_balance",
+            "$lend_volume": "lend_volume",
+            "$lend_sell_volume": "lend_sell_volume",
+            "$lend_repay_volume": "lend_repay_volume",
         }
         out = out.rename(columns=rename_map)
         if "trade_date" in out.columns:
