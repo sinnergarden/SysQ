@@ -8,6 +8,4 @@ RESEARCH_FEATURE_FLAGS = {
     "enable_regime_features": False,
     "enable_industry_context_features": False,
     "enable_fundamental_context_features": False,
-    "enable_v3a_margin_features": False,
-    "enable_v3a_shareholder_features": False,
 }
