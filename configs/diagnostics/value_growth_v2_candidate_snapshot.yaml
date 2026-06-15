@@ -1,0 +1,8 @@
+diagnostics_id: value_growth_v2_candidate_snapshot
+signal_id: fwd_ret_180d_raw__daily_zscore
+feature_list_id: value_growth_multibagger_v2_features
+top_k: 100
+lookback_dates: 5
+rank_alert_threshold: 20
+path_high_quantile: 0.70
+risk_extreme_quantile: 0.80
