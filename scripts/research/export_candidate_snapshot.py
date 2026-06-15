@@ -164,7 +164,11 @@ def main() -> None:
     day["name"] = day["instrument"].str.upper().map(name_map)
     day["industry"] = day["instrument"].str.upper().map(ind_map)
     day["rank"] = range(1, len(day) + 1)
-    day["raw_score"] = day.get("score_raw", day["score"])
+    raw_score_available = "score_raw" in day.columns
+    if raw_score_available:
+        day["raw_score"] = day["score_raw"]
+    else:
+        day["raw_score"] = np.nan
     day["score_pct"] = day["score"].rank(pct=True)
 
     scores = {}
@@ -251,8 +255,8 @@ def main() -> None:
                  "rank_stability_flag", "path_type"]
 
     path_score_cols = [c for c in day.columns if "candidate_score" in c or "risk_score" in c]
-    out_cols = base_cols + feat_cols
-    # deduplicate
+    path_pct_cols = [c for c in day.columns if c.endswith("_score_pct") or c.endswith("_risk_score_pct")]
+    out_cols = base_cols + feat_cols + path_score_cols + path_pct_cols
     out_cols = list(dict.fromkeys(out_cols))
 
     result = day[out_cols].copy()
@@ -266,7 +270,7 @@ def main() -> None:
     print(f"  Feature columns expected: {exp_cols}")
     print(f"  Feature columns available: {avail_cols}")
     print(f"  Feature coverage ratio: {avail_cols/exp_cols:.1%}")
-    print(f"  raw_score available: {'score_raw' in signal_df.columns}")
+    print(f"  raw_score available: {raw_score_available}")
     print(f"  Path scores available: {all(c in result.columns for c in ['continuation_candidate_score','repair_candidate_score'])}")
     print(f"  Prev date available: {prev_info[0][0] if prev_info else 'N/A'}")
     print(f"  Rank stability coverage: {result['rank_stability_flag'].notna().sum()}/{len(result)}")
