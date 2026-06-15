@@ -72,7 +72,8 @@ def build_phase1_features(df: pd.DataFrame, flags: dict | None = None) -> pd.Dat
         from qsys.feature.groups.value_growth_v3a import build_margin_features
         out = build_margin_features(out)
     if flags.get("enable_v3a_shareholder_features", False):
-        from qsys.feature.groups.value_growth_v3a import build_shareholder_features
+        from qsys.feature.groups.value_growth_v3a import load_shareholder_data, build_shareholder_features
+        out = load_shareholder_data(out)
         out = build_shareholder_features(out)
 
     standardize_cols = [

@@ -1,34 +1,26 @@
-# v3a ablation: v2 + shareholder, 2020-2025
-
-experiment_id: v3a_ablation_shareholder
-title: "v3a ablation — v2 + shareholder (2020-2025)"
-description: "Ablation: v2 64 features + shareholder concentration features."
-
 calendar:
-  start_date: "2020-01-01"
-  end_date: "2025-12-31"
-  train_window_days: 504
+  end_date: '2025-12-31'
+  start_date: '2020-01-01'
   step_days: 20
-
-signal:
-  signal_id: v3a_shareholder
-  score_column: score
-
-feature_list_id: value_growth_multibagger_v3a_features
-
+  train_window_days: 504
+description: 'Ablation: v2 64 features + 10 shareholder features'
+experiment_id: v3a_ablation_shareholder
+feature_list_id: value_growth_v2_shareholder_features
 generators:
-  - generator_id: v3a_sh
-    type: multi_label_lightgbm
-    params:
-      universe: csi800
-      n_estimators: 300
-      feature_list_id: value_growth_multibagger_v3a_features
-      labels:
-        - label_id: fwd_ret_180d_raw
-
-signal_transforms:
-  - transform_id: daily_zscore
-    type: daily_zscore
-
+- generator_id: v3a_sh
+  params:
+    feature_list_id: value_growth_v2_shareholder_features
+    labels:
+    - label_id: fwd_ret_180d_raw
+    n_estimators: 300
+    universe: csi800
+  type: multi_label_lightgbm
 labels:
-  - label_id: fwd_ret_180d_raw
+- label_id: fwd_ret_180d_raw
+signal:
+  score_column: score
+  signal_id: v3a_shareholder
+signal_transforms:
+- transform_id: daily_zscore
+  type: daily_zscore
+title: v3a ablation - v2 + shareholder (2020-2025)

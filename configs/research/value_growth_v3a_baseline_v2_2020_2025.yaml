@@ -1,34 +1,27 @@
-# v3a ablation baseline: v2 features, 2020-2025 period
-
-experiment_id: v3a_ablation_baseline
-title: "v3a ablation — v2 baseline (2020-2025)"
-description: "Ablation baseline: standard v2 64 features, 2020-2025 rolling, 180d label."
-
 calendar:
-  start_date: "2020-01-01"
-  end_date: "2025-12-31"
-  train_window_days: 504
+  end_date: '2025-12-31'
+  start_date: '2020-01-01'
   step_days: 20
-
-signal:
-  signal_id: v3a_baseline
-  score_column: score
-
+  train_window_days: 504
+description: 'Ablation baseline: standard v2 64 features, 2020-2025 rolling, 180d
+  label.'
+experiment_id: v3a_ablation_baseline
 feature_list_id: value_growth_multibagger_v2_features
-
 generators:
-  - generator_id: v3a_bl
-    type: multi_label_lightgbm
-    params:
-      universe: csi800
-      n_estimators: 300
-      feature_list_id: value_growth_multibagger_v2_features
-      labels:
-        - label_id: fwd_ret_180d_raw
-
-signal_transforms:
-  - transform_id: daily_zscore
-    type: daily_zscore
-
+- generator_id: v3a_bl
+  params:
+    feature_list_id: value_growth_multibagger_v2_features
+    labels:
+    - label_id: fwd_ret_180d_raw
+    n_estimators: 300
+    universe: csi800
+  type: multi_label_lightgbm
 labels:
-  - label_id: fwd_ret_180d_raw
+- label_id: fwd_ret_180d_raw
+signal:
+  score_column: score
+  signal_id: v3a_baseline
+signal_transforms:
+- transform_id: daily_zscore
+  type: daily_zscore
+title: v3a ablation — v2 baseline (2020-2025)

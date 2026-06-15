@@ -145,6 +145,70 @@ def build_margin_features(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+# ── Shareholder data loader ──────────────────────────────────────────────
+
+
+_HOLDER_PATH = None  # set via load_shareholder_data()
+
+
+def load_shareholder_data(df: pd.DataFrame, holder_path: str = "data/canonical/holder_num.parquet") -> pd.DataFrame:
+    """Load shareholder data from parquet and PIT-merge via ``ann_date`` merge_asof.
+
+    ``df`` must have ``trade_date`` (parsed) and ``instrument`` / ``ts_code`` columns.
+    Returns *df* with ``holder_num``, ``top10_holder_ratio``, ``holder_ann_date``,
+    ``top10_ann_date``, ``total_share`` appended.
+    """
+    out = df.copy()
+    td_key = "trade_date" if "trade_date" in out.columns else None
+    if td_key is None:
+        return out
+
+    out["_dt"] = pd.to_datetime(out[td_key])
+    out["_inst"] = out.get("instrument", out.get("ts_code", "")).str.upper()
+
+    # holder_num
+    try:
+        hdf = pd.read_parquet(holder_path)
+        hdf["_ann_dt"] = pd.to_datetime(hdf["ann_date"])
+        hdf["_inst"] = hdf["inst"].str.upper()
+        hdf = hdf.sort_values(["_inst", "_ann_dt"])
+        merged = pd.merge_asof(
+            out.sort_values("_dt")[["_dt", "_inst"]],
+            hdf[["_inst", "_ann_dt", "holder_num"]].rename(columns={"_ann_dt": "_dt"}),
+            on="_dt", by="_inst", direction="backward",
+        )
+        out["holder_num"] = merged["holder_num"]
+        out["holder_ann_date"] = merged["_dt"].dt.strftime("%Y-%m-%d")
+    except Exception:
+        out["holder_num"] = pd.NA
+        out["holder_ann_date"] = pd.NA
+
+    # total_share as proxy if available
+    if "total_share" not in out.columns:
+        out["total_share"] = pd.NA
+
+    # top10_holder_ratio
+    top10_path = holder_path.replace("holder_num", "top10_holder_ratio")
+    try:
+        tdf = pd.read_parquet(top10_path)
+        tdf["_ann_dt"] = pd.to_datetime(tdf["ann_date"])
+        tdf["_inst"] = tdf["inst"].str.upper()
+        tdf = tdf.sort_values(["_inst", "_ann_dt"])
+        merged2 = pd.merge_asof(
+            out.sort_values("_dt")[["_dt", "_inst"]],
+            tdf[["_inst", "_ann_dt", "top10_ratio"]].rename(columns={"_ann_dt": "_dt", "top10_ratio": "top10_holder_ratio"}),
+            on="_dt", by="_inst", direction="backward",
+        )
+        out["top10_holder_ratio"] = merged2["top10_holder_ratio"]
+        out["top10_ann_date"] = merged2["_dt"].dt.strftime("%Y-%m-%d")
+    except Exception:
+        out["top10_holder_ratio"] = pd.NA
+        out["top10_ann_date"] = pd.NA
+
+    out = out.drop(columns=["_dt", "_inst"], errors="ignore")
+    return out
+
+
 # ── Shareholder concentration features ──────────────────────────────────
 
 
