@@ -320,6 +320,13 @@ class QlibAdapter:
             "$inventory",
             "$accounts_receiv",
             "$roe",
+            "$margin_balance",
+            "$margin_buy_amount",
+            "$margin_repay_amount",
+            "$margin_total_balance",
+            "$lend_volume",
+            "$lend_sell_volume",
+            "$lend_repay_volume",
             "$industry",
         ]
 
@@ -364,6 +371,13 @@ class QlibAdapter:
             "$inventory": "inventory",
             "$accounts_receiv": "accounts_receiv",
             "$roe": "roe",
+            "$margin_balance": "margin_balance",
+            "$margin_buy_amount": "margin_buy_amount",
+            "$margin_repay_amount": "margin_repay_amount",
+            "$margin_total_balance": "margin_total_balance",
+            "$lend_volume": "lend_volume",
+            "$lend_sell_volume": "lend_sell_volume",
+            "$lend_repay_volume": "lend_repay_volume",
             "$industry": "industry",
         }
         out = out.rename(columns=rename_map)
