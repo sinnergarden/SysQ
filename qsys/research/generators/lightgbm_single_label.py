@@ -51,12 +51,16 @@ class LightGBMSingleLabelGenerator:
     feature_list_id: str | None = None
 
     _qlib_inited: bool = field(default=False, repr=False)
-
-    # Note: LabelStore() defaults to root="data/research" (see LabelStore.__init__).
-    # Custom root injection is not yet wired through this generator — the default
-    # path matches the RollingResearchRunner default.  If a custom research root
-    # is needed, this generator should accept an explicit LabelStore instance.
     _clean_features: list[str] = field(default_factory=list, repr=False)
+
+    # Custom (non-LightGBM) param keys stripped before passing to train
+    _CUSTOM_PARAMS = {"enable_recency_weight"}
+
+    @property
+    def _lgb_train_params(self) -> dict | None:
+        if self.lgb_params is None:
+            return None
+        return {k: v for k, v in self.lgb_params.items() if k not in self._CUSTOM_PARAMS}
 
     def _ensure_qlib(self) -> None:
         if not self._qlib_inited:
@@ -136,10 +140,33 @@ class LightGBMSingleLabelGenerator:
         if y_tr.empty:
             raise ValueError(f"No valid training samples for {self.label_id}")
 
+        # ── Option A: lambdarank — label percentile ranking + groups ──
+        groups = None
+        if self.lgb_params and self.lgb_params.get("objective") == "lambdarank":
+            # Use percentile rank (0-99) to retain full ordering info
+            rank_label = train.loc[y_valid, ["trade_date", "label_value"]].copy()
+            rank_label["label_rank"] = rank_label.groupby("trade_date")["label_value"] \
+                .transform(lambda s: s.rank(pct=True).mul(99).astype(int))
+            y_tr = rank_label["label_rank"].astype(float)
+            # Compute group boundaries (one group per trade date)
+            group_sizes = rank_label.groupby("trade_date").size()
+            groups = group_sizes.values
+
+        # ── Option C: recency weighting ──────────────────────────────
+        sample_weight = None
+        if self.lgb_params and self.lgb_params.get("enable_recency_weight", False):
+            train_end_dt = pd.Timestamp(train_end)
+            train["_day_dist"] = (train_end_dt - pd.to_datetime(train["trade_date"])).dt.days.clip(lower=0)
+            # sqrt decay: weight ≈ 1 / sqrt(1 + days_from_end / 30)
+            train["_weight"] = 1.0 / np.sqrt(1.0 + train["_day_dist"] / 30.0)
+            sample_weight = train.loc[y_valid, "_weight"]
+
         model, center, scale = train_model(
             X_tr.loc[y_tr.index], y_tr, "window",
             n_estimators=self.n_estimators,
-            lgb_params=self.lgb_params,
+            lgb_params=self._lgb_train_params,
+            sample_weight=sample_weight,
+            groups=groups,
         )
 
         # Predict

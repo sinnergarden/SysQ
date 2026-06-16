@@ -1,0 +1,53 @@
+experiment_id: v3a_fl_ensemble
+calendar:
+  start_date: "2020-01-01"
+  end_date: "2025-12-31"
+  train_window_days: 504
+  step_days: 20
+signal:
+  signal_id: fl_ensemble
+  score_column: score
+feature_list_id: value_growth_multibagger_v3a_features
+generators:
+  - generator_id: fl_60
+    type: multi_label_lightgbm
+    params:
+      universe: csi800
+      n_estimators: 300
+      feature_list_id: value_growth_multibagger_v3a_features
+      labels:
+        - label_id: fwd_ret_60d_raw
+          signal_id: fwd_ret_60d_raw
+  - generator_id: fl_120
+    type: multi_label_lightgbm
+    params:
+      universe: csi800
+      n_estimators: 300
+      feature_list_id: value_growth_multibagger_v3a_features
+      labels:
+        - label_id: fwd_ret_120d_raw
+          signal_id: fwd_ret_120d_raw
+  - generator_id: fl_180
+    type: multi_label_lightgbm
+    params:
+      universe: csi800
+      n_estimators: 300
+      feature_list_id: value_growth_multibagger_v3a_features
+      labels:
+        - label_id: fwd_ret_180d_raw
+          signal_id: fwd_ret_180d_raw
+signal_transforms:
+  - transform_id: daily_zscore
+    type: daily_zscore
+signal_combinations:
+  - combine_id: equal_weight
+    type: equal_weight
+    inputs:
+      - source_generator_id: fl_60__fwd_ret_60d_raw
+        source_transform_id: daily_zscore
+      - source_generator_id: fl_120__fwd_ret_120d_raw
+        source_transform_id: daily_zscore
+      - source_generator_id: fl_180__fwd_ret_180d_raw
+        source_transform_id: daily_zscore
+labels:
+  - label_id: fwd_ret_180d_raw
