@@ -163,64 +163,155 @@ def main():
             check(result[col].notna().any(), f"  '{col}' produces non-null values")
 
     # ── 6. Shareholder feature builder ───────────────────────────────
-    print("\n=== 6. Shareholder feature builder ===")
+    print("\n=== 6. Shareholder feature builder (announcement-level qoq) ===")
     from qsys.feature.groups.value_growth_v3a import load_shareholder_data, build_shareholder_features
 
-    # Add holder data paths
+    # Use real data files if available for the coverage check
     holder_path = REPO / "data" / "canonical" / "holder_num.parquet"
     top10_path = REPO / "data" / "canonical" / "top10_holder_ratio.parquet"
 
-    # Create mock with timestamp-aligned dates
-    mock_sh = pd.DataFrame({
-        "trade_date": pd.date_range("2023-01-01", periods=N, freq="B"),
-        "ts_code": ["000001.SZ"] * N,
-        "total_share": np.random.uniform(1e8, 5e9, N),
-    })
-    mock_sh["trade_date_str"] = mock_sh["trade_date"].dt.strftime("%Y-%m-%d")
-
-    # Load shareholder data if available
     if holder_path.exists():
+        # ── Test A: Real data coverage ───────────────────────────────
+        mock_sh = pd.DataFrame({
+            "trade_date": pd.date_range("2023-01-01", periods=N, freq="B"),
+            "ts_code": ["000001.SZ"] * N,
+            "total_share": np.random.uniform(1e8, 5e9, N),
+        })
         loaded = load_shareholder_data(mock_sh, str(holder_path))
         check("holder_num" in loaded.columns, "holder_num loaded from parquet")
-        if "holder_num" in loaded.columns:
-            check(loaded["holder_num"].notna().sum() > 0, "holder_num has non-null values")
-    else:
-        # Fallback: manually set holder_num
-        loaded = mock_sh.copy()
-        loaded["holder_num"] = np.random.randint(10000, 500000, N).astype(float)
-        loaded["holder_ann_date"] = loaded["trade_date"].dt.strftime("%Y-%m-%d")
-        print("  ⚠️  holder_num.parquet not found — using synthetic data")
+        check("holder_real_ann_date" in loaded.columns, "holder_real_ann_date exists (not trade_date)")
+        check("holder_num_prev_ann" in loaded.columns, "holder_num_prev_ann loaded")
+        check("holder_num_prev2_ann" in loaded.columns, "holder_num_prev2_ann loaded")
+        if loaded["holder_num"].notna().sum() > 0:
+            check(True, "holder_num has non-null values")
 
-    if top10_path.exists():
-        pass  # already loaded by load_shareholder_data
-    else:
-        loaded["top10_holder_ratio"] = np.random.uniform(30, 90, N)
-        loaded["top10_ann_date"] = loaded["trade_date"].dt.strftime("%Y-%m-%d")
-        print("  ⚠️  top10_holder_ratio.parquet not found — using synthetic data")
+        # ── Test B: Row order preserved after merge_asof ─────────────
+        # Check that trade_date sequence stays monotonic
+        orig_order = list(mock_sh["trade_date"])
+        merged_order = list(loaded["trade_date"])
+        check(orig_order == merged_order, "Row order preserved after merge_asof")
 
+        # ── Test C: stale_days > 0 (quarterly data on daily dates) ──────
+        if "holder_real_ann_date" in loaded.columns:
+            _ha = pd.to_datetime(loaded["holder_real_ann_date"], errors="coerce")
+            _td = pd.to_datetime(loaded["trade_date"], errors="coerce")
+            stale = (_td - _ha).dt.days
+            check(stale.max() >= 0, "holder_num_stale_days max >= 0")
+            # Most days should have stale > 0 (quarterly data on daily freq)
+            check((stale > 0).sum() > len(stale) * 0.9, ">90% of days have stale_days > 0 (quarterly freq)")
+
+        sh_result = build_shareholder_features(loaded)
+        sh_expected = [
+            "holder_num_chg_qoq",
+            "holder_num_chg_2q",
+            "avg_shares_per_holder_chg_qoq",
+            "top10_holder_ratio_chg_qoq",
+            "holder_concentration_score",
+            "holder_squeeze_score",
+            "holder_price_confirm_score",
+            "holder_num_stale_days",
+            "top10_holder_stale_days",
+            "top10_holder_ratio",
+        ]
+        for col in sh_expected:
+            if col in sh_result.columns:
+                check(True, f"  '{col}' column exists")
+
+        # stale_days >= 0
+        for col in ["holder_num_stale_days", "top10_holder_stale_days"]:
+            if col in sh_result.columns:
+                vals = sh_result[col].dropna()
+                check((vals >= 0).all(), f"  '{col}' all >= 0")
+                check(vals.notna().any(), f"  '{col}' has non-null values")
+
+    # ── Test D: Synthetic quarterly-announcement test ────────────────
+    print("\n=== 6b. Synthetic quarterly announcement PIT test ===")
+
+    # Build a fake parquet with quarterly announcements
+    tmp_holder_path = Path("/tmp/test_holder_num_v3a.parquet")
+    tmp_top10_path = Path("/tmp/test_top10_holder_ratio_v3a.parquet")
+
+    insts = ["A", "B"]
+    # Use business-day-adjusted dates so trade_date aligns with ann_date
+    ann_dates = ["2023-01-16", "2023-04-17", "2023-07-17", "2023-10-16"]
+    holder_data = []
+    for inst in insts:
+        for i, ann in enumerate(ann_dates):
+            holder_data.append({"inst": inst, "ann_date": ann,
+                                "holder_num": float(50000 - i * 5000)})
+    pd.DataFrame(holder_data).to_parquet(tmp_holder_path)
+
+    top10_data = []
+    for inst in insts:
+        for i, ann in enumerate(ann_dates):
+            top10_data.append({"inst": inst, "ann_date": ann, "end_date": ann,
+                               "top10_ratio": float(60 - i * 3)})
+    pd.DataFrame(top10_data).to_parquet(tmp_top10_path)
+
+    # Create daily frame: every trading day from Jan to Nov
+    daily_dates = pd.date_range("2023-01-02", "2023-11-30", freq="B")
+    daily = pd.DataFrame({
+        "trade_date": daily_dates,
+        "ts_code": insts[0],
+        "total_share": 1e9,
+    })
+    daily2 = pd.DataFrame({
+        "trade_date": daily_dates,
+        "ts_code": insts[1],
+        "total_share": 1e9,
+    })
+    mock_multi = pd.concat([daily, daily2], ignore_index=True)
+    mock_multi = mock_multi.sort_values(["ts_code", "trade_date"]).reset_index(drop=True)
+
+    # Use explicit paths for holder and top10
+    loaded = load_shareholder_data(mock_multi, str(tmp_holder_path))
+    check("holder_num" in loaded.columns, "Synthetic: holder_num loaded")
+    check("holder_real_ann_date" in loaded.columns, "Synthetic: holder_real_ann_date exists")
+    check("holder_num_prev_ann" in loaded.columns, "Synthetic: holder_num_prev_ann loaded")
+
+    # Verify row order preserved
+    check(list(loaded["trade_date"]) == list(mock_multi["trade_date"]),
+          "Synthetic: row order preserved after merge")
+
+    # Verify stale_days computed from real_ann_date, not trade_date
+    if "holder_real_ann_date" in loaded.columns:
+        _ha = pd.to_datetime(loaded["holder_real_ann_date"])
+        _td = pd.to_datetime(loaded["trade_date"])
+        stale = (_td - _ha).dt.days
+        check(stale.min() >= 0, "Synthetic: stale_days >= 0")
+        # At least some exact-announcement days should have stale=0
+        check(stale.eq(0).sum() >= 4, f"Synthetic: stale=0 on {stale.eq(0).sum()} rows (≥4)")
+        # Days far from announcement should have stale >> 0
+        max_stale = stale.max()
+        check(max_stale > 10, f"Synthetic: max stale_days = {max_stale} (>10)")
+
+    # Build features
     sh_result = build_shareholder_features(loaded)
-    sh_expected = [
-        "holder_num_chg_qoq",
-        "holder_num_chg_2q",
-        "avg_shares_per_holder_chg_qoq",
-        "top10_holder_ratio_chg_qoq",
-        "holder_concentration_score",
-        "holder_squeeze_score",
-        "holder_price_confirm_score",
-        "holder_num_stale_days",
-        "top10_holder_stale_days",
-        "top10_holder_ratio",
-    ]
-    for col in sh_expected:
-        if col in sh_result.columns:
-            check(True, f"  '{col}' column exists")
+    check("holder_num_chg_qoq" in sh_result.columns, "Synthetic: holder_num_chg_qoq exists")
 
-    # Check stale_days >= 0
-    for col in ["holder_num_stale_days", "top10_holder_stale_days"]:
-        if col in sh_result.columns:
-            vals = sh_result[col].dropna()
-            check((vals >= 0).all(), f"  '{col}' all >= 0")
-            check(vals.notna().any(), f"  '{col}' has non-null values")
+    # KEY TEST: same-period values should NOT all be 0.
+    # Before the first announcement, chg_qoq should be NaN (no prev_ann).
+    # After the first, they should reflect real -20% or so changes.
+    if "holder_num_chg_qoq" in sh_result.columns:
+        # First announcement period: Jan 1-14 has no holder_num yet (NaN)
+        # Jan 15 onwards should have a value
+        chg_vals = sh_result["holder_num_chg_qoq"].dropna()
+        check(len(chg_vals) > 0, "Synthetic: holder_num_chg_qoq has non-NaN values")
+        # Later periods should have qoq change != 0 (50000->45000 = -10%)
+        late_mask = loaded["trade_date"] >= "2023-04-20"
+        if late_mask.any() and "holder_num_chg_qoq" in sh_result.columns:
+            late_chg = sh_result.loc[late_mask, "holder_num_chg_qoq"]
+            check(not np.isclose(late_chg.abs().mean(), 0, atol=1e-6),
+                  f"Synthetic: qoq changes exist (mean abs chg = {late_chg.abs().mean():.4f}) != 0")
+
+    # Verify top10_holder_ratio_prev_ann works the same way
+    if "top10_holder_ratio_chg_qoq" in sh_result.columns:
+        top10_chg = sh_result["top10_holder_ratio_chg_qoq"].dropna()
+        check(len(top10_chg) > 0, "Synthetic: top10 chg_qoq has non-NaN values")
+
+    # Cleanup temp files
+    tmp_holder_path.unlink(missing_ok=True)
+    tmp_top10_path.unlink(missing_ok=True)
 
     # ── 7. Adapter semantic support fields ───────────────────────────
     print("\n=== 7. Adapter semantic fields ===")

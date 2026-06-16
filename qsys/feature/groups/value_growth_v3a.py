@@ -135,12 +135,36 @@ def build_margin_features(df: pd.DataFrame) -> pd.DataFrame:
 # ── Shareholder data loader ──────────────────────────────────────────────
 
 
+def _build_ann_date_lookup(hdf: pd.DataFrame) -> pd.DataFrame:
+    """Pre-compute previous announcement holder counts for qoq / 2q changes.
+
+    For each stock, sort by ann_date and shift to get previous and
+    second-previous values.  These are then merge_asof'd into daily
+    frequency so that chg_qoq reflects real announcement-to-announcement
+    changes, not day-over-day noise.
+    """
+    hdf = hdf.sort_values(["inst", "ann_date"]).copy()
+
+    # Previous announcement values
+    for col, label in [("holder_num", "holder_num_prev_ann"),
+                       ("holder_num", "holder_num_prev2_ann")]:
+        pass  # handled below
+
+    hdf["holder_num_prev_ann"] = hdf.groupby("inst")["holder_num"].shift(1)
+    hdf["holder_num_prev2_ann"] = hdf.groupby("inst")["holder_num"].shift(2)
+    return hdf
+
+
 def load_shareholder_data(df: pd.DataFrame, holder_path: str = "data/canonical/holder_num.parquet") -> pd.DataFrame:
     """Load shareholder data from parquet and PIT-merge via ``ann_date`` merge_asof.
 
     ``df`` must have ``trade_date`` (parsed) and ``instrument`` / ``ts_code`` columns.
-    Returns *df* with ``holder_num``, ``top10_holder_ratio``, ``holder_ann_date``,
-    ``top10_ann_date``, ``total_share`` appended.
+    Returns *df* with ``holder_num``, ``top10_holder_ratio``, ``holder_real_ann_date``,
+    ``top10_real_ann_date``, ``holder_num_prev_ann``, ``holder_num_prev2_ann``,
+    ``top10_holder_ratio_prev_ann``, ``total_share`` appended.
+
+    Changes (qoq/2q) are computed at the announcement level before merging,
+    then propagated to daily frequency via merge_asof.
     """
     out = df.copy()
     td_key = "trade_date" if "trade_date" in out.columns else None
@@ -149,54 +173,89 @@ def load_shareholder_data(df: pd.DataFrame, holder_path: str = "data/canonical/h
 
     out["_dt"] = pd.to_datetime(out[td_key])
     out["_inst"] = out.get("instrument", out.get("ts_code", "")).str.upper()
+    # _row_id tracks original row order so we can restore it after merge_asof
+    out["_row_id"] = np.arange(len(out))
 
-    # holder_num
-    try:
-        hdf = pd.read_parquet(holder_path)
-        hdf["_ann_dt"] = pd.to_datetime(hdf["ann_date"])
-        hdf["_inst"] = hdf["inst"].str.upper()
-        # BUGFIX: global sort by _dt + reset_index for merge_asof compatibility
-        right_hn = hdf[["_inst", "_ann_dt", "holder_num"]].rename(
-            columns={"_ann_dt": "_dt"}
-        ).sort_values("_dt").reset_index(drop=True)
-        left_sorted = out.sort_values("_dt")[["_dt", "_inst"]].reset_index(drop=True)
+    # ── helper: merge_asof one right-side table, preserving row order ──
+    def _merge_pit(left: pd.DataFrame, right: pd.DataFrame) -> pd.DataFrame:
+        """Merge ``right`` into ``left`` by ``_inst`` / ``_dt`` (backward).
+
+        Both sides must have ``_dt``, ``_inst``.
+        ``right`` should already have been prepared with the columns needed
+        (including a ``_real_ann_dt`` if it should be tracked).  The merge
+        result is joined back to ``left`` by ``_row_id`` to restore order.
+        """
+        left_sorted = left.sort_values("_dt")[["_row_id", "_dt", "_inst"]].reset_index(drop=True)
+        # right must be globally sorted by _dt for merge_asof
+        right_sorted = right.sort_values("_dt").reset_index(drop=True)
         merged = pd.merge_asof(
             left_sorted,
-            right_hn,
+            right_sorted,
             on="_dt", by="_inst", direction="backward",
         )
-        out["holder_num"] = merged["holder_num"]
-        out["holder_ann_date"] = merged["_dt"].dt.strftime("%Y-%m-%d")
+        # Restore original order via _row_id
+        merged = merged.sort_values("_row_id").reset_index(drop=True)
+        merged = merged.drop(columns=["_dt", "_inst", "_row_id"])
+        return merged
+
+    # ── holder_num + prev_ann values ──────────────────────────────────
+    try:
+        hdf = pd.read_parquet(holder_path)
+        hdf["_dt"] = pd.to_datetime(hdf["ann_date"])
+        hdf["_real_ann_dt"] = hdf["_dt"]  # keep real ann_date before rename
+        hdf["_inst"] = hdf["inst"].str.upper()
+
+        # Pre-compute previous-announcement values on the raw data
+        hdf_sorted = hdf.sort_values(["_inst", "_dt"])
+        hdf["holder_num_prev_ann"] = (
+            hdf_sorted.groupby("_inst")["holder_num"].shift(1)
+        ).values if len(hdf_sorted) == len(hdf) else np.nan
+        hdf["holder_num_prev2_ann"] = (
+            hdf_sorted.groupby("_inst")["holder_num"].shift(2)
+        ).values if len(hdf_sorted) == len(hdf) else np.nan
+
+        right = hdf[["_inst", "_dt", "_real_ann_dt", "holder_num",
+                      "holder_num_prev_ann", "holder_num_prev2_ann"]]
+        result = _merge_pit(out[["_row_id", "_dt", "_inst"]], right)
+        out["holder_num"] = result["holder_num"]
+        out["holder_num_prev_ann"] = result["holder_num_prev_ann"]
+        out["holder_num_prev2_ann"] = result["holder_num_prev2_ann"]
+        out["holder_real_ann_date"] = result["_real_ann_dt"].dt.strftime("%Y-%m-%d")
     except Exception:
         out["holder_num"] = np.nan
-        out["holder_ann_date"] = np.nan
+        out["holder_num_prev_ann"] = np.nan
+        out["holder_num_prev2_ann"] = np.nan
+        out["holder_real_ann_date"] = np.nan
 
     # total_share as proxy if available
     if "total_share" not in out.columns:
         out["total_share"] = np.nan
 
-    # top10_holder_ratio
+    # ── top10_holder_ratio + prev_ann ─────────────────────────────────
     top10_path = holder_path.replace("holder_num", "top10_holder_ratio")
     try:
         tdf = pd.read_parquet(top10_path)
-        tdf["_ann_dt"] = pd.to_datetime(tdf["ann_date"])
+        tdf["_dt"] = pd.to_datetime(tdf["ann_date"])
+        tdf["_real_ann_dt"] = tdf["_dt"]
         tdf["_inst"] = tdf["inst"].str.upper()
-        right_top10 = tdf[["_inst", "_ann_dt", "top10_ratio"]].rename(
-            columns={"_ann_dt": "_dt", "top10_ratio": "top10_holder_ratio"}
-        ).sort_values("_dt").reset_index(drop=True)
-        left_sorted = out.sort_values("_dt")[["_dt", "_inst"]].reset_index(drop=True)
-        merged2 = pd.merge_asof(
-            left_sorted,
-            right_top10,
-            on="_dt", by="_inst", direction="backward",
-        )
-        out["top10_holder_ratio"] = merged2["top10_holder_ratio"]
-        out["top10_ann_date"] = merged2["_dt"].dt.strftime("%Y-%m-%d")
+
+        tdf_sorted = tdf.sort_values(["_inst", "_dt"])
+        tdf["top10_holder_ratio_prev_ann"] = (
+            tdf_sorted.groupby("_inst")["top10_ratio"].shift(1)
+        ).values if len(tdf_sorted) == len(tdf) else np.nan
+
+        right = tdf[["_inst", "_dt", "_real_ann_dt", "top10_ratio",
+                      "top10_holder_ratio_prev_ann"]]
+        result = _merge_pit(out[["_row_id", "_dt", "_inst"]], right)
+        out["top10_holder_ratio"] = result["top10_ratio"]
+        out["top10_holder_ratio_prev_ann"] = result["top10_holder_ratio_prev_ann"]
+        out["top10_real_ann_date"] = result["_real_ann_dt"].dt.strftime("%Y-%m-%d")
     except Exception:
         out["top10_holder_ratio"] = np.nan
-        out["top10_ann_date"] = np.nan
+        out["top10_holder_ratio_prev_ann"] = np.nan
+        out["top10_real_ann_date"] = np.nan
 
-    out = out.drop(columns=["_dt", "_inst"], errors="ignore")
+    out = out.drop(columns=["_dt", "_inst", "_row_id"], errors="ignore")
     return out
 
 
@@ -204,42 +263,46 @@ def load_shareholder_data(df: pd.DataFrame, holder_path: str = "data/canonical/h
 
 
 def build_shareholder_features(df: pd.DataFrame) -> pd.DataFrame:
-    """Build shareholder / concentration features."""
+    """Build shareholder / concentration features.
+
+    Uses announcement-level previous values (holder_num_prev_ann,
+    holder_num_prev2_ann, top10_holder_ratio_prev_ann) that were
+    pre-computed by ``load_shareholder_data``.  This ensures qoq changes
+    reflect real announcement-to-announcement transitions rather than
+    day-over-day noise.
+    """
     out = df.copy()
 
-    # ── Holder num change ──────────────────────────────────────────
-    if "holder_num" in out.columns and "ts_code" in out.columns:
-        _prev = out.groupby("ts_code")["holder_num"].shift(1)
-        out["holder_num_chg_qoq"] = _clip_inf(_safe_div(out["holder_num"], _prev) - 1)
-        _prev2 = out.groupby("ts_code")["holder_num"].shift(2)
-        out["holder_num_chg_2q"] = _clip_inf(_safe_div(out["holder_num"], _prev2) - 1)
+    # ── Holder num change (announcement-level qoq/2q) ──────────────
+    if "holder_num" in out.columns and "holder_num_prev_ann" in out.columns:
+        out["holder_num_chg_qoq"] = _clip_inf(
+            _safe_div(out["holder_num"], out["holder_num_prev_ann"]) - 1
+        )
+    if "holder_num" in out.columns and "holder_num_prev2_ann" in out.columns:
+        out["holder_num_chg_2q"] = _clip_inf(
+            _safe_div(out["holder_num"], out["holder_num_prev2_ann"]) - 1
+        )
 
-    # ── Avg shares per holder ──────────────────────────────────────
-    if {"holder_num", "total_share"}.issubset(out.columns):
+    # ── Avg shares per holder (announcement-level qoq) ─────────────
+    if {"holder_num", "total_share", "holder_num_prev_ann"}.issubset(out.columns):
         _avg = out["total_share"] / out["holder_num"].replace(0, np.nan)
+        _avg_prev = out["total_share"] / out["holder_num_prev_ann"].replace(0, np.nan)
         out["avg_shares_per_holder"] = _avg
-        _prev_avg = _avg.groupby(out["ts_code"]).shift(1) if "ts_code" in out.columns else None
-        if _prev_avg is not None:
-            out["avg_shares_per_holder_chg_qoq"] = _clip_inf(
-                _safe_div(_avg, _prev_avg) - 1
-            )
+        out["avg_shares_per_holder_chg_qoq"] = _clip_inf(_safe_div(_avg, _avg_prev) - 1)
 
-    # ── Top10 holder ratio ─────────────────────────────────────────
-    if "top10_holder_ratio" in out.columns and "ts_code" in out.columns:
+    # ── Top10 holder ratio (announcement-level qoq) ────────────────
+    if "top10_holder_ratio" in out.columns and "top10_holder_ratio_prev_ann" in out.columns:
         out["top10_holder_ratio_chg_qoq"] = _clip_inf(
-            _safe_div(
-                out["top10_holder_ratio"],
-                out.groupby("ts_code")["top10_holder_ratio"].shift(1),
-            ) - 1
+            _safe_div(out["top10_holder_ratio"], out["top10_holder_ratio_prev_ann"]) - 1
         )
 
     # ── Datetime columns for stale-days ─────────────────────────────
-    if "holder_ann_date" in out.columns and "trade_date" in out.columns:
-        _ha = pd.to_datetime(out["holder_ann_date"], errors="coerce")
+    if "holder_real_ann_date" in out.columns and "trade_date" in out.columns:
+        _ha = pd.to_datetime(out["holder_real_ann_date"], errors="coerce")
         _td = pd.to_datetime(out["trade_date"], errors="coerce")
         out["holder_num_stale_days"] = (_td - _ha).dt.days.clip(lower=0)
-    if "top10_ann_date" in out.columns and "trade_date" in out.columns:
-        _ta = pd.to_datetime(out["top10_ann_date"], errors="coerce")
+    if "top10_real_ann_date" in out.columns and "trade_date" in out.columns:
+        _ta = pd.to_datetime(out["top10_real_ann_date"], errors="coerce")
         _td = pd.to_datetime(out["trade_date"], errors="coerce")
         out["top10_holder_stale_days"] = (_td - _ta).dt.days.clip(lower=0)
 
