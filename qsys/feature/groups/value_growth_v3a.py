@@ -135,26 +135,6 @@ def build_margin_features(df: pd.DataFrame) -> pd.DataFrame:
 # ── Shareholder data loader ──────────────────────────────────────────────
 
 
-def _build_ann_date_lookup(hdf: pd.DataFrame) -> pd.DataFrame:
-    """Pre-compute previous announcement holder counts for qoq / 2q changes.
-
-    For each stock, sort by ann_date and shift to get previous and
-    second-previous values.  These are then merge_asof'd into daily
-    frequency so that chg_qoq reflects real announcement-to-announcement
-    changes, not day-over-day noise.
-    """
-    hdf = hdf.sort_values(["inst", "ann_date"]).copy()
-
-    # Previous announcement values
-    for col, label in [("holder_num", "holder_num_prev_ann"),
-                       ("holder_num", "holder_num_prev2_ann")]:
-        pass  # handled below
-
-    hdf["holder_num_prev_ann"] = hdf.groupby("inst")["holder_num"].shift(1)
-    hdf["holder_num_prev2_ann"] = hdf.groupby("inst")["holder_num"].shift(2)
-    return hdf
-
-
 def load_shareholder_data(df: pd.DataFrame, holder_path: str = "data/canonical/holder_num.parquet") -> pd.DataFrame:
     """Load shareholder data from parquet and PIT-merge via ``ann_date`` merge_asof.
 
@@ -198,21 +178,22 @@ def load_shareholder_data(df: pd.DataFrame, holder_path: str = "data/canonical/h
         merged = merged.drop(columns=["_dt", "_inst", "_row_id"])
         return merged
 
+    # ── helper: sort in-place + compute announcement-level shifts ─────
+    def _add_prev_cols(ann_df: pd.DataFrame, col: str, prev_col: str, prev2_col: str) -> pd.DataFrame:
+        """Sort ``ann_df`` by (inst, _dt) in-place and add shift-1/shift-2 columns."""
+        ann_df = ann_df.sort_values(["inst", "_dt"]).reset_index(drop=True)
+        ann_df[prev_col] = ann_df.groupby("inst")[col].shift(1)
+        ann_df[prev2_col] = ann_df.groupby("inst")[col].shift(2)
+        return ann_df
+
     # ── holder_num + prev_ann values ──────────────────────────────────
     try:
         hdf = pd.read_parquet(holder_path)
         hdf["_dt"] = pd.to_datetime(hdf["ann_date"])
         hdf["_real_ann_dt"] = hdf["_dt"]  # keep real ann_date before rename
-        hdf["_inst"] = hdf["inst"].str.upper()
-
-        # Pre-compute previous-announcement values on the raw data
-        hdf_sorted = hdf.sort_values(["_inst", "_dt"])
-        hdf["holder_num_prev_ann"] = (
-            hdf_sorted.groupby("_inst")["holder_num"].shift(1)
-        ).values if len(hdf_sorted) == len(hdf) else np.nan
-        hdf["holder_num_prev2_ann"] = (
-            hdf_sorted.groupby("_inst")["holder_num"].shift(2)
-        ).values if len(hdf_sorted) == len(hdf) else np.nan
+        hdf["inst"] = hdf["inst"].str.upper()
+        hdf = _add_prev_cols(hdf, "holder_num", "holder_num_prev_ann", "holder_num_prev2_ann")
+        hdf["_inst"] = hdf["inst"]
 
         right = hdf[["_inst", "_dt", "_real_ann_dt", "holder_num",
                       "holder_num_prev_ann", "holder_num_prev2_ann"]]
@@ -237,12 +218,9 @@ def load_shareholder_data(df: pd.DataFrame, holder_path: str = "data/canonical/h
         tdf = pd.read_parquet(top10_path)
         tdf["_dt"] = pd.to_datetime(tdf["ann_date"])
         tdf["_real_ann_dt"] = tdf["_dt"]
-        tdf["_inst"] = tdf["inst"].str.upper()
-
-        tdf_sorted = tdf.sort_values(["_inst", "_dt"])
-        tdf["top10_holder_ratio_prev_ann"] = (
-            tdf_sorted.groupby("_inst")["top10_ratio"].shift(1)
-        ).values if len(tdf_sorted) == len(tdf) else np.nan
+        tdf["inst"] = tdf["inst"].str.upper()
+        tdf = _add_prev_cols(tdf, "top10_ratio", "top10_holder_ratio_prev_ann", "__unused")
+        tdf["_inst"] = tdf["inst"]
 
         right = tdf[["_inst", "_dt", "_real_ann_dt", "top10_ratio",
                       "top10_holder_ratio_prev_ann"]]
