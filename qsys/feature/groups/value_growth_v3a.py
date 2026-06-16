@@ -98,41 +98,32 @@ def build_margin_features(df: pd.DataFrame) -> pd.DataFrame:
         out["margin_repay_to_buy_20d"] = _clip_inf(_safe_div(_repay, _buy_))
 
     # ── Composite: crowding ─────────────────────────────────────────
-    _a = out.get("margin_balance_to_float_mv", None)
-    _b = out.get("margin_balance_chg_60d", None)
-    if _a is not None:
-        # need trade_date for cs zscore
+    if "margin_balance_to_float_mv" in out.columns and "margin_balance_chg_60d" in out.columns:
         if "trade_date" in out.columns:
-            _za = out.groupby("trade_date")[_a].transform(
+            _za = out.groupby("trade_date")["margin_balance_to_float_mv"].transform(
                 lambda s: _zscore(s.fillna(0))
             )
-            _zb = (
-                out.groupby("trade_date")[_b].transform(lambda s: _zscore(s.fillna(0)))
-                if _b is not None
-                else 0
+            _zb = out.groupby("trade_date")["margin_balance_chg_60d"].transform(
+                lambda s: _zscore(s.fillna(0))
             )
             out["margin_crowding_score"] = _za + _zb
 
     # ── Composite: trend confirm ────────────────────────────────────
-    _bc = out.get("margin_balance_chg_60d", None)
-    _r60 = out.get("ret_60d", None)
-    if _bc is not None and _r60 is not None and "trade_date" in out.columns:
-        _zbc = out.groupby("trade_date")[_bc].transform(
+    if {"margin_balance_chg_60d", "ret_60d", "trade_date"}.issubset(out.columns):
+        _zbc = out.groupby("trade_date")["margin_balance_chg_60d"].transform(
             lambda s: _zscore(s.fillna(0))
         )
-        _zr60 = out.groupby("trade_date")[_r60].transform(
+        _zr60 = out.groupby("trade_date")["ret_60d"].transform(
             lambda s: _zscore(s.fillna(0))
         )
         out["margin_trend_confirm_score"] = _zbc * _zr60.clip(lower=0)
 
     # ── Composite: overheat ─────────────────────────────────────────
-    _mc = out.get("margin_crowding_score", None)
-    _r120 = out.get("ret_120d", None)
-    if _mc is not None and _r120 is not None and "trade_date" in out.columns:
-        _zmc = out.groupby("trade_date")[_mc].transform(
+    if {"margin_crowding_score", "ret_120d", "trade_date"}.issubset(out.columns):
+        _zmc = out.groupby("trade_date")["margin_crowding_score"].transform(
             lambda s: _zscore(s.fillna(0))
         )
-        _zr120 = out.groupby("trade_date")[_r120].transform(
+        _zr120 = out.groupby("trade_date")["ret_120d"].transform(
             lambda s: _zscore(s.fillna(0))
         )
         out["margin_overheat_risk_score"] = _zmc * _zr120.clip(lower=0)
@@ -171,10 +162,15 @@ def load_shareholder_data(df: pd.DataFrame, holder_path: str = "data/canonical/h
         hdf = pd.read_parquet(holder_path)
         hdf["_ann_dt"] = pd.to_datetime(hdf["ann_date"])
         hdf["_inst"] = hdf["inst"].str.upper()
-        hdf = hdf.sort_values(["_inst", "_ann_dt"])
+        # merge_asof requires both sides sorted by the merge key globally,
+        # then by the 'by' key within each key group. Sort by _dt global.
+        right_hn = hdf[["_inst", "_ann_dt", "holder_num"]].rename(
+            columns={"_ann_dt": "_dt"}
+        ).sort_values("_dt").reset_index(drop=True)
+        left_sorted = out.sort_values("_dt")[["_dt", "_inst"]].reset_index(drop=True)
         merged = pd.merge_asof(
-            out.sort_values("_dt")[["_dt", "_inst"]],
-            hdf[["_inst", "_ann_dt", "holder_num"]].rename(columns={"_ann_dt": "_dt"}),
+            left_sorted,
+            right_hn,
             on="_dt", by="_inst", direction="backward",
         )
         out["holder_num"] = merged["holder_num"]
@@ -193,10 +189,13 @@ def load_shareholder_data(df: pd.DataFrame, holder_path: str = "data/canonical/h
         tdf = pd.read_parquet(top10_path)
         tdf["_ann_dt"] = pd.to_datetime(tdf["ann_date"])
         tdf["_inst"] = tdf["inst"].str.upper()
-        tdf = tdf.sort_values(["_inst", "_ann_dt"])
+        right_top10 = tdf[["_inst", "_ann_dt", "top10_ratio"]].rename(
+            columns={"_ann_dt": "_dt", "top10_ratio": "top10_holder_ratio"}
+        ).sort_values("_dt").reset_index(drop=True)
+        left_sorted = out.sort_values("_dt")[["_dt", "_inst"]].reset_index(drop=True)
         merged2 = pd.merge_asof(
-            out.sort_values("_dt")[["_dt", "_inst"]],
-            tdf[["_inst", "_ann_dt", "top10_ratio"]].rename(columns={"_ann_dt": "_dt", "top10_ratio": "top10_holder_ratio"}),
+            left_sorted,
+            right_top10,
             on="_dt", by="_inst", direction="backward",
         )
         out["top10_holder_ratio"] = merged2["top10_holder_ratio"]
@@ -274,25 +273,21 @@ def build_shareholder_features(df: pd.DataFrame) -> pd.DataFrame:
         out["holder_concentration_score"] = sum(_parts) / len(_parts)
 
     # ── Composite: squeeze score ───────────────────────────────────
-    _hn = out.get("holder_num_chg_qoq", None)
-    _r60 = out.get("ret_60d", None)
-    if _hn is not None and _r60 is not None and "trade_date" in out.columns:
-        _zhn = out.groupby("trade_date")[_hn].transform(
+    if {"holder_num_chg_qoq", "ret_60d", "trade_date"}.issubset(out.columns):
+        _zhn = out.groupby("trade_date")["holder_num_chg_qoq"].transform(
             lambda s: -_zscore(s.fillna(0))
         )
-        _zr60 = out.groupby("trade_date")[_r60].transform(
+        _zr60 = out.groupby("trade_date")["ret_60d"].transform(
             lambda s: _zscore(s.fillna(0))
         )
         out["holder_squeeze_score"] = _zhn * _zr60.clip(lower=0)
 
     # ── Composite: price confirm ───────────────────────────────────
-    _hc = out.get("holder_concentration_score", None)
-    _r120 = out.get("ret_120d", None)
-    if _hc is not None and _r120 is not None and "trade_date" in out.columns:
-        _zhc = out.groupby("trade_date")[_hc].transform(
+    if {"holder_concentration_score", "ret_120d", "trade_date"}.issubset(out.columns):
+        _zhc = out.groupby("trade_date")["holder_concentration_score"].transform(
             lambda s: _zscore(s.fillna(0))
         )
-        _zr120 = out.groupby("trade_date")[_r120].transform(
+        _zr120 = out.groupby("trade_date")["ret_120d"].transform(
             lambda s: _zscore(s.fillna(0))
         )
         out["holder_price_confirm_score"] = _zhc * _zr120.clip(lower=0)
