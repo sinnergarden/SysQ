@@ -31,12 +31,19 @@ def build_rolling_windows(
     *,
     train_window_days: int = 252,
     step_days: int = 5,
+    label_maturity_lag_trading_days: int = 0,
 ) -> list[RollingWindow]:
     """Build rolling windows.
 
     Each window uses the same number of predict days as the step
     (predict = step), so every trading day gets exactly one prediction
     from exactly one model version — no overlap.
+
+    When *label_maturity_lag_trading_days* > 0, the effective train end
+    is pushed back by that many trading days so that every sample's label
+    (e.g. 180d forward return) is fully realised *before* the predict
+    window begins.  If the effective train end falls before train_start,
+    the window is skipped with a warning.
     """
     from qsys.data.calendar import get_trading_calendar
 
@@ -64,14 +71,25 @@ def build_rolling_windows(
         except ValueError:
             continue
 
-        train_end_idx = predict_idx - 1
-        train_start_idx = predict_idx - train_window_days
+        # ── Apply label maturity delay ──────────────────────────────
+        if label_maturity_lag_trading_days > 0:
+            # effective last training date = (predict_start - 1) - label_maturity_lag
+            raw_end_idx = predict_idx - 1
+            train_end_idx = raw_end_idx - label_maturity_lag_trading_days
+        else:
+            train_end_idx = predict_idx - 1
+
+        train_start_idx = train_end_idx - train_window_days + 1
 
         if train_start_idx < 0:
             continue
 
         train_start = full_cal[train_start_idx]
         train_end = full_cal[train_end_idx] if train_end_idx >= 0 else full_cal[0]
+
+        # Sanity: effective train window must contain at least some trading days
+        if train_end_idx - train_start_idx + 1 < 20:
+            continue
 
         windows.append(RollingWindow(
             window_id=f"w{offset:04d}",
