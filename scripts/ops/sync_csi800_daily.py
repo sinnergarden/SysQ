@@ -185,6 +185,7 @@ def _update_index_daily(collector: TushareCollector, target_dt: str) -> dict:
             import pandas as pd
             existing = pd.read_csv(csv_path)
             combined = pd.concat([existing, df], ignore_index=True)
+            combined["trade_date"] = combined["trade_date"].astype(str)
             combined = combined.drop_duplicates(subset=["trade_date"]).sort_values("trade_date").reset_index(drop=True)
             combined.to_csv(csv_path, index=False)
         else:

@@ -99,11 +99,15 @@ class SignalResearchPipeline:
         exp_dir = self._paths.experiment_dir(config.experiment_id)
 
         # ── 1. Build rolling windows ──
+        lag = 0
+        if config.labels and len(config.labels) > 0:
+            lag = config.labels[0].get("label_maturity_lag_trading_days", 0)
         windows = build_rolling_windows(
             config.calendar.get("start_date", ""),
             config.calendar.get("end_date", ""),
             train_window_days=config.calendar.get("train_window_days", 252),
             step_days=config.calendar.get("step_days", 5),
+            label_maturity_lag_trading_days=lag,
         )
         window_df = pd.DataFrame([{
             "window_id": w.window_id,
