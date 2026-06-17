@@ -1,0 +1,30 @@
+experiment_id: v3b_pv_delayed
+calendar:
+  start_date: "2020-01-01"
+  end_date: "2025-12-31"
+  train_window_days: 504
+  step_days: 20
+signal:
+  signal_id: v3b_pv
+  score_column: score
+feature_list_id: value_growth_v3b_pv_features
+feature_flags:
+  enable_v3a_margin_features: true
+  enable_v3a_shareholder_features: true
+  enable_v3b_price_volume_features: true
+  enable_v3b_interaction_features: false
+generators:
+  - generator_id: v3b_pv
+    type: multi_label_lightgbm
+    params:
+      universe: csi800
+      n_estimators: 300
+      feature_list_id: value_growth_v3b_pv_features
+      labels:
+        - label_id: fwd_ret_180d_raw
+signal_transforms:
+  - transform_id: daily_zscore
+    type: daily_zscore
+labels:
+  - label_id: fwd_ret_180d_raw
+    label_maturity_lag_trading_days: 180

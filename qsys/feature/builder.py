@@ -75,6 +75,12 @@ def build_phase1_features(df: pd.DataFrame, flags: dict | None = None) -> pd.Dat
         from qsys.feature.groups.value_growth_v3a import load_shareholder_data, build_shareholder_features
         out = load_shareholder_data(out)
         out = build_shareholder_features(out)
+    if flags.get("enable_v3b_price_volume_features", False):
+        from qsys.feature.groups.value_growth_v3b_price_volume import build_v3b_price_volume_features
+        out = build_v3b_price_volume_features(out)
+    if flags.get("enable_v3b_interaction_features", False):
+        from qsys.feature.groups.value_growth_v3b_price_volume import build_v3a_v3b_interaction_features
+        out = build_v3a_v3b_interaction_features(out)
 
     standardize_cols = [
         c for c in [
