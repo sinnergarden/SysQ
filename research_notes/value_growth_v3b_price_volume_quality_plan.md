@@ -66,9 +66,22 @@ v3b 特征设计原则：
 | `abl_full_v3b_pv_delayed180` | v3a full + v3b pv | 97 | margin + shareholder + pv |
 | `abl_full_v3b_pv_interact_delayed180` | v3a full + v3b pv + v3a×v3b | 102 | margin + shareholder + pv + interaction |
 
-## Results
+## Results (strict delayed-180 after bugfix)
 
-（待填写实验完成后）
+| Variant | Features | Delayed IC | Delayed ICIR | ΔIC vs v3a_full |
+|---------|:-------:|:---------:|:-----------:|:---------------:|
+| v2 baseline | 64 | 0.0529 | 0.495 | −0.0348 |
+| v3a_full | 83 | **0.0877** | 1.009 | — |
+| v3b_pv | 97 | **0.0885** | 1.015 | +0.0008 |
+| v3b_pv_interact | 102 | **0.0894** | 1.028 | +0.0017 |
+
+Note: initial run had two bugs (cross-stock rolling contamination, Series-as-column in groupby) that caused v3b_pv_interact IC=0.0217 (buggy). After fix, IC recovers to 0.0894 — still flat vs baseline.
+
+### Pass/Fail: FAIL
+
+- v3b_pv: +0.0008 IC — negligible, does not meet Weak Pass (+0.01).
+- v3b_pv_interact: +0.0017 IC — negligible after bugfix.
+- Direction closed. Code/configs preserved for reproducibility.
 
 ## Pass/Fail 标准
 

@@ -339,7 +339,74 @@ def main():
     except SyntaxError as e:
         check(False, f"value_growth_v3a.py has syntax error: {e}")
 
-    # ── Summary ──────────────────────────────────────────────────────
+    # ── 9. v3b price-volume quality feature builder ─────────────────
+    print("\n=== 9. v3b price-volume quality ===")
+    from qsys.feature.groups.value_growth_v3b_price_volume import (
+        build_v3b_price_volume_features,
+        build_v3a_v3b_interaction_features,
+    )
+
+    # Mock with 2 stocks for cross-stock contamination test
+    N = 300
+    np.random.seed(0)
+    mock2 = pd.concat([
+        pd.DataFrame({"trade_date": pd.date_range("2023-01-01", periods=N, freq="B"),
+                      "ts_code": "A", "close": 100 + np.cumsum(np.random.randn(N)*0.5),
+                      "amount": 1e8 + np.random.randn(N)*1e7}),
+        pd.DataFrame({"trade_date": pd.date_range("2023-01-01", periods=N, freq="B"),
+                      "ts_code": "B", "close": 10 + np.cumsum(np.random.randn(N)*0.1),
+                      "amount": 1e7 + np.random.randn(N)*1e6}),
+    ], ignore_index=True)
+
+    pv_result = build_v3b_price_volume_features(mock2)
+    pv_cols = [
+        "trend_consistency_60d", "trend_consistency_120d",
+        "low_vol_uptrend_60d", "low_vol_uptrend_120d",
+        "return_drawdown_ratio_60d", "return_drawdown_ratio_120d",
+        "pullback_recovery_speed_60d", "new_high_persistence_120d",
+        "up_volume_down_volume_ratio_60d", "up_volume_down_volume_ratio_120d",
+        "volume_contraction_after_rise_60d", "quiet_accumulation_60d",
+        "amount_stability_60d", "breakout_volume_quality_120d",
+    ]
+    for col in pv_cols:
+        check(col in pv_result.columns, f"  '{col}' column exists")
+
+    for col in pv_cols:
+        if col in pv_result.columns:
+            check(not np.isinf(pv_result[col].dropna()).any(), f"  '{col}' has no inf")
+
+    # Cross-stock contamination: B's first row rolling feature = NaN
+    b_first_dd = pv_result[pv_result["ts_code"]=="B"]["return_drawdown_ratio_60d"].iloc[0]
+    check(pd.isna(b_first_dd),
+          "Cross-stock: B first row rolling(60) not contaminated by A")
+
+    # ── 10. v3b interaction features ────────────────────────────────
+    print("\n=== 10. v3b interaction features ===")
+    mock3 = pv_result.copy()
+    mock3["holder_concentration_score"] = np.random.randn(len(mock3))
+    mock3["margin_trend_confirm_score"] = np.random.randn(len(mock3))
+    inter_result = build_v3a_v3b_interaction_features(mock3)
+    inter_cols = [
+        "holder_concentration_trend_confirm", "holder_concentration_low_vol_uptrend",
+        "holder_concentration_volume_contract", "margin_holder_trend_confirm",
+        "margin_pullback_recovery_confirm",
+    ]
+    for col in inter_cols:
+        check(col in inter_result.columns, f"  '{col}' column exists")
+
+    # ── 11. v3b configs load ────────────────────────────────────────
+    print("\n=== 11. v3b configs load ===")
+    from qsys.research.matrix_job import RollingResearchConfig
+    for cfg in ["abl_full_v3b_pv_delayed180.yaml", "abl_full_v3b_pv_interact_delayed180.yaml"]:
+        p = REPO / "configs" / "research" / cfg
+        check(p.exists(), f"Config '{cfg}' exists")
+        if p.exists():
+            c = RollingResearchConfig.from_file(p)
+            check(c.experiment_id is not None, f"  {c.experiment_id}")
+
+    for fl in ["value_growth_v3b_pv_features", "value_growth_v3b_pv_interact_features"]:
+        feats = FeatureListRegistry.load(fl)
+        check(len(feats) > 0, f"  '{fl}': {len(feats)} feats")
     print(f"\n{'=' * 40}")
     print(f"Results: {pass_count} passed, {fail_count} failed")
     if fail_count > 0:
