@@ -1,0 +1,47 @@
+# value_growth_60d_structured_price_volume_features — curated 60d timing features
+# 35 features total
+feature_list_id: value_growth_60d_structured_price_volume_features
+description: "curated 60d timing price-volume features (35 features)"
+features:
+  # short/medium returns
+  - ret_5d
+  - ret_20d
+  - ret_60d
+  # rps ranking
+  - rps_20d
+  - rps_60d
+  - rps_20d_minus_rps_60d
+  # trend quality
+  - up_day_ratio_60d
+  - trend_smoothness_60d
+  - volatility_adjusted_return_60d
+  - max_pullback_120d
+  - price_percentile_252d
+  - distance_to_120d_high
+  - distance_to_250d_high
+  # volume participation
+  - volume_ratio_20d
+  - volume_ratio_60d
+  - amount_ratio_20d
+  - amount_ratio_60d
+  - volume_up_down_ratio_60d
+  - above_avg_volume_ratio_60d
+  - volume_spike_20d
+  - volume_stability_60d
+  # v3b trend quality
+  - trend_consistency_60d
+  - low_vol_uptrend_60d
+  - return_drawdown_ratio_60d
+  - pullback_recovery_speed_60d
+  # v3b volume quality
+  - up_volume_down_volume_ratio_60d
+  - volume_contraction_after_rise_60d
+  - quiet_accumulation_60d
+  - amount_stability_60d
+  - breakout_volume_quality_120d
+  # tradability / liquidity
+  - tradability_score
+  - distance_to_limit_up
+  - distance_to_limit_down
+  - illiquidity
+  - turnover_acceleration

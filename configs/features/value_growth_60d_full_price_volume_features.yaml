@@ -1,0 +1,92 @@
+# value_growth_60d_full_price_volume_features — all price-volume groups, no fundamental/margin/shareholder
+# Groups: microstructure + liquidity + tradability + relative_strength + v3b_price_volume
+# 81 features total
+feature_list_id: value_growth_60d_full_price_volume_features
+description: "all price-volume groups (81 features)"
+features:
+  # microstructure (7)
+  - close_to_open_gap_1d
+  - open_to_close_ret
+  - close_pos_in_range
+  - open_pos_in_range
+  - upper_shadow_ratio
+  - lower_shadow_ratio
+  - intraday_reversal_strength
+  # liquidity (7)
+  - turnover_rate
+  - amount_log
+  - amount_zscore_20
+  - volume_shock_3
+  - volume_shock_5
+  - turnover_acceleration
+  - illiquidity
+  # tradability (7)
+  - is_limit_up
+  - is_limit_down
+  - distance_to_limit_up
+  - distance_to_limit_down
+  - limit_up_count_5d
+  - tradability_score
+  - opened_from_limit_up
+  # relative_strength (46)
+  - ret_1d
+  - ret_3d
+  - ret_5d
+  - vol_mean_3d
+  - vol_mean_5d
+  - amount_mean_3d
+  - amount_mean_5d
+  - ret_1d_rank
+  - ret_3d_rank
+  - ret_5d_rank
+  - vol_mean_3d_rank
+  - vol_mean_5d_rank
+  - amount_mean_3d_rank
+  - amount_mean_5d_rank
+  - stock_minus_index_ret_3d
+  - stock_minus_index_ret_5d
+  - stock_minus_industry_ret_3d
+  - stock_minus_industry_ret_5d
+  - ret_20d
+  - ret_60d
+  - ret_120d
+  - volume_ratio_20d
+  - volume_ratio_60d
+  - distance_to_120d_high
+  - distance_to_250d_high
+  - up_day_ratio_60d
+  - up_day_ratio_120d
+  - trend_smoothness_60d
+  - trend_smoothness_120d
+  - max_pullback_120d
+  - volatility_adjusted_return_60d
+  - volatility_adjusted_return_120d
+  - rps_60d
+  - rps_120d
+  - rps_20d
+  - rps_20d_minus_rps_60d
+  - rps_industry_60d
+  - rps_industry_120d
+  - price_percentile_252d
+  - distance_to_252d_low
+  - volume_up_down_ratio_60d
+  - above_avg_volume_ratio_60d
+  - amount_ratio_20d
+  - amount_ratio_60d
+  - volume_spike_20d
+  - volume_stability_60d
+  # v3b_price_volume (14)
+  - trend_consistency_60d
+  - trend_consistency_120d
+  - low_vol_uptrend_60d
+  - low_vol_uptrend_120d
+  - return_drawdown_ratio_60d
+  - return_drawdown_ratio_120d
+  - pullback_recovery_speed_60d
+  - new_high_persistence_120d
+  - up_volume_down_volume_ratio_60d
+  - up_volume_down_volume_ratio_120d
+  - volume_contraction_after_rise_60d
+  - quiet_accumulation_60d
+  - amount_stability_60d
+  - breakout_volume_quality_120d
