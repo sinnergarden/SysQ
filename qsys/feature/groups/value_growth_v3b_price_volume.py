@@ -112,24 +112,35 @@ def build_trend_quality_features(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_volume_quality_features(df: pd.DataFrame) -> pd.DataFrame:
-    """Build volume quality features — stability, contraction, quality."""
+    """Build volume quality features — stability, contraction, quality.
+
+    BUGFIX: all ``rolling(…)`` and ``pct_change(…)`` calls are wrapped
+    in ``groupby("ts_code")`` to prevent cross-stock contamination.
+    """
     out = df.copy()
 
     if not {"close", "amount", "ts_code", "trade_date"}.issubset(out.columns):
         return out
 
-    _grp_amt = out.groupby("ts_code")["amount"]
-    _grp_ret = out.groupby("ts_code")["close"].pct_change()
+    _inst_key = "ts_code"
+
+    # Per-stock daily close returns
+    _ret_1d = out.groupby(_inst_key)["close"].pct_change()
+
+    # Per-stock change helper
+    def _grp_pct_change(series: pd.Series, periods: int = 1):
+        return series.groupby(out[_inst_key]).transform(
+            lambda s: s.pct_change(periods)
+        )
 
     # ── up_volume_down_volume_ratio_120d ─────────────────────────────
-    # Volume on up days / volume on down days
-    _up_vol = _grp_ret.gt(0).astype(float) * out["amount"]
-    _down_vol = _grp_ret.lt(0).astype(float) * out["amount"]
+    _up_vol = _ret_1d.gt(0).astype(float) * out["amount"]
+    _down_vol = _ret_1d.lt(0).astype(float) * out["amount"]
     for window, label in [(60, "60d"), (120, "120d")]:
-        _up_sum = _up_vol.groupby(out["ts_code"]).transform(
+        _up_sum = _up_vol.groupby(out[_inst_key]).transform(
             lambda s: s.rolling(window, min_periods=20).sum()
         )
-        _down_sum = _down_vol.groupby(out["ts_code"]).transform(
+        _down_sum = _down_vol.groupby(out[_inst_key]).transform(
             lambda s: s.rolling(window, min_periods=20).sum()
         )
         out[f"up_volume_down_volume_ratio_{label}"] = _clip_inf(
@@ -137,43 +148,48 @@ def build_volume_quality_features(df: pd.DataFrame) -> pd.DataFrame:
         )
 
     # ── volume_contraction_after_rise_60d ────────────────────────────
-    # After a positive return period, volume is contracting
-    _ret_20 = _grp_ret.rolling(20, min_periods=10).mean()
-    _amount_z = _grp_amt.transform(lambda s: _rolling_zscore(s, 60))
-    # When ret_20 > 0 and amount zscore is falling → healthy consolidation
-    _amt_trend = _grp_amt.transform(lambda s: s.rolling(20, min_periods=10).mean())
-    _amt_trend_pct = _amt_trend.pct_change(10)
+    _ret_20 = _ret_1d.groupby(out[_inst_key]).transform(
+        lambda s: s.rolling(20, min_periods=10).mean()
+    )
+    _amt_trend = out.groupby(_inst_key)["amount"].transform(
+        lambda s: s.rolling(20, min_periods=10).mean()
+    )
+    _amt_trend_pct = _grp_pct_change(_amt_trend, 10)
     out["volume_contraction_after_rise_60d"] = (
         (_ret_20.gt(0).astype(float)) *
         (-_amt_trend_pct.fillna(0).clip(lower=0))
     ).clip(lower=0)
 
     # ── quiet_accumulation_60d ───────────────────────────────────────
-    # Price slowly rising + amount volatility decreasing
-    _close_ma_20 = _grp_ret.rolling(20, min_periods=10).mean()
-    _amount_vol = _grp_amt.transform(
+    _close_ma_20 = _ret_1d.groupby(out[_inst_key]).transform(
+        lambda s: s.rolling(20, min_periods=10).mean()
+    )
+    _amount_vol = out.groupby(_inst_key)["amount"].transform(
         lambda s: s.rolling(20, min_periods=10).std(ddof=0)
     )
-    _amount_vol_pct = _amount_vol.pct_change(10)
+    _amount_vol_pct = _grp_pct_change(_amount_vol, 10)
     out["quiet_accumulation_60d"] = (
         _close_ma_20.gt(0).astype(float) *
         (-_amount_vol_pct.fillna(0).clip(lower=0))
     ).clip(lower=0)
 
     # ── amount_stability_60d ─────────────────────────────────────────
-    # Negative of amount coefficient of variation (higher = more stable)
-    _amt_mean = _grp_amt.transform(lambda s: s.rolling(60, min_periods=20).mean())
-    _amt_std = _grp_amt.transform(lambda s: s.rolling(60, min_periods=20).std(ddof=0))
+    _amt_mean = out.groupby(_inst_key)["amount"].transform(
+        lambda s: s.rolling(60, min_periods=20).mean()
+    )
+    _amt_std = out.groupby(_inst_key)["amount"].transform(
+        lambda s: s.rolling(60, min_periods=20).std(ddof=0)
+    )
     out["amount_stability_60d"] = _clip_inf(-_safe_div(_amt_std, _amt_mean))
 
     # ── breakout_volume_quality_120d ─────────────────────────────────
-    # Near 120d high + volume moderately elevated (not extreme)
-    _high_120 = out.groupby("ts_code")["close"].transform(
+    _high_120 = out.groupby(_inst_key)["close"].transform(
         lambda s: s.rolling(120, min_periods=60).max()
     )
     _near_high = _safe_div(out["close"], _high_120).gt(0.90).astype(float)
-    _amt_zscore = _grp_amt.transform(lambda s: _rolling_zscore(s, 120))
-    # Volume zscore between 0.5 and 1.5 (moderate) near high
+    _amt_zscore = out.groupby(_inst_key)["amount"].transform(
+        lambda s: _rolling_zscore(s, 120)
+    )
     _moderate_vol = (_amt_zscore.gt(0.5) & _amt_zscore.lt(1.5)).astype(float)
     out["breakout_volume_quality_120d"] = _near_high * _moderate_vol
 
@@ -186,41 +202,54 @@ def build_volume_quality_features(df: pd.DataFrame) -> pd.DataFrame:
 def build_v3a_v3b_interaction_features(df: pd.DataFrame) -> pd.DataFrame:
     """Build interaction features combining v3a and v3b signals.
 
-    All rely on columns from v3a (margin / shareholder / concentration)
-    and v3b (trend quality / volume quality) groups.
+    BUGFIX: use string column names for groupby, not Series from out.get().
     """
     out = df.copy()
 
+    required = ["holder_concentration_score", "margin_trend_confirm_score",
+                 "trend_consistency_120d", "low_vol_uptrend_120d",
+                 "volume_contraction_after_rise_60d", "pullback_recovery_speed_60d",
+                 "trade_date"]
+    if not all(c in out.columns for c in required):
+        return out
+
+    hc = out["holder_concentration_score"]
+
     # holder_concentration * max(zscore(trend_consistency_120d), 0)
-    _hc = out.get("holder_concentration_score")
-    _tc = out.get("trend_consistency_120d")
-    if _hc is not None and _tc is not None and "trade_date" in out.columns:
-        _ztc = out.groupby("trade_date")[_tc].transform(lambda s: _zscore(s.fillna(0)))
-        out["holder_concentration_trend_confirm"] = _hc * _ztc.clip(lower=0)
+    out["holder_concentration_trend_confirm"] = (
+        hc * out.groupby("trade_date")["trend_consistency_120d"].transform(
+            lambda s: _zscore(s.fillna(0))
+        ).clip(lower=0)
+    )
 
     # holder_concentration * max(zscore(low_vol_uptrend_120d), 0)
-    _lv = out.get("low_vol_uptrend_120d")
-    if _hc is not None and _lv is not None and "trade_date" in out.columns:
-        _zlv = out.groupby("trade_date")[_lv].transform(lambda s: _zscore(s.fillna(0)))
-        out["holder_concentration_low_vol_uptrend"] = _hc * _zlv.clip(lower=0)
+    out["holder_concentration_low_vol_uptrend"] = (
+        hc * out.groupby("trade_date")["low_vol_uptrend_120d"].transform(
+            lambda s: _zscore(s.fillna(0))
+        ).clip(lower=0)
+    )
 
     # holder_concentration * max(zscore(volume_contraction_after_rise_60d), 0)
-    _vc = out.get("volume_contraction_after_rise_60d")
-    if _hc is not None and _vc is not None and "trade_date" in out.columns:
-        _zvc = out.groupby("trade_date")[_vc].transform(lambda s: _zscore(s.fillna(0)))
-        out["holder_concentration_volume_contract"] = _hc * _zvc.clip(lower=0)
+    out["holder_concentration_volume_contract"] = (
+        hc * out.groupby("trade_date")["volume_contraction_after_rise_60d"].transform(
+            lambda s: _zscore(s.fillna(0))
+        ).clip(lower=0)
+    )
 
     # margin_trend_confirm_score * max(zscore(holder_concentration_score), 0)
-    _mt = out.get("margin_trend_confirm_score")
-    if _mt is not None and _hc is not None and "trade_date" in out.columns:
-        _zhc = out.groupby("trade_date")[_hc].transform(lambda s: _zscore(s.fillna(0)))
-        out["margin_holder_trend_confirm"] = _mt * _zhc.clip(lower=0)
+    mt = out["margin_trend_confirm_score"]
+    out["margin_holder_trend_confirm"] = (
+        mt * out.groupby("trade_date")["holder_concentration_score"].transform(
+            lambda s: _zscore(s.fillna(0))
+        ).clip(lower=0)
+    )
 
     # margin_trend_confirm_score * max(zscore(pullback_recovery_speed_60d), 0)
-    _pr = out.get("pullback_recovery_speed_60d")
-    if _mt is not None and _pr is not None and "trade_date" in out.columns:
-        _zpr = out.groupby("trade_date")[_pr].transform(lambda s: _zscore(s.fillna(0)))
-        out["margin_pullback_recovery_confirm"] = _mt * _zpr.clip(lower=0)
+    out["margin_pullback_recovery_confirm"] = (
+        mt * out.groupby("trade_date")["pullback_recovery_speed_60d"].transform(
+            lambda s: _zscore(s.fillna(0))
+        ).clip(lower=0)
+    )
 
     return out
 
