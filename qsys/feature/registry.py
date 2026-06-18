@@ -198,6 +198,35 @@ FEATURE_GROUPS = {
             "top10_holder_ratio",
         ],
     },
+    "v3b_price_volume": {
+        "enabled_by": "enable_v3b_price_volume_features",
+        "features": [
+            "trend_consistency_60d",
+            "trend_consistency_120d",
+            "low_vol_uptrend_60d",
+            "low_vol_uptrend_120d",
+            "return_drawdown_ratio_60d",
+            "return_drawdown_ratio_120d",
+            "pullback_recovery_speed_60d",
+            "new_high_persistence_120d",
+            "up_volume_down_volume_ratio_60d",
+            "up_volume_down_volume_ratio_120d",
+            "volume_contraction_after_rise_60d",
+            "quiet_accumulation_60d",
+            "amount_stability_60d",
+            "breakout_volume_quality_120d",
+        ],
+    },
+    "v3b_interaction": {
+        "enabled_by": "enable_v3b_interaction_features",
+        "features": [
+            "holder_concentration_trend_confirm",
+            "holder_concentration_low_vol_uptrend",
+            "holder_concentration_volume_contract",
+            "margin_holder_trend_confirm",
+            "margin_pullback_recovery_confirm",
+        ],
+    },
 }
 
 
