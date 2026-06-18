@@ -25,14 +25,17 @@ PR #181 已确认 forward-return supervised model 必须使用 label maturity de
 
 ### 总表
 
-| Variant | 特征数 | IC | ICIR | RankIC | RankICIR | ΔIC vs baseline |
+| Variant | 特征数 | IC | ICIR | RankIC | RankICIR | ΔIC vs v3a_full |
 |---------|:-----:|:--:|:---:|:-----:|:-------:|:---------------:|
-| v2 baseline | 64 | 0.0335 | 0.339 | 0.0329 | 0.270 | — |
-| +margin | 73 | 0.0453 | 0.459 | 0.0418 | 0.356 | **+0.012** |
-| +shareholder | 74 | 0.0435 | 0.526 | 0.0413 | 0.418 | +0.010 |
-| **v3a_full** | **83** | **0.0545** | **0.644** | **0.0485** | **0.493** | **+0.021** |
-| existing pv only | 26 | 0.0032 | 0.032 | -0.0064 | -0.052 | −0.030 ❌ |
-| +v3b_pv | 97 | 0.0537 | 0.640 | 0.0474 | 0.485 | +0.020 |
+| v2 baseline | 64 | 0.0335 | 0.339 | 0.0329 | 0.270 | −0.021 |
+| +margin | 73 | 0.0453 | 0.459 | 0.0418 | 0.356 | −0.009 |
+| +shareholder | 74 | 0.0435 | 0.526 | 0.0413 | 0.418 | −0.011 |
+| **v3a_full** | **83** | **0.0545** | **0.644** | **0.0485** | **0.493** | **—** |
+| existing pv only (26 old) | 26 | 0.0032 | 0.032 | -0.0064 | -0.052 | −0.051 ❌ |
+| +v3b_pv | 97 | 0.0537 | 0.640 | 0.0474 | 0.485 | −0.001 |
+| full pv (81 broad) | 81 | −0.0100 | −0.077 | −0.0161 | −0.113 | −0.065 ❌ |
+| structured pv (35 curated) | 35 | 0.0244 | 0.221 | — | — | −0.030 ❌ |
+| v3a_full + structured pv | 98 | 0.0521 | 0.575 | — | — | −0.002 |
 
 ### v3a_full 年份表（strict 20d）
 
@@ -55,8 +58,13 @@ PR #181 已确认 forward-return supervised model 必须使用 label maturity de
 
 ### 2. 哪些 feature group 无效或负贡献
 
-- **existing pv only（纯量价）**：IC=0.003，几乎零预测力。当前已有的 ret/rps/volume 特征对 60d 收益没有预测能力。
-- **v3b_pv（新增量价质量）**：IC=0.0537，与 v3a_full 持平（Δ=-0.0008），说明 v3b 特征即使在 60d 短周期也无增量。方向关闭结论不变。
+- **existing pv only（26 个旧量价）**：IC=0.003，零预测力。
+- **full pv（81 个全量量价）**：IC=-0.010，负贡献。包括 microstructure/liquidity/tradability/relative_strength/v3b 全部 PV 组。
+- **structured pv（35 个精选量价）**：IC=0.024，远低于 baseline。
+- **v3a_full + structured pv**：IC=0.052，低于 v3a_full 单独（0.055）。PV 特征在 v3a_full 上无增量。
+- **+v3b_pv**：IC=0.054，与 v3a_full 持平（Δ=-0.001）。v3b 方向关闭结论不变。
+
+**结论：纯量价特征对 60d 前向收益无预测力。全量 PV（81 feat）、精选 PV（35 feat）、旧量价（26 feat）全部失败。量价 + v3a_full 无增量。60d feature mining 方向关闭。**
 
 ### 3. 60d 与 180d 的角色划分
 
@@ -74,19 +82,30 @@ PR #181 已确认 forward-return supervised model 必须使用 label maturity de
 - **Strong Pass：未通过**（IC < 0.08, ICIR < 0.8）。
 - **结论：60d 可作为 timing/rebalance 的辅助信号，但不单独作为主信号。**
 
-### 5. 是否建议下一步做 signal combination
+### 5. 下一步建议
 
-**建议。** 60d（timing）和 180d（candidate pool）组合可能有正交互：
-- 180d 信号选出长期候选池
-- 60d 信号在池内做调仓时机判定
-- 两者相关性低（60d 偏 margin/short-term, 180d 偏 holder/long-term）
+1. **暂时关闭 60d feature mining**，不建议继续堆量价 feature。
+2. 下一步应转向：
+   - 180d candidate pool（已有方向）
+   - 60d timing/rebalance（作为辅助信号）
+   - signal-combination / TopK strategy validation
 
 ## 文件
 
-- `configs/research/60d/abl_*_delayed60.yaml` — 6 个 delayed60 configs
-- `configs/features/value_growth_existing_price_volume.yaml` — 纯量价特征列表
-- `tests/research/test_label_maturity_delay_60d.py` — [待创建]
-- `tests/research/test_60d_configs_smoke.py` — [待创建]
+- `configs/research/60d/abl_v2_baseline_delayed60.yaml` — v2 baseline
+- `configs/research/60d/abl_v3a_full_delayed60.yaml` — v3a full
+- `configs/research/60d/abl_v3a_margin_delayed60.yaml` — v2 + margin
+- `configs/research/60d/abl_v3a_shareholder_delayed60.yaml` — v2 + shareholder
+- `configs/research/60d/abl_price_volume_existing_delayed60.yaml` — existing pv only (26 feat)
+- `configs/research/60d/abl_v3b_pv_delayed60.yaml` — v3a + v3b (97 feat)
+- `configs/research/60d/abl_60d_pure_full_price_volume_delayed60.yaml` — full pv (81 feat)
+- `configs/research/60d/abl_60d_pure_structured_price_volume_delayed60.yaml` — structured pv (35 feat)
+- `configs/research/60d/abl_60d_v3a_full_plus_structured_pv_delayed60.yaml` — v3a + structured pv (98 feat)
+- `configs/features/value_growth_existing_price_volume.yaml` — 旧量价 (26 feat)
+- `configs/features/value_growth_60d_full_price_volume_features.yaml` — 全量价 (81 feat)
+- `configs/features/value_growth_60d_structured_price_volume_features.yaml` — 精选量价 (35 feat)
+- `configs/features/value_growth_60d_v3a_full_plus_structured_pv_features.yaml` — v3a+精选量价 (98 feat)
+- `tests/research/test_60d_configs_smoke.py` — 6+4 configs parse test
 
 ## 结论
 
@@ -95,4 +114,5 @@ PR #181 已确认 forward-return supervised model 必须使用 label maturity de
 | 60d 可作为 timing/rebalance 信号？ | **Weak Pass — 可作辅助信号** |
 | 推荐单独使用？ | ❌ 不推荐 |
 | 推荐 60d+180d 组合？ | ✅ 建议下一步验证 |
-| 新增 v3b 特征对 60d 有用？ | ❌ 无增量 |
+| 追加量价特征有效？ | ❌ 全部失败 |
+| 60d feature mining 继续？ | ❌ 关闭 |

@@ -15,6 +15,9 @@ configs = [
     "60d/abl_v3a_shareholder_delayed60.yaml",
     "60d/abl_price_volume_existing_delayed60.yaml",
     "60d/abl_v3b_pv_delayed60.yaml",
+    "60d/abl_60d_pure_full_price_volume_delayed60.yaml",
+    "60d/abl_60d_pure_structured_price_volume_delayed60.yaml",
+    "60d/abl_60d_v3a_full_plus_structured_pv_delayed60.yaml",
 ]
 
 pass_c = 0
