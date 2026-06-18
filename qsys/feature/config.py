@@ -12,4 +12,7 @@ RESEARCH_FEATURE_FLAGS = {
     "enable_v3a_shareholder_features": False,
     "enable_v3b_price_volume_features": False,
     "enable_v3b_interaction_features": False,
+    "enable_industry_relative_features": False,
+    "enable_neutralized_features": False,
+    "enable_shareholder_freshness_interaction_features": False,
 }

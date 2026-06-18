@@ -81,6 +81,17 @@ def build_phase1_features(df: pd.DataFrame, flags: dict | None = None) -> pd.Dat
     if flags.get("enable_v3b_interaction_features", False):
         from qsys.feature.groups.value_growth_v3b_price_volume import build_v3a_v3b_interaction_features
         out = build_v3a_v3b_interaction_features(out)
+    if flags.get("enable_industry_relative_features", False):
+        from qsys.feature.groups.industry_relative_features import build_industry_relative_features
+        out = build_industry_relative_features(out)
+    if flags.get("enable_neutralized_features", False):
+        from qsys.feature.groups.neutralized_features import build_neutralized_features
+        out = build_neutralized_features(out)
+    if flags.get("enable_shareholder_freshness_interaction_features", False):
+        from qsys.feature.groups.shareholder_freshness_and_interaction import (
+            build_shareholder_freshness_and_interaction_features,
+        )
+        out = build_shareholder_freshness_and_interaction_features(out)
 
     standardize_cols = [
         c for c in [

@@ -227,6 +227,49 @@ FEATURE_GROUPS = {
             "margin_pullback_recovery_confirm",
         ],
     },
+    "industry_relative": {
+        "enabled_by": "enable_industry_relative_features",
+        "features": [
+            "industry_relative_roe",
+            "industry_relative_revenue_yoy",
+            "industry_relative_profit_yoy",
+            "industry_relative_ocf_margin",
+            "industry_relative_pe_cheapness",
+            "industry_relative_pb_cheapness",
+            "industry_relative_holder_chg",
+            "industry_relative_top10_chg",
+            "industry_relative_margin_crowding",
+            "industry_relative_rps_60d",
+            "industry_relative_rps_120d",
+        ],
+    },
+    "neutralized": {
+        "enabled_by": "enable_neutralized_features",
+        "features": [
+            "mktcap_neutral_ret_60d",
+            "mktcap_neutral_ret_120d",
+            "mktcap_neutral_roe",
+            "mktcap_neutral_holder_score",
+            "industry_size_neutral_ret_60d",
+            "industry_size_neutral_ret_120d",
+            "industry_size_neutral_roe",
+            "industry_size_neutral_holder_score",
+        ],
+    },
+    "shareholder_freshness_interaction": {
+        "enabled_by": "enable_shareholder_freshness_interaction_features",
+        "features": [
+            "holder_decay_weight",
+            "top10_decay_weight",
+            "holder_concentration_score_decay",
+            "holder_squeeze_score_decay",
+            "fresh_holder_signal_40d",
+            "fresh_holder_signal_80d",
+            "holder_concentration_x_value",
+            "holder_concentration_x_growth",
+            "holder_concentration_x_industry_rps",
+        ],
+    },
 }
 
 
