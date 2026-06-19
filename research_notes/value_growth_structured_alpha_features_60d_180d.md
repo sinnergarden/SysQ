@@ -131,7 +131,31 @@ For comparison, the `v3a_strpv` experiment (which adds structured price-volume f
 | v3b_pv_interact | 19 | 0.0748 | 0.7652 | 1.0281 | 0.8636 | 1151 |
 | **v3a_alpha** | **111** | **--** | **--** | **--** | **--** | **not run** |
 
-**Note**: The `v3a_alpha` 180d delayed experiment (`v3a_alpha_180d_delayed`) was configured with `rolling_windows.csv` generated but the signal run has not completed. No results available yet.
+## Results (2026-06-19, strict delayed)
+
+### 60d Delayed Results
+
+| Config | Feats | IC | ICIR | RankIC | RankICIR | ΔIC vs v3a_full |
+|--------|:----:|:--:|:----:|:-----:|:-------:|:---------------:|
+| v3a_full | 83 | **0.0545** | 0.644 | 0.0485 | 0.493 | — |
+| +structured alpha (all 3 groups) | 111 | **0.0551** | 0.609 | 0.0509 | 0.488 | **+0.0006** |
+
+### 180d Delayed Results
+
+| Config | Feats | IC | ICIR | RankIC | RankICIR | ΔIC vs v3a_full |
+|--------|:----:|:--:|:----:|:-----:|:-------:|:---------------:|
+| v3a_full | 83 | **0.0877** | 1.009 | 0.0745 | 0.782 | — |
+| +holder_freshness (92 feats) | 92 | **0.0882** | 1.036 | 0.0757 | 0.788 | **+0.0005** |
+| +industry_relative (94 feats) | 94 | **0.0845** | 0.999 | 0.0700 | 0.771 | **−0.0032** |
+| +full structured alpha (111 feats) | 111 | not completed | — | — | — | — |
+
+### Verdict: ALL THREE GROUPS FAIL ❌
+
+| Group | 60d | 180d | Verdict |
+|-------|:---:|:---:|:--------|
+| industry_relative (11 feats) | — | −0.003 | Fail. Redundant with tree's automatic industry splitting. |
+| neutralized (8 feats) | 0.0006 (in combined) | — | Fail. OLS residuals redundant with LightGBM's natural size adjustment. |
+| shareholder_freshness (9 feats) | — | +0.001 | Fail. Decay weights and interactions add no material signal. |
 
 ### 180d Non-Delayed Results (no label_maturity_lag -- reference)
 

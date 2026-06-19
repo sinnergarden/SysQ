@@ -1,0 +1,25 @@
+experiment_id: v3a_holder_180d_delayed
+calendar:
+  start_date: "2020-01-01"
+  end_date: "2025-12-31"
+  train_window_days: 504
+  step_days: 20
+signal:
+  signal_id: v3a_holder_180d
+  score_column: score
+feature_list_id: value_growth_v3a_plus_holder_freshness_features
+generators:
+  - generator_id: v3a_holder_180d
+    type: multi_label_lightgbm
+    params:
+      universe: csi800
+      n_estimators: 300
+      feature_list_id: value_growth_v3a_plus_holder_freshness_features
+      labels:
+        - label_id: fwd_ret_180d_raw
+signal_transforms:
+  - transform_id: daily_zscore
+    type: daily_zscore
+labels:
+  - label_id: fwd_ret_180d_raw
+    label_maturity_lag_trading_days: 180
