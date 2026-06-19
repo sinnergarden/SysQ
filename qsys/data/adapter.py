@@ -9,6 +9,7 @@ from qsys.utils.logger import log
 from qsys.data.storage import StockDataStore
 from qsys.data.collector import TushareCollector
 from qsys.feature.builder import build_phase1_features
+from qsys.feature.cache import has as _has_cache, load as _load_cache, save as _save_cache
 from qsys.feature.config import RESEARCH_FEATURE_FLAGS
 from qsys.feature.registry import list_feature_groups
 import qlib
@@ -237,6 +238,13 @@ class QlibAdapter:
         else:
             log.info("Qlib bin is up to date.")
 
+    @staticmethod
+    def _current_universe(instruments):
+        """Extract universe name from *instruments* for cache key."""
+        if isinstance(instruments, str) and instruments.lower() in ("all", "csi300", "csi500", "csi800"):
+            return instruments.lower()
+        return "custom"
+
     def normalize_instruments(self, instruments):
         if isinstance(instruments, str):
             low = instruments.lower()
@@ -444,6 +452,27 @@ class QlibAdapter:
         support_fields = [f for f in self._semantic_support_fields() if f not in native_fields]
         native_request = native_fields + support_fields
         base_start_time = self._semantic_lookback_start(start_time, end_time)
+
+        # ── Feature cache: skip full recompute for cached feature sets ──
+        universe = self._current_universe(instruments)
+        cache_start = base_start_time
+        cache_end = end_time or start_time
+        use_cache = bool(derived_fields and cache_start and cache_end)
+
+        if use_cache and _has_cache(universe, derived_fields, cache_start, cache_end):
+            cached = _load_cache(universe, derived_fields, cache_start, cache_end,
+                                  request_start=start_time)
+            native_df = DatasetD.dataset(
+                inst, native_request,
+                start_time=base_start_time, end_time=end_time,
+                freq=freq, inst_processors=inst_processors or [],
+            )
+            combined = native_df.join(cached, how="left")
+            for field in requested_fields:
+                if field not in combined.columns:
+                    combined[field] = np.nan
+            return combined[requested_fields]
+
         native_df = DatasetD.dataset(
             inst,
             native_request,
@@ -453,6 +482,10 @@ class QlibAdapter:
             inst_processors=inst_processors or []
         )
         semantic_df = self._build_semantic_features(native_df, derived_fields, start_time=start_time, end_time=end_time)
+
+        # Cache the full computed MultiIndex result for future windows
+        if use_cache and semantic_df is not None and not semantic_df.empty:
+            _save_cache(universe, derived_fields, cache_start, cache_end, semantic_df)
 
         native_current = native_df
         if start_time is not None or end_time is not None:

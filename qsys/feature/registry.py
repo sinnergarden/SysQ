@@ -339,10 +339,17 @@ class FeatureListRegistry:
 
     @classmethod
     def load(cls, feature_list_id: str) -> list[str]:
-        """Load feature list, return qlib field expressions."""
+        """Load feature list, return qlib field expressions.
+
+        Supports two formats:
+        - ``features: [...]`` — explicit list (legacy, backward compat).
+        - ``features: [...] + feature_groups: [...]`` — explicit list
+          with additional group expansions (see :mod:`qsys.feature.resolver`).
+        """
         path = cls._CONFIG_DIR / f"{feature_list_id}.yaml"
         if not path.exists():
             raise FileNotFoundError(f"Feature list '{feature_list_id}' not found. Available: {cls.list_ids()}")
         import yaml
         data: dict[str, Any] = yaml.safe_load(path.read_text(encoding="utf-8"))
-        return list(data.get("features", []))
+        from qsys.feature.resolver import resolve_feature_list  # noqa: PLC0415
+        return resolve_feature_list(data)
