@@ -381,34 +381,92 @@ overheat_risk_score
 
 ---
 
-## 二、重构目标
+## 二、目标架构
 
-### 2.1 核心架构目标
+### 2.1 分层设计
 
-1. **单一事实来源（Single Source of Truth）：** 消除 `registry.py`、`configs/features/*.yaml`、`builder.py` 三方之间的不一致，使特征定义集中在一个权威位置。
+```
+┌─────────────────────────────────────────────────────────┐
+│  User-facing layer                                      │
+│  FeatureSet YAML (configs/features/*.yaml)              │
+│    • features list / extends + add_features (只加不减)   │
+│    • 声明 = 承诺：缺失或 broken → fail fast              │
+└───────────────────────┬─────────────────────────────────┘
+                        │  (内部，自动)
+                        v
+┌─────────────────────────────────────────────────────────┐
+│  Resolver / BuildPlan                                   │
+│    • 读 YAML → 唯一特征列表                              │
+│    • 查 FeatureSpec → 拓扑排序 → build_plan              │
+│    • 校验：broken/missing → fail fast                    │
+└──────┬──────────────────────────────┬───────────────────┘
+       │                              │
+       v                              v
+┌──────────────┐          ┌──────────────────────┐
+│ Transform    │          │ Cache                │
+│ (compute)    │◄─────────│ • transform-level     │
+│              │          │ • matrix-level        │
+└──────┬───────┘          │ • per-feature (扩展)  │
+       │                  └──────────────────────┘
+       v
+┌─────────────────────────────────────────────────────────┐
+│  Manifest (audit only)                                  │
+│    • final_features, required_transforms                │
+│    • cache hits/misses, source_hash, builder_hash       │
+│    • 若 final_columns ≠ resolved → 构建失败             │
+└─────────────────────────────────────────────────────────┘
+```
 
-2. **声明式特征依赖：** 每个 derived feature 显式声明其依赖的 raw/derived feature，实现自动化依赖解析、拓扑排序和增量构建。
+### 2.2 核心原则
 
-3. **可审计的特征清单：** 生成完整的特征清单 CSV，包含特征名、所属组、依赖、公式定义、数据源、PIT 类型、缓存范围、状态等元信息。
+1. **用户感知层只能有一层：FeatureSet YAML。** FeatureSpec、TransformSpec、Resolver、Cache、Manifest 都是内部实现细节。
+2. **YAML 声明 = 承诺。** 声明的 feature 必须全部产出，缺者 fail fast。不允许 silent skip。
+3. **只做加法。** 不支持 `exclude_features` / `exclude_groups`，不支持运行时减法。需要 ablation 就新建显式 YAML。
+4. **Manifest 只用于审计和复现，不用于容错。**
+5. **旧 YAML 输出 feature column 不变。** 除非显式标注为 bugfix/migration。
+6. **FeatureSet YAML 只支持两种模式：** old-style features list（兼容）；new-style `extends + add_features`（只追加）。
 
-4. **双路径统一：** 合并 YAML 驱动路径和 Adapter 自动检测路径，消除行为差异。
+### 2.3 各层设计要点
 
-### 2.2 具体设计目标
+**FeatureSet YAML（用户层）：**
+```yaml
+# 旧式（兼容）
+feature_list_id: value_growth_multibagger_v3a
+features:
+  - ret_60d
+  - margin_crowding_score
 
-1. **registry_v2 全面迁移：** 将全部 169+ 个 derived feature 用 `FeatureSpec` 注册，填充 `dependencies`、`compute_fn`、`pit_type`、`cache_scope`、`status`、`description` 等字段。新增冗余字段检查（alias 登记）。
+# 新式（目标态）
+feature_list_id: vg_v3a_plus_momentum
+extends: value_growth_multibagger_v3a
+add_features:
+  - industry_breadth_20d
+```
 
-2. **YAML 配置瘦身：** 将 YAML 中的显式特征列表逐步替换为 `feature_groups` 引用组合，由 resolver.py 统一展开。消除手工维护长列表的负担。
+**FeatureSpec（内部）：** 每个 feature 的完整元数据，含 feature_id（永久稳定）、name（列名）、kind（raw/derived）、dependencies、compute_fn、pit_type、cache_scope、status 等。
 
-3. **依赖图自动构建：** 基于 registry_v2 的依赖声明，构建特征依赖 DAG，支持：
-   - 构建前验证所有依赖是否可用（避免静默 NaN）
-   - 增量构建（仅重新计算受影响的特征）
-   - 拓扑排序确保构建顺序正确（消除 builder 中硬编码的 flag 顺序）
+**TransformSpec（内部）：** 描述一个计算单元（如 "build_relative_strength_features"），含 inputs、outputs、compute_fn、pit_contract、cache_scope、dependencies（transform 级依赖）。
 
-4. **Adapter 路径规范化：** 统一 QlibAdapter 的 feature flag 推导逻辑，使其基于 registry_v2 的组归属解析而非硬编码字符串匹配。
+**Resolver（内部）：** YAML → FeatureSpec → BuildPlan。自动检测 broken/deprecated/missing feature。自动决定需要跑哪些 transform 及其顺序。
 
-5. **缓存层集成：** 利用 registry_v2 中的 `cache_scope` 信息，将 cache.py 集成到构建引擎中，实现智能缓存。
+**Cache（内部）：**
+- 主路径：transform-level cache（scope=panel 的 transform 结果可缓存）
+- 可选：matrix cache（全量矩阵缓存）
+- Per-feature cache 作为未来扩展，当前不做主路径
 
-6. **消除命名歧义：** 为跨组重复的特征建立 alias 机制；统一命名规范。
+**Manifest（内部）：** 每次构建产出一份 manifest，记录 final_features、required_transforms、cache hits/misses、source hash、builder hash。若 final_columns ≠ resolved_features，构建失败。
+
+### 2.4 当前 vs 目标态
+
+| 维度 | 当前 | 目标态（Phase 4） |
+|------|------|------------------|
+| 用户入口 | flag + YAML + FeatureLibrary 三路径 | FeatureSet YAML only |
+| Feature 元数据 | FEATURE_GROUPS (name list) | FeatureSpec (full metadata) |
+| 构建调度 | 硬编码 flag → group → fn 链 | BuildPlan (拓扑排序) |
+| 校验 | 无 | YAML↔registry 双向校验，fail fast |
+| 缓存 | QlibAdapter 粗粒度缓存 | Transform-level + matrix |
+| YAML 模式 | 纯 features list | extends + add_features（只加不减） |
+| 减法 | 隐式（flag=false） | 不允许；需要 ablation 就建新 YAML |
 
 ---
 

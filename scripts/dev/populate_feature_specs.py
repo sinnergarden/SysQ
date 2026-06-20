@@ -1,8 +1,11 @@
-"""Populate registry_v2 with FeatureSpec entries for all active features.
+"""Populate registry_v2 with FeatureSpec entries (Phase 1 partial sample).
 
-This script reads the existing FEATURE_GROUPS registry and the inventory
-CSV to populate the FeatureSpec registry with appropriate metadata.
-It is intended to be imported (not run standalone) to prime the registry.
+Phase 1 status: only representative specs are populated (core raw + sample
+derived per group).  Full 171-feature population is Phase 2.
+
+Usage:
+    from scripts.dev.populate_feature_specs import populate_registry
+    populate_registry()  # adds sample specs to the in-memory registry_v2 dict
 """
 
 from qsys.feature.registry_v2 import (

@@ -1,224 +1,209 @@
-# Feature Registry Design — FeatureSpec 化
+# Feature Registry Design — 分层架构
 
-## 1. 背景：当前注册表的问题
+## 1. 架构总览
 
-当前特征注册表由 `qsys/feature/registry.py` 中的 `FEATURE_GROUPS` 字典管理：
-
-```python
-FEATURE_GROUPS = {
-    "microstructure": {
-        "enabled_by": "enable_microstructure_features",
-        "features": ["close_to_open_gap_1d", "open_to_close_ret", ...],
-    },
-    ...
-}
+```
+┌─────────────────────────────────────────────────────────┐
+│  User-facing layer                                      │
+│  FeatureSet YAML (configs/features/*.yaml)              │
+│    • 只支持 features list / extends + add_features      │
+│    • 不支持 exclude_features / exclude_groups           │
+│    • 声明 = 承诺：所有 feature 必须产出，缺者 fail      │
+└───────────────────────┬─────────────────────────────────┘
+                        │
+                        v  (internal, auto)
+┌─────────────────────────────────────────────────────────┐
+│  Resolver / BuildPlan                                   │
+│    • 读 YAML → 唯一特征列表                              │
+│    • 查 registry → feature_id → FeatureSpec              │
+│    • 拓扑排序 → build_plan (需跑哪些 transform)          │
+│    • 校验：broken/missing/deprecated → fail fast         │
+└──────┬──────────────────────────────┬───────────────────┘
+       │                              │
+       v                              v
+┌──────────────┐          ┌──────────────────────┐
+│ Transform    │          │ Cache                │
+│ (compute)    │◄─────────│ • transform-level     │
+│              │          │   (scope=panel)       │
+│              │          │ • matrix-level        │
+│              │          │ • per-feature (未来)   │
+└──────┬───────┘          └──────────────────────┘
+       │
+       v
+┌─────────────────────────────────────────────────────────┐
+│  Manifest (audit only)                                  │
+│    • final_features, required_transforms                │
+│    • cache hits/misses, source_hash, builder_hash       │
+│    • 若 final columns ≠ YAML resolved → 构建失败        │
+└─────────────────────────────────────────────────────────┘
 ```
 
-这种设计存在以下核心问题：
+### 核心原则
 
-| 问题 | 后果 |
-|------|------|
-| 每组的 features 只是一个字符串列表，没有 per-feature 元数据 | 无法表达每个特征的 kind、dtype、dependencies、owner 等属性 |
-| 依赖关系隐含在 builder 代码中（`resolver.py` 的 `_REQUIRED_FIELDS` 是独立维护的硬编码字典）| 容易产生 registry 与 builder 的不一致 |
-| 没有 raw / derived 的显式区分 | 无法自动推断计算顺序，也无法检测循环依赖 |
-| 没有 status 字段（active / experimental / deprecated / broken）| 无法安全管理特征生命周期，broken 特征可能被误用 |
-| feature_id 和 name 混为一谈 | 重命名会导致下游查询断裂（如 UI 持久化的 feature_id）|
-| 无法表达 compute_fn 或 cache_scope | 缓存系统无法知道哪些特征可缓存、如何缓存 |
+1. **用户只能看到 FeatureSet YAML**。FeatureSpec、TransformSpec、Resolver、Cache、Manifest 全是内部实现细节。
+2. **YAML 声明 = 承诺**。所有 feature 必须产出，缺字段、缺依赖、broken/deprecated 都 fail fast。
+3. **只能做加法**。`extends + add_features` 模式，不支持减法。需要 ablation 就新建显式 YAML。
+4. **Manifest 只用于审计和复现**，不用于容错。
+5. **旧 YAML 输出列不变**（除非明确标记为 bugfix/migration）。
 
-## 2. FeatureSpec 设计
+## 2. 当前状态（Phase 1）
 
-引入 `FeatureSpec` 数据类作为每个特征的唯一描述。
+| 组件 | 状态 |
+|---|---|
+| FEATURE_GROUPS (v1 dict) | 运行中，builder 仍通过 flag dispatch 使用 |
+| FeatureSpec (v2 skel) | ✅ 定义完成，partial sample specs |
+| TransformSpec | ✅ 定义完成，未填充 |
+| Resolver / BuildPlan | ❌ 未实现（Phase 2） |
+| Cache | ❌ 未实现（Phase 3） |
+| Manifest | ❌ 未实现（Phase 4） |
+| FeatureSet YAML → builder 直连 | 运行中，旧路径 |
 
-### 2.1 数据结构
+当前的迁移过渡路径：
+
+```
+YAML features list  ───→  (旧路径)  resolver.py expand → builder flag dispatch
+                               (新路径，Phase 2+)  resolver_v2 → FeatureSpec → build_plan → cache → manifest
+```
+
+两条路径并存直到 Phase 4。
+
+## 3. FeatureSpec 设计（内部）
 
 ```python
 @dataclass(frozen=True)
 class FeatureSpec:
-    # ── 标识 ──
-    feature_id: str          # 永久稳定标识符，一旦分配永不改变
-    name: str                # DataFrame 中的实际列名，可随设计调整
-
-    # ── 分类 ──
-    group: str               # 所属组名，对应 FEATURE_GROUPS 的 key
-    kind: FeatureKind        # FeatureKind.RAW 或 FeatureKind.DERIVED
-
-    # ── 来源和依赖 ──
-    source: str              # 数据来源描述，如 "tushare/stock_daily", "qlib/fundamental"
-    dependencies: list[str]  # 依赖的 feature_id 列表（仅 DERIVED 类型需要）
-    compute_fn: str | None   # 计算函数引用，格式 "module:function"（仅 DERIVED）
-
-    # ── 类型和存储 ──
-    dtype: str               # pandas dtype，如 "float64", "int64", "bool"
-    pit_type: PITRule        # PIT 规则枚举，见下文
-    cache_scope: CacheScope  # CacheScope.NONE / PER_FEATURE / MATRIX
-
-    # ── 生命周期 ──
-    status: FeatureStatus    # FeatureStatus.ACTIVE / EXPERIMENTAL / DEPRECATED / BROKEN
-
-    # ── 文档 ──
-    description: str         # 人类可读的描述
-    owner: str               # 维护者标识
+    feature_id: str          # 永久稳定标识符
+    name: str                # DataFrame 列名
+    group: str               # 所属组
+    kind: "raw" | "derived" # 内部分类
+    source: str | None       # 数据源或实现模块
+    dependencies: tuple[str, ...]  # 直接依赖
+    compute_fn: str | None   # 计算函数
+    dtype: str | None        # 期望 dtype
+    pit_type: "point_in_time" | "rolling_past" | "cross_sectional" | "static"
+    cache_scope: "none" | "panel"
+    status: "active" | "experimental" | "deprecated" | "broken"
+    description: str
+    owner: str | None
 ```
 
-### 2.2 辅助枚举
+FeatureSpec 是 **registry 中某个 feature 的完整元数据描述**，但**用户不直接接触它**。FeatureSet YAML 里的 feature name 被 Resolver 翻译为 FeatureSpec 查询，所有校验在 Resolver 层完成。
+
+## 4. TransformSpec 设计（内部）
 
 ```python
-from enum import Enum, auto
-
-class FeatureKind(Enum):
-    RAW = "raw"
-    DERIVED = "derived"
-
-class FeatureStatus(Enum):
-    ACTIVE = "active"         # 生产就绪，纳入所有默认特征列表
-    EXPERIMENTAL = "experimental"  # 实验中，需显式启用
-    DEPRECATED = "deprecated" # 已废弃，保留兼容性但不再推荐使用
-    BROKEN = "broken"         # 已损坏，不能被任何 active feature list 引用
-
-class PITRule(Enum):
-    # 见 docs/feature_development.md — 6 条 PIT 规则
-    ROLLING_HISTORY_ONLY = "rolling_history_only"
-    CROSS_SECTIONAL_BY_DATE = "cross_sectional_by_date"
-    INDUSTRY_AGGREGATION = "industry_aggregation"
-    FINANCIAL_ANN_DATE = "financial_ann_date"
-    QOQ_REPORT_PANEL = "qoq_report_panel"
-    PROXY_NAMED = "proxy_named"
-
-class CacheScope(Enum):
-    NONE = "none"             # 不缓存（简单原始特征）
-    PER_FEATURE = "per_feature"  # 单特征级别缓存
-    MATRIX = "matrix"         # 仅矩阵级别缓存
-```
-
-### 2.3 核心设计决策
-
-#### feature_id 必须永久不变
-
-- `feature_id` 是特征的**稳定标识符**。下游（UI、缓存、实验索引、数据库）应使用 `feature_id` 引用特征。
-- `name` 是 DataFrame 中的实际列名，可以随重构调整。
-- 重命名时必须保持 `feature_id` 不变；引入新特征时必须使用新的 `feature_id`。
-- 此决策确保查询、缓存和实验结果不会因重命名而断裂。
-
-#### name 是 DataFrame 列名
-
-- `name` 字段对应 builder 在 DataFrame 中插入的列名，也对应 YAML 配置文件和 qlib expression 中的引用名称。
-- `name` 可包含字母、数字、下划线。
-- 如果某个特征在 DataFrame 中的列名在将来变更，它的 `feature_id` 保持不变，仅 `name` 更新。
-
-#### status 的流动规则
-
-```
-BROKEN 只能被人工干预修复，不能自动恢复为 ACTIVE
-EXPERIMENTAL → ACTIVE 需要评审
-ACTIVE → DEPRECATED 需要通知下游使用者
-DEPRECATED → ARCHIVED（从注册表中移除）需设过渡期
-```
-
-关键约束：
-- **`status == BROKEN` 的特征不能进入任何 active feature list**。`resolve_feature_list()` 和 builder 在看到 `BROKEN` 特征时应跳过或报错。
-- 特征标记为 `BROKEN` 时，其缓存必须被标记为无效（见 `feature_cache_design.md`）。
-
-## 3. 实现策略
-
-### 3.1 向后兼容
-
-当前代码路径：
-
-```
-FEATURE_GROUPS dict
-  → builder.py 根据 feature flag 决定调用哪些 build_* 函数
-  → resolver.py 的 FEATURE_FORMULAS / REQUIRED_FIELDS 提供元数据
-  → configs/features/*.yaml 提供特征列表
-```
-
-新设计在 `registry_v2.py` 中引入 `FeatureSpec` 注册表，**与现有 `FEATURE_GROUPS` 并存**。迁移过程不会破坏任何现有路径。
-
-```python
-# qsys/feature/registry_v2.py（新文件）
-
 @dataclass(frozen=True)
-class FeatureSpec:
-    ...
+class TransformSpec:
+    transform_id: str        # 如 "build_microstructure"
+    inputs: tuple[str, ...]  # 读取哪些 feature
+    outputs: tuple[str, ...] # 产出哪些 feature
+    compute_fn: str | None   # 实现函数
+    pit_contract: str        # PIT 义务描述
+    cache_scope: "none" | "panel"
+    dependencies: tuple[str, ...]  # 其他 transform 依赖
+```
 
-# 全量注册表实例
-FEATURE_REGISTRY: dict[str, FeatureSpec] = {
-    "close_to_open_gap_1d": FeatureSpec(
-        feature_id="close_to_open_gap_1d",
-        name="close_to_open_gap_1d",
-        group="microstructure",
-        kind=FeatureKind.DERIVED,
-        source="tushare/stock_daily",
-        dependencies=["close", "open"],
-        compute_fn="qsys.feature.groups.microstructure:_gap",
-        dtype="float64",
-        pit_type=PITRule.ROLLING_HISTORY_ONLY,
-        cache_scope=CacheScope.PER_FEATURE,
-        status=FeatureStatus.ACTIVE,
-        description="Close-to-open gap ratio (prev close / today open)",
-        owner="researcher/liuming",
-    ),
-    ...
+TransformSpec 描述一个计算单元。Resolver 根据 FeatureSpec 的 `compute_fn` 自动决定需要跑哪些 transform，自动计算拓扑顺序。用户不需要配置 TransformSpec——它由 framework 维护者填充。
+
+## 5. FeatureSet YAML 规范（用户层）
+
+### 旧式（兼容，Phase 1-2）：
+
+```yaml
+feature_list_id: value_growth_multibagger_v3a
+features:
+  - ret_60d
+  - ret_120d
+  - margin_crowding_score
+  - ...
+```
+
+### 新式（目标态，Phase 3+）：
+
+```yaml
+feature_list_id: vg_v3a_plus_momentum
+extends: value_growth_multibagger_v3a   # 继承已有特征集
+add_features:
+  - industry_ret_20d
+  - industry_breadth_20d
+```
+
+**规则：**
+- `extends` 引用另一个 YAML 的 `feature_list_id`
+- `add_features` 只追加，不支持删除
+- 不支持 `exclude_features` 或 `exclude_groups`
+- 需要 ablation 时，复制 YAML + 手动编辑，不允许运行时减法
+
+### 声明 = 承诺
+
+- YAML 中列出 feature → **必须全部产出**
+- 依赖于不存在的 feature → fail fast
+- 引用了 status=broken 的 feature → fail fast
+- 引用了 status=deprecated 的 feature → 硬警告（不阻断，但必须报告）
+- 构建完成后 final columns ≠ resolved features → 构建失败
+
+## 6. Manifest 设计（审计用）
+
+Manifest **不用于容错**。它的唯一用途是**审计和复现**：
+
+```json
+{
+  "feature_list_id": "vg_v3a_plus_momentum",
+  "resolved_at": "2026-06-20T12:00:00Z",
+  "resolved_features": ["ret_60d", "ret_120d", "margin_crowding_score", "industry_ret_20d"],
+  "final_columns": ["ret_60d", "ret_120d", "margin_crowding_score", "industry_ret_20d"],
+  "required_transforms": [
+    {"transform_id": "build_relative_strength", "cache_hit": true, "cache_key": "a1b2c3"},
+    {"transform_id": "build_margin", "cache_hit": false, "duration_ms": 1200},
+    {"transform_id": "build_industry_momentum", "cache_hit": true, "cache_key": "d4e5f6"}
+  ],
+  "source_hash": "sha256:...",
+  "builder_hash": "sha256:...",
+  "status": "ok"
 }
 ```
 
-### 3.2 兼容层
+如果 `final_columns ≠ resolved_features`，状态为 `"failed"`，构建失败。
 
-提供一个 `FeatureSpecAdapter`，将旧的 `FEATURE_GROUPS` 条目自动包装成 `FeatureSpec`（使用启发式默认值）：
+## 7. Resolver 设计（内部）
 
-```python
-def adapt_group(group_name: str) -> dict[str, FeatureSpec]:
-    """将 FEATURE_GROUPS[group_name] 转换为对应的 FeatureSpec 字典。"""
-    ...
-```
+Resolver 是用户层 → 内部的桥梁：
 
-### 3.3 Resolver 改造
+1. 输入：`feature_list_id`（指向 YAML）
+2. 读 YAML → 展开 features 列表（`extends` 递归 + `add_features` 合并）
+3. 每个 name → `get_by_name()` 查 FeatureSpec
+4. 校验：missing → fail；broken → fail；deprecated → warn
+5. 查 TransformSpec 决定 build plan（需要哪些 compute、顺序如何）
+6. 输出 BuildPlan（transforms + cache keys）
 
-新的 resolver (`resolver_v2.py`) 应：
+Resolver 不直接修改 builder 代码路径。在 Phase 4 之前，Resolver 的输出只用于**校验和审计**，builder 仍走 flag dispatch 路径。
 
-1. 从 `FEATURE_REGISTRY` 接收 `feature_id` 或 `name` 列表
-2. 根据 `kind` 和 `dependencies` 拓扑排序
-3. 过滤掉 `status == BROKEN` 的特征
-4. 返回可用于 builder 的 `(feature_id, name, compute_fn, dependencies)` 元组列表
+## 8. 迁移计划
 
-## 4. 迁移计划
+### Phase 1（本 PR = #189）
 
-### Phase 1：Inventory（当前 → +1 周）
+- ✅ 盘点 inventory
+- ✅ FeatureSpec skeleton（partial specs）
+- ✅ TransformSpec skeleton
+- ✅ consistency tests
+- ✅ 设计文档 + agent checklist
 
-- 盘点所有现有特征，为每个特征确定 `kind`、`dependencies`、`status`、`dtype`、`pit_type`
-- 建立 `feature_id` ↔ `name` 映射表
-- 确认无重复 feature_id
+### Phase 2
 
-### Phase 2：FeatureSpec + Resolver + Tests（+1 周 → +3 周）
+- Resolver 实现（YAML → FeatureSpec → BuildPlan）
+- 全量 FeatureSpec 填充
+- `extends + add_features` YAML 格式支持
+- 校验集成（YAML 中的 feature 必须可在 registry 中找到）
+- Manifest 生成
 
-- 创建 `qsys/feature/registry_v2.py`，包含 `FeatureSpec`、枚举、全量注册表
-- 创建 `qsys/feature/resolver_v2.py`，实现基于 FeatureSpec 的特征解析
-- 编写迁移测试：
-  - 验证 `FEATURE_REGISTRY` 覆盖 `FEATURE_GROUPS` 中所有特征
-  - 验证 `BROKEN` 特征不会出现在特征列表中
-  - 验证 `dependencies` 无循环引用
-  - 验证 `feature_id` 唯一且无空值
+### Phase 3
 
-### Phase 3：Cache Integration（+3 周 → +5 周）
+- Transform-level cache（scope=panel）
+- Matrix cache（可选优化）
+- Cache 与 Resolver/BuildPlan 集成
 
-- 在 `qsys/feature/cache_v2.py` 中使用 `feature_id` + `compute_fn` 哈希作为缓存键
-- 缓存系统消费 `cache_scope` 字段决定缓存策略
-- 见 `docs/feature_cache_design.md`
+### Phase 4
 
-### Phase 4：Builder Refactor（+5 周 → +8 周）
-
-- 将 `builder.py` 改为消费 `FeatureSpec`（通过 resolver_v2）
-- 用拓扑排序替代当前的硬编码 flag → group → function 调用链
-- 移除旧的 `FEATURE_GROUPS` 路径（保留兼容层，但不作为默认路径）
-
-## 5. 迁移比对表
-
-| 维度 | 当前（FEATURE_GROUPS）| 目标（FeatureSpec）|
-|------|-----------------------|-------------------|
-| 特征标识 | 仅 name（字符串）| feature_id（永久）+ name（可更换）|
-| 类型区分 | 无 | 显式 kind: RAW / DERIVED |
-| 依赖声明 | 分散在 resolver.py 的硬编码字典中 | 在 FeatureSpec 中声明 |
-| 计算函数 | 隐式通过 builder.py 的 if/else 链 | compute_fn 显式引用 |
-| 生命周期管理 | 无 | status 状态机 |
-| 缓存策略 | 无 | cache_scope 字段 |
-| PIT 规则 | 无 | pit_type 枚举 |
-| 可测试性 | 弱 | 强（每个 FeatureSpec 可独立验证）|
+- Builder 改为由 BuildPlan 驱动
+- 旧 flag dispatch 路径标记 deprecated
+- 旧 FEATURE_GROUPS 降级为兼容层

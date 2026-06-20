@@ -1,51 +1,33 @@
-"""FeatureSpec registry — per-feature metadata for the SysQ feature system.
+"""FeatureSpec registry — per-feature metadata skeleton (Phase 1).
 
-This is a backward-compatible addition alongside ``qsys.feature.registry.FEATURE_GROUPS``.
-All features registered here are grouped by the existing group structure; the main
-addition is per-feature ``FeatureSpec`` metadata.
+This is an **internal implementation detail**, not a user-facing API.
+For users: only ``configs/features/*.yaml`` matters.
 
-feature_id
-    Permanent, stable identifier for the feature.  Never changes even if the
-    output column name is renamed.
-name
-    The actual column name in the DataFrame / qlib panel.  Must match the
-    existing downstream name for backward compatibility.
-group
-    Logical group (matches one of the ``FEATURE_GROUPS`` keys).
-kind
-    ``"raw"`` — directly from data source or qlib table, no business logic.
-    ``"derived"`` — computed from raw features or other derived features.
-source
-    For raw features: the data source table (e.g. ``"daily"``, ``"fina_indicator"``,
-    ``"margin_detail"``, ``"shareholder"``).  For derived features: the
-    implementing module path.
-dependencies
-    Tuple of feature names this feature directly depends on.  Empty for raw
-    features.
-compute_fn
-    Fully qualified function name (e.g. ``"build_microstructure_features"``)
-    for derived features; ``None`` for raw.
-dtype
-    Expected pandas/numpy dtype, or ``None`` if unknown.
-pit_type
-    ``"point_in_time"`` — reported at a specific date (financial statements).
-    ``"rolling_past"`` — computed over a historical lookback window.
-    ``"cross_sectional"`` — ranked / normalised across stocks on the same date.
-    ``"static"`` — does not change (industry code, stock code).
-cache_scope
-    ``"per_date"`` — value depends on date only.
-    ``"per_instrument"`` — value depends on instrument only.
-    ``"panel"`` — value is a panel of (date, instrument).
-    ``"none"`` — not cacheable.
-status
-    ``"active"`` — in production or active research.
-    ``"experimental"`` — under evaluation, not in production config.
-    ``"deprecated"`` — still available but scheduled for removal.
-    ``"broken"`` — known issues, must NOT enter active feature list.
-description
-    Human-readable description of what this feature measures.
-owner
-    Optional: the team or person who owns this feature.
+Current status (Phase 1 of the migration plan):
+- ``FeatureSpec`` dataclass defined ✓
+- ``TransformSpec`` dataclass defined ✓
+- ``register()/get_by_id()/verify_feature_list()`` API ✓
+- Partial raw specs populated (representative sample)
+- Derived specs populated (representative sample — not yet full 171)
+- NOT yet wired into builder.py or resolver.py
+
+Target architecture (full phases):
+::
+    User-facing:  FeatureSet YAML  (configs/features/*.yaml)
+                      |
+                      v (internal)
+    Internal:     Resolver → FeatureSpec + TransformSpec → BuildPlan
+                      |               |
+                      v               v
+                   Build Plan     Feature Cache
+                      |               |
+                      v               v
+                   Manifest (audit only) — if final columns ≠ resolved → fail
+
+Rules:
+- ``status="broken"`` features MUST NOT enter any active feature list.
+- ``status="deprecated"`` features MAY appear but MUST trigger a hard warning.
+- feature_id is permanent. name is the DataFrame column (may change).
 """
 
 from __future__ import annotations
@@ -54,66 +36,151 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 
+# ── Type aliases ──
+
 FeatureKind = Literal["raw", "derived"]
-PitType = Literal["point_in_time", "rolling_past", "cross_sectional", "static"]
-CacheScope = Literal["per_date", "per_instrument", "panel", "none"]
+"""Internal classification — users never see this."""
+
+PitType = Literal[
+    "point_in_time",
+    "rolling_past",
+    "cross_sectional",
+    "static",
+]
+"""PIT contract for the feature computation."""
+
+CacheScope = Literal["none", "panel"]
+"""Transform-level cache scope.
+
+- ``"none"`` — simple computation, no caching needed.
+- ``"panel"`` — expensive computation; cache the full (date, instrument) panel
+  so rolling research windows can reuse it.
+
+Per-feature cache (``"per_feature"``) is deferred — see docs/feature_cache_design.md.
+Current Phase 1 only supports ``"none"`` and ``"panel"``.
+"""
+
 FeatureStatus = Literal["active", "experimental", "deprecated", "broken"]
+"""Lifecycle status.
+
+``"broken"`` → blocked from entering any feature list.  Fail fast.
+"""
+
+
+# ── Spec definitions ──
 
 
 @dataclass(frozen=True)
 class FeatureSpec:
-    """Per-feature metadata spec."""
+    """Per-feature metadata.
 
+    **Internal only.**  Researchers should never touch this directly;
+    they write YAML, and FeatureSpec is populated by framework maintainers.
+
+    All fields are frozen — once registered, a FeatureSpec should be
+    considered read-only.
+    """
+
+    # ── Identity ──
     feature_id: str
+    """Permanent stable identifier.  Never changes."""
+
     name: str
+    """DataFrame column name.  Must match downstream YAML/qlib output."""
+
     group: str
+    """Logical group (mirrors ``FEATURE_GROUPS`` keys for now)."""
+
+    # ── Classification ──
     kind: FeatureKind
+    """``"raw"`` — directly from data source.  ``"derived"`` — computed."""
+
     source: str | None = None
+    """For raw: data source table.  For derived: implementing module path."""
+
     dependencies: tuple[str, ...] = field(default_factory=tuple)
+    """Direct inputs (feature names).  Empty for raw features."""
+
     compute_fn: str | None = None
+    """Fully qualified function name for derived features; ``None`` for raw."""
+
+    # ── Type and storage hints (for Resolver / Cache) ──
     dtype: str | None = None
+    """Expected pandas dtype, or ``None`` if unknown."""
+
     pit_type: PitType = "rolling_past"
+    """PIT contract — consumed by Resolver to validate build order."""
+
     cache_scope: CacheScope = "none"
+    """Cache hint — consumed by Cache layer."""
+
+    # ── Lifecycle ──
     status: FeatureStatus = "active"
+    """``"broken"`` features must not enter any active feature list."""
+
+    # ── Documentation ──
     description: str = ""
+    """Human-readable description of what this feature measures."""
+
     owner: str | None = None
+    """Who maintains this feature (name or team)."""
 
 
-# ── Helper: build FeatureSpec from a dict (for migration from FEATURE_GROUPS) ──
+@dataclass(frozen=True)
+class TransformSpec:
+    """Describes a transform (derived feature compute unit).
 
+    **Internal only.**  The Resolver uses TransformSpec to decide:
+    - What order to run transforms (dependency DAG)
+    - What needs caching (expensive panel-level transforms)
+    - What source columns are required
 
-def spec_from_dict(d: dict) -> FeatureSpec:
-    """Construct a FeatureSpec from a plain dict."""
-    return FeatureSpec(
-        feature_id=d["feature_id"],
-        name=d.get("name", d["feature_id"]),
-        group=d.get("group", ""),
-        kind=d.get("kind", "derived"),
-        source=d.get("source"),
-        dependencies=tuple(d.get("dependencies", []) or []),
-        compute_fn=d.get("compute_fn"),
-        dtype=d.get("dtype"),
-        pit_type=d.get("pit_type", "rolling_past"),
-        cache_scope=d.get("cache_scope", "none"),
-        status=d.get("status", "active"),
-        description=d.get("description", ""),
-        owner=d.get("owner"),
-    )
+    A single TransformSpec maps to one ``if flag: out = build_something(out)``
+    block in the current builder.py.  Over time, builder will be driven by
+    TransformSpec resolution rather than hard-coded flag dispatch.
+    """
+
+    transform_id: str
+    """Unique identifier for this transform (e.g. ``"build_microstructure"``)."""
+
+    inputs: tuple[str, ...] = field(default_factory=tuple)
+    """Feature names this transform reads.  May be raw or derived."""
+
+    outputs: tuple[str, ...] = field(default_factory=tuple)
+    """Feature names this transform produces."""
+
+    compute_fn: str | None = None
+    """Function reference, e.g. ``"build_microstructure_features"``."""
+
+    pit_contract: str = ""
+    """Short description of PIT obligations (see docs/feature_development.md)."""
+
+    cache_scope: CacheScope = "none"
+    """``"panel"`` if the transform is expensive enough to cache."""
+
+    dependencies: tuple[str, ...] = field(default_factory=tuple)
+    """Other transform_ids this transform depends on (build order)."""
 
 
 # ── Global registries ──
 
-# _FEATURE_SPECS: dict[str, FeatureSpec] keyed by feature_id
 _FEATURE_SPECS: dict[str, FeatureSpec] = {}
+"""feature_id → FeatureSpec."""
 
-# _NAME_INDEX: dict[str, str] — name -> feature_id (for name-based lookup)
 _NAME_INDEX: dict[str, str] = {}
+"""name → feature_id.  Enforces name uniqueness."""
+
+_TRANSFORM_SPECS: dict[str, TransformSpec] = {}
+"""transform_id → TransformSpec."""
+
+
+# ── Registration API ──
 
 
 def register(spec: FeatureSpec) -> None:
     """Register a single FeatureSpec.
 
-    Raises ValueError if feature_id or name is already registered.
+    Raises ``ValueError`` if feature_id or name is already registered.
     """
     if spec.feature_id in _FEATURE_SPECS:
         raise ValueError(
@@ -123,7 +190,8 @@ def register(spec: FeatureSpec) -> None:
         existing_id = _NAME_INDEX[spec.name]
         if existing_id != spec.feature_id:
             raise ValueError(
-                f"Feature name '{spec.name}' already registered (feature_id={existing_id})"
+                f"Feature name '{spec.name}' already registered "
+                f"(feature_id={existing_id})"
             )
     _FEATURE_SPECS[spec.feature_id] = spec
     _NAME_INDEX[spec.name] = spec.feature_id
@@ -133,6 +201,15 @@ def register_batch(specs: list[FeatureSpec]) -> None:
     """Register multiple FeatureSpecs."""
     for sp in specs:
         register(sp)
+
+
+def register_transform(spec: TransformSpec) -> None:
+    """Register a TransformSpec."""
+    if spec.transform_id in _TRANSFORM_SPECS:
+        raise ValueError(
+            f"TransformSpec '{spec.transform_id}' already registered"
+        )
+    _TRANSFORM_SPECS[spec.transform_id] = spec
 
 
 def get_by_id(feature_id: str) -> FeatureSpec | None:
@@ -166,13 +243,19 @@ def list_specs(
     return results
 
 
+# ── Dependency resolution (Phase 2 target, simple version for tests) ──
+
+
 def resolve_dependencies(
     feature_id: str, *, visited: set[str] | None = None
 ) -> list[str]:
-    """Resolve the full dependency chain for a feature (topological order).
+    """Resolve the full dependency chain for a feature to its raw leaf inputs.
 
-    Returns a list of *kind='raw'* feature names that *feature_id* ultimately
+    Returns a list of **raw feature names** that *feature_id* ultimately
     depends on.  Raises ``ValueError`` on circular dependency.
+
+    NOTE: This is a simplified version for Phase 1.  Phase 2 will replace
+    it with a full DAG-based topological resolver.
     """
     if visited is None:
         visited = set()
@@ -188,18 +271,17 @@ def resolve_dependencies(
     for dep_name in spec.dependencies:
         dep_spec = get_by_name(dep_name)
         if dep_spec is None:
-            # Could be a raw feature not in the registry yet — add as-is
             deps.append(dep_name)
         else:
             deps.extend(resolve_dependencies(dep_spec.feature_id, visited=visited))
     return deps
 
 
-def check_broken_features(names: list[str]) -> list[str]:
-    """Check if any of the named features is status=broken.
+# ── Validation helpers ──
 
-    Returns a list of broken feature names found.
-    """
+
+def check_broken_features(names: list[str]) -> list[str]:
+    """Return feature names whose status is ``"broken"``."""
     broken: list[str] = []
     for name in names:
         spec = get_by_name(name)
@@ -209,10 +291,7 @@ def check_broken_features(names: list[str]) -> list[str]:
 
 
 def check_deprecated_features(names: list[str]) -> list[str]:
-    """Check if any of the named features is status=deprecated.
-
-    Returns a list of deprecated feature names found.
-    """
+    """Return feature names whose status is ``"deprecated"``."""
     deprecated: list[str] = []
     for name in names:
         spec = get_by_name(name)
@@ -222,7 +301,7 @@ def check_deprecated_features(names: list[str]) -> list[str]:
 
 
 def check_missing_features(names: list[str]) -> list[str]:
-    """Check which feature names are NOT in the registry at all."""
+    """Return feature names NOT found in the registry at all."""
     missing: list[str] = []
     for name in names:
         if get_by_name(name) is None:
@@ -233,10 +312,10 @@ def check_missing_features(names: list[str]) -> list[str]:
 def verify_feature_list(features: list[str]) -> dict[str, list[str]]:
     """Verify a feature list against the registry.
 
-    Returns a dict with keys:
-        broken: list of broken feature names
-        deprecated: list of deprecated feature names
-        missing: list of feature names not found in registry
+    Returns ``{"broken": [...], "deprecated": [...], "missing": [...]}``.
+
+    Downstream MUST fail if ``broken`` or ``missing`` is non-empty.
+    ``deprecated`` SHOULD produce a hard warning.
     """
     return {
         "broken": check_broken_features(features),
