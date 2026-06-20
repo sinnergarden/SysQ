@@ -56,7 +56,14 @@
 - [ ] `python -m unittest tests/features/test_industry_aggregation_contract.py`
 - [ ] `python -m unittest tests/features/test_financial_statement_feature_semantics.py`
 - [ ] `python -m unittest tests/features/test_feature_set_resolver.py`
-- [ ] `python -m unittest discover tests/features/`
+- [ ] `python -m unittest tests/features/test_feature_cache.py`
+- [ ] `python -m unittest tests/features/`
+
+### Cache Awareness
+- [ ] If adding a new transform, its `compute_fn_hash` change invalidates existing cache
+- [ ] Cache key = f(transform_id, inputs, outputs, compute_fn_hash, source_hash, date_range, universe)
+- [ ] Cache metadata stored as `.meta.json` sidecar
+- [ ] Cache is internal — users never configure it
 
 ### PR Body Must Include
 ```

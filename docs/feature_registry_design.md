@@ -206,11 +206,13 @@ Resolver 不直接修改 builder 代码路径。在 Phase 4 之前，Resolver �
 - 校验集成（YAML 中的 feature 必须可在 registry 中找到）
 - Manifest 生成
 
-### Phase 3
+### Phase 3（PR #191 — 当前）
 
-- Transform-level cache（scope=panel）
-- Matrix cache（可选优化）
-- Cache 与 Resolver/BuildPlan 集成
+- ✅ Cache module (CacheKey, FeatureCacheContext, key/path/metadata)
+- ✅ Manifest cache section（compatible）
+- ✅ Cache plan CLI（plan only, no parquet）
+- ❌ Per-feature cache（deferred）
+- ❌ 不改 builder / model / inference
 
 ### Phase 4
 
