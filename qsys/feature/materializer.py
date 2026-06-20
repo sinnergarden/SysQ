@@ -149,8 +149,8 @@ def materialize_feature_set_cache(
         )
         t_path = transform_cache_path(tid, transform_ck.key, root=cache_root)
 
-        # Try transform cache read first
-        if cache_exists(t_path):
+        # Try transform cache read first (skipped when force=True)
+        if not force and cache_exists(t_path):
             cached = read_transform_cache(
                 path=t_path,
                 expected_cache_key=transform_ck.key,
