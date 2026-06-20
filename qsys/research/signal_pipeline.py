@@ -75,6 +75,10 @@ class SignalResearchPipeline:
         signal_generator: RollingSignalGenerator | None = None,
         overwrite_signal: bool = False,
         overwrite_eval: bool = False,
+        use_feature_cache: bool = False,
+        materialize_on_miss: bool = False,
+        feature_cache_root: str = "data/feature_cache",
+        source_manifest_hash: str = "",
     ) -> SignalResearchResult:
         """Execute signal research pipeline.
 
@@ -88,6 +92,8 @@ class SignalResearchPipeline:
             Allow overwriting existing SignalRun.
         overwrite_eval:
             Allow overwriting existing evaluations.
+        use_feature_cache / materialize_on_miss / feature_cache_root / source_manifest_hash:
+            Feature cache options (opt-in, default off).
         """
         if isinstance(config, (str, Path)):
             config = RollingResearchConfig.from_file(Path(config))

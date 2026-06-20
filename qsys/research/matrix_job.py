@@ -102,6 +102,12 @@ class RollingResearchConfig:
     # ── Feature list reference ─────────────────────────────────────────
     feature_list_id: str | None = None
 
+    # ── Feature cache options (opt-in) ──────────────────────────────────
+    use_feature_cache: bool = False
+    materialize_on_miss: bool = False
+    feature_cache_root: str = "data/feature_cache"
+    source_manifest_hash: str = ""
+
     # ── v2 signal combinations ──────────────────────────────────────────
     signal_combinations: list[dict[str, Any]] = field(default_factory=list)
     # each combination: combine_id, type, inputs
