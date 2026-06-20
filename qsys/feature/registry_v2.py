@@ -43,11 +43,23 @@ FeatureKind = Literal["raw", "derived"]
 
 PitType = Literal[
     "point_in_time",
+    "daily_observed",
     "rolling_past",
     "cross_sectional",
     "static",
 ]
-"""PIT contract for the feature computation."""
+"""PIT contract for the feature computation.
+
+- ``"point_in_time"`` — value visible at a specific date (financial statements,
+  margin data).  Must use ``ann_date`` for merge.
+- ``"daily_observed"`` — value is directly observed per trading day (OHLCV,
+  volume, amount).  No lookahead concern as long as data is synced.
+- ``"rolling_past"`` — computed over a historical lookback window.  Must
+  groupby/instrument before rolling.
+- ``"cross_sectional"`` — ranked / normalised across instruments on the same
+  trade date.  Must groupby/trade_date.
+- ``"static"`` — does not change (industry code).  Rare.
+"""
 
 CacheScope = Literal["none", "panel"]
 """Transform-level cache scope.

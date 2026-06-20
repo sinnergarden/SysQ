@@ -22,58 +22,58 @@ def build_all_specs() -> list[FeatureSpec]:
     raw_specs = [
         FeatureSpec(
             feature_id="close", name="close", group="price_volume", kind="raw",
-            source="daily", pit_type="static", cache_scope="none",
+            source="daily", pit_type="daily_observed", cache_scope="none",
             description="Daily close price (adjusted)",
         ),
         FeatureSpec(
             feature_id="open", name="open", group="price_volume", kind="raw",
-            source="daily", pit_type="static", cache_scope="none",
+            source="daily", pit_type="daily_observed", cache_scope="none",
             description="Daily open price",
         ),
         FeatureSpec(
             feature_id="high", name="high", group="price_volume", kind="raw",
-            source="daily", pit_type="static", cache_scope="none",
+            source="daily", pit_type="daily_observed", cache_scope="none",
             description="Daily high price",
         ),
         FeatureSpec(
             feature_id="low", name="low", group="price_volume", kind="raw",
-            source="daily", pit_type="static", cache_scope="none",
+            source="daily", pit_type="daily_observed", cache_scope="none",
             description="Daily low price",
         ),
         FeatureSpec(
             feature_id="volume", name="volume", group="price_volume", kind="raw",
-            source="daily", pit_type="static", cache_scope="none",
+            source="daily", pit_type="daily_observed", cache_scope="none",
             description="Daily trading volume (shares)",
         ),
         FeatureSpec(
             feature_id="amount", name="amount", group="price_volume", kind="raw",
-            source="daily", pit_type="static", cache_scope="none",
+            source="daily", pit_type="daily_observed", cache_scope="none",
             description="Daily trading amount (yuan)",
         ),
         FeatureSpec(
             feature_id="factor", name="factor", group="price_volume", kind="raw",
-            source="daily", pit_type="static", cache_scope="none",
+            source="daily", pit_type="daily_observed", cache_scope="none",
             description="Cumulative adjustment factor",
         ),
         FeatureSpec(
             feature_id="vwap", name="vwap", group="price_volume", kind="raw",
-            source="daily", pit_type="static", cache_scope="none",
+            source="daily", pit_type="daily_observed", cache_scope="none",
             description="Volume-weighted average price",
         ),
         FeatureSpec(
             feature_id="high_limit", name="high_limit", group="price_volume", kind="raw",
-            source="daily", pit_type="static", cache_scope="none",
+            source="daily", pit_type="daily_observed", cache_scope="none",
             description="Limit-up price",
         ),
         FeatureSpec(
             feature_id="low_limit", name="low_limit", group="price_volume", kind="raw",
-            source="daily", pit_type="static", cache_scope="none",
+            source="daily", pit_type="daily_observed", cache_scope="none",
             description="Limit-down price",
         ),
         FeatureSpec(
             feature_id="turnover_rate", name="turnover_rate", group="price_volume", kind="raw",
-            source="daily", pit_type="static", cache_scope="none",
-            description="Share turnover rate",
+            source="daily", pit_type="daily_observed", cache_scope="none",
+            description="Share turnover rate (pass-through from data source)",
         ),
         FeatureSpec(
             feature_id="industry", name="industry", group="classification", kind="raw",
@@ -82,7 +82,7 @@ def build_all_specs() -> list[FeatureSpec]:
         ),
         FeatureSpec(
             feature_id="float_shares", name="float_shares", group="shares", kind="raw",
-            source="daily", pit_type="static", cache_scope="none",
+            source="daily", pit_type="daily_observed", cache_scope="none",
             description="Free float shares",
         ),
         # Fundamentals
@@ -200,14 +200,6 @@ def build_all_specs() -> list[FeatureSpec]:
             description="Upper shadow length relative to daily range",
         ),
         # liquidity
-        FeatureSpec(
-            feature_id="turnover_rate", name="turnover_rate",
-            group="liquidity", kind="derived",
-            dependencies=("volume", "amount", "float_shares"),
-            compute_fn="build_liquidity_features", pit_type="static",
-            cache_scope="none", status="active",
-            description="Share turnover rate (volume / free float shares)",
-        ),
         FeatureSpec(
             feature_id="amount_zscore_20", name="amount_zscore_20",
             group="liquidity", kind="derived",

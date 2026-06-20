@@ -193,7 +193,29 @@ class TestRegistryConsistency(unittest.TestCase):
         if fetched:
             self.assertEqual(fetched.name, "ret_1d")
 
-    # ── 8. No status=broken features in active groups ──
+    # ── 8. build_all_specs() uniqueness guarantee ──
+
+    def test_build_all_specs_no_duplicates(self):
+        """build_all_specs() must not produce duplicate feature_id or name."""
+        from scripts.dev.populate_feature_specs import build_all_specs
+
+        specs = build_all_specs()
+        feature_ids = set()
+        names = set()
+        for s in specs:
+            with self.subTest(spec=s.feature_id):
+                self.assertNotIn(
+                    s.feature_id, feature_ids,
+                    f"Duplicate feature_id '{s.feature_id}' in build_all_specs()",
+                )
+                feature_ids.add(s.feature_id)
+                self.assertNotIn(
+                    s.name, names,
+                    f"Duplicate name '{s.name}' in build_all_specs()",
+                )
+                names.add(s.name)
+
+    # ── 9. No status=broken features in active groups ──
 
     def test_no_broken_features_in_registry_groups(self):
         """Registry FEATURE_GROUPS should not include feature names that are
