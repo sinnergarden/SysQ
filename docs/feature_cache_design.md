@@ -101,6 +101,56 @@ CACHE IS NOT SOT — rm -rf data/feature_cache/ 安全，不影响任何下游�
 
 ## 8. 实现计划
 
-- Phase 1（本 PR）：设计文档（done）
-- Phase 3：transform-level cache 实现
-- Phase 4：matrix cache 作为优化
+- Phase 1（PR #189）：设计文档（done）
+- Phase 2（PR #190）：Resolver + Manifest（done）
+- Phase 3（PR #191，当前）：Cache key / path / metadata + CLI plan + manifest 集成（key only，不写 parquet）
+- Phase 4：Builder 集成 + 真实 parquet 写入 + rolling research 接入
+
+## 9. 当前实现（Phase 3）
+
+| 模块 | 状态 |
+|---|---|
+| `qsys/feature/cache.py` | ✅ CacheKey, FeatureCacheContext, key/path/metadata |
+| `manifest.py` cache section | ✅ 兼容旧 schema，可选 cache key 记录 |
+| `scripts/dev/plan_feature_cache.py` | ✅ CLI：生成 cache plan JSON |
+| Per-feature cache | ❌ 未实现（future extension） |
+| 真实 parquet 写入 | ❌ 本 PR 不做 |
+| Builder 集成 | ❌ Phase 4 |
+
+### Cache key 组成
+
+**Transform cache key** = SHA256(
+    transform_id,
+    input_features (order-sensitive),
+    output_features (order-sensitive),
+    compute_fn_hash,
+    source_manifest_hash,
+    date_start, date_end,
+    universe,
+    pit_policy_hash,
+    builder_hash,
+)[:20]
+
+**Matrix cache key** = SHA256(
+    feature_set_id,
+    resolved_features (order-sensitive),
+    required_transforms (order-sensitive),
+    source_manifest_hash,
+    builder_hash,
+    date_start, date_end,
+    universe,
+    pit_policy_hash,
+)[:20]
+
+### Cache plan CLI
+
+```bash
+python scripts/dev/plan_feature_cache.py \
+  --feature-set value_growth_multibagger_v3a_features \
+  --source-manifest-hash src_v1 \
+  --date-start 2018-01-01 --date-end 2025-12-31 \
+  --universe csi800 \
+  --output-dir artifacts/feature_cache_plans
+```
+
+输出 `artifacts/feature_cache_plans/{feature_set_id}.json`，包含 matrix_cache_key、transform_cache_keys、各 cache path。不写 parquet。
