@@ -101,6 +101,8 @@ CACHE IS NOT SOT — rm -rf data/feature_cache/ 安全，不影响任何下游�
 
 ## 8. 实现计划
 
-- Phase 1（本 PR）：设计文档（done）
-- Phase 3：transform-level cache 实现
-- Phase 4：matrix cache 作为优化
+- Phase 1（PR #189）：设计文档 ✓
+- Phase 2（PR #190）：Resolver + Manifest ✓
+- Phase 3（PR #191）：Cache key/path/metadata + plan CLI ✓
+- Phase 4A（PR #192，当前）：Cache materialization + parquet read/write + backfill CLI + transform registry
+- Phase 4B（未来）：Builder 集成 + rolling research 接入

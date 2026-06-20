@@ -17,8 +17,19 @@ from qsys.feature.resolver_v2 import ResolvedFeatureSet
 def build_feature_manifest(
     resolved: ResolvedFeatureSet,
     plan: FeatureBuildPlan,
+    *,
+    cache_info: dict | None = None,
 ) -> dict:
     """Build a manifest dict from a resolved feature set and its build plan.
+
+    Parameters
+    ----------
+    resolved:
+        The resolved feature set.
+    plan:
+        The build plan (validate-only).
+    cache_info:
+        Optional cache section. If provided, ``{"cache": {...}}`` is added.
 
     Returns a dict ready for JSON serialization.
 
@@ -33,7 +44,7 @@ def build_feature_manifest(
             f"does not match feature_ids count ({len(resolved.feature_ids)})"
         )
 
-    return {
+    manifest = {
         "manifest_version": 1,
         "feature_set_id": resolved.feature_set_id,
         "source_path": resolved.source_path,
@@ -51,6 +62,16 @@ def build_feature_manifest(
         ],
         "status": "ok",
     }
+
+    if cache_info is not None:
+        manifest["cache"] = {
+            "enabled": cache_info.get("enabled", False),
+            "matrix_cache_key": cache_info.get("matrix_cache_key"),
+            "transform_cache_keys": cache_info.get("transform_cache_keys", {}),
+            "cache_root": cache_info.get("cache_root", "data/feature_cache"),
+        }
+
+    return manifest
 
 
 def write_feature_manifest(
