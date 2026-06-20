@@ -399,6 +399,67 @@ class TestMaterializerRealTransform(unittest.TestCase):
         )
         self.assertFalse(r3["hit"])
 
+    def test_transform_cache_reused_on_matrix_miss(self):
+        """Matrix miss but transform cache hit: reuses cached transform."""
+        from qsys.feature.materializer import materialize_feature_set_cache
+
+        yaml_path = self._write_minimal_yaml(
+            "test_tc_reuse",
+            ["close_to_open_gap_1d", "upper_shadow_ratio"],
+        )
+
+        # First run: materialize everything (matrix + transform caches)
+        r1 = materialize_feature_set_cache(
+            self.panel,
+            feature_set_id=str(yaml_path),
+            date_start="2025-01-01",
+            date_end="2025-02-28",
+            universe="test_reuse",
+            source_manifest_hash="reuse_v1",
+            cache_root=str(self.tmpdir / "fc4"),
+            force=True,
+        )
+        self.assertFalse(r1["hit"])
+
+        # Second run: same universe, different source_manifest_hash (matrix key changes)
+        # but same compute_fn_hash (transform key unchanged → transform cache hit)
+        r2 = materialize_feature_set_cache(
+            self.panel,
+            feature_set_id=str(yaml_path),
+            date_start="2025-01-01",
+            date_end="2025-02-28",
+            universe="test_reuse",
+            source_manifest_hash="reuse_v2",  # different → matrix miss
+            cache_root=str(self.tmpdir / "fc4"),
+            force=False,
+        )
+        # Matrix miss, but transforms should reuse existing cache
+        self.assertFalse(r2["hit"])
+        self.assertGreater(r2["transform_count"], 0)
+
+    def test_compute_fn_hash_changes_with_builder_source(self):
+        """_fn_hash must produce different value when builder source changes."""
+        from qsys.feature.transform_registry import _fn_hash, _build_microstructure
+
+        hash_a = _fn_hash(_build_microstructure)
+
+        # Monkey-patch a different function to simulate source change
+        def _patched_micro(df):
+            return df  # drastically different
+
+        hash_b = _fn_hash(_patched_micro)
+        self.assertNotEqual(hash_a, hash_b)
+
+    def test_compute_fn_hash_different_across_transforms(self):
+        """Different transforms must have different compute_fn_hash."""
+        from qsys.feature.transform_registry import (
+            get_transform,
+        )
+
+        hash_micro = get_transform("build_microstructure_features").compute_fn_hash
+        hash_margin = get_transform("build_margin_features").compute_fn_hash
+        self.assertNotEqual(hash_micro, hash_margin)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -24,6 +24,7 @@ from qsys.feature.cache import (
     transform_cache_path,
     matrix_cache_path,
     cache_exists,
+    read_transform_cache,
     write_transform_cache,
     write_matrix_cache,
     read_matrix_cache,
@@ -129,7 +130,7 @@ def materialize_feature_set_cache(
             "builder_mode": "legacy_flag_dispatch",
         }
 
-    # 5. Materialize transforms
+    # 5. Materialize transforms (with transform-level cache read)
     materialized: dict[str, pd.DataFrame] = {}
     for tid in resolved.required_transforms:
         tspec = get_transform(tid)
@@ -148,6 +149,17 @@ def materialize_feature_set_cache(
         )
         t_path = transform_cache_path(tid, transform_ck.key, root=cache_root)
 
+        # Try transform cache read first
+        if cache_exists(t_path):
+            cached = read_transform_cache(
+                path=t_path,
+                expected_cache_key=transform_ck.key,
+                expected_features=list(tspec.output_features),
+            )
+            materialized[tid] = cached
+            continue
+
+        # Cache miss: compute and write
         try:
             result = tspec.compute_fn(raw_panel)
         except Exception as e:
@@ -155,7 +167,6 @@ def materialize_feature_set_cache(
                 f"Transform '{tid}' failed for '{feature_set_id}': {e}"
             ) from e
 
-        # Write transform cache
         write_transform_cache(
             result,
             transform_id=tid,

@@ -38,17 +38,33 @@ class TransformRuntimeSpec:
 
 
 def _fn_hash(wrapper_fn: Callable) -> str:
-    """Compute a deterministic hash of the wrapper function's source code.
+    """Compute a deterministic hash of the **underlying builder function** source.
 
-    This captures the actual implementation (the ``from ... import`` +
-    single call within the wrapper).  If the underlying group builder
-    changes, its source hash changes too.
+    The wrapper imports a group builder (e.g. ``build_microstructure_features``),
+    then calls it.  We hash that underlying builder's source code so that
+    any change to the actual feature computation invalidates the cache key.
+
+    Falls back to wrapper source if the underlying cannot be inspected.
     """
     try:
-        source = inspect.getsource(wrapper_fn)
+        # The wrapper is ``def _build_xxx(df): from ... import fn; return fn(df)``
+        # We extract the function name after ``return`` and hash its source.
+        wrapper_source = inspect.getsource(wrapper_fn)
+        for line in wrapper_source.splitlines():
+            line = line.strip()
+            # Match ``return build_xxx_features(df)``
+            if line.startswith("return "):
+                inner_name = line.replace("return ", "").replace("(df)", "").strip()
+                try:
+                    inner_fn = eval(inner_name, wrapper_fn.__globals__)
+                    inner_source = inspect.getsource(inner_fn)
+                    return hashlib.sha256(inner_source.encode("utf-8")).hexdigest()[:20]
+                except (OSError, TypeError, NameError):
+                    pass
+        # Fallback: hash wrapper source
+        return hashlib.sha256(wrapper_source.encode("utf-8")).hexdigest()[:20]
     except (OSError, TypeError):
-        source = wrapper_fn.__name__
-    return hashlib.sha256(source.encode("utf-8")).hexdigest()[:20]
+        return hashlib.sha256(wrapper_fn.__name__.encode("utf-8")).hexdigest()[:20]
 
 
 # ── Feature group name → transform_id mapping ──
