@@ -260,8 +260,10 @@ class TestResolver(unittest.TestCase):
             status="deprecated",
             description="intentionally deprecated for test",
         ))
-        info = _resolve_single_feature("deprecated_test_feat", allow_deprecated=True)
+        info, warnings = _resolve_single_feature("deprecated_test_feat")
         self.assertEqual(info["name"], "deprecated_test_feat")
+        self.assertGreater(len(warnings), 0, "deprecated feature should produce warning")
+        self.assertIn("deprecated", warnings[0])
 
     # ── 7. extends → non-existent → fail ──
 

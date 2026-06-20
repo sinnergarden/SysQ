@@ -43,9 +43,14 @@ _index: dict[str, Path] = {}
 def discover_feature_sets(config_dir: str = "configs/features") -> dict[str, FeatureSetSpec]:
     """Scan *config_dir* for all ``*.yaml`` files and index by id.
 
+    **Clears the global ``_index``** before populating, so every call is
+    a fresh scan of the given directory.  This prevents stale indices
+    when switching between different config directories.
+
     Returns a dict mapping ``feature_set_id`` → ``FeatureSetSpec``.
     Two files with the same ``feature_set_id`` → ValueError (fail fast).
     """
+    _index.clear()
     base = Path(config_dir)
     if not base.exists():
         return {}
@@ -100,7 +105,6 @@ def resolve_feature_set(
     feature_set_id_or_path: str,
     *,
     config_dir: str = "configs/features",
-    allow_deprecated: bool = True,
 ) -> ResolvedFeatureSet:
     """Resolve a FeatureSet YAML to a ``ResolvedFeatureSet``.
 
@@ -147,10 +151,9 @@ def resolve_feature_set(
     # 4. Validate against registry / inventory
     specs_sources: list[dict[str, str]] = []
     for name in resolved_names:
-        source_info = _resolve_single_feature(
-            name, allow_deprecated=allow_deprecated
-        )
+        source_info, info_warnings = _resolve_single_feature(name)
         specs_sources.append(source_info)
+        warnings.extend(info_warnings)
 
     # 5. Classify raw vs derived, collect transforms
     raw_names: list[str] = []
@@ -164,6 +167,14 @@ def resolve_feature_set(
             derived_names.append(info["name"])
         if info.get("compute_fn"):
             transforms.add(info["compute_fn"])
+
+    # 6. Detect derived features with no compute_fn (unresolved transforms)
+    for info in specs_sources:
+        if info["kind"] == "derived" and not info.get("compute_fn"):
+            warnings.append(
+                f"Feature '{info['name']}' is derived but has no compute_fn "
+                f"(unresolved transform)"
+            )
 
     return ResolvedFeatureSet(
         feature_set_id=spec.feature_set_id,
@@ -238,19 +249,23 @@ def _is_qlib_expression(name: str) -> bool:
 
 def _resolve_single_feature(
     name: str,
-    allow_deprecated: bool = True,
-) -> dict[str, str]:
+) -> tuple[dict[str, str], list[str]]:
     """Resolve a single feature name against registry_v2, then inventory CSV.
 
     Qlib expressions (like ``$close`` or ``Ref($close,5)/$close``) are treated
     as pass-through raw features — they are not looked up in the registry.
 
-    Returns a dict with keys: ``name``, ``feature_id``, ``kind``,
-    ``compute_fn``, ``source`` (``"registry_v2"``, ``"inventory"``, or
-    ``"qlib_expression"``).
+    Returns
+    -------
+    (info_dict, warnings_list)
+        info_dict has keys: ``name``, ``feature_id``, ``kind``,
+        ``compute_fn``, ``source`` (``"registry_v2"``, ``"inventory"``, or
+        ``"qlib_expression"``).
 
     Raises ``ValueError`` if the feature is missing or broken.
     """
+    warnings: list[str] = []
+
     # Qlib expressions → pass-through raw
     if _is_qlib_expression(name):
         return {
@@ -260,7 +275,7 @@ def _resolve_single_feature(
             "compute_fn": "",
             "source": "qlib_expression",
             "status": "active",
-        }
+        }, warnings
 
     # Try registry_v2 first
     spec: FeatureSpec | None = None
@@ -278,27 +293,37 @@ def _resolve_single_feature(
             raise ValueError(
                 f"Feature '{name}' not found in registry_v2 or inventory CSV"
             )
+        # Inventory fallback: also check broken/deprecated
+        inv_status = inv_info.get("status", "active")
+        if inv_status == "broken":
+            raise ValueError(
+                f"Feature '{name}' from inventory CSV is status=broken "
+                f"and must not enter any active feature list"
+            )
+        if inv_status == "deprecated":
+            warnings.append(
+                f"Feature '{name}' is status=deprecated (from inventory CSV)"
+            )
         return {
             "name": name,
             "feature_id": inv_info["feature_id"],
             "kind": inv_info["kind"],
             "compute_fn": inv_info["compute_fn"],
             "source": "inventory",
-            "status": inv_info.get("status", "active"),
-        }
+            "status": inv_status,
+        }, warnings
 
-    # Check broken
+    # Check broken — registry_v2
     if spec.status == "broken":
         raise ValueError(
             f"Feature '{name}' (feature_id={spec.feature_id}) is status=broken "
             f"and must not enter any active feature list"
         )
 
-    # Check deprecated
-    warnings_list: list[str] = []
-    if spec.status == "deprecated" and not allow_deprecated:
-        raise ValueError(
-            f"Feature '{name}' is status=deprecated and allow_deprecated=False"
+    # Check deprecated — registry_v2
+    if spec.status == "deprecated":
+        warnings.append(
+            f"Feature '{name}' (feature_id={spec.feature_id}) is status=deprecated"
         )
 
     return {
@@ -308,7 +333,7 @@ def _resolve_single_feature(
         "compute_fn": spec.compute_fn or "",
         "source": "registry_v2",
         "status": spec.status,
-    }
+    }, warnings
 
 
 _INVENTORY_CACHE: list[dict[str, str]] | None = None

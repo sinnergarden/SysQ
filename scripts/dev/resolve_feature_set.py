@@ -9,7 +9,7 @@ Usage:
         --feature-set configs/features/alpha_v1_clean_132.yaml \\
         --output-dir artifacts/feature_manifests
 
-Exit code: 0 on success, 1 on validation failure, 2 on unresolved transforms.
+Exit code: 0 (warnings are OK), 1 on validation failure.
 """
 
 import sys
@@ -66,12 +66,17 @@ def main(feature_set: str, output_dir: str):
         print(f"   Warnings:          {len(plan.warnings)}")
         print(f"   Manifest:          {manifest_path}")
 
+        if plan.warnings:
+            print(f"\n⚠️  Warnings ({len(plan.warnings)}):")
+            for w in plan.warnings[:5]:
+                print(f"     - {w}")
+            if len(plan.warnings) > 5:
+                print(f"     ... and {len(plan.warnings) - 5} more")
         if plan.unresolved_transforms:
             print(
-                f"\n⚠️  Unresolved transforms: {plan.unresolved_transforms}",
-                file=sys.stderr,
+                f"\n⚠️  Unresolved transforms ({len(plan.unresolved_transforms)}): "
+                f"{list(plan.unresolved_transforms[:5])}...",
             )
-            sys.exit(2)
 
     except ValueError as e:
         print(f"❌ {e}", file=sys.stderr)

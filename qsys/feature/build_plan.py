@@ -49,7 +49,6 @@ def build_plan_from_resolved(resolved: ResolvedFeatureSet) -> FeatureBuildPlan:
 
     transforms: set[str] = set()
     unresolved: list[str] = []
-    warnings: list[str] = list(resolved.warnings)
 
     for info in resolved.spec_sources:
         fn = info.get("compute_fn", "")
@@ -58,10 +57,6 @@ def build_plan_from_resolved(resolved: ResolvedFeatureSet) -> FeatureBuildPlan:
                 transforms.add(fn)
             else:
                 unresolved.append(info["name"])
-                warnings.append(
-                    f"Feature '{info['name']}' is derived but has no "
-                    f"compute_fn (unresolved transform)"
-                )
 
     return FeatureBuildPlan(
         feature_set_id=resolved.feature_set_id,
@@ -70,5 +65,5 @@ def build_plan_from_resolved(resolved: ResolvedFeatureSet) -> FeatureBuildPlan:
         required_derived_features=resolved.derived_features,
         required_transforms=tuple(sorted(transforms)),
         unresolved_transforms=tuple(unresolved),
-        warnings=tuple(warnings),
+        warnings=resolved.warnings,  # warnings come from resolver only
     )
