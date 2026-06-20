@@ -48,14 +48,13 @@ class LightGBMSingleLabelGenerator:
     universe: str = "csi300"
     n_estimators: int = 200
     lgb_params: dict | None = None
-    feature_list_id: str | None = None
+    # ── Feature cache options (opt-in, default off) ─────────────────────
+    use_feature_cache: bool = False
+    materialize_on_miss: bool = False
+    feature_cache_root: str = "data/feature_cache"
+    source_manifest_hash: str = ""
 
     _qlib_inited: bool = field(default=False, repr=False)
-
-    # Note: LabelStore() defaults to root="data/research" (see LabelStore.__init__).
-    # Custom root injection is not yet wired through this generator — the default
-    # path matches the RollingResearchRunner default.  If a custom research root
-    # is needed, this generator should accept an explicit LabelStore instance.
     _clean_features: list[str] = field(default_factory=list, repr=False)
 
     def _ensure_qlib(self) -> None:
@@ -65,7 +64,6 @@ class LightGBMSingleLabelGenerator:
             self._qlib_inited = True
 
     def _load_data(self, start: str, end: str) -> tuple[pd.DataFrame, list[str]]:
-        from qsys.data.adapter import QlibAdapter
         from qsys.feature.registry import get_feature_fields, FeatureListRegistry
 
         if self.feature_list_id:
@@ -77,6 +75,8 @@ class LightGBMSingleLabelGenerator:
             clean = get_clean_features(all_features)
         self._clean_features = clean
 
+        # ── Fetach raw panel (needed for both cache path and qlib path) ──
+        from qsys.data.adapter import QlibAdapter
         adapter = QlibAdapter()
         raw = adapter.get_features(
             self.universe, all_features + ["$close"],
@@ -85,6 +85,34 @@ class LightGBMSingleLabelGenerator:
         frame = raw.reset_index().rename(columns={"datetime": "trade_date"})
         frame = frame.loc[:, ~frame.columns.duplicated()]
         frame["trade_date"] = frame["trade_date"].astype(str).str[:10]
+
+        # ── Feature cache path (opt-in) ──
+        if self.use_feature_cache and self.feature_list_id:
+            from qsys.feature.cache_loader import load_feature_matrix_with_cache
+
+            log.info(
+                "Feature cache ENABLED for generator '%s' "
+                "(feature_list_id=%s, materialize_on_miss=%s)",
+                self.label_id, self.feature_list_id, self.materialize_on_miss,
+            )
+            feature_df = load_feature_matrix_with_cache(
+                frame,
+                feature_set_id=self.feature_list_id,
+                date_start=start,
+                date_end=end,
+                universe=self.universe,
+                source_manifest_hash=self.source_manifest_hash,
+                cache_root=self.feature_cache_root,
+                use_feature_cache=True,
+                materialize_on_miss=self.materialize_on_miss,
+            )
+            log.info(
+                "Feature cache result: %d rows x %d cols",
+                len(feature_df), len(feature_df.columns),
+            )
+            return feature_df, clean
+
+        # ── Existing qlib path (default) ──
         return frame, clean
 
     def generate(

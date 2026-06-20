@@ -289,7 +289,13 @@ class SignalResearchPipeline:
         raw_predictions: dict[str, pd.DataFrame] = {}
         for gen_cfg in effective_generators:
             gen_id = gen_cfg["generator_id"]
-            gen = signal_generator if explicit_generator else _create_generator_from_config(gen_cfg, feature_list_id=config.feature_list_id)
+            gen = signal_generator if explicit_generator else _create_generator_from_config(
+                gen_cfg, feature_list_id=config.feature_list_id,
+                use_feature_cache=config.use_feature_cache,
+                materialize_on_miss=config.materialize_on_miss,
+                feature_cache_root=config.feature_cache_root,
+                source_manifest_hash=config.source_manifest_hash,
+            )
 
             all_preds: list[pd.DataFrame] = []
             for w in windows:
