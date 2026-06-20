@@ -1,8 +1,12 @@
 """Industry momentum / theme proxy features.
 
-All industry aggregations are first collapsed to a (industry, trade_date)
-daily panel, then rolling windows are applied at the industry level.
-The result is merged back to individual stocks.
+All industry-level aggregations are first collapsed to a
+``(trade_date, industry)`` daily panel, then rolling windows are
+applied at the industry level (over time).  The result is merged
+back to individual stocks.
+
+No ``rolling(window)`` is ever called inside a ``groupby(["trade_date", "industry"])``
+cross-sectional slice — all rolling is purely temporal.
 
 PIT: all calculations use only historical windows (rolling/backward).
 """
@@ -34,87 +38,97 @@ def build_industry_momentum_features(df: pd.DataFrame) -> pd.DataFrame:
     if "industry" not in out.columns:
         return out
 
-    # Ensure sort order for rolling
     out = out.sort_values(["ts_code", "trade_date"]).reset_index(drop=True)
 
-    _grp = ["trade_date", "industry"]
+    # ── Step 1: per-stock daily return (time-series within each stock) ──
+    daily_ret = out.groupby("ts_code")["close"].pct_change()
+    out["_daily_ret"] = daily_ret
 
-    # Daily return per stock
-    ret_d = out.groupby("ts_code")["close"].pct_change()
+    # ── Step 2: per-stock rolling values (time-series, not cross-sectional) ──
+    # 120d high for new-high detection
+    _high_120 = out.groupby("ts_code")["close"].transform(
+        lambda s: s.rolling(120, min_periods=60).max()
+    )
+    out["_near_high"] = _safe_div(out["close"], _high_120).gt(0.95).astype(float)
 
-    # ── Build industry daily panel ────────────────────────────────────
+    # volume ratio: current 20d avg / past 20d avg (per stock)
+    _amt_ma = out.groupby("ts_code")["amount"].transform(
+        lambda s: s.rolling(20, min_periods=5).mean()
+    )
+    _amt_ma_past = out.groupby("ts_code")["amount"].transform(
+        lambda s: s.rolling(20, min_periods=5).mean().shift(20)
+    )
+    out["_vol_ratio"] = _clip_inf(_safe_div(_amt_ma, _amt_ma_past))
+
+    # ── Step 3: construct (trade_date x industry) daily panel ─────────────
     ind_panel = out.groupby(["trade_date", "industry"]).agg(
-        ind_ret=("close", lambda s: s.pct_change(1).mean()),
-        ind_breadth=("close", lambda s: (s.pct_change(1) > 0).mean()),
-        ind_near_high_ratio=("close", lambda s: _safe_div(s, s.rolling(120, min_periods=60).max()).gt(0.95).mean()),
-        ind_volume_ratio=("amount", lambda s: _safe_div(
-            s.rolling(20, min_periods=10).mean(),
-            s.rolling(20, min_periods=10).mean().shift(20)
-        ).mean()),
+        ind_ret=("_daily_ret", "mean"),
+        ind_breadth=("_daily_ret", lambda s: (s > 0).mean()),
+        ind_near_high=("_near_high", "mean"),
+        ind_vol_ratio=("_vol_ratio", "mean"),
     ).reset_index()
+
+    if "ret_60d" in out.columns:
+        out["_r60"] = out["ret_60d"].fillna(0)
+        top20 = out["_r60"].groupby(
+            [out["trade_date"], out["industry"]]
+        ).transform(lambda s: (s >= s.quantile(0.8)).astype(float))
+        out["_top_ret"] = out["_r60"] * top20
+        top_panel = out.groupby(["trade_date", "industry"])["_top_ret"].mean().reset_index()
+        ind_panel = ind_panel.merge(top_panel, on=["trade_date", "industry"], how="left")
+
+    # ── Step 4: industry-level temporal rolling (on ind_panel time series) ──
     ind_panel = ind_panel.sort_values(["industry", "trade_date"]).reset_index(drop=True)
 
-    # Rolling on industry panel
     for window, label in [(20, "20d"), (60, "60d"), (120, "120d")]:
         ind_panel[f"industry_ret_{label}"] = ind_panel.groupby("industry")["ind_ret"].transform(
-            lambda s: s.rolling(window, min_periods=window // 2).mean()
+            lambda s: s.rolling(window, min_periods=max(2, window // 4)).mean()
         )
-
     for window, label in [(20, "20d"), (60, "60d")]:
         ind_panel[f"industry_breadth_{label}"] = ind_panel.groupby("industry")["ind_breadth"].transform(
-            lambda s: s.rolling(window, min_periods=window // 2).mean()
+            lambda s: s.rolling(window, min_periods=max(2, window // 4)).mean()
         )
-
-    ind_panel["industry_new_high_ratio"] = ind_panel.groupby("industry")["ind_near_high_ratio"].transform(
-        lambda s: s.rolling(20, min_periods=10).mean()
+    ind_panel["industry_new_high_ratio"] = ind_panel.groupby("industry")["ind_near_high"].transform(
+        lambda s: s.rolling(20, min_periods=5).mean()
     )
-
-    ind_panel["industry_volume_expansion"] = ind_panel.groupby("industry")["ind_volume_ratio"].transform(
-        lambda s: s.rolling(20, min_periods=10).mean()
+    ind_panel["industry_volume_expansion"] = ind_panel.groupby("industry")["ind_vol_ratio"].transform(
+        lambda s: s.rolling(20, min_periods=5).mean()
     )
-
-    # Top-stock momentum: for each industry×trade_date, mean of top 20% by ret_60d
-    if "ret_60d" in out.columns:
-        _r60 = out["ret_60d"].fillna(0)
-        _top_mask = _r60.groupby(_grp).transform(lambda s: s >= s.quantile(0.8)).astype(float)
-        top_df = out[["trade_date", "industry"]].copy()
-        top_df["top_ret"] = _r60 * _top_mask
-        top_panel = top_df.groupby(["trade_date", "industry"])["top_ret"].mean().reset_index()
-        top_panel = top_panel.sort_values(["industry", "trade_date"]).reset_index(drop=True)
-        top_panel["industry_top_stock_momentum"] = top_panel.groupby("industry")["top_ret"].transform(
+    if "ret_60d" in out.columns and "_top_ret" in ind_panel.columns:
+        ind_panel["industry_top_stock_momentum"] = ind_panel.groupby("industry")["_top_ret"].transform(
             lambda s: s.rolling(60, min_periods=10).mean()
         )
-        ind_panel = ind_panel.merge(top_panel[["trade_date", "industry", "industry_top_stock_momentum"]],
-                                     on=["trade_date", "industry"], how="left")
 
-    # ── Merge industry panel back to stock level ──────────────────────
-    merge_cols = ["trade_date", "industry"] + [c for c in ind_panel.columns if c.startswith("industry_")] + ["ind_ret"]
-    out = out.merge(ind_panel[merge_cols], on=["trade_date", "industry"], how="left")
+    # ── Step 5: merge industry panel back to stocks ──────────────────────
+    result_cols = ["trade_date", "industry", "ind_ret"] + [
+        c for c in ind_panel.columns if c.startswith("industry_")
+    ]
+    out = out.merge(ind_panel[result_cols], on=["trade_date", "industry"], how="left")
 
-    # ── Stock minus industry return (per-date截面 industry mean) ──────
-    if "ret_60d" in out.columns:
-        ind_r60 = out["ret_60d"].groupby(_grp).transform("mean")
-        out["stock_minus_industry_ret_60d"] = _clip_inf(out["ret_60d"] - ind_r60)
-    if "ret_20d" in out.columns:
-        ind_r20 = out["ret_20d"].groupby(_grp).transform("mean")
-        out["stock_minus_industry_ret_20d"] = _clip_inf(out["ret_20d"] - ind_r20)
+    # ── Step 6: stock-minus-industry return (cross-sectional per date) ──
+    for h in [(60, "60d"), (20, "20d")]:
+        col = f"ret_{h[0]}d"
+        if col in out.columns:
+            ind_mean = out[col].groupby([out["trade_date"], out["industry"]]).transform("mean")
+            out[f"stock_minus_industry_ret_{h[1]}"] = _clip_inf(out[col] - ind_mean)
 
-    # ── Stock-industry return correlation (rolling 60d) ───────────────
-    _follow = (ret_d * out["ind_ret"]).groupby(out["ts_code"]).transform(
+    # ── Step 7: stock-industry return rolling correlation (per stock) ──
+    _follow = (daily_ret * out["ind_ret"]).groupby(out["ts_code"]).transform(
         lambda s: s.rolling(60, min_periods=20).mean()
     )
-    _ret_var = (ret_d ** 2).groupby(out["ts_code"]).transform(
+    _ret_var = (daily_ret ** 2).groupby(out["ts_code"]).transform(
         lambda s: s.rolling(60, min_periods=20).mean()
     ) ** 0.5
     _ind_var = (out["ind_ret"] ** 2).groupby(out["ts_code"]).transform(
         lambda s: s.rolling(60, min_periods=20).mean()
     ) ** 0.5
-    _corr = _safe_div(_follow, _ret_var * _ind_var)
-    out["stock_industry_ret_corr_60d"] = _clip_inf(_corr)
+    out["stock_industry_ret_corr_60d"] = _clip_inf(
+        _safe_div(_follow, _ret_var * _ind_var)
+    )
 
-    # Clean up intermediates (keep ind_ret for correlation, drop the rest)
+    # Clean up intermediates
     for c in list(out.columns):
-        if c.startswith("_") or c in ("ind_breadth", "ind_near_high_ratio", "ind_volume_ratio", "top_ret"):
+        if c.startswith("_"):
             out = out.drop(columns=[c], errors="ignore")
 
     return out

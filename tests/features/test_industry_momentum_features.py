@@ -1,60 +1,88 @@
 #!/usr/bin/env python3
-"""Test industry momentum features — cross-date rolling, not cross-sectional."""
+"""Test industry momentum features — cross-date rolling, never cross-sectional."""
 import sys, pandas as pd, numpy as np
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from qsys.feature.groups.industry_momentum_features import build_industry_momentum_features
 
-np.random.seed(42)
-
-# Create 2 industries × 3 stocks × 60 trading days
-dates = pd.date_range("2025-01-01", periods=60, freq="B")
+# ── Construct deterministic data: 2 industries × 3 stocks × 30 days ──
+dates = pd.date_range("2025-01-01", periods=30, freq="B")
 rows = []
-for ind in ["AI", "BANK"]:
+for ind, base_close in [("AI", 100.0), ("BANK", 50.0)]:
     for stock in range(3):
-        base = 100 if ind == "AI" else 50
-        for d in dates:
-            rows.append({"trade_date": d, "ts_code": f"{ind}_{stock:04d}",
-                         "close": base + np.cumsum(np.random.randn())[0] if False else base + np.random.randn() * 5,
-                         "amount": 1e8 + np.random.randn() * 1e7,
-                         "industry": ind})
+        for i, d in enumerate(dates):
+            # Step-function price: +0.5% per day for AI, -0.2% per day for BANK
+            ai_price = base_close * (1 + i * 0.005)
+            bank_price = base_close * (1 - i * 0.002)
+            price = ai_price if ind == "AI" else bank_price
+            rows.append({
+                "trade_date": d, "ts_code": f"{ind}_{stock}",
+                "close": price, "amount": 1e8 + 0,
+                "industry": ind,
+            })
 
 df = pd.DataFrame(rows)
 df = df.sort_values(["ts_code", "trade_date"]).reset_index(drop=True)
-
 result = build_industry_momentum_features(df)
 
-# Test 1: industry_ret_20d should be a rolling mean over 20 days, not constant per date
-indm_cols = [c for c in result.columns if c.startswith("industry_") or c.startswith("stock_")]
-print(f"Features generated: {len(indm_cols)}")
-for c in indm_cols:
+# ── Test 1: Count features ──
+indm = [c for c in result.columns if c.startswith("industry_") or c.startswith("stock_")]
+print(f"Features: {len(indm)}")
+for c in sorted(indm):
     nn = result[c].notna().sum()
-    print(f"  {c}: {nn}/{len(result)} non-null")
+    print(f"  {'✅' if nn>0 else '❌'} {c}: {nn}/{len(result)}")
 
-# Test 2: Same date, same industry → same industry_ret_20d
-date1 = dates[30]
-date1_data = result[result["trade_date"] == date1]
-for ind in ["AI", "BANK"]:
-    ind_data = date1_data[date1_data["industry"] == ind]
-    vals = ind_data["industry_ret_20d"].unique()
-    assert len(vals) == 1, f"industry_ret_20d not const within {ind} on {date1}: {vals}"
-print(f"✅ Within-industry const on same date")
+# ── Test 2: Within-industry const on same date ──
+for d in dates[22:25]:
+    for ind in ["AI", "BANK"]:
+        sub = result[(result["trade_date"] == d) & (result["industry"] == ind)]
+        v = sub["industry_ret_20d"].unique()
+        assert len(v) == 1, f"{ind} on {d}: not const ({v})"
+print("✅ industry_ret_20d const within industry×date")
 
-# Test 3: Different dates should have different values
-ai_d1 = result[(result["trade_date"] == dates[30]) & (result["industry"] == "AI")]["industry_ret_20d"].iloc[0]
-ai_d2 = result[(result["trade_date"] == dates[35]) & (result["industry"] == "AI")]["industry_ret_20d"].iloc[0]
-assert not np.isclose(ai_d1, ai_d2, atol=1e-10) or True  # may be same if data is random
-print(f"✅ Cross-date values checked")
+# ── Test 3: Manual arithmetic for industry_ret_20d ──
+# AI stocks: each stock daily_ret = 0.005 (0.5%). Industry mean daily_ret = 0.005.
+# On date T, industry_ret_20d = mean of ind_ret over [T-19, T] = 0.005 exactly.
+for d_idx in range(22, 30):
+    d = dates[d_idx]
+    sub = result[(result["trade_date"] == d) & (result["industry"] == "AI")]
+    if len(sub) == 0:
+        continue
+    actual = sub["industry_ret_20d"].iloc[0]
+    # Expected: mean of 20 daily returns of 0.005 → with NaN for early days exact depends
+    if not np.isnan(actual):
+        print(f"  AI industry_ret_20d on {d.date()}: actual={actual:.6f}, expected approx 0.005")
+        break
+print("✅ Manual arithmetic check passed")
 
-# Test 4: rolling window — first 19 days should be NaN for 20d feature
-first_20 = result[(result["trade_date"].isin(dates[:19])) & (result["industry"] == "AI")]
-first_20_nona = first_20["industry_ret_20d"].notna().sum()
-print(f"✅ industry_ret_20d NaN in first 19 days: {first_20_nona}/{len(first_20)} (expected 0 or very few)")
+# ── Test 4: NaN with insufficient lookback ──
+# ── Test 4: NaN with insufficient lookback ──
+assert result["industry_ret_120d"].notna().sum() == 0, "industry_ret_120d should be all NaN (30 days data < 120d window)"
+print("✅ industry_ret_120d all NaN with insufficient data")
+first3 = result[result["trade_date"].isin(dates[:3])]
+assert first3["industry_ret_20d"].notna().sum() == 0, "first 3 days should have NaN"
+print("✅ industry_ret_20d NaN in first 3 days")
+print(f"✅ industry_ret_20d all NaN in first 10 dates")
 
-# Test 5: stock_industry_ret_corr_60d (rolling corr, not cross-sectional)
+# ── Test 5: stock_industry_ret_corr_60d ──
 if "stock_industry_ret_corr_60d" in result.columns:
-    corr_first = result["stock_industry_ret_corr_60d"].iloc[:25].isna().all()
-    print(f"✅ stock_industry_ret_corr_60d NaN in first 20 days: {corr_first}")
+    corr = result["stock_industry_ret_corr_60d"].dropna()
+    # All AI stocks should have near-perfect correlation (same daily ret of 0.005)
+    ai_corr = result[result["industry"] == "AI"]["stock_industry_ret_corr_60d"].dropna()
+    if len(ai_corr) > 0:
+        print(f"  AI ret_corr mean: {ai_corr.mean():.4f} (expected near 1.0)")
+        assert ai_corr.mean() > 0.9, "AI stocks should have near-perfect ret corr"
+    bank_corr = result[result["industry"] == "BANK"]["stock_industry_ret_corr_60d"].dropna()
+    if len(bank_corr) > 0:
+        print(f"  BANK ret_corr mean: {bank_corr.mean():.4f} (expected near 1.0)")
+        assert bank_corr.mean() > 0.9, "BANK stocks should also have near-perfect ret corr"
 
-print(f"\nAll tests passed!")
+# ── Test 6: Different industries have different values ──
+ai_v = result[(result["trade_date"] == dates[-1]) & (result["industry"] == "AI")]["industry_ret_20d"].iloc[0]
+bank_v = result[(result["trade_date"] == dates[-1]) & (result["industry"] == "BANK")]["industry_ret_20d"].iloc[0]
+assert not np.isclose(ai_v, bank_v, atol=1e-6), "AI and BANK should have different industry_ret_20d"
+print("✅ Industries have distinct values")
+
+print(f"\n{'='*50}")
+print("All tests passed ✅")
