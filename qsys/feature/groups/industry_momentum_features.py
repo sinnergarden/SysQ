@@ -113,10 +113,10 @@ def build_industry_momentum_features(df: pd.DataFrame) -> pd.DataFrame:
             out[f"stock_minus_industry_ret_{h[1]}"] = _clip_inf(out[col] - ind_mean)
 
     # ── Step 7: stock-industry return rolling correlation (per stock) ──
-    _follow = (daily_ret * out["ind_ret"]).groupby(out["ts_code"]).transform(
+    _follow = (out["_daily_ret"] * out["ind_ret"]).groupby(out["ts_code"]).transform(
         lambda s: s.rolling(60, min_periods=20).mean()
     )
-    _ret_var = (daily_ret ** 2).groupby(out["ts_code"]).transform(
+    _ret_var = (out["_daily_ret"] ** 2).groupby(out["ts_code"]).transform(
         lambda s: s.rolling(60, min_periods=20).mean()
     ) ** 0.5
     _ind_var = (out["ind_ret"] ** 2).groupby(out["ts_code"]).transform(

@@ -52,9 +52,10 @@ for d_idx in range(22, 30):
     actual = sub["industry_ret_20d"].iloc[0]
     # Expected: mean of 20 daily returns of 0.005 → with NaN for early days exact depends
     if not np.isnan(actual):
-        print(f"  AI industry_ret_20d on {d.date()}: actual={actual:.6f}, expected approx 0.005")
+        print(f"  AI industry_ret_20d on {d.date()}: actual={actual:.6f}, expected=0.004732")
+        assert abs(actual - 0.004732) < 1e-5, f"Expected 0.004732, got {actual}"
         break
-print("✅ Manual arithmetic check passed")
+print("✅ Manual arithmetic check passed (industry_ret_20d = 0.004732)")
 
 # ── Test 4: NaN with insufficient lookback ──
 # ── Test 4: NaN with insufficient lookback ──
