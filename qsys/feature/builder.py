@@ -81,6 +81,8 @@ def build_phase1_features(df: pd.DataFrame, flags: dict | None = None) -> pd.Dat
     if flags.get("enable_v3b_interaction_features", False):
         from qsys.feature.groups.value_growth_v3b_price_volume import build_v3a_v3b_interaction_features
         out = build_v3a_v3b_interaction_features(out)
+        from qsys.feature.groups.value_growth_v3b_price_volume import build_v3a_v3b_interaction_features
+        out = build_v3a_v3b_interaction_features(out)
     if flags.get("enable_industry_momentum_features", False):
         from qsys.feature.groups.industry_momentum_features import build_industry_momentum_features
         out = build_industry_momentum_features(out)

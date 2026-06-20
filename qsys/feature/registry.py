@@ -240,7 +240,7 @@ FEATURE_GROUPS = {
             "industry_volume_expansion",
             "stock_minus_industry_ret_20d",
             "stock_minus_industry_ret_60d",
-            "industry_leader_follow_score",
+            "stock_industry_ret_corr_60d",
         ],
     },
 }
