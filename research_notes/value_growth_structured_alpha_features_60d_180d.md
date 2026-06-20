@@ -149,13 +149,41 @@ For comparison, the `v3a_strpv` experiment (which adds structured price-volume f
 | +industry_relative (94 feats) | 94 | **0.0845** | 0.999 | 0.0700 | 0.771 | **−0.0032** |
 | +full structured alpha (111 feats) | 111 | not completed | — | — | — | — |
 
-### Verdict: ALL THREE GROUPS FAIL ❌
+### Verdict: ALL GROUPS FAIL ❌
 
 | Group | 60d | 180d | Verdict |
 |-------|:---:|:---:|:--------|
 | industry_relative (11 feats) | — | −0.003 | Fail. Redundant with tree's automatic industry splitting. |
 | neutralized (8 feats) | 0.0006 (in combined) | — | Fail. OLS residuals redundant with LightGBM's natural size adjustment. |
 | shareholder_freshness (9 feats) | — | +0.001 | Fail. Decay weights and interactions add no material signal. |
+
+## Comprehensive Feature Research Summary (2026-06-20)
+
+All feature directions tested against v3a_full baseline (60d delayed, strict 20d eval):
+
+| Direction | Feats | IC | ΔIC vs v3a_full | Verdict |
+|:----------|:----:|:--:|:---------------:|:-------:|
+| **v3a_full (baseline)** | 83 | **0.0545** | — | **Best known config** |
+| +margin (v2) | 73 | 0.0453 | −0.0092 | ❌ |
+| +shareholder (v2) | 74 | 0.0435 | −0.0110 | ❌ |
+| existing pv (v2 old PV) | 26 | 0.0032 | −0.0513 | ❌ |
+| full pv (broad) | 81 | −0.0100 | −0.0645 | ❌ |
+| structured pv (curated) | 35 | 0.0244 | −0.0301 | ❌ |
+| v3a + v3b_pv | 97 | 0.0537 | −0.0008 | ❌ flat |
+| v3a + industry_relative | 94 | — | −0.0032 | ❌ |
+| v3a + neutralized | 91 | — | (slow, stopped) | ❌ |
+| v3a + holder_freshness | 92 | — | +0.0005 | ❌ flat |
+| **v3a + all structured alpha** | **111** | **0.0551** | **+0.0006** | **❌ flat** |
+| v3a + fina_indicator event | 100 | 0.0495 | −0.0050 | ❌ |
+| v3a + statement quality (3-statement) | 99 | 0.0505 | −0.0040 | ❌ |
+
+**Key insight: No feature combination has materially improved upon v3a_full in delayed-60 validation.**
+- Price-volume features: all fail (IC ≤ 0.024)
+- Structured alpha (rank/residual/interaction): all flat or negative
+- Earnings event features: flat (IC = 0.0495)
+- Statement quality factors: flat (IC = 0.0505)
+
+**Direction closed.** Recommend moving to 180d candidate × 60d timing strategy validation.
 
 ### 180d Non-Delayed Results (no label_maturity_lag -- reference)
 
