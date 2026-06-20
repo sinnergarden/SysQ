@@ -17,6 +17,7 @@ Key checks:
 """
 
 import json
+import os
 import shutil
 import tempfile
 import unittest
@@ -309,8 +310,8 @@ class TestCacheExists(unittest.TestCase):
         self.assertFalse(cache_exists(self.tmpdir / "nonexistent.parquet"))
 
 
-class TestMaterializer(unittest.TestCase):
-    """Materializer smoke tests (simple feature set requiring limited data)."""
+class TestMaterializerRealTransform(unittest.TestCase):
+    """Materializer tests with real transforms and a minimal custom YAML."""
 
     def setUp(self):
         self.tmpdir = Path(tempfile.mkdtemp())
@@ -319,83 +320,84 @@ class TestMaterializer(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmpdir, ignore_errors=True)
 
-    def test_materialize_cache_only_with_existing_yaml(self):
-        """Can materialize a known simple existing YAML."""
+    def _write_minimal_yaml(self, name: str, features: list[str]) -> Path:
+        """Write a minimal legacy YAML for testing."""
+        import yaml
+        p = self.tmpdir / "yaml" / f"{name}.yaml"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with open(p, "w") as f:
+            yaml.dump({"feature_list_id": name, "features": features}, f)
+        return p
+
+    def test_materialize_microstructure_liquidity(self):
+        """Materialize a feature set with microstructure + liquidity (no index deps)."""
         from qsys.feature.materializer import materialize_feature_set_cache
 
-        # Use the simplest possible YAML — one that only has raw/qilb features
-        # momentum_price_volume_v1 has only 6 qlib expressions (no derived transforms)
-        try:
-            result = materialize_feature_set_cache(
-                self.panel,
-                feature_set_id="momentum_price_volume_v1",
-                date_start="2025-01-01",
-                date_end="2025-02-28",
-                universe="test",
-                source_manifest_hash="test_backfill",
-                cache_root=str(self.tmpdir / "fc"),
-                force=True,
-            )
-            self.assertEqual(result["feature_set_id"], "momentum_price_volume_v1")
-            self.assertFalse(result["hit"])
-            # With only raw/qlib features, transform_count may be 0
-            # That's OK — the matrix is still written
-            self.assertIn("matrix_cache_path", result)
-        except ValueError as e:
-            # It's OK if the feature set has unresolved transforms;
-            # the key test is that the path and validation error is clear
-            if "unregistered transforms" in str(e):
-                self.skipTest(f"Unregistered transforms: {e}")
-            raise
+        yaml_path = self._write_minimal_yaml(
+            "test_core_features",
+            ["close_to_open_gap_1d", "open_to_close_ret",
+             "close_pos_in_range", "upper_shadow_ratio"],
+        )
+        result = materialize_feature_set_cache(
+            self.panel,
+            feature_set_id=str(yaml_path),  # pass path directly
+            date_start="2025-01-01",
+            date_end="2025-02-28",
+            universe="test",
+            source_manifest_hash="test_backfill",
+            cache_root=str(self.tmpdir / "fc"),
+            force=True,
+        )
+        self.assertEqual(result["feature_set_id"], "test_core_features")
+        self.assertFalse(result["hit"])
+        self.assertGreater(result["transform_count"], 0)
+        self.assertIn("matrix_cache_path", result)
+        self.assertTrue(os.path.exists(result["matrix_cache_path"]))
 
     def test_materialize_hit_then_force_rewrite(self):
         """Hit returns early; force=True rewrites."""
-        from qsys.feature.cache import cache_exists
         from qsys.feature.materializer import materialize_feature_set_cache
 
-        try:
-            # First run (force=True to ensure initial write)
-            r1 = materialize_feature_set_cache(
-                self.panel,
-                feature_set_id="momentum_price_volume_v1",
-                date_start="2025-01-01",
-                date_end="2025-02-28",
-                universe="test",
-                source_manifest_hash="test_hit_force",
-                cache_root=str(self.tmpdir / "fc2"),
-                force=True,
-            )
-            path = r1["matrix_cache_path"]
+        yaml_path = self._write_minimal_yaml(
+            "test_hit_force_set",
+            ["close_to_open_gap_1d", "open_to_close_ret"],
+        )
 
-            # Second run (no force) — should hit
-            r2 = materialize_feature_set_cache(
-                self.panel,
-                feature_set_id="momentum_price_volume_v1",
-                date_start="2025-01-01",
-                date_end="2025-02-28",
-                universe="test",
-                source_manifest_hash="test_hit_force",
-                cache_root=str(self.tmpdir / "fc2"),
-                force=False,
-            )
-            self.assertTrue(r2["hit"])
+        r1 = materialize_feature_set_cache(
+            self.panel,
+            feature_set_id=str(yaml_path),
+            date_start="2025-01-01",
+            date_end="2025-02-28",
+            universe="test",
+            source_manifest_hash="test_hf",
+            cache_root=str(self.tmpdir / "fc3"),
+            force=True,
+        )
+        self.assertFalse(r1["hit"])
 
-            # Third run (force=True) — should rewrite
-            r3 = materialize_feature_set_cache(
-                self.panel,
-                feature_set_id="momentum_price_volume_v1",
-                date_start="2025-01-01",
-                date_end="2025-02-28",
-                universe="test",
-                source_manifest_hash="test_hit_force",
-                cache_root=str(self.tmpdir / "fc2"),
-                force=True,
-            )
-            self.assertFalse(r3["hit"])
-        except ValueError as e:
-            if "unregistered transforms" in str(e):
-                self.skipTest(f"Unregistered transforms: {e}")
-            raise
+        r2 = materialize_feature_set_cache(
+            self.panel,
+            feature_set_id=str(yaml_path),
+            date_start="2025-01-01",
+            date_end="2025-02-28",
+            universe="test",
+            source_manifest_hash="test_hf",
+            cache_root=str(self.tmpdir / "fc3"),
+            force=False,
+        )
+        self.assertTrue(r2["hit"])
+
+        r3 = materialize_feature_set_cache(
+            self.panel,
+            feature_set_id=str(yaml_path),
+            date_start="2025-01-01",
+            date_end="2025-02-28",
+            universe="test",
+            source_manifest_hash="test_hf",
+            cache_root=str(self.tmpdir / "fc3"),
+            force=True,
+        )
+        self.assertFalse(r3["hit"])
 
 
 if __name__ == "__main__":

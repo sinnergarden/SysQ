@@ -138,12 +138,12 @@ def materialize_feature_set_cache(
                 f"Transform '{tid}' not registered in transform_registry.py"
             )
 
-        # Compute transform cache key
+        # Compute transform cache key using real compute_fn_hash from the spec
         transform_ck = compute_transform_cache_key(
             tid,
             input_features=list(tspec.input_features),
             output_features=list(tspec.output_features),
-            compute_fn_hash=source_manifest_hash,
+            compute_fn_hash=tspec.compute_fn_hash or source_manifest_hash,
             context=context,
         )
         t_path = transform_cache_path(tid, transform_ck.key, root=cache_root)
@@ -166,26 +166,23 @@ def materialize_feature_set_cache(
         )
         materialized[tid] = result
 
-    # 6. Assemble matrix — start with raw panel columns, then overlay
-    # transform outputs.  Qlib expressions remain in the panel as raw cols
-    # (they are fetched by qlib at query time and may already be present
-    # if the raw_panel was pre-computed).
+    # 6. Assemble matrix — overlay transform outputs onto raw panel.
+    # ALL resolved features (including qlib expressions) must be present
+    # in the final matrix.  Qlib expressions must already be in raw_panel
+    # (pre-computed or sourced from qlib) — the materializer does NOT
+    # compute them.
     final_df = raw_panel.copy()
     for tid in resolved.required_transforms:
         tspec = get_transform(tid)
         if tspec is None:
             continue
-        # Copy output columns from the materialized result
         for col in tspec.output_features:
             if col in materialized[tid].columns:
                 final_df[col] = materialized[tid][col].values
 
-    # Validate all resolved features exist (skip qlib expressions — they are
-    # computed by qlib at query time, not by the materializer).
-    from qsys.feature.resolver_v2 import _is_qlib_expression  # noqa: PLC0415
-
-    checkable_features = [f for f in resolved.resolved_features if not _is_qlib_expression(str(f))]
-    missing_features = [f for f in checkable_features if f not in final_df.columns]
+    # Validate ALL resolved features exist (including qlib expressions).
+    # If raw_panel lacks them, fail fast.
+    missing_features = [f for f in resolved.resolved_features if f not in final_df.columns]
     if missing_features:
         raise ValueError(
             f"Materialization of '{feature_set_id}' missing features: "
@@ -193,35 +190,36 @@ def materialize_feature_set_cache(
             f"Available: {list(final_df.columns)}"
         )
 
-    # 7. Write matrix cache — exclude qlib expressions from column validation
-    # since they are computed by qlib at query time, not by the materializer.
-    materializable_features = [f for f in resolved.resolved_features
-                               if not _is_qlib_expression(str(f))]
-    # Filter to only columns that should be in the matrix
-    matrix_df = final_df[["trade_date", "ts_code"] + materializable_features].copy()
+    # 7. Write matrix cache — columns order is fixed:
+    #    ["trade_date", "ts_code"] + resolved_features
+    matrix_cols = ["trade_date", "ts_code"] + list(resolved.resolved_features)
+    matrix_df = final_df[matrix_cols].copy()
     write_matrix_cache(
         matrix_df,
         feature_set_id=resolved.feature_set_id,
         cache_key=matrix_ck,
-        resolved_features=materializable_features,
+        resolved_features=list(resolved.resolved_features),
         path=matrix_path,
         context=context,
     )
 
     # 8. Write manifest
+    transform_keys = {}
+    for tid in resolved.required_transforms:
+        tspec = get_transform(tid)
+        if tspec:
+            tk = compute_transform_cache_key(
+                tid,
+                input_features=list(tspec.input_features),
+                output_features=list(tspec.output_features),
+                compute_fn_hash=tspec.compute_fn_hash or source_manifest_hash,
+                context=context,
+            )
+            transform_keys[tid] = tk.key
     cache_info = {
         "enabled": True,
         "matrix_cache_key": matrix_ck.key,
-        "transform_cache_keys": {
-            tid: compute_transform_cache_key(
-                tid,
-                input_features=[],
-                output_features=[],
-                compute_fn_hash=source_manifest_hash,
-                context=context,
-            ).key
-            for tid in resolved.required_transforms
-        },
+        "transform_cache_keys": transform_keys,
         "cache_root": str(cache_root),
     }
     manifest = build_feature_manifest(resolved, plan, cache_info=cache_info)

@@ -301,7 +301,9 @@ def write_matrix_cache(
         )
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    df[list(allowed)].to_parquet(path, index=False)
+    # Enforce fixed column order: index cols first, then features in order
+    ordered_cols = ["trade_date", "ts_code"] + resolved_features
+    df[ordered_cols].to_parquet(path, index=False)
     log.info("Wrote matrix cache: %s → %s (%d cols)", feature_set_id, path, len(resolved_features))
 
     meta_path = Path(str(path) + ".meta.json")
