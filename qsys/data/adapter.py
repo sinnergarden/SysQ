@@ -398,6 +398,9 @@ class QlibAdapter:
             flags["enable_relative_strength_features"] = True
         if requested.intersection({"inventory_yoy", "ar_yoy"}):
             flags["enable_fundamental_context_features"] = True
+        if any(f.startswith("industry_") or f.startswith("stock_minus_industry_") for f in requested):
+            flags["enable_industry_momentum_features"] = True
+            flags["enable_industry_context_features"] = True
         return flags
 
     def _build_semantic_features(self, base_df: pd.DataFrame, derived_fields, start_time=None, end_time=None) -> pd.DataFrame:
