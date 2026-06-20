@@ -1,0 +1,10 @@
+# Example additive FeatureSet using extends + add_features.
+# This is a demonstration file — not in production config.
+feature_set_id: value_growth_v3a_plus_industry_momentum_extends
+extends: value_growth_multibagger_v3a_features
+add_features:
+  - industry_ret_20d
+  - industry_ret_60d
+  - industry_breadth_20d
+  - industry_breadth_60d
+description: Example additive feature set using extends + add_features.

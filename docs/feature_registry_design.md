@@ -118,11 +118,11 @@ features:
   - ...
 ```
 
-### 新式（目标态，Phase 3+）：
+### 新式（Phase 2+）：
 
 ```yaml
-feature_list_id: vg_v3a_plus_momentum
-extends: value_growth_multibagger_v3a   # 继承已有特征集
+feature_set_id: vg_v3a_plus_momentum
+extends: value_growth_multibagger_v3a_features   # 继承已有特征集
 add_features:
   - industry_ret_20d
   - industry_breadth_20d
@@ -180,13 +180,23 @@ Resolver 不直接修改 builder 代码路径。在 Phase 4 之前，Resolver �
 
 ## 8. 迁移计划
 
-### Phase 1（本 PR = #189）
+### Phase 1（PR #189）
 
 - ✅ 盘点 inventory
 - ✅ FeatureSpec skeleton（partial specs）
 - ✅ TransformSpec skeleton
 - ✅ consistency tests
 - ✅ 设计文档 + agent checklist
+
+### Phase 2（PR #190 — 当前）
+
+- ✅ FeatureSetSpec (YAML schema)
+- ✅ Resolver v2 (discover → parse → extends chain → validate → resolve)
+- ✅ BuildPlan skeleton (validate only, no execution)
+- ✅ Manifest generation (audit-only, write JSON)
+- ✅ CLI (resolve_feature_set.py)
+- ✅ Extends + add_features YAML support
+- ❌ 不改写 builder / model / inference
 
 ### Phase 2
 
