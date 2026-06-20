@@ -12,4 +12,5 @@ RESEARCH_FEATURE_FLAGS = {
     "enable_v3a_shareholder_features": False,
     "enable_v3b_price_volume_features": False,
     "enable_v3b_interaction_features": False,
+    "enable_industry_momentum_features": False,
 }

@@ -227,6 +227,22 @@ FEATURE_GROUPS = {
             "margin_pullback_recovery_confirm",
         ],
     },
+    "industry_momentum": {
+        "enabled_by": "enable_industry_momentum_features",
+        "features": [
+            "industry_ret_20d",
+            "industry_ret_60d",
+            "industry_ret_120d",
+            "industry_breadth_20d",
+            "industry_breadth_60d",
+            "industry_new_high_ratio",
+            "industry_top_stock_momentum",
+            "industry_volume_expansion",
+            "stock_minus_industry_ret_20d",
+            "stock_minus_industry_ret_60d",
+            "stock_industry_ret_corr_60d",
+        ],
+    },
 }
 
 
