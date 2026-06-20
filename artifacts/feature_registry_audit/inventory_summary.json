@@ -1,0 +1,11 @@
+{
+  "total": 272,
+  "active": 261,
+  "experimental": 11,
+  "deprecated": 0,
+  "broken": 0,
+  "raw": 108,
+  "derived": 164,
+  "cacheable": 73,
+  "yaml_only": 103
+}
