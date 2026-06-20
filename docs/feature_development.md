@@ -24,6 +24,16 @@
 "margin_crowding_score" # derived from margin_balance_to_float_mv + margin_balance_chg_60d
 ```
 
+## PitType 说明
+
+| PitType | 适用场景 | 说明 |
+|---------|---------|------|
+| `daily_observed` | OHLCV, amount, volume, turnover_rate | 日频直接观测值，每个 trading day 有一条记录，无需 PIT 处理 |
+| `point_in_time` | PE, PB, ROE, margin_balance, holder_num | 财报/两融数据，必须用 ann_date 做 merge_asof |
+| `rolling_past` | ret_60d, trend_consistency_120d | 时间窗口 rolling，只用历史数据 |
+| `cross_sectional` | rps_60d, market_breadth | 横截面排序/标准化，按 trade_date group |
+| `static` | industry | 不随时间改变 |
+
 ## PIT Rules（强制）
 
 ### 规则 1：Rolling window 只能用过去窗口

@@ -68,8 +68,8 @@ CacheScope = Literal["none", "panel"]
 - ``"panel"`` — expensive computation; cache the full (date, instrument) panel
   so rolling research windows can reuse it.
 
-Per-feature cache (``"per_feature"``) is deferred — see docs/feature_cache_design.md.
-Current Phase 1 only supports ``"none"`` and ``"panel"``.
+Per-feature cache (``"per_feature"``) and date-level cache (``"per_date"``)
+are deferred — see docs/feature_cache_design.md.
 """
 
 FeatureStatus = Literal["active", "experimental", "deprecated", "broken"]
@@ -259,34 +259,60 @@ def list_specs(
 
 
 def resolve_dependencies(
-    feature_id: str, *, visited: set[str] | None = None
+    feature_id: str,
+    *,
+    _path: set[str] | None = None,
+    _resolved: set[str] | None = None,
 ) -> list[str]:
     """Resolve the full dependency chain for a feature to its raw leaf inputs.
 
-    Returns a list of **raw feature names** that *feature_id* ultimately
-    depends on.  Raises ``ValueError`` on circular dependency.
+    Uses ``_path`` (recursion stack) for circular detection — two branches
+    that share a common ancestor do NOT trigger a false positive.
+    Uses ``_resolved`` for visited-set dedup so the same raw leaf is not
+    double-listed.
 
-    NOTE: This is a simplified version for Phase 1.  Phase 2 will replace
-    it with a full DAG-based topological resolver.
+    Returns a stable-ordered, deduplicated list of raw feature names.
+
+    Raises ``ValueError`` on genuine circular dependency (``_path`` hit).
     """
-    if visited is None:
-        visited = set()
-    if feature_id in visited:
-        raise ValueError(f"Circular dependency detected: {feature_id}")
-    visited.add(feature_id)
+    if _path is None:
+        _path = set()
+    if _resolved is None:
+        _resolved = set()
+
     spec = get_by_id(feature_id)
     if spec is None:
         return []
     if spec.kind == "raw":
+        if spec.name not in _resolved:
+            _resolved.add(spec.name)
         return [spec.name]
+
+    # ── Circular detection (recursion-stack path check) ──
+    if feature_id in _path:
+        raise ValueError(f"Circular dependency detected: {feature_id}")
+    _path.add(feature_id)
+
     deps: list[str] = []
     for dep_name in spec.dependencies:
         dep_spec = get_by_name(dep_name)
-        if dep_spec is None:
-            deps.append(dep_name)
-        else:
-            deps.extend(resolve_dependencies(dep_spec.feature_id, visited=visited))
-    return deps
+        if dep_spec is not None:
+            deps.extend(
+                resolve_dependencies(
+                    dep_spec.feature_id, _path=_path, _resolved=_resolved
+                )
+            )
+
+    _path.discard(feature_id)
+
+    # ── Stable-order dedup ──
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for d in deps:
+        if d not in seen:
+            seen.add(d)
+            ordered.append(d)
+    return ordered
 
 
 # ── Validation helpers ──

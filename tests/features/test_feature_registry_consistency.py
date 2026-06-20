@@ -215,6 +215,19 @@ class TestRegistryConsistency(unittest.TestCase):
                 )
                 names.add(s.name)
 
+    def test_build_all_specs_cache_scope_in_allowlist(self):
+        """All specs from build_all_specs() must have cache_scope in {none, panel}."""
+        from scripts.dev.populate_feature_specs import build_all_specs
+
+        specs = build_all_specs()
+        allowed = {"none", "panel"}
+        for s in specs:
+            with self.subTest(spec=s.feature_id):
+                self.assertIn(
+                    s.cache_scope, allowed,
+                    f"cache_scope='{s.cache_scope}' not in {allowed}",
+                )
+
     # ── 9. No status=broken features in active groups ──
 
     def test_no_broken_features_in_registry_groups(self):
@@ -355,6 +368,60 @@ class TestRegistryV2Consistency(unittest.TestCase):
 
         deps = resolve_dependencies("unittest_rdep_C")
         self.assertIn("raw_A", deps)
+        self.assertEqual(len(deps), 1, "resolve_dependencies should return unique list")
+
+    def test_resolve_dependencies_shared_dep(self):
+        """Two branches sharing the same raw leaf must NOT trigger circular."""
+        from qsys.feature.registry_v2 import FeatureSpec, register, resolve_dependencies
+
+        register(FeatureSpec(
+            feature_id="unittest_sdep_close",
+            name="close", group="test", kind="raw",
+            description="shared raw leaf",
+        ))
+        register(FeatureSpec(
+            feature_id="unittest_sdep_A",
+            name="derived_sdep_A", group="test",
+            kind="derived", dependencies=("close",),
+            description="derived A (depends on close)",
+        ))
+        register(FeatureSpec(
+            feature_id="unittest_sdep_B",
+            name="derived_sdep_B", group="test",
+            kind="derived", dependencies=("close",),
+            description="derived B (depends on close)",
+        ))
+        register(FeatureSpec(
+            feature_id="unittest_sdep_X",
+            name="derived_sdep_X", group="test",
+            kind="derived", dependencies=("derived_sdep_A", "derived_sdep_B"),
+            description="derived X (depends on A and B, both depend on close)",
+        ))
+
+        # Must not raise — shared dep is fine
+        deps = resolve_dependencies("unittest_sdep_X")
+        self.assertEqual(deps, ["close"],
+                         "Shared dependency should resolve to exactly ['close']")
+
+    def test_resolve_dependencies_circular(self):
+        """Genuine circular dependency must raise ValueError."""
+        from qsys.feature.registry_v2 import FeatureSpec, register, resolve_dependencies
+
+        register(FeatureSpec(
+            feature_id="unittest_circ_A",
+            name="circ_A", group="test",
+            kind="derived", dependencies=("circ_B",),
+            description="circular A -> B -> A",
+        ))
+        register(FeatureSpec(
+            feature_id="unittest_circ_B",
+            name="circ_B", group="test",
+            kind="derived", dependencies=("circ_A",),
+            description="circular B -> A",
+        ))
+
+        with self.assertRaises(ValueError):
+            resolve_dependencies("unittest_circ_A")
 
     def test_check_broken_features(self):
         from qsys.feature.registry_v2 import (

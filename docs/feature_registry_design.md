@@ -80,7 +80,7 @@ class FeatureSpec:
     dependencies: tuple[str, ...]  # 直接依赖
     compute_fn: str | None   # 计算函数
     dtype: str | None        # 期望 dtype
-    pit_type: "point_in_time" | "rolling_past" | "cross_sectional" | "static"
+    pit_type: "point_in_time" | "daily_observed" | "rolling_past" | "cross_sectional" | "static"
     cache_scope: "none" | "panel"
     status: "active" | "experimental" | "deprecated" | "broken"
     description: str

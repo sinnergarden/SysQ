@@ -77,7 +77,7 @@ def build_all_specs() -> list[FeatureSpec]:
         ),
         FeatureSpec(
             feature_id="industry", name="industry", group="classification", kind="raw",
-            source="daily", pit_type="static", cache_scope="per_instrument",
+            source="daily", pit_type="static", cache_scope="none",
             description="SW industry classification",
         ),
         FeatureSpec(
@@ -228,7 +228,7 @@ def build_all_specs() -> list[FeatureSpec]:
             feature_id="market_breadth", name="market_breadth",
             group="regime", kind="derived",
             dependencies=("index_close",), compute_fn="build_regime_features",
-            pit_type="cross_sectional", cache_scope="per_date", status="active",
+            pit_type="cross_sectional", cache_scope="none", status="active",
             description="Fraction of stocks above 20d MA in index",
         ),
         # fundamental_context — point_in_time
@@ -277,7 +277,7 @@ def build_all_specs() -> list[FeatureSpec]:
             feature_id="industry_ret_20d", name="industry_ret_20d",
             group="industry_momentum", kind="derived",
             dependencies=("close", "industry"), compute_fn="build_industry_momentum_features",
-            pit_type="cross_sectional", cache_scope="per_date", status="active",
+            pit_type="cross_sectional", cache_scope="none", status="active",
             description="Industry-mean return over 20d (cross-sectional aggregated, then temporal rolling)",
         ),
     ]
