@@ -37,11 +37,25 @@
 
 ## Before PR
 
+### FeatureSet YAML Registration
+
+- [ ] New feature added to a FeatureSet YAML (`configs/features/<name>.yaml`)
+  - Legacy mode: add to `features` list
+  - Additive mode: use `extends` + `add_features` (only if base set exists)
+- [ ] Run resolver CLI to verify:
+  ```bash
+  python scripts/dev/resolve_feature_set.py \
+      --feature-set configs/features/<name>.yaml
+  ```
+- [ ] Confirm no "missing", no "broken", no "unresolved transforms" you didn't expect
+- [ ] Manifest written to `artifacts/feature_manifests/`
+
 ### Testing
 - [ ] `python -m unittest tests/features/test_feature_registry_consistency.py`
 - [ ] `python -m unittest tests/features/test_feature_builder_isolation.py`
 - [ ] `python -m unittest tests/features/test_industry_aggregation_contract.py`
 - [ ] `python -m unittest tests/features/test_financial_statement_feature_semantics.py`
+- [ ] `python -m unittest tests/features/test_feature_set_resolver.py`
 - [ ] `python -m unittest discover tests/features/`
 
 ### PR Body Must Include
