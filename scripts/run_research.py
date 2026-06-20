@@ -16,9 +16,30 @@ def main():
     p.add_argument("--config", required=True)
     p.add_argument("--overwrite-signal", action="store_true")
     p.add_argument("--overwrite-eval", action="store_true")
+    p.add_argument("--use-feature-cache", action="store_true",
+                    help="Opt-in: use matrix cache for feature loading")
+    p.add_argument("--materialize-on-miss", action="store_true",
+                    help="Opt-in: auto-materialize cache on miss")
+    p.add_argument("--feature-cache-root", default="data/feature_cache",
+                    help="Feature cache root directory")
+    p.add_argument("--source-manifest-hash", default="",
+                    help="Source data version hash for cache key")
     args = p.parse_args()
+
+    if args.use_feature_cache:
+        from qsys.utils.logger import log
+        log.warning(
+            "Feature cache ENABLED for research. "
+            "materialize_on_miss=%s, root=%s",
+            args.materialize_on_miss, args.feature_cache_root,
+        )
+
     config = RollingResearchConfig.from_file(Path(args.config))
-    result = SignalResearchPipeline().run(config, overwrite_signal=args.overwrite_signal, overwrite_eval=args.overwrite_eval)
+    result = SignalResearchPipeline().run(
+        config,
+        overwrite_signal=args.overwrite_signal,
+        overwrite_eval=args.overwrite_eval,
+    )
     print(f"\nExperiment: {config.experiment_id}")
     for sr in result.signal_runs:
         print(f"  Signal: {sr.signal_id} / {sr.signal_run_id}")
