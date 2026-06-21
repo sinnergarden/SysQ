@@ -117,7 +117,7 @@ class LightGBMSingleLabelGenerator:
                 feature_cache_root=self.feature_cache_root,
                 compute_missing=self.materialize_on_miss,
                 allow_uncacheable=True,
-                join_policy="inner",
+                anchor_df=cache_frame,
             )
             # Adapt back: training code expects instrument column
             if has_instrument:
