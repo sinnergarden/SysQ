@@ -1,0 +1,29 @@
+experiment_id: retest_60d_v3a_full_smoke
+calendar:
+  start_date: "2023-01-01"
+  end_date: "2023-06-30"
+  train_window_days: 252
+  step_days: 60
+signal:
+  signal_id: retest_60d_smoke
+  score_column: score
+feature_list_id: configs/features/retest_60d_combinations/v3a_full.yaml
+use_feature_cache: false
+materialize_on_miss: false
+feature_cache_root: data/feature_cache
+source_manifest_hash: ""
+generators:
+  - generator_id: retest_smoke
+    type: single_label_lightgbm
+    params:
+      universe: csi800
+      n_estimators: 100
+      feature_list_id: configs/features/retest_60d_combinations/v3a_full.yaml
+      labels:
+        - label_id: fwd_ret_60d_raw
+signal_transforms:
+  - transform_id: daily_zscore
+    type: daily_zscore
+labels:
+  - label_id: fwd_ret_60d_raw
+    label_maturity_lag_trading_days: 60

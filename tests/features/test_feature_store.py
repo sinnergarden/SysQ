@@ -42,8 +42,8 @@ class TestFeatureCacheKey(unittest.TestCase):
     def test_universe_changes_key(self):
         self.assertNotEqual(self._key(universe="csi300"), self._key(universe="csi800"))
 
-    def test_date_range_changes_key(self):
-        self.assertNotEqual(self._key(date_start="2020-01-01"), self._key(date_start="2021-01-01"))
+    def test_date_range_not_in_cache_key(self):
+        self.assertEqual(self._key(date_start="2020-01-01"), self._key(date_start="2021-01-01"))
 
 
 class TestFeatureStore(unittest.TestCase):

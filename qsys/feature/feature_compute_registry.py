@@ -66,8 +66,18 @@ def compute_phase1_batch(
     if flags is None:
         flags = _infer_flags(feature_ids)
     raw = raw_panel.copy()
-    if any(c.startswith("$") for c in raw.columns):
-        raw.columns = [c.lstrip("$") if c.startswith("$") else c for c in raw.columns]
+    # Build adapter-level rename map: $xxx -> xxx
+    # This must be an EXACT column rename, not a string strip, to avoid
+    # creating duplicate column names that trip up _repair_research_input_columns
+    adapter_rename: dict[str, str] = {}
+    for c in raw.columns:
+        if c.startswith("$"):
+            adapter_rename[c] = c[1:]
+    # Also map instrument to ts_code if present
+    if "instrument" in raw.columns and "ts_code" not in raw.columns:
+        adapter_rename["instrument"] = "ts_code"
+    if adapter_rename:
+        raw = raw.rename(columns=adapter_rename)
     if "trade_date" in raw.columns:
         raw["trade_date"] = pd.to_datetime(raw["trade_date"])
     return build_phase1_features(raw, flags=flags)

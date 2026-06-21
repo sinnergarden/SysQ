@@ -57,8 +57,6 @@ def main(feature_id, source_panel, source_manifest_hash,
     fk = FeatureCacheKey(
         feature_id=feature_id,
         universe=universe,
-        date_start=date_start,
-        date_end=date_end,
         source_manifest_hash=source_manifest_hash,
         compute_fn_hash=spec.compute_fn_hash,
         pit_policy="rolling_past",

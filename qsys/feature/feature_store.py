@@ -45,7 +45,10 @@ import pandas as pd
 class FeatureCacheKey:
     """Deterministic key components for a single-feature cache entry.
 
-    All fields are included in the SHA-256 hash via ``compute_feature_cache_key()``.
+    ``date_start`` and ``date_end`` are **metadata only** — they are NOT
+    included in the SHA-256 hash.  This allows different query windows
+    (e.g. rolling research's per-window ranges) to all hit the same cache.
+    Date filtering happens at read time via ``read_feature(…, date_start=…)``.
     """
 
     feature_id: str
@@ -61,14 +64,13 @@ class FeatureCacheKey:
 def compute_feature_cache_key(k: FeatureCacheKey) -> str:
     """Compute a deterministic SHA-256 cache key from ``FeatureCacheKey``.
 
-    Two identical keys always produce the same hash.
-    Changing any field produces a different hash.
+    ``date_start`` and ``date_end`` are deliberately excluded from the hash
+    so that different query windows share the same cache entry.  Always
+    filter to the desired date range via ``read_feature(…, date_start=…)``.
     """
     raw = {
         "feature_id": k.feature_id,
         "universe": k.universe or "",
-        "date_start": k.date_start or "",
-        "date_end": k.date_end or "",
         "source_manifest_hash": k.source_manifest_hash,
         "compute_fn_hash": k.compute_fn_hash,
         "pit_policy": k.pit_policy or "",
@@ -122,8 +124,22 @@ class FeatureStore:
         *,
         expected_cache_key: str,
         strict_source_hash: str | None = None,
+        date_start: str | None = None,
+        date_end: str | None = None,
     ) -> pd.DataFrame:
         """Read a single feature from cache.
+
+        Parameters
+        ----------
+        feature_id:
+            Feature identifier.
+        expected_cache_key:
+            Cache key for validation.
+        strict_source_hash:
+            If set, validates cached source hash matches.
+        date_start, date_end:
+            Optional date range filter.  Applied **after** parquet load,
+            so the cached parquet may contain more rows than requested.
 
         Returns a DataFrame with columns ``[trade_date, ts_code, {feature_id}]``.
 
@@ -178,7 +194,6 @@ class FeatureStore:
 
         # 7. Ensure feature column exists
         if feature_id not in df.columns:
-            # Narrow schema (value column): rename "value" → feature_id
             if "value" in df.columns:
                 df = df.rename(columns={"value": feature_id})
             else:
@@ -186,6 +201,12 @@ class FeatureStore:
                     f"Feature '{feature_id}': neither '{feature_id}' nor 'value' "
                     f"column in cache. Columns: {list(df.columns)}"
                 )
+
+        # 8. Optional date range filter (applied after parquet load)
+        if date_start is not None:
+            df = df[df["trade_date"] >= date_start]
+        if date_end is not None:
+            df = df[df["trade_date"] <= date_end]
 
         return df
 

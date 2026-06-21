@@ -16,7 +16,9 @@ def build_tradability_features(df: pd.DataFrame) -> pd.DataFrame:
     out["opened_from_limit_up"] = out["is_limit_up"] & (out["open"] < out[high_limit_col])
 
     tradability = np.ones(len(out), dtype=float)
-    tradability -= out.get("paused", 0).fillna(0).astype(float)
+    _paused = out.get("paused")
+    if _paused is not None:
+        tradability -= pd.to_numeric(_paused, errors="coerce").fillna(0).astype(float)
     tradability -= out["is_limit_up"].astype(float) * 0.5
     tradability -= out["is_limit_down"].astype(float) * 0.5
     out["tradability_score"] = np.clip(tradability, 0.0, 1.0)

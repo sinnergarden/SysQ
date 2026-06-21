@@ -89,30 +89,35 @@ class LightGBMSingleLabelGenerator:
         # qlib returns "instrument" column; cache internally uses "ts_code"
         has_instrument = "instrument" in frame.columns and "ts_code" not in frame.columns
 
-        # ── Feature cache path (opt-in) ──
+        # ── Feature cache path (opt-in) — uses FeatureStore per-feature cache ──
         if self.use_feature_cache and self.feature_list_id:
-            from qsys.feature.cache_loader import load_feature_matrix_with_cache
-
-            # Adapt: cache expects ts_code, qlib returns instrument
-            cache_frame = frame.copy()
-            if has_instrument:
-                cache_frame = cache_frame.rename(columns={"instrument": "ts_code"})
+            from qsys.feature.feature_matrix_builder import build_matrix_from_feature_store
 
             log.info(
                 "Feature cache ENABLED for generator '%s' "
                 "(feature_list_id=%s, materialize_on_miss=%s)",
                 self.label_id, self.feature_list_id, self.materialize_on_miss,
             )
-            feature_df = load_feature_matrix_with_cache(
+            # Adapt: cache expects ts_code, qlib returns instrument
+            cache_frame = frame.copy()
+            if has_instrument:
+                cache_frame = cache_frame.rename(columns={"instrument": "ts_code"})
+            # Strip $ prefix in raw panel so feature names match
+            rename_map = {c: c[1:] for c in cache_frame.columns if c.startswith("$")}
+            if rename_map:
+                cache_frame = cache_frame.rename(columns=rename_map)
+
+            feature_df = build_matrix_from_feature_store(
                 cache_frame,
                 feature_set_id=self.feature_list_id,
                 date_start=start,
                 date_end=end,
                 universe=self.universe,
                 source_manifest_hash=self.source_manifest_hash,
-                cache_root=self.feature_cache_root,
-                use_feature_cache=True,
-                materialize_on_miss=self.materialize_on_miss,
+                feature_cache_root=self.feature_cache_root,
+                compute_missing=False,
+                allow_uncacheable=True,
+                join_policy="inner",
             )
             # Adapt back: training code expects instrument column
             if has_instrument:
@@ -182,8 +187,8 @@ class LightGBMSingleLabelGenerator:
         )
 
         y_valid = train["label_value"].notna()
-        X_tr = train[clean_features].astype(np.float32).fillna(0.0)
-        y_tr = train.loc[y_valid, "label_value"]
+        X_tr = train[clean_features].fillna(0.0).astype(np.float32)
+        y_tr = train.loc[y_valid, "label_value"].astype(float)
         if y_tr.empty:
             raise ValueError(f"No valid training samples for {self.label_id}")
 
@@ -200,7 +205,7 @@ class LightGBMSingleLabelGenerator:
         if pred.empty:
             raise ValueError(f"No data for predict window [{predict_start}, {predict_end}]")
 
-        pred["pred"] = predict_model(model, center, scale, pred[clean_features].astype(np.float32).fillna(0.0)).values
+        pred["pred"] = predict_model(model, center, scale, pred[clean_features].fillna(0.0).astype(np.float32)).values
 
         # Assemble output
         prev_td = _build_prev_trading_date_lookup(predict_start, predict_end)

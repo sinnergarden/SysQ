@@ -1,0 +1,1100 @@
+{
+  "manifest_version": 1,
+  "feature_set_id": "retest_60d_all_candidate_features",
+  "source_path": "configs/features/retest_60d_all_candidate_features.yaml",
+  "resolved_at": "2026-06-21T02:17:12.818422+00:00",
+  "resolved_features": [
+    "$debt_to_assets",
+    "$grossprofit_margin",
+    "$industry",
+    "$op_cashflow",
+    "$pb",
+    "$pe",
+    "$roe",
+    "above_avg_volume_ratio_60d",
+    "amount_log",
+    "amount_ratio_20d",
+    "amount_ratio_60d",
+    "amount_stability_60d",
+    "amount_zscore_20",
+    "avg_shares_per_holder_chg_qoq",
+    "breakout_volume_quality_120d",
+    "close_pos_in_range",
+    "close_to_open_gap_1d",
+    "continuation_candidate_score",
+    "debt_to_assets_delta_252d",
+    "distance_to_120d_high",
+    "distance_to_250d_high",
+    "distance_to_252d_low",
+    "distance_to_limit_down",
+    "distance_to_limit_up",
+    "earnings_yield_proxy",
+    "grossprofit_margin_delta_252d",
+    "holder_concentration_low_vol_uptrend",
+    "holder_concentration_score",
+    "holder_concentration_trend_confirm",
+    "holder_concentration_volume_contract",
+    "holder_num_chg_2q",
+    "holder_num_chg_qoq",
+    "holder_num_stale_days",
+    "holder_price_confirm_score",
+    "holder_squeeze_score",
+    "illiquidity",
+    "industry_breadth_20d",
+    "industry_breadth_60d",
+    "industry_new_high_ratio",
+    "industry_ret_120d",
+    "industry_ret_20d",
+    "industry_ret_60d",
+    "industry_top_stock_momentum",
+    "industry_volume_expansion",
+    "intraday_reversal_strength",
+    "is_limit_down",
+    "is_limit_up",
+    "limit_up_count_5d",
+    "low_vol_uptrend_120d",
+    "low_vol_uptrend_60d",
+    "lower_shadow_ratio",
+    "margin_balance_chg_20d",
+    "margin_balance_chg_60d",
+    "margin_balance_to_float_mv",
+    "margin_buy_intensity_20d",
+    "margin_crowding_score",
+    "margin_eligible",
+    "margin_holder_trend_confirm",
+    "margin_overheat_risk_score",
+    "margin_pullback_recovery_confirm",
+    "margin_repay_to_buy_20d",
+    "margin_trend_confirm_score",
+    "max_pullback_120d",
+    "net_margin",
+    "net_margin_delta_756d",
+    "new_high_persistence_120d",
+    "ocf_margin",
+    "op_cashflow_delta_252d",
+    "open_pos_in_range",
+    "open_to_close_ret",
+    "opened_from_limit_up",
+    "operating_cf_to_profit",
+    "overheat_risk_score",
+    "pb_delta_120d",
+    "pb_distance_from_756d_low",
+    "pb_percentile_756d",
+    "pb_rank_252d",
+    "pb_repair_room_to_median",
+    "pe_delta_120d",
+    "pe_distance_from_756d_low",
+    "pe_percentile_756d",
+    "pe_rank_252d",
+    "pe_repair_room_to_median",
+    "peg_proxy",
+    "price_percentile_252d",
+    "profit_yoy",
+    "profit_yoy_accel",
+    "pullback_recovery_speed_60d",
+    "quiet_accumulation_60d",
+    "repair_candidate_score",
+    "ret_120d",
+    "ret_20d",
+    "ret_60d",
+    "return_drawdown_ratio_120d",
+    "return_drawdown_ratio_60d",
+    "revenue_yoy",
+    "revenue_yoy_accel",
+    "roa",
+    "roe_delta_252d",
+    "roe_delta_756d",
+    "rps_120d",
+    "rps_20d",
+    "rps_20d_minus_rps_60d",
+    "rps_60d",
+    "rps_industry_120d",
+    "rps_industry_60d",
+    "stock_industry_ret_corr_60d",
+    "stock_minus_industry_ret_20d",
+    "stock_minus_industry_ret_60d",
+    "top10_holder_ratio",
+    "top10_holder_ratio_chg_qoq",
+    "top10_holder_stale_days",
+    "tradability_score",
+    "trend_consistency_120d",
+    "trend_consistency_60d",
+    "trend_smoothness_120d",
+    "trend_smoothness_60d",
+    "turnover_acceleration",
+    "turnover_rate",
+    "up_day_ratio_120d",
+    "up_day_ratio_60d",
+    "up_volume_down_volume_ratio_120d",
+    "up_volume_down_volume_ratio_60d",
+    "upper_shadow_ratio",
+    "value_trap_risk_score",
+    "volatility_adjusted_return_120d",
+    "volatility_adjusted_return_60d",
+    "volume_contraction_after_rise_60d",
+    "volume_ratio_20d",
+    "volume_ratio_60d",
+    "volume_shock_3",
+    "volume_shock_5",
+    "volume_spike_20d",
+    "volume_stability_60d",
+    "volume_up_down_ratio_60d"
+  ],
+  "feature_ids": [
+    "$debt_to_assets",
+    "$grossprofit_margin",
+    "$industry",
+    "$op_cashflow",
+    "$pb",
+    "$pe",
+    "$roe",
+    "above_avg_volume_ratio_60d",
+    "amount_log",
+    "amount_ratio_20d",
+    "amount_ratio_60d",
+    "amount_stability_60d",
+    "amount_zscore_20",
+    "avg_shares_per_holder_chg_qoq",
+    "breakout_volume_quality_120d",
+    "close_pos_in_range",
+    "close_to_open_gap_1d",
+    "continuation_candidate_score",
+    "debt_to_assets_delta_252d",
+    "distance_to_120d_high",
+    "distance_to_250d_high",
+    "distance_to_252d_low",
+    "distance_to_limit_down",
+    "distance_to_limit_up",
+    "earnings_yield_proxy",
+    "grossprofit_margin_delta_252d",
+    "holder_concentration_low_vol_uptrend",
+    "holder_concentration_score",
+    "holder_concentration_trend_confirm",
+    "holder_concentration_volume_contract",
+    "holder_num_chg_2q",
+    "holder_num_chg_qoq",
+    "holder_num_stale_days",
+    "holder_price_confirm_score",
+    "holder_squeeze_score",
+    "illiquidity",
+    "industry_breadth_20d",
+    "industry_breadth_60d",
+    "industry_new_high_ratio",
+    "industry_ret_120d",
+    "industry_ret_20d",
+    "industry_ret_60d",
+    "industry_top_stock_momentum",
+    "industry_volume_expansion",
+    "intraday_reversal_strength",
+    "is_limit_down",
+    "is_limit_up",
+    "limit_up_count_5d",
+    "low_vol_uptrend_120d",
+    "low_vol_uptrend_60d",
+    "lower_shadow_ratio",
+    "margin_balance_chg_20d",
+    "margin_balance_chg_60d",
+    "margin_balance_to_float_mv",
+    "margin_buy_intensity_20d",
+    "margin_crowding_score",
+    "margin_eligible",
+    "margin_holder_trend_confirm",
+    "margin_overheat_risk_score",
+    "margin_pullback_recovery_confirm",
+    "margin_repay_to_buy_20d",
+    "margin_trend_confirm_score",
+    "max_pullback_120d",
+    "net_margin",
+    "net_margin_delta_756d",
+    "new_high_persistence_120d",
+    "ocf_margin",
+    "op_cashflow_delta_252d",
+    "open_pos_in_range",
+    "open_to_close_ret",
+    "opened_from_limit_up",
+    "operating_cf_to_profit",
+    "overheat_risk_score",
+    "pb_delta_120d",
+    "pb_distance_from_756d_low",
+    "pb_percentile_756d",
+    "pb_rank_252d",
+    "pb_repair_room_to_median",
+    "pe_delta_120d",
+    "pe_distance_from_756d_low",
+    "pe_percentile_756d",
+    "pe_rank_252d",
+    "pe_repair_room_to_median",
+    "peg_proxy",
+    "price_percentile_252d",
+    "profit_yoy",
+    "profit_yoy_accel",
+    "pullback_recovery_speed_60d",
+    "quiet_accumulation_60d",
+    "repair_candidate_score",
+    "ret_120d",
+    "ret_20d",
+    "ret_60d",
+    "return_drawdown_ratio_120d",
+    "return_drawdown_ratio_60d",
+    "revenue_yoy",
+    "revenue_yoy_accel",
+    "roa",
+    "roe_delta_252d",
+    "roe_delta_756d",
+    "rps_120d",
+    "rps_20d",
+    "rps_20d_minus_rps_60d",
+    "rps_60d",
+    "rps_industry_120d",
+    "rps_industry_60d",
+    "stock_industry_ret_corr_60d",
+    "stock_minus_industry_ret_20d",
+    "stock_minus_industry_ret_60d",
+    "top10_holder_ratio",
+    "top10_holder_ratio_chg_qoq",
+    "top10_holder_stale_days",
+    "tradability_score",
+    "trend_consistency_120d",
+    "trend_consistency_60d",
+    "trend_smoothness_120d",
+    "trend_smoothness_60d",
+    "turnover_acceleration",
+    "turnover_rate",
+    "up_day_ratio_120d",
+    "up_day_ratio_60d",
+    "up_volume_down_volume_ratio_120d",
+    "up_volume_down_volume_ratio_60d",
+    "upper_shadow_ratio",
+    "value_trap_risk_score",
+    "volatility_adjusted_return_120d",
+    "volatility_adjusted_return_60d",
+    "volume_contraction_after_rise_60d",
+    "volume_ratio_20d",
+    "volume_ratio_60d",
+    "volume_shock_3",
+    "volume_shock_5",
+    "volume_spike_20d",
+    "volume_stability_60d",
+    "volume_up_down_ratio_60d"
+  ],
+  "raw_features": [
+    "$debt_to_assets",
+    "$grossprofit_margin",
+    "$industry",
+    "$op_cashflow",
+    "$pb",
+    "$pe",
+    "$roe"
+  ],
+  "derived_features": [
+    "above_avg_volume_ratio_60d",
+    "amount_log",
+    "amount_ratio_20d",
+    "amount_ratio_60d",
+    "amount_stability_60d",
+    "amount_zscore_20",
+    "avg_shares_per_holder_chg_qoq",
+    "breakout_volume_quality_120d",
+    "close_pos_in_range",
+    "close_to_open_gap_1d",
+    "continuation_candidate_score",
+    "debt_to_assets_delta_252d",
+    "distance_to_120d_high",
+    "distance_to_250d_high",
+    "distance_to_252d_low",
+    "distance_to_limit_down",
+    "distance_to_limit_up",
+    "earnings_yield_proxy",
+    "grossprofit_margin_delta_252d",
+    "holder_concentration_low_vol_uptrend",
+    "holder_concentration_score",
+    "holder_concentration_trend_confirm",
+    "holder_concentration_volume_contract",
+    "holder_num_chg_2q",
+    "holder_num_chg_qoq",
+    "holder_num_stale_days",
+    "holder_price_confirm_score",
+    "holder_squeeze_score",
+    "illiquidity",
+    "industry_breadth_20d",
+    "industry_breadth_60d",
+    "industry_new_high_ratio",
+    "industry_ret_120d",
+    "industry_ret_20d",
+    "industry_ret_60d",
+    "industry_top_stock_momentum",
+    "industry_volume_expansion",
+    "intraday_reversal_strength",
+    "is_limit_down",
+    "is_limit_up",
+    "limit_up_count_5d",
+    "low_vol_uptrend_120d",
+    "low_vol_uptrend_60d",
+    "lower_shadow_ratio",
+    "margin_balance_chg_20d",
+    "margin_balance_chg_60d",
+    "margin_balance_to_float_mv",
+    "margin_buy_intensity_20d",
+    "margin_crowding_score",
+    "margin_eligible",
+    "margin_holder_trend_confirm",
+    "margin_overheat_risk_score",
+    "margin_pullback_recovery_confirm",
+    "margin_repay_to_buy_20d",
+    "margin_trend_confirm_score",
+    "max_pullback_120d",
+    "net_margin",
+    "net_margin_delta_756d",
+    "new_high_persistence_120d",
+    "ocf_margin",
+    "op_cashflow_delta_252d",
+    "open_pos_in_range",
+    "open_to_close_ret",
+    "opened_from_limit_up",
+    "operating_cf_to_profit",
+    "overheat_risk_score",
+    "pb_delta_120d",
+    "pb_distance_from_756d_low",
+    "pb_percentile_756d",
+    "pb_rank_252d",
+    "pb_repair_room_to_median",
+    "pe_delta_120d",
+    "pe_distance_from_756d_low",
+    "pe_percentile_756d",
+    "pe_rank_252d",
+    "pe_repair_room_to_median",
+    "peg_proxy",
+    "price_percentile_252d",
+    "profit_yoy",
+    "profit_yoy_accel",
+    "pullback_recovery_speed_60d",
+    "quiet_accumulation_60d",
+    "repair_candidate_score",
+    "ret_120d",
+    "ret_20d",
+    "ret_60d",
+    "return_drawdown_ratio_120d",
+    "return_drawdown_ratio_60d",
+    "revenue_yoy",
+    "revenue_yoy_accel",
+    "roa",
+    "roe_delta_252d",
+    "roe_delta_756d",
+    "rps_120d",
+    "rps_20d",
+    "rps_20d_minus_rps_60d",
+    "rps_60d",
+    "rps_industry_120d",
+    "rps_industry_60d",
+    "stock_industry_ret_corr_60d",
+    "stock_minus_industry_ret_20d",
+    "stock_minus_industry_ret_60d",
+    "top10_holder_ratio",
+    "top10_holder_ratio_chg_qoq",
+    "top10_holder_stale_days",
+    "tradability_score",
+    "trend_consistency_120d",
+    "trend_consistency_60d",
+    "trend_smoothness_120d",
+    "trend_smoothness_60d",
+    "turnover_acceleration",
+    "turnover_rate",
+    "up_day_ratio_120d",
+    "up_day_ratio_60d",
+    "up_volume_down_volume_ratio_120d",
+    "up_volume_down_volume_ratio_60d",
+    "upper_shadow_ratio",
+    "value_trap_risk_score",
+    "volatility_adjusted_return_120d",
+    "volatility_adjusted_return_60d",
+    "volume_contraction_after_rise_60d",
+    "volume_ratio_20d",
+    "volume_ratio_60d",
+    "volume_shock_3",
+    "volume_shock_5",
+    "volume_spike_20d",
+    "volume_stability_60d",
+    "volume_up_down_ratio_60d"
+  ],
+  "required_transforms": [
+    "build_fundamental_context_features",
+    "build_industry_momentum_features",
+    "build_liquidity_features",
+    "build_margin_features",
+    "build_microstructure_features",
+    "build_relative_strength_features",
+    "build_shareholder_features",
+    "build_tradability_features",
+    "build_v3a_v3b_interaction_features",
+    "build_v3b_price_volume_features"
+  ],
+  "unresolved_transforms": [
+    "above_avg_volume_ratio_60d",
+    "amount_ratio_20d",
+    "amount_ratio_60d",
+    "amount_stability_60d",
+    "breakout_volume_quality_120d",
+    "continuation_candidate_score",
+    "debt_to_assets_delta_252d",
+    "distance_to_120d_high",
+    "distance_to_250d_high",
+    "distance_to_252d_low",
+    "earnings_yield_proxy",
+    "grossprofit_margin_delta_252d",
+    "holder_concentration_low_vol_uptrend",
+    "holder_concentration_volume_contract",
+    "low_vol_uptrend_120d",
+    "low_vol_uptrend_60d",
+    "margin_holder_trend_confirm",
+    "margin_pullback_recovery_confirm",
+    "max_pullback_120d",
+    "net_margin_delta_756d",
+    "new_high_persistence_120d",
+    "ocf_margin",
+    "op_cashflow_delta_252d",
+    "overheat_risk_score",
+    "pb_delta_120d",
+    "pb_distance_from_756d_low",
+    "pb_percentile_756d",
+    "pb_rank_252d",
+    "pb_repair_room_to_median",
+    "pe_delta_120d",
+    "pe_distance_from_756d_low",
+    "pe_percentile_756d",
+    "pe_rank_252d",
+    "pe_repair_room_to_median",
+    "peg_proxy",
+    "price_percentile_252d",
+    "profit_yoy_accel",
+    "pullback_recovery_speed_60d",
+    "quiet_accumulation_60d",
+    "repair_candidate_score",
+    "return_drawdown_ratio_120d",
+    "return_drawdown_ratio_60d",
+    "revenue_yoy_accel",
+    "roe_delta_252d",
+    "roe_delta_756d",
+    "rps_20d_minus_rps_60d",
+    "trend_smoothness_120d",
+    "trend_smoothness_60d",
+    "up_day_ratio_120d",
+    "up_day_ratio_60d",
+    "up_volume_down_volume_ratio_120d",
+    "up_volume_down_volume_ratio_60d",
+    "value_trap_risk_score",
+    "volatility_adjusted_return_120d",
+    "volatility_adjusted_return_60d",
+    "volume_contraction_after_rise_60d",
+    "volume_ratio_20d",
+    "volume_ratio_60d",
+    "volume_spike_20d",
+    "volume_stability_60d",
+    "volume_up_down_ratio_60d"
+  ],
+  "warnings": [
+    "Feature 'above_avg_volume_ratio_60d' is derived but has no compute_fn (unresolved transform)",
+    "Feature 'amount_ratio_20d' is derived but has no compute_fn (unresolved transform)",
+    "Feature 'amount_ratio_60d' is derived but has no compute_fn (unresolved transform)",
+    "Feature 'amount_stability_60d' is derived but has no compute_fn (unresolved transform)",
+    "Feature 'breakout_volume_quality_120d' is derived but has no compute_fn (unresolved transform)",
+    "Feature 'continuation_candidate_score' is derived but has no compute_fn (unresolved transform)",
+    "Feature 'debt_to_assets_delta_252d' is derived but has no compute_fn (unresolved transform)",
+    "Feature 'distance_to_120d_high' is derived but has no compute_fn (unresolved transform)",
+    "Feature 'distance_to_250d_high' is derived but has no compute_fn (unresolved transform)",
+    "Feature 'distance_to_252d_low' is derived but has no compute_fn (unresolved transform)",
+    "Feature 'earnings_yield_proxy' is derived but has no compute_fn (unresolved transform)",
+    "Feature 'grossprofit_margin_delta_252d' is derived but has no compute_fn (unresolved transform)",
+    "Feature 'holder_concentration_low_vol_uptrend' is derived but has no compute_fn (unresolved transform)",
+    "Feature 'holder_concentration_volume_contract' is derived but has no compute_fn (unresolved transform)",
+    "Feature 'low_vol_uptrend_120d' is derived but has no compute_fn (unresolved transform)",
+    "Feature 'low_vol_uptrend_60d' is derived but has no compute_fn (unresolved transform)",
+    "Feature 'margin_holder_trend_confirm' is derived but has no compute_fn (unresolved transform)",
+    "Feature 'margin_pullback_recovery_confirm' is derived but has no compute_fn (unresolved transform)",
+    "Feature 'max_pullback_120d' is derived but has no compute_fn (unresolved transform)",
+    "Feature 'net_margin_delta_756d' is derived but has no compute_fn (unresolved transform)",
+    "Feature 'new_high_persistence_120d' is derived but has no compute_fn (unresolved transform)",
+    "Feature 'ocf_margin' is derived but has no compute_fn (unresolved transform)",
+    "Feature 'op_cashflow_delta_252d' is derived but has no compute_fn (unresolved transform)",
+    "Feature 'overheat_risk_score' is derived but has no compute_fn (unresolved transform)",
+    "Feature 'pb_delta_120d' is derived but has no compute_fn (unresolved transform)",
+    "Feature 'pb_distance_from_756d_low' is derived but has no compute_fn (unresolved transform)",
+    "Feature 'pb_percentile_756d' is derived but has no compute_fn (unresolved transform)",
+    "Feature 'pb_rank_252d' is derived but has no compute_fn (unresolved transform)",
+    "Feature 'pb_repair_room_to_median' is derived but has no compute_fn (unresolved transform)",
+    "Feature 'pe_delta_120d' is derived but has no compute_fn (unresolved transform)",
+    "Feature 'pe_distance_from_756d_low' is derived but has no compute_fn (unresolved transform)",
+    "Feature 'pe_percentile_756d' is derived but has no compute_fn (unresolved transform)",
+    "Feature 'pe_rank_252d' is derived but has no compute_fn (unresolved transform)",
+    "Feature 'pe_repair_room_to_median' is derived but has no compute_fn (unresolved transform)",
+    "Feature 'peg_proxy' is derived but has no compute_fn (unresolved transform)",
+    "Feature 'price_percentile_252d' is derived but has no compute_fn (unresolved transform)",
+    "Feature 'profit_yoy_accel' is derived but has no compute_fn (unresolved transform)",
+    "Feature 'pullback_recovery_speed_60d' is derived but has no compute_fn (unresolved transform)",
+    "Feature 'quiet_accumulation_60d' is derived but has no compute_fn (unresolved transform)",
+    "Feature 'repair_candidate_score' is derived but has no compute_fn (unresolved transform)",
+    "Feature 'return_drawdown_ratio_120d' is derived but has no compute_fn (unresolved transform)",
+    "Feature 'return_drawdown_ratio_60d' is derived but has no compute_fn (unresolved transform)",
+    "Feature 'revenue_yoy_accel' is derived but has no compute_fn (unresolved transform)",
+    "Feature 'roe_delta_252d' is derived but has no compute_fn (unresolved transform)",
+    "Feature 'roe_delta_756d' is derived but has no compute_fn (unresolved transform)",
+    "Feature 'rps_20d_minus_rps_60d' is derived but has no compute_fn (unresolved transform)",
+    "Feature 'trend_smoothness_120d' is derived but has no compute_fn (unresolved transform)",
+    "Feature 'trend_smoothness_60d' is derived but has no compute_fn (unresolved transform)",
+    "Feature 'up_day_ratio_120d' is derived but has no compute_fn (unresolved transform)",
+    "Feature 'up_day_ratio_60d' is derived but has no compute_fn (unresolved transform)",
+    "Feature 'up_volume_down_volume_ratio_120d' is derived but has no compute_fn (unresolved transform)",
+    "Feature 'up_volume_down_volume_ratio_60d' is derived but has no compute_fn (unresolved transform)",
+    "Feature 'value_trap_risk_score' is derived but has no compute_fn (unresolved transform)",
+    "Feature 'volatility_adjusted_return_120d' is derived but has no compute_fn (unresolved transform)",
+    "Feature 'volatility_adjusted_return_60d' is derived but has no compute_fn (unresolved transform)",
+    "Feature 'volume_contraction_after_rise_60d' is derived but has no compute_fn (unresolved transform)",
+    "Feature 'volume_ratio_20d' is derived but has no compute_fn (unresolved transform)",
+    "Feature 'volume_ratio_60d' is derived but has no compute_fn (unresolved transform)",
+    "Feature 'volume_spike_20d' is derived but has no compute_fn (unresolved transform)",
+    "Feature 'volume_stability_60d' is derived but has no compute_fn (unresolved transform)",
+    "Feature 'volume_up_down_ratio_60d' is derived but has no compute_fn (unresolved transform)"
+  ],
+  "spec_sources": [
+    {
+      "name": "$debt_to_assets",
+      "source": "qlib_expression"
+    },
+    {
+      "name": "$grossprofit_margin",
+      "source": "qlib_expression"
+    },
+    {
+      "name": "$industry",
+      "source": "qlib_expression"
+    },
+    {
+      "name": "$op_cashflow",
+      "source": "qlib_expression"
+    },
+    {
+      "name": "$pb",
+      "source": "qlib_expression"
+    },
+    {
+      "name": "$pe",
+      "source": "qlib_expression"
+    },
+    {
+      "name": "$roe",
+      "source": "qlib_expression"
+    },
+    {
+      "name": "above_avg_volume_ratio_60d",
+      "source": "inventory"
+    },
+    {
+      "name": "amount_log",
+      "source": "inventory"
+    },
+    {
+      "name": "amount_ratio_20d",
+      "source": "inventory"
+    },
+    {
+      "name": "amount_ratio_60d",
+      "source": "inventory"
+    },
+    {
+      "name": "amount_stability_60d",
+      "source": "inventory"
+    },
+    {
+      "name": "amount_zscore_20",
+      "source": "inventory"
+    },
+    {
+      "name": "avg_shares_per_holder_chg_qoq",
+      "source": "inventory"
+    },
+    {
+      "name": "breakout_volume_quality_120d",
+      "source": "inventory"
+    },
+    {
+      "name": "close_pos_in_range",
+      "source": "inventory"
+    },
+    {
+      "name": "close_to_open_gap_1d",
+      "source": "inventory"
+    },
+    {
+      "name": "continuation_candidate_score",
+      "source": "inventory"
+    },
+    {
+      "name": "debt_to_assets_delta_252d",
+      "source": "inventory"
+    },
+    {
+      "name": "distance_to_120d_high",
+      "source": "inventory"
+    },
+    {
+      "name": "distance_to_250d_high",
+      "source": "inventory"
+    },
+    {
+      "name": "distance_to_252d_low",
+      "source": "inventory"
+    },
+    {
+      "name": "distance_to_limit_down",
+      "source": "inventory"
+    },
+    {
+      "name": "distance_to_limit_up",
+      "source": "inventory"
+    },
+    {
+      "name": "earnings_yield_proxy",
+      "source": "inventory"
+    },
+    {
+      "name": "grossprofit_margin_delta_252d",
+      "source": "inventory"
+    },
+    {
+      "name": "holder_concentration_low_vol_uptrend",
+      "source": "inventory"
+    },
+    {
+      "name": "holder_concentration_score",
+      "source": "inventory"
+    },
+    {
+      "name": "holder_concentration_trend_confirm",
+      "source": "inventory"
+    },
+    {
+      "name": "holder_concentration_volume_contract",
+      "source": "inventory"
+    },
+    {
+      "name": "holder_num_chg_2q",
+      "source": "inventory"
+    },
+    {
+      "name": "holder_num_chg_qoq",
+      "source": "inventory"
+    },
+    {
+      "name": "holder_num_stale_days",
+      "source": "inventory"
+    },
+    {
+      "name": "holder_price_confirm_score",
+      "source": "inventory"
+    },
+    {
+      "name": "holder_squeeze_score",
+      "source": "inventory"
+    },
+    {
+      "name": "illiquidity",
+      "source": "inventory"
+    },
+    {
+      "name": "industry_breadth_20d",
+      "source": "inventory"
+    },
+    {
+      "name": "industry_breadth_60d",
+      "source": "inventory"
+    },
+    {
+      "name": "industry_new_high_ratio",
+      "source": "inventory"
+    },
+    {
+      "name": "industry_ret_120d",
+      "source": "inventory"
+    },
+    {
+      "name": "industry_ret_20d",
+      "source": "inventory"
+    },
+    {
+      "name": "industry_ret_60d",
+      "source": "inventory"
+    },
+    {
+      "name": "industry_top_stock_momentum",
+      "source": "inventory"
+    },
+    {
+      "name": "industry_volume_expansion",
+      "source": "inventory"
+    },
+    {
+      "name": "intraday_reversal_strength",
+      "source": "inventory"
+    },
+    {
+      "name": "is_limit_down",
+      "source": "inventory"
+    },
+    {
+      "name": "is_limit_up",
+      "source": "inventory"
+    },
+    {
+      "name": "limit_up_count_5d",
+      "source": "inventory"
+    },
+    {
+      "name": "low_vol_uptrend_120d",
+      "source": "inventory"
+    },
+    {
+      "name": "low_vol_uptrend_60d",
+      "source": "inventory"
+    },
+    {
+      "name": "lower_shadow_ratio",
+      "source": "inventory"
+    },
+    {
+      "name": "margin_balance_chg_20d",
+      "source": "inventory"
+    },
+    {
+      "name": "margin_balance_chg_60d",
+      "source": "inventory"
+    },
+    {
+      "name": "margin_balance_to_float_mv",
+      "source": "inventory"
+    },
+    {
+      "name": "margin_buy_intensity_20d",
+      "source": "inventory"
+    },
+    {
+      "name": "margin_crowding_score",
+      "source": "inventory"
+    },
+    {
+      "name": "margin_eligible",
+      "source": "inventory"
+    },
+    {
+      "name": "margin_holder_trend_confirm",
+      "source": "inventory"
+    },
+    {
+      "name": "margin_overheat_risk_score",
+      "source": "inventory"
+    },
+    {
+      "name": "margin_pullback_recovery_confirm",
+      "source": "inventory"
+    },
+    {
+      "name": "margin_repay_to_buy_20d",
+      "source": "inventory"
+    },
+    {
+      "name": "margin_trend_confirm_score",
+      "source": "inventory"
+    },
+    {
+      "name": "max_pullback_120d",
+      "source": "inventory"
+    },
+    {
+      "name": "net_margin",
+      "source": "inventory"
+    },
+    {
+      "name": "net_margin_delta_756d",
+      "source": "inventory"
+    },
+    {
+      "name": "new_high_persistence_120d",
+      "source": "inventory"
+    },
+    {
+      "name": "ocf_margin",
+      "source": "inventory"
+    },
+    {
+      "name": "op_cashflow_delta_252d",
+      "source": "inventory"
+    },
+    {
+      "name": "open_pos_in_range",
+      "source": "inventory"
+    },
+    {
+      "name": "open_to_close_ret",
+      "source": "inventory"
+    },
+    {
+      "name": "opened_from_limit_up",
+      "source": "inventory"
+    },
+    {
+      "name": "operating_cf_to_profit",
+      "source": "inventory"
+    },
+    {
+      "name": "overheat_risk_score",
+      "source": "inventory"
+    },
+    {
+      "name": "pb_delta_120d",
+      "source": "inventory"
+    },
+    {
+      "name": "pb_distance_from_756d_low",
+      "source": "inventory"
+    },
+    {
+      "name": "pb_percentile_756d",
+      "source": "inventory"
+    },
+    {
+      "name": "pb_rank_252d",
+      "source": "inventory"
+    },
+    {
+      "name": "pb_repair_room_to_median",
+      "source": "inventory"
+    },
+    {
+      "name": "pe_delta_120d",
+      "source": "inventory"
+    },
+    {
+      "name": "pe_distance_from_756d_low",
+      "source": "inventory"
+    },
+    {
+      "name": "pe_percentile_756d",
+      "source": "inventory"
+    },
+    {
+      "name": "pe_rank_252d",
+      "source": "inventory"
+    },
+    {
+      "name": "pe_repair_room_to_median",
+      "source": "inventory"
+    },
+    {
+      "name": "peg_proxy",
+      "source": "inventory"
+    },
+    {
+      "name": "price_percentile_252d",
+      "source": "inventory"
+    },
+    {
+      "name": "profit_yoy",
+      "source": "inventory"
+    },
+    {
+      "name": "profit_yoy_accel",
+      "source": "inventory"
+    },
+    {
+      "name": "pullback_recovery_speed_60d",
+      "source": "inventory"
+    },
+    {
+      "name": "quiet_accumulation_60d",
+      "source": "inventory"
+    },
+    {
+      "name": "repair_candidate_score",
+      "source": "inventory"
+    },
+    {
+      "name": "ret_120d",
+      "source": "inventory"
+    },
+    {
+      "name": "ret_20d",
+      "source": "inventory"
+    },
+    {
+      "name": "ret_60d",
+      "source": "inventory"
+    },
+    {
+      "name": "return_drawdown_ratio_120d",
+      "source": "inventory"
+    },
+    {
+      "name": "return_drawdown_ratio_60d",
+      "source": "inventory"
+    },
+    {
+      "name": "revenue_yoy",
+      "source": "inventory"
+    },
+    {
+      "name": "revenue_yoy_accel",
+      "source": "inventory"
+    },
+    {
+      "name": "roa",
+      "source": "inventory"
+    },
+    {
+      "name": "roe_delta_252d",
+      "source": "inventory"
+    },
+    {
+      "name": "roe_delta_756d",
+      "source": "inventory"
+    },
+    {
+      "name": "rps_120d",
+      "source": "inventory"
+    },
+    {
+      "name": "rps_20d",
+      "source": "inventory"
+    },
+    {
+      "name": "rps_20d_minus_rps_60d",
+      "source": "inventory"
+    },
+    {
+      "name": "rps_60d",
+      "source": "inventory"
+    },
+    {
+      "name": "rps_industry_120d",
+      "source": "inventory"
+    },
+    {
+      "name": "rps_industry_60d",
+      "source": "inventory"
+    },
+    {
+      "name": "stock_industry_ret_corr_60d",
+      "source": "inventory"
+    },
+    {
+      "name": "stock_minus_industry_ret_20d",
+      "source": "inventory"
+    },
+    {
+      "name": "stock_minus_industry_ret_60d",
+      "source": "inventory"
+    },
+    {
+      "name": "top10_holder_ratio",
+      "source": "inventory"
+    },
+    {
+      "name": "top10_holder_ratio_chg_qoq",
+      "source": "inventory"
+    },
+    {
+      "name": "top10_holder_stale_days",
+      "source": "inventory"
+    },
+    {
+      "name": "tradability_score",
+      "source": "inventory"
+    },
+    {
+      "name": "trend_consistency_120d",
+      "source": "inventory"
+    },
+    {
+      "name": "trend_consistency_60d",
+      "source": "inventory"
+    },
+    {
+      "name": "trend_smoothness_120d",
+      "source": "inventory"
+    },
+    {
+      "name": "trend_smoothness_60d",
+      "source": "inventory"
+    },
+    {
+      "name": "turnover_acceleration",
+      "source": "inventory"
+    },
+    {
+      "name": "turnover_rate",
+      "source": "inventory"
+    },
+    {
+      "name": "up_day_ratio_120d",
+      "source": "inventory"
+    },
+    {
+      "name": "up_day_ratio_60d",
+      "source": "inventory"
+    },
+    {
+      "name": "up_volume_down_volume_ratio_120d",
+      "source": "inventory"
+    },
+    {
+      "name": "up_volume_down_volume_ratio_60d",
+      "source": "inventory"
+    },
+    {
+      "name": "upper_shadow_ratio",
+      "source": "inventory"
+    },
+    {
+      "name": "value_trap_risk_score",
+      "source": "inventory"
+    },
+    {
+      "name": "volatility_adjusted_return_120d",
+      "source": "inventory"
+    },
+    {
+      "name": "volatility_adjusted_return_60d",
+      "source": "inventory"
+    },
+    {
+      "name": "volume_contraction_after_rise_60d",
+      "source": "inventory"
+    },
+    {
+      "name": "volume_ratio_20d",
+      "source": "inventory"
+    },
+    {
+      "name": "volume_ratio_60d",
+      "source": "inventory"
+    },
+    {
+      "name": "volume_shock_3",
+      "source": "inventory"
+    },
+    {
+      "name": "volume_shock_5",
+      "source": "inventory"
+    },
+    {
+      "name": "volume_spike_20d",
+      "source": "inventory"
+    },
+    {
+      "name": "volume_stability_60d",
+      "source": "inventory"
+    },
+    {
+      "name": "volume_up_down_ratio_60d",
+      "source": "inventory"
+    }
+  ],
+  "status": "ok"
+}

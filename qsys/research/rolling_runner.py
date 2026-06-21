@@ -214,6 +214,10 @@ class RollingResearchRunner:
                 signal_generator=signal_generator,
                 overwrite_signal=overwrite_signal,
                 overwrite_eval=overwrite_eval,
+                use_feature_cache=config.use_feature_cache,
+                materialize_on_miss=config.materialize_on_miss,
+                feature_cache_root=config.feature_cache_root,
+                source_manifest_hash=config.source_manifest_hash,
             )
         finally:
             config.strategies = _saved_strategies
