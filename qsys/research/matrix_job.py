@@ -105,7 +105,7 @@ class RollingResearchConfig:
     # ── Feature cache options (opt-in) ──────────────────────────────────
     use_feature_cache: bool = False
     materialize_on_miss: bool = False
-    feature_cache_root: str = "data/feature_cache"
+    feature_cache_root: str = "data/feature_cache/features"
     source_manifest_hash: str = ""
 
     # ── v2 signal combinations ──────────────────────────────────────────
@@ -152,7 +152,7 @@ class RollingResearchConfig:
             signal_combinations=signal_combinations,
             use_feature_cache=payload.get("use_feature_cache", False),
             materialize_on_miss=payload.get("materialize_on_miss", False),
-            feature_cache_root=payload.get("feature_cache_root", "data/feature_cache"),
+            feature_cache_root=payload.get("feature_cache_root", "data/feature_cache/features"),
             source_manifest_hash=payload.get("source_manifest_hash", ""),
         )
 
@@ -228,7 +228,7 @@ def _create_generator_from_config(
     *,
     use_feature_cache: bool = False,
     materialize_on_miss: bool = False,
-    feature_cache_root: str = "data/feature_cache",
+    feature_cache_root: str = "data/feature_cache/features",
     source_manifest_hash: str = "",
 ) -> RollingSignalGenerator:
     """Create a generator instance from a config dict.

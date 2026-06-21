@@ -52,7 +52,7 @@ class LightGBMSingleLabelGenerator:
     # ── Feature cache options (opt-in, default off) ─────────────────────
     use_feature_cache: bool = False
     materialize_on_miss: bool = False
-    feature_cache_root: str = "data/feature_cache"
+    feature_cache_root: str = "data/feature_cache/features"
     source_manifest_hash: str = ""
 
     _qlib_inited: bool = field(default=False, repr=False)
