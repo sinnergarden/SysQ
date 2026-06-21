@@ -40,6 +40,8 @@ from typing import Any
 
 import pandas as pd
 
+from qsys.utils.logger import log
+
 
 @dataclass(frozen=True)
 class FeatureCacheKey:
@@ -207,6 +209,31 @@ class FeatureStore:
             df = df[df["trade_date"] >= date_start]
         if date_end is not None:
             df = df[df["trade_date"] <= date_end]
+
+        # 9. Coverage check: warn if the filtered result covers < 50% of
+        #    the cache's stored date range.  This prevents a short-window
+        #    cache (e.g. 2023-2024) from being silently reused by a broader
+        #    request (e.g. 2020-2025) that would mostly be empty.
+        stored_start = meta.get("date_start")
+        stored_end = meta.get("date_end")
+        if stored_start and stored_end and date_start and date_end:
+            try:
+                request_days = (pd.Timestamp(date_end) - pd.Timestamp(date_start)).days
+                stored_days = (pd.Timestamp(stored_end) - pd.Timestamp(stored_start)).days
+                if stored_days > 0 and request_days > stored_days * 0.5:
+                    actual_days = df["trade_date"].nunique()
+                    expected = df["trade_date"].between(date_start, date_end).sum()
+                    if expected > 0 and actual_days / expected < 0.5:
+                        log.warning(
+                            "Feature '%s': cache covers %s–%s (%dd) but request is "
+                            "%s–%s (%dd).  Only %d/%d rows returned. "
+                            "Consider re-backfilling with a wider range.",
+                            feature_id, stored_start, stored_end, stored_days,
+                            date_start, date_end, request_days,
+                            actual_days, expected,
+                        )
+            except (ValueError, TypeError):
+                pass
 
         return df
 

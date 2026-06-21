@@ -30,6 +30,24 @@ from qsys.feature.resolver_v2 import resolve_feature_set, discover_feature_sets
 from qsys.utils.logger import log
 
 
+
+def _build_cache_key(
+    feature_id: str,
+    *,
+    universe: str | None = None,
+    source_manifest_hash: str = "",
+) -> tuple[FeatureCacheKey, str]:
+    """Build a unified FeatureCacheKey + its computed key string."""
+    fk = FeatureCacheKey(
+        feature_id=feature_id,
+        universe=universe,
+        source_manifest_hash=source_manifest_hash,
+        compute_fn_hash=_PHASE1_HASH,
+        pit_policy="rolling_past",
+    )
+    return fk, compute_feature_cache_key(fk)
+
+
 def build_matrix_from_feature_store(
     raw_panel: pd.DataFrame,
     *,
@@ -97,13 +115,7 @@ def build_matrix_from_feature_store(
     uncacheable: list[str] = []
 
     for fid in feature_ids:
-        fk = FeatureCacheKey(
-            feature_id=fid,
-            universe=universe,
-            source_manifest_hash=source_manifest_hash,
-            compute_fn_hash=_PHASE1_HASH,
-        )
-        ck = compute_feature_cache_key(fk)
+        fk, ck = _build_cache_key(fid, universe=universe, source_manifest_hash=source_manifest_hash)
 
         if store.exists(fid, ck):
             df = store.read_feature(
@@ -150,13 +162,7 @@ def build_matrix_from_feature_store(
                     f"Phase1 builder did not produce '{fid}' during batch compute. "
                     f"Available: {list(batch_result.columns)}"
                 )
-            fk = FeatureCacheKey(
-                feature_id=fid,
-                date_end=date_end,
-                source_manifest_hash=source_manifest_hash,
-                compute_fn_hash=_PHASE1_HASH,
-            )
-            ck = compute_feature_cache_key(fk)
+            fk, ck = _build_cache_key(fid, universe=universe, source_manifest_hash=source_manifest_hash)
             df_part = batch_result[["trade_date", "ts_code", fid]]
             store.write_feature(
                 fid,
@@ -187,8 +193,18 @@ def build_matrix_from_feature_store(
             if fid.startswith("$"):
                 clean_name = fid[1:]
                 if clean_name in raw_panel_clean.columns:
-                    cached[fid] = raw_panel_clean[["trade_date", "ts_code", clean_name]].rename(columns={clean_name: fid})
-                    log.info("  Raw field (from panel): %s", fid)
+                    df = raw_panel_clean[["trade_date", "ts_code", clean_name]].drop_duplicates(
+                        subset=["trade_date", "ts_code"]
+                    ).rename(columns={clean_name: fid})
+                    cached[fid] = df
+                    log.info("  Raw field (from panel): %s (%d rows)", fid, len(df))
+                    continue
+                if fid in raw_panel.columns:
+                    df = raw_panel[[
+                        "trade_date", "ts_code", fid
+                    ]].drop_duplicates(subset=["trade_date", "ts_code"]).copy()
+                    cached[fid] = df
+                    log.info("  Raw field (from panel, $ name): %s (%d rows)", fid, len(df))
                     continue
             # Builder must produce it
             clean_panel = raw_panel.drop_duplicates(subset=["trade_date", "ts_code"]).copy()

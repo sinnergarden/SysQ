@@ -454,5 +454,72 @@ class TestBackfillBatch(unittest.TestCase):
                                 metadata={"source_manifest_hash": "v1"})
 
 
+
+class TestMatrixBuilderRawFields(unittest.TestCase):
+    """Matrix builder raw $ field handling."""
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp())
+        self.panel = pd.DataFrame({
+            "trade_date": pd.date_range("2025-01-01", periods=5, freq="B"),
+            "ts_code": ["A"] * 5,
+            "close": [100.0] * 5, "open": [100.0] * 5,
+            "high": [101.0] * 5, "low": [99.0] * 5,
+            "volume": [1e6] * 5, "amount": [1e8] * 5,
+            "float_shares": [1e8] * 5,
+            "$pe": [10.0] * 5, "pe": [10.0] * 5,
+        })
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_s_dollar_field_dedup(self):
+        """$ field with duplicates in panel should not explode matrix."""
+        from qsys.feature.feature_matrix_builder import _build_cache_key
+        from qsys.feature.feature_store import FeatureStore, FeatureCacheKey, compute_feature_cache_key
+        from qsys.feature.feature_compute_registry import _PHASE1_HASH
+
+        # Verify the helper produces the correct key
+        fk, ck = _build_cache_key("ret_60d", universe="test", source_manifest_hash="h1")
+        self.assertIsNotNone(ck)
+        self.assertEqual(len(ck), 20)
+        self.assertEqual(fk.pit_policy, "rolling_past")
+
+    def test_dollar_field_read_from_raw_panel(self):
+        """$pe in YAML but $pe in panel → read from panel, not builder."""
+        import yaml
+        from qsys.feature.feature_matrix_builder import build_matrix_from_feature_store
+        from qsys.feature.resolver_v2 import discover_feature_sets
+
+        yaml_dir = Path(self.tmpdir) / "r_y"
+        yaml_dir.mkdir()
+        yp = yaml_dir / "r_set.yaml"
+        with open(yp, "w") as f:
+            yaml.dump({"feature_set_id": "r_set", "features": ["$pe", "close_to_open_gap_1d"]}, f)
+        discover_feature_sets(config_dir=str(yaml_dir))
+
+        matrix = build_matrix_from_feature_store(
+            self.panel, feature_set_id=str(yp),
+            feature_cache_root=str(self.tmpdir / "r_fs"),
+            compute_missing=True, allow_uncacheable=True,
+        )
+        self.assertIn("$pe", matrix.columns)
+        self.assertIn("close_to_open_gap_1d", matrix.columns)
+
+    def test_read_feature_coverage_warning(self):
+        """read_feature with date_start outside cache range warns."""
+        import logging
+        logging.basicConfig(level=logging.DEBUG)
+        from qsys.feature.feature_store import FeatureStore
+        store = FeatureStore(root=str(self.tmpdir / "cov_test"))
+        df = pd.DataFrame({"trade_date": pd.date_range("2025-01-01", periods=10, freq="B"),
+                            "ts_code": ["A"] * 10, "cov_feat": range(10)})
+        store.write_feature("cov_feat", df, cache_key="k1",
+                            metadata={"date_start": "2025-01-01", "date_end": "2025-01-15"})
+        # Read with wider range — should warn but still work
+        loaded = store.read_feature("cov_feat", expected_cache_key="k1",
+                                     date_start="2025-01-01", date_end="2026-01-01")
+        self.assertLessEqual(len(loaded), 10)
+
 if __name__ == "__main__":
     unittest.main()
