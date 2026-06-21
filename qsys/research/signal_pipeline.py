@@ -75,10 +75,10 @@ class SignalResearchPipeline:
         signal_generator: RollingSignalGenerator | None = None,
         overwrite_signal: bool = False,
         overwrite_eval: bool = False,
-        use_feature_cache: bool = False,
-        materialize_on_miss: bool = False,
-        feature_cache_root: str = "data/feature_cache",
-        source_manifest_hash: str = "",
+        use_feature_cache: bool | None = None,
+        materialize_on_miss: bool | None = None,
+        feature_cache_root: str | None = None,
+        source_manifest_hash: str | None = None,
     ) -> SignalResearchResult:
         """Execute signal research pipeline.
 
@@ -93,12 +93,22 @@ class SignalResearchPipeline:
         overwrite_eval:
             Allow overwriting existing evaluations.
         use_feature_cache / materialize_on_miss / feature_cache_root / source_manifest_hash:
-            Feature cache options (opt-in, default off).
+            Feature cache options.  CLI overrides YAML when set (not None).
         """
         if isinstance(config, (str, Path)):
             config = RollingResearchConfig.from_file(Path(config))
         elif isinstance(config, dict):
             config = RollingResearchConfig.from_dict(config)
+
+        # CLI overrides YAML config for cache params (only when explicitly set)
+        if use_feature_cache is not None:
+            config.use_feature_cache = use_feature_cache
+        if materialize_on_miss is not None:
+            config.materialize_on_miss = materialize_on_miss
+        if feature_cache_root is not None:
+            config.feature_cache_root = feature_cache_root
+        if source_manifest_hash is not None:
+            config.source_manifest_hash = source_manifest_hash
 
         self._validate_config(config)
 

@@ -85,10 +85,17 @@ class LightGBMSingleLabelGenerator:
         frame = raw.reset_index().rename(columns={"datetime": "trade_date"})
         frame = frame.loc[:, ~frame.columns.duplicated()]
         frame["trade_date"] = frame["trade_date"].astype(str).str[:10]
+        # qlib returns "instrument" column; cache internally uses "ts_code"
+        has_instrument = "instrument" in frame.columns and "ts_code" not in frame.columns
 
         # ── Feature cache path (opt-in) ──
         if self.use_feature_cache and self.feature_list_id:
             from qsys.feature.cache_loader import load_feature_matrix_with_cache
+
+            # Adapt: cache expects ts_code, qlib returns instrument
+            cache_frame = frame.copy()
+            if has_instrument:
+                cache_frame = cache_frame.rename(columns={"instrument": "ts_code"})
 
             log.info(
                 "Feature cache ENABLED for generator '%s' "
@@ -96,7 +103,7 @@ class LightGBMSingleLabelGenerator:
                 self.label_id, self.feature_list_id, self.materialize_on_miss,
             )
             feature_df = load_feature_matrix_with_cache(
-                frame,
+                cache_frame,
                 feature_set_id=self.feature_list_id,
                 date_start=start,
                 date_end=end,
@@ -106,11 +113,25 @@ class LightGBMSingleLabelGenerator:
                 use_feature_cache=True,
                 materialize_on_miss=self.materialize_on_miss,
             )
+            # Adapt back: training code expects instrument column
+            if has_instrument:
+                feature_df = feature_df.rename(columns={"ts_code": "instrument"})
+
+            # Filter clean_features to only what's available in cache result
+            available = [f for f in clean if f in feature_df.columns]
+            if len(available) < len(clean):
+                log.warning(
+                    "Cache result missing some features: %d/%d. "
+                    "Missing: %s",
+                    len(available), len(clean),
+                    [f for f in clean if f not in feature_df.columns],
+                )
             log.info(
-                "Feature cache result: %d rows x %d cols",
-                len(feature_df), len(feature_df.columns),
+                "Feature cache result: %d rows x %d cols (%d features)",
+                len(feature_df), len(feature_df.columns), len(available),
             )
-            return feature_df, clean
+            self._clean_features = available
+            return feature_df, available
 
         # ── Existing qlib path (default) ──
         return frame, clean
