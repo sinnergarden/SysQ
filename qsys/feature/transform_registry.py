@@ -206,6 +206,9 @@ for _tid, _wrapper, _flag in _REGISTRY_ENTRIES:
     )
     _REGISTRY[_tid] = _spec
 
+# Alias for inventory CSV name compatibility
+_REGISTRY["build_v3a_v3b_interaction_features"] = _REGISTRY.get("build_v3b_interaction_features")
+
 TRANSFORM_IDS: tuple[str, ...] = tuple(_REGISTRY.keys())
 
 
