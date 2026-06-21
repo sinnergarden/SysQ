@@ -102,6 +102,12 @@ class RollingResearchConfig:
     # ── Feature list reference ─────────────────────────────────────────
     feature_list_id: str | None = None
 
+    # ── Feature cache options (opt-in) ──────────────────────────────────
+    use_feature_cache: bool = False
+    materialize_on_miss: bool = False
+    feature_cache_root: str = "data/feature_cache"
+    source_manifest_hash: str = ""
+
     # ── v2 signal combinations ──────────────────────────────────────────
     signal_combinations: list[dict[str, Any]] = field(default_factory=list)
     # each combination: combine_id, type, inputs
@@ -144,6 +150,10 @@ class RollingResearchConfig:
             transforms=transforms,
             strategies=strategies,
             signal_combinations=signal_combinations,
+            use_feature_cache=payload.get("use_feature_cache", False),
+            materialize_on_miss=payload.get("materialize_on_miss", False),
+            feature_cache_root=payload.get("feature_cache_root", "data/feature_cache"),
+            source_manifest_hash=payload.get("source_manifest_hash", ""),
         )
 
 
@@ -212,7 +222,15 @@ def expand_multi_label_generators(generators: list[dict]) -> list[dict]:
 # ── Generator factory ──────────────────────────────────────────────────
 
 
-def _create_generator_from_config(gen_config: dict, feature_list_id: str | None = None) -> RollingSignalGenerator:
+def _create_generator_from_config(
+    gen_config: dict,
+    feature_list_id: str | None = None,
+    *,
+    use_feature_cache: bool = False,
+    materialize_on_miss: bool = False,
+    feature_cache_root: str = "data/feature_cache",
+    source_manifest_hash: str = "",
+) -> RollingSignalGenerator:
     """Create a generator instance from a config dict.
 
     Supported types:
@@ -266,6 +284,10 @@ def _create_generator_from_config(gen_config: dict, feature_list_id: str | None 
             n_estimators=params.get("n_estimators", 200),
             feature_list_id=feature_list_id or params.get("feature_list_id"),
             lgb_params=params.get("lgb_params"),
+            use_feature_cache=use_feature_cache,
+            materialize_on_miss=materialize_on_miss,
+            feature_cache_root=feature_cache_root,
+            source_manifest_hash=source_manifest_hash,
         )
     raise ValueError(f"Unknown generator type: {gen_type!r}")
 

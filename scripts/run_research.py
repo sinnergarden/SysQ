@@ -16,9 +16,25 @@ def main():
     p.add_argument("--config", required=True)
     p.add_argument("--overwrite-signal", action="store_true")
     p.add_argument("--overwrite-eval", action="store_true")
+    p.add_argument("--use-feature-cache", action="store_true", default=None,
+                    help="Opt-in: read feature matrix from cache (overrides YAML)")
+    p.add_argument("--materialize-on-miss", action="store_true", default=None,
+                    help="Auto-materialize cache on miss")
+    p.add_argument("--feature-cache-root", default=None,
+                    help="Feature cache root directory")
+    p.add_argument("--source-manifest-hash", default=None,
+                    help="Source data version hash for cache key")
     args = p.parse_args()
     config = RollingResearchConfig.from_file(Path(args.config))
-    result = SignalResearchPipeline().run(config, overwrite_signal=args.overwrite_signal, overwrite_eval=args.overwrite_eval)
+    result = SignalResearchPipeline().run(
+        config,
+        overwrite_signal=args.overwrite_signal,
+        overwrite_eval=args.overwrite_eval,
+        use_feature_cache=args.use_feature_cache,
+        materialize_on_miss=args.materialize_on_miss,
+        feature_cache_root=args.feature_cache_root,
+        source_manifest_hash=args.source_manifest_hash,
+    )
     print(f"\nExperiment: {config.experiment_id}")
     for sr in result.signal_runs:
         print(f"  Signal: {sr.signal_id} / {sr.signal_run_id}")
