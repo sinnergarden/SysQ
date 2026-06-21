@@ -48,6 +48,7 @@ class LightGBMSingleLabelGenerator:
     universe: str = "csi300"
     n_estimators: int = 200
     lgb_params: dict | None = None
+    feature_list_id: str | None = None
     # ── Feature cache options (opt-in, default off) ─────────────────────
     use_feature_cache: bool = False
     materialize_on_miss: bool = False
@@ -117,21 +118,22 @@ class LightGBMSingleLabelGenerator:
             if has_instrument:
                 feature_df = feature_df.rename(columns={"ts_code": "instrument"})
 
-            # Filter clean_features to only what's available in cache result
-            available = [f for f in clean if f in feature_df.columns]
-            if len(available) < len(clean):
-                log.warning(
-                    "Cache result missing some features: %d/%d. "
-                    "Missing: %s",
-                    len(available), len(clean),
-                    [f for f in clean if f not in feature_df.columns],
+            # Validate ALL clean features are present in cache result.
+            # Missing any feature = fail fast — no silent subset.
+            missing_features = [f for f in clean if f not in feature_df.columns]
+            if missing_features:
+                raise ValueError(
+                    f"Feature cache result missing {len(missing_features)}/"
+                    f"{len(clean)} clean features for generator '{self.label_id}': "
+                    f"{missing_features}. "
+                    f"Available: {list(feature_df.columns)}"
                 )
             log.info(
                 "Feature cache result: %d rows x %d cols (%d features)",
-                len(feature_df), len(feature_df.columns), len(available),
+                len(feature_df), len(feature_df.columns), len(clean),
             )
-            self._clean_features = available
-            return feature_df, available
+            self._clean_features = clean
+            return feature_df, clean
 
         # ── Existing qlib path (default) ──
         return frame, clean
