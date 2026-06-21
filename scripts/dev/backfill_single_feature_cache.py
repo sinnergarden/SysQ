@@ -61,7 +61,7 @@ def main(feature_id, source_panel, source_manifest_hash,
         date_end=date_end,
         source_manifest_hash=source_manifest_hash,
         compute_fn_hash=spec.compute_fn_hash,
-        pit_policy=spec.pit_policy or "",
+        pit_policy="rolling_past",
     )
     ck = compute_feature_cache_key(fk)
 
@@ -72,7 +72,7 @@ def main(feature_id, source_panel, source_manifest_hash,
         "universe": universe,
         "date_start": date_start,
         "date_end": date_end,
-        "pit_policy": spec.pit_policy or "",
+        "pit_policy": "rolling_past",
     }
     path = store.write_feature(feature_id, result, cache_key=ck, metadata=meta, overwrite=overwrite)
     click.echo(f"✅ Written: {path}")

@@ -43,7 +43,10 @@ import pandas as pd
 
 @dataclass(frozen=True)
 class FeatureCacheKey:
-    """Deterministic key components for a single-feature cache entry."""
+    """Deterministic key components for a single-feature cache entry.
+
+    All fields are included in the SHA-256 hash via ``compute_feature_cache_key()``.
+    """
 
     feature_id: str
     universe: str | None = None
@@ -51,7 +54,7 @@ class FeatureCacheKey:
     date_end: str | None = None
     source_manifest_hash: str = ""
     compute_fn_hash: str = ""
-    pit_policy: str | None = None
+    pit_policy: str = ""
     frequency: str = "daily"
 
 

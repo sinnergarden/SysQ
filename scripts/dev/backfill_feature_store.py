@@ -84,6 +84,7 @@ def main(feature_set, source_panel, source_manifest_hash,
             date_end=date_end,
             source_manifest_hash=source_manifest_hash,
             compute_fn_hash=_PHASE1_HASH,
+            pit_policy="rolling_past",
         )
         ck = compute_feature_cache_key(fk)
 
@@ -108,6 +109,14 @@ def main(feature_set, source_panel, source_manifest_hash,
         sys.exit(1)
 
     # Phase 2: batch compute all missing features at once
+    if missing_ids and not compute_missing:
+        click.echo(
+            f"❌ {len(missing_ids)} features not cached and --compute-missing not set. "
+            f"Missing: {missing_ids[:5]}...",
+            err=True,
+        )
+        sys.exit(1)
+
     if missing_ids:
         click.echo(f"Batch computing {len(missing_ids)} features ({len(cached_ids)} cached)...")
         try:
@@ -125,6 +134,7 @@ def main(feature_set, source_panel, source_manifest_hash,
                     date_end=date_end,
                     source_manifest_hash=source_manifest_hash,
                     compute_fn_hash=_PHASE1_HASH,
+                    pit_policy="rolling_past",
                 )
                 ck = compute_feature_cache_key(fk)
                 if fid not in batch_result.columns:
