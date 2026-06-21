@@ -80,8 +80,6 @@ def main(feature_set, source_panel, source_manifest_hash,
         fk = FeatureCacheKey(
             feature_id=fid,
             universe=universe,
-            date_start=date_start,
-            date_end=date_end,
             source_manifest_hash=source_manifest_hash,
             compute_fn_hash=_PHASE1_HASH,
             pit_policy="rolling_past",
@@ -101,6 +99,13 @@ def main(feature_set, source_panel, source_manifest_hash,
                     click.echo(f"❌ {fid}: invalid existing cache — set --overwrite to replace")
                     fail += 1
                     continue
+
+        # Skip qlib expressions ($prefix or function calls) — they are
+        # NOT produced by the builder but already present in raw panel
+        if fid.startswith("$") or "(" in fid or ")" in fid or "/" in fid:
+            click.echo(f"  ⏭️  {fid}: qlib expression (skipped)")
+            ok += 1
+            continue
 
         missing_ids.append(fid)
 
@@ -130,18 +135,21 @@ def main(feature_set, source_panel, source_manifest_hash,
                 fk = FeatureCacheKey(
                     feature_id=fid,
                     universe=universe,
-                    date_start=date_start,
-                    date_end=date_end,
                     source_manifest_hash=source_manifest_hash,
                     compute_fn_hash=_PHASE1_HASH,
                     pit_policy="rolling_past",
                 )
                 ck = compute_feature_cache_key(fk)
                 if fid not in batch_result.columns:
-                    click.echo(f"❌ {fid}: not in batch result")
-                    fail += 1
-                    continue
-                df_part = batch_result[["trade_date", "ts_code", fid]]
+                    # Check if it's a raw field already in the panel
+                    if fid in raw.columns:
+                        df_part = raw[["trade_date", "ts_code", fid]].copy()
+                        click.echo(f"  ⏭️  {fid}: raw field (read from panel)")
+                    else:
+                        click.echo(f"  ⚠️  {fid}: not produced by builder (skipped)")
+                        continue
+                else:
+                    df_part = batch_result[["trade_date", "ts_code", fid]]
                 store.write_feature(fid, df_part, cache_key=ck, metadata=meta, overwrite=overwrite)
                 ok += 1
             except Exception as e:

@@ -30,6 +30,24 @@ from qsys.feature.resolver_v2 import resolve_feature_set, discover_feature_sets
 from qsys.utils.logger import log
 
 
+
+def _build_cache_key(
+    feature_id: str,
+    *,
+    universe: str | None = None,
+    source_manifest_hash: str = "",
+) -> tuple[FeatureCacheKey, str]:
+    """Build a unified FeatureCacheKey + its computed key string."""
+    fk = FeatureCacheKey(
+        feature_id=feature_id,
+        universe=universe,
+        source_manifest_hash=source_manifest_hash,
+        compute_fn_hash=_PHASE1_HASH,
+        pit_policy="rolling_past",
+    )
+    return fk, compute_feature_cache_key(fk)
+
+
 def build_matrix_from_feature_store(
     raw_panel: pd.DataFrame,
     *,
@@ -97,21 +115,15 @@ def build_matrix_from_feature_store(
     uncacheable: list[str] = []
 
     for fid in feature_ids:
-        fk = FeatureCacheKey(
-            feature_id=fid,
-            universe=universe,
-            date_start=date_start,
-            date_end=date_end,
-            source_manifest_hash=source_manifest_hash,
-            compute_fn_hash=_PHASE1_HASH,
-        )
-        ck = compute_feature_cache_key(fk)
+        fk, ck = _build_cache_key(fid, universe=universe, source_manifest_hash=source_manifest_hash)
 
         if store.exists(fid, ck):
             df = store.read_feature(
                 fid,
                 expected_cache_key=ck,
                 strict_source_hash=source_manifest_hash,
+                date_start=date_start,
+                date_end=date_end,
             )
             cached[fid] = df[["trade_date", "ts_code", fid]]
             continue
@@ -150,15 +162,7 @@ def build_matrix_from_feature_store(
                     f"Phase1 builder did not produce '{fid}' during batch compute. "
                     f"Available: {list(batch_result.columns)}"
                 )
-            fk = FeatureCacheKey(
-                feature_id=fid,
-                universe=universe,
-                date_start=date_start,
-                date_end=date_end,
-                source_manifest_hash=source_manifest_hash,
-                compute_fn_hash=_PHASE1_HASH,
-            )
-            ck = compute_feature_cache_key(fk)
+            fk, ck = _build_cache_key(fid, universe=universe, source_manifest_hash=source_manifest_hash)
             df_part = batch_result[["trade_date", "ts_code", fid]]
             store.write_feature(
                 fid,
@@ -177,18 +181,37 @@ def build_matrix_from_feature_store(
     elif missing_spec and not compute_missing:
         missing.extend(missing_spec)
 
-    # 5. Compute uncacheable (inline, no cache write)
+    # 5. Handle uncacheable — qlib raw fields ($ prefix) read from panel
     if uncacheable:
-        log.info(
-            "Computing %d uncacheable features inline (no cache)...",
-            len(uncacheable),
-        )
-        clean_panel = raw_panel.drop_duplicates(subset=["trade_date", "ts_code"]).copy()
-        batch_result = compute_phase1_batch(clean_panel, uncacheable)
+        log.info("Handling %d uncacheable features...", len(uncacheable))
+        raw_panel_clean = raw_panel.copy()
+        rename_map = {c: c[1:] for c in raw_panel_clean.columns if c.startswith("$")}
+        if rename_map:
+            raw_panel_clean = raw_panel_clean.rename(columns=rename_map)
+
         for fid in uncacheable:
+            if fid.startswith("$"):
+                clean_name = fid[1:]
+                if clean_name in raw_panel_clean.columns:
+                    df = raw_panel_clean[["trade_date", "ts_code", clean_name]].drop_duplicates(
+                        subset=["trade_date", "ts_code"]
+                    ).rename(columns={clean_name: fid})
+                    cached[fid] = df
+                    log.info("  Raw field (from panel): %s (%d rows)", fid, len(df))
+                    continue
+                if fid in raw_panel.columns:
+                    df = raw_panel[[
+                        "trade_date", "ts_code", fid
+                    ]].drop_duplicates(subset=["trade_date", "ts_code"]).copy()
+                    cached[fid] = df
+                    log.info("  Raw field (from panel, $ name): %s (%d rows)", fid, len(df))
+                    continue
+            # Builder must produce it
+            clean_panel = raw_panel.drop_duplicates(subset=["trade_date", "ts_code"]).copy()
+            batch_result = compute_phase1_batch(clean_panel, [fid])
             if fid not in batch_result.columns:
                 raise ValueError(
-                    f"Phase1 builder did not produce uncacheable feature '{fid}'. "
+                    f"Uncacheable feature '{fid}' has no compute spec and is not a raw field. "
                     f"Available: {list(batch_result.columns)}"
                 )
             cached[fid] = batch_result[["trade_date", "ts_code", fid]]

@@ -17,7 +17,10 @@ def attach_industry_info(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_industry_context_features(df: pd.DataFrame) -> pd.DataFrame:
-    out = attach_industry_info(df)
+    out = df.copy()
+    # If the panel already has industry (from qlib adapter), skip the SQLite merge
+    if "industry" not in out.columns:
+        out = attach_industry_info(out)
     out['ret_1d_ind_tmp'] = out.groupby('ts_code')['close'].pct_change(1)
     out['ret_3d_ind_tmp'] = out.groupby('ts_code')['close'].pct_change(3)
     out['ret_5d_ind_tmp'] = out.groupby('ts_code')['close'].pct_change(5)
