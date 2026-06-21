@@ -210,35 +210,19 @@ class FeatureStore:
         if date_end is not None:
             df = df[df["trade_date"] <= date_end]
 
-        # 9. Coverage check: warn if the filtered result covers < 50% of
-        #    the cache's stored date range.  This prevents a short-window
-        #    cache (e.g. 2023-2024) from being silently reused by a broader
-        #    request (e.g. 2020-2025) that would mostly be empty.
+        # 9. Coverage check: ensure the requested window fits in the cache.
         stored_start = meta.get("date_start")
-        stored_end = meta.get("date_end")
-        if stored_start and stored_end and date_start and date_end:
-            try:
-                request_days = (pd.Timestamp(date_end) - pd.Timestamp(date_start)).days
-                stored_days = (pd.Timestamp(stored_end) - pd.Timestamp(stored_start)).days
-                if stored_days > 0 and request_days > stored_days * 0.5:
-                    actual_days = df["trade_date"].nunique()
-                    expected = df["trade_date"].between(date_start, date_end).sum()
-                    if expected > 0 and actual_days / expected < 0.5:
-                        log.warning(
-                            "Feature '%s': cache covers %s–%s (%dd) but request is "
-                            "%s–%s (%dd).  Only %d/%d rows returned. "
-                            "Consider re-backfilling with a wider range.",
-                            feature_id, stored_start, stored_end, stored_days,
-                            date_start, date_end, request_days,
-                            actual_days, expected,
-                        )
-            except (ValueError, TypeError):
-                pass
-
+        if stored_start and date_start is not None:
+            req_start = pd.Timestamp(date_start)
+            cache_start = pd.Timestamp(stored_start)
+            if req_start < cache_start:
+                raise ValueError(
+                    f"Feature '{feature_id}': cache starts at {cache_start.date()} "
+                    f"but request starts at {req_start.date()}. "
+                    f"Re-backfill with an earlier date_start to cover the "
+                    f"requested window."
+                )
         return df
-
-    # ── Write ──
-
     def write_feature(
         self,
         feature_id: str,

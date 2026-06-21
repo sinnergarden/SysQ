@@ -115,7 +115,7 @@ class LightGBMSingleLabelGenerator:
                 universe=self.universe,
                 source_manifest_hash=self.source_manifest_hash,
                 feature_cache_root=self.feature_cache_root,
-                compute_missing=False,
+                compute_missing=self.materialize_on_miss,
                 allow_uncacheable=True,
                 join_policy="inner",
             )

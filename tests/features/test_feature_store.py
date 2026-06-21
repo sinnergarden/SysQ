@@ -506,20 +506,21 @@ class TestMatrixBuilderRawFields(unittest.TestCase):
         self.assertIn("$pe", matrix.columns)
         self.assertIn("close_to_open_gap_1d", matrix.columns)
 
-    def test_read_feature_coverage_warning(self):
-        """read_feature with date_start outside cache range warns."""
-        import logging
-        logging.basicConfig(level=logging.DEBUG)
+    def test_read_feature_coverage_fail_fast(self):
+        """read_feature with date_start before cache stored_start fails."""
         from qsys.feature.feature_store import FeatureStore
         store = FeatureStore(root=str(self.tmpdir / "cov_test"))
         df = pd.DataFrame({"trade_date": pd.date_range("2025-01-01", periods=10, freq="B"),
                             "ts_code": ["A"] * 10, "cov_feat": range(10)})
         store.write_feature("cov_feat", df, cache_key="k1",
                             metadata={"date_start": "2025-01-01", "date_end": "2025-01-15"})
-        # Read with wider range — should warn but still work
+        with self.assertRaises(ValueError):
+            store.read_feature("cov_feat", expected_cache_key="k1",
+                                date_start="2024-01-01", date_end="2025-01-10")
+        # Read with same start — should work (date_start == stored_start)
         loaded = store.read_feature("cov_feat", expected_cache_key="k1",
-                                     date_start="2025-01-01", date_end="2026-01-01")
-        self.assertLessEqual(len(loaded), 10)
+                                     date_start="2025-01-01")
+        self.assertGreater(len(loaded), 0)
 
 if __name__ == "__main__":
     unittest.main()
