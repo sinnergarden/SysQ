@@ -69,7 +69,7 @@ def _load_income() -> pd.DataFrame:
     if not path.exists():
         raise FileNotFoundError(f"Income data not found at {path}")
     df = pd.read_parquet(path)
-    df = df[df["report_type"] == 1].copy()
+    df = df[df["report_type"].astype(int) == 1].copy()
     df["ann_date"] = pd.to_datetime(df["ann_date"])
     df["end_date"] = pd.to_datetime(df["end_date"])
     return df.drop_duplicates(subset=["ts_code", "ann_date", "end_date"])
@@ -163,11 +163,19 @@ def _compute_quarterly_features(inc_raw: pd.DataFrame) -> pd.DataFrame:
     inc = inc.sort_values(["ts_code", "end_date"]).reset_index(drop=True)
 
     # ── Convert cumulative → single quarter ──
+    # Validate: shift(1) prev must be same fiscal year and preceding quarter.
+    # If the gap between end_dates > 125 days (~4 months), the 'prev' row
+    # is not the immediately preceding quarter → output NaN.
+    gap_days = inc.groupby("ts_code")["end_date"].diff().dt.days
+
     for col in ["revenue", "n_income", "oper_cost"]:
         if col not in inc.columns:
             inc[col] = np.nan
         prev_cum = inc.groupby("ts_code")[col].shift(1)
-        inc[f"{col}_prev_cum"] = prev_cum
+        same_year = inc.groupby("ts_code")["end_year"].shift(1) == inc["end_year"]
+        consecutive_quarter = gap_days.fillna(0).abs() <= 125  # ~4 months
+        valid_prev = same_year & consecutive_quarter
+        inc[f"{col}_prev_cum"] = prev_cum.where(valid_prev, np.nan)
         inc[f"{col}_single_q"] = inc.apply(
             lambda r: _single_q_value(r[col], r[f"{col}_prev_cum"], r["end_q"]),
             axis=1,
@@ -291,28 +299,24 @@ def build_growth_confirmation_features(df: pd.DataFrame) -> pd.DataFrame:
     # 3. Breakout features (from daily close, no external dependencies)
     # ═══════════════════════════════════════════════════════════════
     if "close" in out.columns:
-        close_grp = out.groupby("ts_code")["close"]
-        # 252-day high, shifted so today's close competes against past 252,
-        # and we DON'T compare close against the same bar it belongs to
-        high_252d = close_grp.transform(lambda s: s.rolling(252, min_periods=60).max())
+        # 252-day high, shifted(1) inside groupby transform so it's per-ts_code.
+        out["breakout_252d_high"] = out.groupby("ts_code")["close"].transform(
+            lambda s: (s >= s.rolling(252, min_periods=60).max().shift(1)).astype(float)
+        )
 
-        # shift(1) so that today's close is compared to the max of PREVIOUS 252
-        out["breakout_252d_high"] = (
-            out["close"] >= high_252d.shift(1)
-        ).astype(float)
+        # days_since_252d_high: per-ts_code, count trading days since last 252d high.
+        # Before the first ever 252d high for that stock → 999.
+        def _days_since_high(s: pd.Series) -> pd.Series:
+            """Within one ts_code, count days since last 252d high (before first=999)."""
+            cum_high = s.cumsum()
+            never_high = ~(cum_high > 0)
+            groups = cum_high.diff().ne(0).cumsum()
+            days = s.groupby(groups).cumcount()
+            return days.where(~never_high, 999)
 
-        # days_since_252d_high: per-ts_code, count days since last breakout
-        # Before first ever 252d high → 999
         out["days_since_252d_high"] = out.groupby("ts_code")["breakout_252d_high"].transform(
-            lambda s: (
-                s.cumsum() > 0
-            ).astype(int).groupby(
-                s.cumsum().diff().ne(0).cumsum()
-            ).cumcount()
-        )
-        out["days_since_252d_high"] = (
-            out["days_since_252d_high"].fillna(999).clip(lower=0).astype(int)
-        )
+            _days_since_high
+        ).fillna(999).clip(lower=0).astype(int)
     else:
         out["breakout_252d_high"] = np.nan
         out["days_since_252d_high"] = np.nan
