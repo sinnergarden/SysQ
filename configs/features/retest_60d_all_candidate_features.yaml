@@ -144,3 +144,7 @@ features:
 - has_forecast
 - breakout_252d_high
 - days_since_252d_high
+- ttm_revenue_yoy
+- single_q_revenue_yoy
+- is_profitable_ttm
+- gross_margin_delta_yoy
