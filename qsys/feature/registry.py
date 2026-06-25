@@ -7,9 +7,16 @@ FEATURE_GROUPS = {
     "growth_confirmation_v0": {
         "enabled_by": "enable_growth_confirmation_features",
         "features": [
+            # forecast
             "forecast_type_score",
             "forecast_stale_days",
             "has_forecast",
+            # financial (income-based)
+            "ttm_revenue_yoy",
+            "single_q_revenue_yoy",
+            "is_profitable_ttm",
+            "gross_margin_delta_yoy",
+            # breakout
             "breakout_252d_high",
             "days_since_252d_high",
         ],
