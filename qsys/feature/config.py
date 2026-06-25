@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 RESEARCH_FEATURE_FLAGS = {
+    "enable_growth_confirmation_features": True,
     "enable_microstructure_features": True,
     "enable_liquidity_features": True,
     "enable_tradability_features": True,

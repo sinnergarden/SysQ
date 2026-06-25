@@ -24,6 +24,8 @@ def main():
                     help="Feature cache root directory")
     p.add_argument("--source-manifest-hash", default=None,
                     help="Source data version hash for cache key")
+    p.add_argument("--write-through", action="store_true", default=None,
+                    help="Write cache during first run (cold -> warm)")
     args = p.parse_args()
     config = RollingResearchConfig.from_file(Path(args.config))
     result = SignalResearchPipeline().run(
@@ -32,6 +34,7 @@ def main():
         overwrite_eval=args.overwrite_eval,
         use_feature_cache=args.use_feature_cache,
         materialize_on_miss=args.materialize_on_miss,
+        write_through=args.write_through,
         feature_cache_root=args.feature_cache_root,
         source_manifest_hash=args.source_manifest_hash,
     )

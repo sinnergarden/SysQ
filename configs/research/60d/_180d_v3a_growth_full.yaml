@@ -1,0 +1,25 @@
+calendar:
+  end_date: '2025-12-31'
+  start_date: '2020-01-01'
+  step_days: 20
+  train_window_days: 504
+experiment_id: 180d_v3a_growth_full
+feature_list_id: v3a_plus_liquidity_plus_growth
+generators:
+- generator_id: v3a_growth_180d
+  params:
+    feature_list_id: v3a_plus_liquidity_plus_growth
+    labels:
+    - label_id: fwd_ret_180d_raw
+    n_estimators: 300
+    universe: csi800
+  type: multi_label_lightgbm
+labels:
+- label_id: fwd_ret_180d_raw
+  label_maturity_lag_trading_days: 180
+signal:
+  score_column: score
+  signal_id: v3a_growth_180d
+signal_transforms:
+- transform_id: daily_zscore
+  type: daily_zscore

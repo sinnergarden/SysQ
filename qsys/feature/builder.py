@@ -11,6 +11,7 @@ from qsys.feature.groups.regime import build_regime_features
 from qsys.feature.groups.industry_context import build_industry_context_features
 from qsys.feature.groups.index_context import attach_index_context
 from qsys.feature.groups.fundamental_context import build_fundamental_context_features
+from qsys.feature.groups.growth_confirmation_v0 import build_growth_confirmation_features
 from qsys.feature.transforms import apply_cross_sectional_standardization
 
 
@@ -84,6 +85,11 @@ def build_phase1_features(df: pd.DataFrame, flags: dict | None = None) -> pd.Dat
     if flags.get("enable_industry_momentum_features", False):
         from qsys.feature.groups.industry_momentum_features import build_industry_momentum_features
         out = build_industry_momentum_features(out)
+
+
+    if flags.get("enable_growth_confirmation_features", False):
+        out = build_growth_confirmation_features(out)
+
 
     standardize_cols = [
         c for c in [

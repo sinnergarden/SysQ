@@ -79,6 +79,7 @@ class SignalResearchPipeline:
         materialize_on_miss: bool | None = None,
         feature_cache_root: str | None = None,
         source_manifest_hash: str | None = None,
+        write_through: bool | None = None,
     ) -> SignalResearchResult:
         """Execute signal research pipeline.
 
@@ -109,6 +110,8 @@ class SignalResearchPipeline:
             config.feature_cache_root = feature_cache_root
         if source_manifest_hash is not None:
             config.source_manifest_hash = source_manifest_hash
+        if write_through is not None:
+            config.write_through = write_through
 
         self._validate_config(config)
 
@@ -302,7 +305,7 @@ class SignalResearchPipeline:
             gen = signal_generator if explicit_generator else _create_generator_from_config(
                 gen_cfg, feature_list_id=config.feature_list_id,
                 use_feature_cache=config.use_feature_cache,
-                materialize_on_miss=config.materialize_on_miss,
+                write_through=config.write_through,
                 feature_cache_root=config.feature_cache_root,
                 source_manifest_hash=config.source_manifest_hash,
             )

@@ -282,6 +282,40 @@ def build_all_specs() -> list[FeatureSpec]:
         ),
     ]
     specs.extend(derived_specs)
+    # ── growth confirmation v0 ──
+    growth_specs = [
+        FeatureSpec(feature_id="forecast_type_score", name="forecast_type_score",
+            group="growth_confirmation_v0", kind="derived",
+            dependencies=("ts_code",), pit_type="point_in_time",
+            compute_fn="build_growth_confirmation_features",
+            cache_scope="panel", status="active",
+            description="Forecast type mapped to score"),
+        FeatureSpec(feature_id="forecast_stale_days", name="forecast_stale_days",
+            group="growth_confirmation_v0", kind="derived",
+            dependencies=("ts_code",), pit_type="point_in_time",
+            compute_fn="build_growth_confirmation_features",
+            cache_scope="none", status="active",
+            description="Days since last forecast announcement"),
+        FeatureSpec(feature_id="has_forecast", name="has_forecast",
+            group="growth_confirmation_v0", kind="derived",
+            dependencies=("ts_code",), pit_type="point_in_time",
+            compute_fn="build_growth_confirmation_features",
+            cache_scope="none", status="active",
+            description="Binary: stock has at least one forecast on record"),
+        FeatureSpec(feature_id="breakout_252d_high", name="breakout_252d_high",
+            group="growth_confirmation_v0", kind="derived",
+            dependencies=("close",), pit_type="rolling_past",
+            compute_fn="build_growth_confirmation_features",
+            cache_scope="none", status="active",
+            description="Binary: close >= previous 252-day high (shift(1))"),
+        FeatureSpec(feature_id="days_since_252d_high", name="days_since_252d_high",
+            group="growth_confirmation_v0", kind="derived",
+            dependencies=("close",), pit_type="rolling_past",
+            compute_fn="build_growth_confirmation_features",
+            cache_scope="none", status="active",
+            description="Trading days since last 252-day high"),
+    ]
+    specs.extend(growth_specs)
     return specs
 
 
