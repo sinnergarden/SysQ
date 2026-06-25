@@ -64,7 +64,11 @@ def _load_forecast() -> pd.DataFrame:
 
 
 def _load_income() -> pd.DataFrame:
-    """Load income data, keep only quarterly reports (report_type=1)."""
+    """Load income data, keep only quarterly reports (report_type=1).
+
+    PIT dedup: if multiple records for same (ts_code, end_date), keep
+    the one with the latest ``ann_date`` (most recently revised).
+    """
     path = TUSHARE_DIR / "income.parquet"
     if not path.exists():
         raise FileNotFoundError(f"Income data not found at {path}")
@@ -72,7 +76,12 @@ def _load_income() -> pd.DataFrame:
     df = df[df["report_type"].astype(int) == 1].copy()
     df["ann_date"] = pd.to_datetime(df["ann_date"])
     df["end_date"] = pd.to_datetime(df["end_date"])
-    return df.drop_duplicates(subset=["ts_code", "ann_date", "end_date"])
+
+    # PIT dedup: keep latest ann_date per (ts_code, end_date)
+    df = df.sort_values(["ts_code", "end_date", "ann_date"])
+    df = df.drop_duplicates(subset=["ts_code", "end_date"], keep="last")
+
+    return df
 
 
 def _build_daily_anchor(universe: list[str] | None = None,
