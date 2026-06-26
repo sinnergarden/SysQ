@@ -203,19 +203,26 @@ print("EXPERIMENT 2: TopK Quality (2024/2025)")
 print("=" * 60)
 
 def topk_stats(sub: pd.DataFrame, k: int, label_col: str = "label_value") -> dict:
-    """Score-sorted top-k stats."""
-    sub = sub.sort_values("score", ascending=False).head(k)
-    vals = sub[label_col]
+    """Per-date TopK then aggregate — 不能整年/整月混排后 head(k).
+
+    每个 prediction date 分别取 TopK，再聚合 label_value 统计。
+    """
+    dates = sorted(sub["trade_date"].unique())
+    all_vals = []
+    for dt in dates:
+        day_slice = sub[sub["trade_date"] == dt].sort_values("score", ascending=False).head(k)
+        all_vals.extend(day_slice[label_col].tolist())
+    vals = pd.Series(all_vals).dropna()
     return {
-        "mean_ret": vals.mean(),
-        "median_ret": vals.median(),
-        "hit_rate": (vals > 0).mean(),
-        "bad_rate": (vals < 0).mean(),
-        "good_rate_30": (vals > 0.3).mean(),
-        "big_win_rate_60": (vals > 0.6).mean(),
-        "worst_ret": vals.min(),
-        "best_ret": vals.max(),
-        "n": len(sub),
+        "mean_ret": vals.mean() if len(vals) > 0 else np.nan,
+        "median_ret": vals.median() if len(vals) > 0 else np.nan,
+        "hit_rate": (vals > 0).mean() if len(vals) > 0 else np.nan,
+        "bad_rate": (vals < 0).mean() if len(vals) > 0 else np.nan,
+        "good_rate_30": (vals > 0.3).mean() if len(vals) > 0 else np.nan,
+        "big_win_rate_60": (vals > 0.6).mean() if len(vals) > 0 else np.nan,
+        "worst_ret": vals.min() if len(vals) > 0 else np.nan,
+        "best_ret": vals.max() if len(vals) > 0 else np.nan,
+        "n": len(vals),
         "top_industry": sub["industry"].value_counts().index[0] if "industry" in sub.columns and sub["industry"].notna().any() else "",
     }
 
