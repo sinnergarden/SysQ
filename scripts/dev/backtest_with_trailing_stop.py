@@ -18,11 +18,17 @@ Key behavioural rules (vs standard weekly rebalance):
 Fee config: slippage=0.001, commission=0.0003, NO stamp duty (same as baseline).
 
 Usage:
-    python scripts/dev/backtest_with_trailing_stop.py
+    python scripts/dev/backtest_with_trailing_stop.py                                    # TOP20 60d financial
+    python scripts/dev/backtest_with_trailing_stop.py --top-n 5                          # TOP5  60d financial
+    python scripts/dev/backtest_with_trailing_stop.py --top-n 5 --blend-w180 0.7         # TOP5  30/70 blend
+    python scripts/dev/backtest_with_trailing_stop.py --blend-w180 0.5 --blend-w60 0.5   # TOP20 50/50 blend
+
+Output:
+    artifacts/diagnostics/60d_backtest/backtest_{top_n}_{desc}.csv
 """
 from __future__ import annotations
 
-import sys
+import sys, argparse
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -32,34 +38,79 @@ from qsys.signal.store import SignalStore
 from qlib.data import D
 from qsys.data.adapter import QlibAdapter
 
-# ── Config ──
+# ── CLI ──
+parser = argparse.ArgumentParser()
+parser.add_argument("--top-n", type=int, default=20)
+parser.add_argument("--blend-w60", type=float, default=1.0)
+parser.add_argument("--blend-w180", type=float, default=0.0)
+parser.add_argument("--signal-60d", default="rolling__60d_v3a_growth_financial__v3a_growth_financial_60d__fwd_ret_60d_raw__daily_zscore__2020-01-01_2025-12-31")
+parser.add_argument("--signal-180d", default="rolling__180d_v3a_growth_financial__v3a_growth_financial_180d__fwd_ret_180d_raw__daily_zscore__2020-01-01_2025-12-31")
+parser.add_argument("--start-date", default="2021-01-01")
+parser.add_argument("--end-date", default="2025-08-27")
+args = parser.parse_args()
+
 INITIAL_CAPITAL = 10_000_000
-TOP_N = 20
+TOP_N = args.top_n
 COMMISSION = 0.0003
 MIN_COMMISSION = 5.0
 SLIPPAGE = 0.001
 STAMP_DUTY = 0.0
 STOP_LOSS = 0.07
 TRAILING_STOP = 0.10
+W60 = args.blend_w60
+W180 = args.blend_w180
 
-SIGNAL_ID = "fwd_ret_60d_raw__daily_zscore"
-SIGNAL_RUN_ID = "rolling__60d_v3a_growth_financial__v3a_growth_financial_60d__fwd_ret_60d_raw__daily_zscore__2020-01-01_2025-12-31"
-START_DATE = "2021-01-01"
-END_DATE = "2025-08-27"
+SIGNAL_60D_RUN = args.signal_60d
+SIGNAL_180D_RUN = args.signal_180d
+START_DATE = args.start_date
+END_DATE = args.end_date
+
+SIGNAL_60D_ID = "fwd_ret_60d_raw__daily_zscore"
+SIGNAL_180D_ID = "fwd_ret_180d_raw__daily_zscore"
+
+DESC_PARTS = []
+if W60 > 0: DESC_PARTS.append(f"60d_{W60}")
+if W180 > 0: DESC_PARTS.append(f"180d_{W180}")
+DESC = "_".join(DESC_PARTS) if DESC_PARTS else "empty"
+OUT_CSV = f"backtest_top{TOP_N}_{DESC}.csv"
 
 OUT = Path("artifacts/diagnostics/60d_backtest")
 
 # ═══════════════════════════════════════════════════════════════════
-# 1. Load signal
+# 1. Load signal(s)
 # ═══════════════════════════════════════════════════════════════════
 QlibAdapter().init_qlib()
-print("Loading signal...")
-sig = SignalStore().load_signal_run(SIGNAL_ID, SIGNAL_RUN_ID)
-sig["ts_code"] = sig["instrument"]
-sig["trade_date"] = sig["trade_date"].astype(str).str[:10]
+print("Loading signal(s)...")
+
+sigs = {}
+if W60 > 0:
+    s = SignalStore().load_signal_run(SIGNAL_60D_ID, SIGNAL_60D_RUN)
+    s["ts_code"] = s["instrument"]; s["trade_date"] = s["trade_date"].astype(str).str[:10]
+    sigs["s60"] = s
+
+if W180 > 0:
+    s = SignalStore().load_signal_run(SIGNAL_180D_ID, SIGNAL_180D_RUN)
+    s["ts_code"] = s["instrument"]; s["trade_date"] = s["trade_date"].astype(str).str[:10]
+    sigs["s180"] = s
+
+# Merge signals
+sig = None
+for k, s in sigs.items():
+    s = s[["trade_date", "ts_code", "score"]].rename(columns={"score": k})
+    sig = s if sig is None else sig.merge(s, on=["trade_date", "ts_code"], how="inner")
+
+if sig is None:
+    raise ValueError("No signals loaded")
+
+# Weighted blend
+score_cols = [c for c in ["s60","s180"] if c in sig.columns]
+weights_map = {"s60": W60, "s180": W180}
+sig["score"] = 0.0
+for col in score_cols:
+    sig["score"] += weights_map[col] * sig[col]
 sig = sig[sig["trade_date"].between(START_DATE, END_DATE)].sort_values("trade_date").reset_index(drop=True)
 dates = sorted(sig["trade_date"].unique())
-print(f"  Signal: {len(sig)} rows, {len(dates)} dates")
+print(f"  Signal: {len(sig)} rows, {len(dates)} dates, blend={W60}x60d/{W180}x180d")
 
 # Per-date TopN lookup
 daily_top20 = {}
@@ -133,25 +184,23 @@ for idx, this_date in enumerate(dates):
         if n_current < TOP_N:
             slot_count = TOP_N - n_current
             sorted_scores = sig[sig["trade_date"] == this_date].sort_values("score", ascending=False)
-            buy_candidates = sorted_scores[~sorted_scores["ts_code"].isin(current_set)].head(slot_count)["ts_code"].tolist()
+            bcodes = sorted_scores[~sorted_scores["ts_code"].isin(current_set)].head(slot_count)["ts_code"].tolist()
 
-            if buy_candidates:
-                alloc = cash / len(buy_candidates)
-                for code in buy_candidates:
+            if bcodes:
+                alloc_per_stock = cash / len(bcodes)
+                for code in bcodes:
                     opx = open_map.get(code)
-                    if not opx or opx <= 0 or np.isnan(opx):
+                    if opx is None or np.isnan(opx) or opx <= 0:
                         continue
                     buy_px = opx * (1 + SLIPPAGE)
-                    qty = int(alloc / buy_px / 100) * 100
+                    qty = int(alloc_per_stock / buy_px / 100) * 100
+                    while qty > 0:
+                        total = buy_cost(buy_px, qty)
+                        if total <= cash:
+                            break
+                        qty -= 100
                     if qty <= 0:
                         continue
-                    total = buy_cost(buy_px, qty)
-                    if total > cash:
-                        if np.isnan(buy_px):
-                            continue
-                        qty = max(0, int((cash / buy_px / 100)) * 100)
-                        if qty <= 0: continue
-                        total = buy_cost(buy_px, qty)
                     cash -= total
                     portfolio[code] = Position(qty, buy_px)
 
@@ -211,7 +260,7 @@ rdf = pd.DataFrame(daily_log)
 tr = rdf.iloc[-1]["total_value"] / INITIAL_CAPITAL - 1
 
 print(f"\n{'=' * 60}")
-print(f"  Backtest: trailing stop + stop-loss")
+print(f"  Backtest: trailing stop + stop-loss (TOP{TOP_N}, {DESC})")
 print(f"  Signal: 60d +financial rc")
 print(f"  Period: {START_DATE} → {END_DATE} ({len(dates)} days)")
 print(f"{'=' * 60}")
@@ -229,5 +278,5 @@ print(f"  Baseline (no stop, standard backtest): 87.10%")
 print(f"  With trailing stop + stop-loss:         {tr:.2%}")
 
 OUT.mkdir(parents=True, exist_ok=True)
-rdf.to_csv(OUT / "backtest_trailing_stop.csv", index=False)
-print(f"\n  → {OUT}/backtest_trailing_stop.csv")
+rdf.to_csv(OUT / f"backtest_top{TOP_N}_{DESC}.csv", index=False)
+print(f"\n  → {OUT}/backtest_top{TOP_N}_{DESC}.csv")
