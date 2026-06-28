@@ -1,5 +1,5 @@
-description: 'Ablation: v3a_plus_liquidity_financial (4 income-based features)'
-feature_set_id: v3a_plus_liquidity_financial
+description: 'RESEARCH CANDIDATE (60d horizon) — 4 financial features on v3a+liq baseline. NOT production baseline.'
+feature_set_id: v3a_plus_liquidity_financial_rc
 features:
 - $roe
 - $grossprofit_margin

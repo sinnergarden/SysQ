@@ -7,14 +7,14 @@ calendar:
 signal:
   signal_id: v3a_growth_financial_180d
   score_column: score
-feature_list_id: v3a_plus_liquidity_financial
+feature_list_id: v3a_plus_liquidity_financial_rc
 generators:
   - generator_id: v3a_growth_financial_180d
     type: multi_label_lightgbm
     params:
       universe: csi800
       n_estimators: 300
-      feature_list_id: v3a_plus_liquidity_financial
+      feature_list_id: v3a_plus_liquidity_financial_rc
       labels:
         - label_id: fwd_ret_180d_raw
 signal_transforms:

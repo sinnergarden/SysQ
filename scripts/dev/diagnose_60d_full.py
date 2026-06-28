@@ -82,17 +82,6 @@ for name, rid in runs:
     print(f"  {'Year':>6s} {'OrigIC':>8s} {'OrigIR':>8s} {'WthnIC':>8s} {'WthnIR':>8s} {'AlocIC':>8s} {'AlocIR':>8s}")
     for y in ["2020","2021","2022","2023","2024","2025"]:
         line = f"  {y:>6s}"
-        for method in ["orig","within","alloc"]:
-            d = ic.get(method)
-            if d is not None:
-                yd = d[d.index.get_level_values("trade_date").str[:4]==y] if hasattr(d.index, 'get_level_values') else d[d.index.str[:4]==y]
-                # try simpler approach
-                yd2 = d.copy()
-                yd2["_y"] = yd2.index if isinstance(yd2.index, pd.Index) else yd2["trade_date"]
-                # Use the original df with year filter
-                pass
-
-        # Simpler: compute per year
         for method, label in [("orig","ic"),("within","ic"),("alloc","ic")]:
             d = ic.get(method)
             if d is not None and len(d)>0:
