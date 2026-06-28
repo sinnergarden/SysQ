@@ -112,54 +112,15 @@ last_trade_week = None
 daily_log = []
 
 for idx, this_date in enumerate(dates):
-    # Determine prev trading date
-    prev_idx = idx - 1 if idx > 0 else None
-    prev_date = dates[prev_idx] if prev_idx is not None else None
-
-    # Market data for today
     today_px = pf[pf["trade_date"] == this_date]
     close_map = dict(zip(today_px["ts_code"], today_px["$close"]))
     open_map  = dict(zip(today_px["ts_code"], today_px["$open"]))
 
-    # ── Open: apply pending cash from yesterday's stops ──
+    # ── (1) Open: make yesterday's stop cash available ──
     cash += pending_cash
     pending_cash = 0.0
 
-    # ── Update peaks for all positions (based on prev close or current open) ──
-    # Use open as reference for peak tracking (closer to when we'd know the PnL)
-    for code, pos in portfolio.items():
-        px = close_map.get(code)
-        if px and px > 0:
-            pos.peak = max(pos.peak, px)
-
-    # ── Check stops using close prices ──
-    # Sales happen at close; proceeds go to pending_cash (avail next day)
-    stop_sales = []
-    for code, pos in list(portfolio.items()):
-        px = close_map.get(code)
-        if not px or px <= 0:
-            continue
-        pnl = px / pos.cost - 1
-
-        if pnl < -STOP_LOSS:
-            # Stop-loss triggered
-            qty = pos.qty
-            sell_price = px * (1 - SLIPPAGE)
-            net_cash = sell_stock(code, sell_price, qty)
-            pending_cash += net_cash
-            stop_sales.append(code)
-        elif pnl > 0 and px < pos.peak * (1 - TRAILING_STOP):
-            # Trailing stop triggered
-            qty = pos.qty
-            sell_price = px * (1 - SLIPPAGE)
-            net_cash = sell_stock(code, sell_price, qty)
-            pending_cash += net_cash
-            stop_sales.append(code)
-
-    for code in stop_sales:
-        del portfolio[code]
-
-    # ── Weekly rebalance ──
+    # ── (2) Open: weekly rebalance — buy using open prices ──
     iso = pd.Timestamp(this_date).isocalendar()
     current_week = (iso[0], iso[1])
     is_rebalance = (current_week != last_trade_week)
@@ -169,9 +130,6 @@ for idx, this_date in enumerate(dates):
         current_set = set(portfolio.keys())
         n_current = len(current_set)
 
-        # Determine buy candidates: score-ranked stocks not yet held,
-        # up to (TOP_N - n_current) if n_current < TOP_N
-        # If n_current >= TOP_N, no new buys.
         if n_current < TOP_N:
             slot_count = TOP_N - n_current
             sorted_scores = sig[sig["trade_date"] == this_date].sort_values("score", ascending=False)
@@ -184,7 +142,7 @@ for idx, this_date in enumerate(dates):
                     if not opx or opx <= 0:
                         continue
                     buy_px = opx * (1 + SLIPPAGE)
-                    qty = int(alloc / buy_px / 100) * 100  # round to 100 shares
+                    qty = int(alloc / buy_px / 100) * 100
                     if qty <= 0:
                         continue
                     total = buy_cost(buy_px, qty)
@@ -197,14 +155,43 @@ for idx, this_date in enumerate(dates):
 
         last_trade_week = current_week
 
-    # ── Daily MTM ──
+    # ── (3) Close: MTM + update peaks ──
+    for code, pos in portfolio.items():
+        px = close_map.get(code)
+        if px and px > 0:
+            pos.peak = max(pos.peak, px)
+
+    # ── (4) Close: check stops, sell if triggered ──
+    stop_sales = []
+    for code, pos in list(portfolio.items()):
+        px = close_map.get(code)
+        if not px or px <= 0:
+            continue
+        pnl = px / pos.cost - 1
+
+        if pnl < -STOP_LOSS:
+            qty = pos.qty
+            sell_price = px * (1 - SLIPPAGE)
+            pending_cash += sell_stock(code, sell_price, qty)
+            stop_sales.append(code)
+        elif pnl > 0 and px < pos.peak * (1 - TRAILING_STOP):
+            qty = pos.qty
+            sell_price = px * (1 - SLIPPAGE)
+            pending_cash += sell_stock(code, sell_price, qty)
+            stop_sales.append(code)
+
+    for code in stop_sales:
+        del portfolio[code]
+
+    # ── NAV: cash + pending_cash + market_value ──
     total_mv = sum((close_map.get(c, 0) or 0) * pos.qty for c, pos in portfolio.items())
-    tv = cash + total_mv
+    tv = cash + pending_cash + total_mv
 
     daily_log.append({
         "trade_date": this_date,
-        "cash": round(cash, 2),
+        "available_cash": round(cash, 2),
         "pending_cash": round(pending_cash, 2),
+        "total_cash": round(cash + pending_cash, 2),
         "market_value": round(total_mv, 2),
         "total_value": round(tv, 2),
         "pos_count": len(portfolio),
