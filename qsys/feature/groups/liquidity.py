@@ -22,4 +22,22 @@ def build_liquidity_features(df: pd.DataFrame) -> pd.DataFrame:
     else:
         out["turnover_acceleration"] = np.nan
     out["illiquidity"] = ret_1d.abs() / out["amount"].replace(0, np.nan)
+
+    # ── Industry-adjusted liquidity features ──
+    # amount_log and turnover_rate normalized within (trade_date, industry)
+    # This prevents high-amount industries (e.g. 证券, 白酒) from being
+    # systematically over-predicted vs low-amount ones (e.g. 纺织, 钢铁)
+    if "industry" in out.columns:
+        ind_mean = out.groupby(["trade_date", "industry"])["amount_log"].transform("mean")
+        ind_std = out.groupby(["trade_date", "industry"])["amount_log"].transform("std").replace(0, np.nan)
+        out["amount_log_ind_zscore"] = (out["amount_log"] - ind_mean) / ind_std
+
+        if "turnover_rate" in out.columns:
+            tr_mean = out.groupby(["trade_date", "industry"])["turnover_rate"].transform("mean")
+            tr_std = out.groupby(["trade_date", "industry"])["turnover_rate"].transform("std").replace(0, np.nan)
+            out["turnover_rate_ind_zscore"] = (out["turnover_rate"] - tr_mean) / tr_std
+    else:
+        out["amount_log_ind_zscore"] = np.nan
+        out["turnover_rate_ind_zscore"] = np.nan
+
     return out

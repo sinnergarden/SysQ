@@ -1,6 +1,6 @@
+description: All candidate features for delayed 60d retest — superset of 136 features
+  across 11+ combinations
 feature_set_id: retest_60d_all_candidate_features
-description: "All candidate features for delayed 60d retest \u2014 superset of 135\
-  \ features across 11+ combinations"
 features:
 - $debt_to_assets
 - $grossprofit_margin
@@ -137,3 +137,14 @@ features:
 - volume_spike_20d
 - volume_stability_60d
 - volume_up_down_ratio_60d
+- amount_log_ind_zscore
+- turnover_rate_ind_zscore
+- forecast_type_score
+- forecast_stale_days
+- has_forecast
+- breakout_252d_high
+- days_since_252d_high
+- ttm_revenue_yoy
+- single_q_revenue_yoy
+- is_profitable_ttm
+- gross_margin_delta_yoy

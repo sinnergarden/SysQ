@@ -59,7 +59,8 @@ def build_matrix_from_feature_store(
     feature_cache_root: str | Path = "data/feature_cache/features",
     compute_missing: bool = False,
     allow_uncacheable: bool = False,
-    join_policy: str = "inner",
+    join_policy: str = "left",
+    anchor_df: pd.DataFrame | None = None,
     write_matrix_cache: bool = False,
     matrix_cache_root: str | Path = "data/feature_cache/matrices",
 ) -> pd.DataFrame:
@@ -68,8 +69,8 @@ def build_matrix_from_feature_store(
     Parameters
     ----------
     raw_panel:
-        Raw input panel.  Only used when computing missing features;
-        **not** used as the base for matrix assembly.
+        Raw input panel.  Used for computing missing features and as
+        the anchor row set (when ``anchor_df`` is not provided).
     feature_set_id:
         Feature set ID or YAML path.
     universe, date_start, date_end, source_manifest_hash:
@@ -79,12 +80,19 @@ def build_matrix_from_feature_store(
     compute_missing:
         If ``True``, compute missing features on the fly.
     allow_uncacheable:
-        If ``True``, features without a compute spec are computed inline
-        but NOT cached.  They still appear in the output matrix.
-        If ``False`` (default), features without a spec raise ``ValueError``.
+        If ``True``, features without a compute spec are used from the
+        raw panel or computed inline (not cached).
     join_policy:
-        ``"inner"`` (default) — only keep (trade_date, ts_code) rows that
-        have ALL features.  ``"left"`` — keep all rows from the first feature.
+        Only ``"left"`` (default) is supported — the matrix is anchored
+        to *anchor_df* or *raw_panel* rows, and feature values are
+        left-joined.  This guarantees exact row count parity with the
+        no-cache path.
+    anchor_df:
+        Optional explicit anchor DataFrame.  Must have ``trade_date``
+        and ``ts_code`` columns.  When provided, the output contains
+        exactly the (trade_date, ts_code) pairs from this anchor.
+        When ``None``, uses ``raw_panel`` deduped on
+        (trade_date, ts_code) as the anchor.
     write_matrix_cache:
         If ``True``, write the assembled matrix to optional matrix cache.
     matrix_cache_root:
@@ -122,8 +130,9 @@ def build_matrix_from_feature_store(
                 fid,
                 expected_cache_key=ck,
                 strict_source_hash=source_manifest_hash,
-                date_start=date_start,
-                date_end=date_end,
+                # NOTE: no date_start/date_end — read FULL backfill range
+                # so rank-based features reflect the full universe.
+                # Date filtering is handled by the anchor below.
             )
             cached[fid] = df[["trade_date", "ts_code", fid]]
             continue
@@ -224,30 +233,49 @@ def build_matrix_from_feature_store(
             f"from cache and compute_missing=False. Missing: {missing}"
         )
 
-    # 7. Join into wide matrix — from assembled feature data, NOT raw_panel
-    if not cached:
-        raise ValueError(f"FeatureSet '{feature_set_id}': no features assembled")
-
-    # Build index from all cached feature (trade_date, ts_code) pairs
-    # Use inner join by default: only keep rows present in ALL features
-    first_fid = feature_ids[0]
-    if first_fid in cached:
-        matrix = cached[first_fid][["trade_date", "ts_code"]].drop_duplicates().copy()
+    # 7. Build anchor — the exact (trade_date, ts_code) rows the output must have.
+    #    When anchor_df is provided, use it directly; otherwise use raw_panel.
+    if anchor_df is not None:
+        anchor = anchor_df[["trade_date", "ts_code"]].drop_duplicates().copy()
     else:
-        # Find the first available feature for the base
-        for fid in feature_ids:
-            if fid in cached:
-                matrix = cached[fid][["trade_date", "ts_code"]].drop_duplicates().copy()
-                break
+        anchor = raw_panel[["trade_date", "ts_code"]].drop_duplicates().copy()
+    anchor["trade_date"] = anchor["trade_date"].astype(str)
 
+    # Apply optional date range filter to anchor only.
+    # Feature values are read from cache WITHOUT date filter (full range),
+    # because rank-based features depend on the full universe range.
+    # Date filtering happens on the anchor (row set), not on the cached values.
+    if date_start is not None:
+        anchor = anchor[anchor["trade_date"] >= date_start]
+    if date_end is not None:
+        anchor = anchor[anchor["trade_date"] <= date_end]
+
+    if anchor.empty:
+        raise ValueError(f"FeatureSet '{feature_set_id}': anchor has zero rows")
+
+    log.info(
+        "Matrix anchor: %d rows (from %s, date=[%s, %s])",
+        len(anchor), "explicit anchor_df" if anchor_df is not None else "raw_panel",
+        date_start or "all", date_end or "all",
+    )
+
+    # 8. Left-join every feature onto the anchor.
+    #    Features are read from cache WITHOUT date_start/date_end so that
+    #    rank-based features reflect the full backfill range.
+    #    This guarantees exact value parity with the no-cache builder path.
     for fid in feature_ids:
         if fid in cached:
-            matrix = matrix.merge(
-                cached[fid],
+            src = cached[fid].copy()
+            src["trade_date"] = src["trade_date"].astype(str)
+            anchor = anchor.merge(
+                src[["trade_date", "ts_code", fid]],
                 on=["trade_date", "ts_code"],
-                how=join_policy,
+                how="left",
             )
-    # 8. Write optional matrix cache
+
+    matrix = anchor.copy()
+
+    # 9. Write optional matrix cache
     if write_matrix_cache:
         from qsys.feature.cache import (
             FeatureCacheContext,

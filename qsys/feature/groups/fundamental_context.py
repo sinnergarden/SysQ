@@ -154,7 +154,11 @@ def build_fundamental_context_features(df: pd.DataFrame) -> pd.DataFrame:
     _pp252 = out.get("price_percentile_252d", None)
 
     if all(x is not None for x in [_ts60, _rps120, _rps20, _pp252]):
-        cont = (_ts60.fillna(0).clip(-1, 1).rank(pct=True) * 1.0
+        # BUGFIX: percent_rank of trend_smoothness must be per trade_date
+        # (cross-sectional rank), not across all dates × stocks.
+        cont = (out.groupby("trade_date")["trend_smoothness_60d"].transform(
+                    lambda s: s.fillna(0).clip(-1, 1).rank(pct=True)
+                ) * 1.0
                 + _rps120.fillna(0) * 1.0
                 + _pp252.fillna(0) * 0.5
                 + (1 - _rps20.fillna(0)) * 0.3)

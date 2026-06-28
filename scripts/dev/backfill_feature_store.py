@@ -50,6 +50,50 @@ def main(feature_set, source_panel, source_manifest_hash,
         click.echo(f"Unsupported: {suffix}", err=True)
         sys.exit(1)
 
+    # Ensure registry_v2 has all features populated
+    from scripts.dev.populate_feature_specs import populate_registry
+    populate_registry()
+    # Manually register features that populate_registry doesn't cover
+    from qsys.feature.registry_v2 import register, get_by_name, FeatureSpec
+    for _spec in [
+        FeatureSpec("amount_log_ind_zscore","amount_log_ind_zscore","liquidity","derived",
+            None,("amount_log","industry"),"build_liquidity_features","cross_sectional",
+            "none","active","amount_log z-score within industry"),
+        FeatureSpec("turnover_rate_ind_zscore","turnover_rate_ind_zscore","liquidity","derived",
+            None,("turnover_rate","industry"),"build_liquidity_features","cross_sectional",
+            "none","active","turnover_rate z-score within industry"),
+        FeatureSpec("forecast_type_score","forecast_type_score","growth_confirmation_v0","derived",
+            None,("ts_code",),"build_growth_confirmation_features","point_in_time",
+            "panel","active","Forecast type score"),
+        FeatureSpec("forecast_stale_days","forecast_stale_days","growth_confirmation_v0","derived",
+            None,("ts_code",),"build_growth_confirmation_features","point_in_time",
+            "none","active","Days since forecast"),
+        FeatureSpec("has_forecast","has_forecast","growth_confirmation_v0","derived",
+            None,("ts_code",),"build_growth_confirmation_features","point_in_time",
+            "none","active","Has forecast binary"),
+        FeatureSpec("ttm_revenue_yoy","ttm_revenue_yoy","growth_confirmation_v0","derived",
+            None,("ts_code",),"build_growth_confirmation_features","point_in_time",
+            "panel","active","TTM revenue YoY growth"),
+        FeatureSpec("single_q_revenue_yoy","single_q_revenue_yoy","growth_confirmation_v0","derived",
+            None,("ts_code",),"build_growth_confirmation_features","point_in_time",
+            "panel","active","Single-quarter revenue YoY growth"),
+        FeatureSpec("is_profitable_ttm","is_profitable_ttm","growth_confirmation_v0","derived",
+            None,("ts_code",),"build_growth_confirmation_features","point_in_time",
+            "none","active","TTM profitability binary"),
+        FeatureSpec("gross_margin_delta_yoy","gross_margin_delta_yoy","growth_confirmation_v0","derived",
+            None,("ts_code",),"build_growth_confirmation_features","point_in_time",
+            "panel","active","Single-quarter gross margin delta YoY"),
+        FeatureSpec("breakout_252d_high","breakout_252d_high","growth_confirmation_v0","derived",
+            None,("close",),"build_growth_confirmation_features","rolling_past",
+            "none","active","Close >= previous 252d high"),
+        FeatureSpec("days_since_252d_high","days_since_252d_high","growth_confirmation_v0","derived",
+            None,("close",),"build_growth_confirmation_features","rolling_past",
+            "none","active","Days since 252d high"),
+    ]:
+        if not get_by_name(_spec.name):
+            try: register(_spec)
+            except ValueError: pass
+
     # Resolve
     discover_feature_sets()
     resolved = resolve_feature_set(feature_set)
