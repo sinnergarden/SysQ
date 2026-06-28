@@ -139,7 +139,7 @@ for idx, this_date in enumerate(dates):
                 alloc = cash / len(buy_candidates)
                 for code in buy_candidates:
                     opx = open_map.get(code)
-                    if not opx or opx <= 0:
+                    if not opx or opx <= 0 or np.isnan(opx):
                         continue
                     buy_px = opx * (1 + SLIPPAGE)
                     qty = int(alloc / buy_px / 100) * 100
@@ -147,6 +147,8 @@ for idx, this_date in enumerate(dates):
                         continue
                     total = buy_cost(buy_px, qty)
                     if total > cash:
+                        if np.isnan(buy_px):
+                            continue
                         qty = max(0, int((cash / buy_px / 100)) * 100)
                         if qty <= 0: continue
                         total = buy_cost(buy_px, qty)
@@ -158,14 +160,14 @@ for idx, this_date in enumerate(dates):
     # ── (3) Close: MTM + update peaks ──
     for code, pos in portfolio.items():
         px = close_map.get(code)
-        if px and px > 0:
+        if px is not None and not np.isnan(px) and px > 0:
             pos.peak = max(pos.peak, px)
 
     # ── (4) Close: check stops, sell if triggered ──
     stop_sales = []
     for code, pos in list(portfolio.items()):
         px = close_map.get(code)
-        if not px or px <= 0:
+        if px is None or np.isnan(px) or px <= 0:
             continue
         pnl = px / pos.cost - 1
 
@@ -184,7 +186,7 @@ for idx, this_date in enumerate(dates):
         del portfolio[code]
 
     # ── NAV: cash + pending_cash + market_value ──
-    total_mv = sum((close_map.get(c, 0) or 0) * pos.qty for c, pos in portfolio.items())
+    total_mv = sum(max(0, close_map.get(c, 0) or 0) * pos.qty for c, pos in portfolio.items())
     tv = cash + pending_cash + total_mv
 
     daily_log.append({
