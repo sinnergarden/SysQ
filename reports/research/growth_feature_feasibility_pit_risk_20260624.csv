@@ -1,0 +1,16 @@
+feature,source,qlib_ann_date,tushare_ann_date,pit_risk,notes
+is_profitable_ttm,qlib net_income (no ann_date) / Tushare income (has ann_date),no,yes,medium,qlib forward-fill approximates PIT but not exact. Tushare income with merge_asof(ann_date) = low risk.
+is_profitable_latest_q,Tushare income,no,yes,low,Only feasible via Tushare income ann_date. Low risk with strict merge_asof backward.
+single_q_revenue_yoy,Tushare income,no,yes,low,Same as above.
+ttm_revenue_yoy,qlib revenue / Tushare income,no,yes,medium,qlib version has no ann_date. Tushare version low risk.
+revenue_yoy_above_40,derived,n/a,n/a,same as source,Risk equal to component feature.
+revenue_growth_consistency_4q,Tushare income,no,yes,medium,Requires 4 quarters aligned by ann_date. Older quarters may shift as new announcements override.
+breakout_252d_high,qlib close,n/a,n/a,none,Daily OHLCV — no PIT concern.
+days_since_252d_high,qlib close,n/a,n/a,none,Daily OHLCV — no PIT concern.
+gross_margin_delta_qoq_or_yoy,Tushare income,partial,yes,medium,Daily margin from qlib is forward-filled fina_indicator. Quarterly requires Tushare income ann_date.
+contract_liability_yoy,Tushare balancesheet,no,yes,low,Balancesheet has ann_date. Strict PIT possible.
+advance_receipts_yoy,Tushare balancesheet,no,yes,low,Same as contract_liability.
+forecast_profit_yoy_mid,Tushare forecast,no,yes,low,Forecast has explicit ann_date. Low risk.
+forecast_type_score,Tushare forecast,no,yes,low,Same as forecast_profit_yoy_mid.
+express_revenue_yoy,Tushare express,no,yes,low,Express has ann_date. Low risk.
+express_profit_yoy,Tushare express,no,yes,low,Same as express_revenue_yoy.

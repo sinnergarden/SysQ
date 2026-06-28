@@ -1,15 +1,23 @@
 #!/usr/bin/env python3
 """60d top-weighted LightGBM — sample weight experiment.
 
-Trains 4 variants with different label-based sample weights:
-  baseline_no_weight, top10pct_weight_3x, top20pct_weight_2x, top10pct_3x_top20pct_2x
+Research artifact-level signal storage.
+NOT written to production SignalStore.
+Each scheme is an independent model idea; same scheme rerun overwrites.
+No timestamp in filename.
 
-Uses per-window cache → no feature recomputation.
-Outputs predictions to artifacts/diagnostics/60d_top_weighted/predictions/
+Usage:
+    python scripts/dev/run_60d_top_weighted_lgbm.py              # full run
+    python scripts/dev/run_60d_top_weighted_lgbm.py --smoke      # last 2 windows
+
+Output:
+    artifacts/diagnostics/60d_top_weighted/
+    ├── predictions/{scheme}.parquet       (full) or predictions_smoke/ (smoke)
+    └── weight_scheme_summary.csv
 """
 from __future__ import annotations
 
-import hashlib, json, sys, time, warnings
+import argparse, hashlib, sys, time, warnings
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 warnings.filterwarnings("ignore")
@@ -26,9 +34,6 @@ from qsys.signal.alpha_v1.labels import robust_zscore_fit, robust_zscore_transfo
 
 P = Path(__file__).resolve().parents[2]
 CACHE = P / "data/feature_cache/per_window"
-OUT = P / "artifacts/diagnostics/60d_top_weighted"
-PRED_DIR = OUT / "predictions"
-PRED_DIR.mkdir(parents=True, exist_ok=True)
 
 # ── Config ────────────────────────────────────────────────────────────
 FEATURE_LIST = "v3a_plus_liquidity_financial_rc"
@@ -45,25 +50,39 @@ LGB_PARAMS = {
     "verbosity": -1, "seed": 42,
 }
 
+# Sorted by threshold DESC — highest threshold last, overwrites lower ones
 WEIGHT_SCHEMES = {
     "baseline_no_weight": None,
     "top10pct_weight_3x": [(0.90, 3.0)],
     "top20pct_weight_2x": [(0.80, 2.0)],
-    "top10pct_3x_top20pct_2x": [(0.90, 3.0), (0.80, 2.0)],
+    "top10pct_3x_top20pct_2x": [(0.80, 2.0), (0.90, 3.0)],  # low → high: high overwrites
 }
+
+
+# ═══════════════════════════════════════════════════════════════════
+# CLI
+# ═══════════════════════════════════════════════════════════════════
+parser = argparse.ArgumentParser()
+parser.add_argument("--smoke", action="store_true", help="Run only last 2 windows for testing")
+args = parser.parse_args()
+
+OUT_SUFFIX = "predictions_smoke" if args.smoke else "predictions"
+OUT = P / "artifacts/diagnostics/60d_top_weighted"
+PRED_DIR = OUT / OUT_SUFFIX
+PRED_DIR.mkdir(parents=True, exist_ok=True)
 
 # ═══════════════════════════════════════════════════════════════════
 # 1. Load shared data
 # ═══════════════════════════════════════════════════════════════════
 print("=" * 60)
-print("Loading shared data...")
+print("Loading shared data..." + (" (SMOKE)" if args.smoke else ""))
 print("=" * 60)
 
 adapter = QlibAdapter()
 adapter.init_qlib()
 
 clean_features = FeatureListRegistry.load(FEATURE_LIST)
-print(f"  Features: {len(clean_features)}")
+print(f"  Features: {len(clean_features)} from {FEATURE_LIST}")
 
 all_labels = LabelStore(root=str(P / "data/research")).load_labels(LABEL_ID)
 all_labels["trade_date"] = all_labels["trade_date"].astype(str).str[:10]
@@ -73,11 +92,9 @@ cal = [str(c)[:10] for c in D.calendar(end_time="2026-06-30", freq="day")]
 cal_idx = {d: i for i, d in enumerate(cal)}
 
 windows = pd.read_csv(P / WINDOW_FILE)
+if args.smoke:
+    windows = windows.iloc[-2:].reset_index(drop=True)
 print(f"  Windows: {len(windows)}")
-
-# Label date range
-label_max = all_labels["trade_date"].max()
-print(f"  Label range: {all_labels['trade_date'].min()} → {label_max}")
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -108,11 +125,17 @@ def load_cache(start: str, end: str) -> pd.DataFrame:
 
 
 def compute_sample_weight(y_tr: pd.Series, train_dates: pd.Series, scheme_name: str) -> pd.Series:
-    """Compute per-row sample weight based on label rank within each trade_date."""
-    if scheme_name == "baseline_no_weight":
-        return pd.Series(1.0, index=y_tr.index)
+    """Compute per-row sample weight based on label rank within each trade_date.
 
-    weight_config = WEIGHT_SCHEMES[scheme_name]
+    Weight config is sorted by threshold ASC (low→high) so that higher
+    thresholds overwrite lower ones, ensuring graduated schemes work correctly
+    (e.g. top10% gets 3x, not overwritten to 2x).
+    """
+    if scheme_name == "baseline_no_weight":
+        w = pd.Series(1.0, index=y_tr.index)
+        return w
+
+    weight_config = sorted(WEIGHT_SCHEMES[scheme_name], key=lambda x: x[0])
     w = pd.Series(1.0, index=y_tr.index)
     tmp = pd.DataFrame({"label_value": y_tr, "trade_date": train_dates})
     for dt in tmp["trade_date"].unique():
@@ -122,14 +145,13 @@ def compute_sample_weight(y_tr: pd.Series, train_dates: pd.Series, scheme_name: 
             continue
         pct = sub["label_value"].rank(pct=True)
         for threshold, weight_val in weight_config:
-            mask2 = mask.copy()
-            mask2[mask] = pct >= threshold
-            w.loc[mask & mask2] = weight_val
+            # Higher threshold overwrites — applies to rows >= threshold
+            w.loc[mask & (pct >= threshold)] = weight_val
     return w
 
 
 # ═══════════════════════════════════════════════════════════════════
-# 3. Train + predict per window and variant
+# 3. Train + predict per window
 # ═══════════════════════════════════════════════════════════════════
 
 def train_and_predict(
@@ -137,7 +159,7 @@ def train_and_predict(
     pred_df: pd.DataFrame,
     scheme: str,
 ) -> pd.DataFrame:
-    """Train one window with sample_weight; return predictions."""
+    """Train one window with sample_weight; return predictions + weight stats."""
     train = train_df.merge(
         all_labels[["trade_date", "ts_code", "label_value"]],
         on=["trade_date", "ts_code"], how="left",
@@ -148,7 +170,7 @@ def train_and_predict(
     t_dates = train.loc[has_y, "trade_date"]
 
     if len(y_tr) < 50:
-        return pd.DataFrame()
+        return pd.DataFrame(), {}
 
     sample_weight = compute_sample_weight(y_tr, t_dates, scheme)
 
@@ -174,42 +196,55 @@ def train_and_predict(
     Xp_z = robust_zscore_transform(X_pred, center, scale)
     scores = model.predict(Xp_z.values)
 
+    # Weight distribution stats for this window
+    w1 = (sample_weight == 1.0).sum()
+    w2 = (sample_weight == 2.0).sum()
+    w3 = (sample_weight == 3.0).sum()
+
     return pd.DataFrame({
         "trade_date": pred_df["trade_date"].values,
         "ts_code": pred_df["ts_code"].values,
         "score": scores,
-    })
+    }), {"n_rows": len(sample_weight), "w1": int(w1), "w2": int(w2), "w3": int(w3),
+         "mean_w": float(sample_weight.mean()), "max_w": float(sample_weight.max())}
 
 
 # ═══════════════════════════════════════════════════════════════════
-# 4. Run all windows for each scheme
+# 4. Run all schemes
 # ═══════════════════════════════════════════════════════════════════
 
-results = {}
+weight_summary_rows = []
+
 for scheme in WEIGHT_SCHEMES:
     print(f"\n{'=' * 60}")
     print(f"  Scheme: {scheme}")
     print(f"{'=' * 60}")
     t0 = time.time()
     all_preds = []
+    scheme_w_acc = {"n_rows": 0, "w1": 0, "w2": 0, "w3": 0, "mean_w_sum": 0.0, "max_w": 0.0, "wind_count": 0}
 
     for i, w in windows.iterrows():
         ts_orig, te, ps, pe = w["train_start"], w["train_end"], w["predict_start"], w["predict_end"]
 
-        # ── Label maturity: train only until predict_start - 60d ──
         maturity_cutoff = _prev_trading_date(ps, 60)
         load_end = (pd.Timestamp(pe) + pd.Timedelta(days=30)).strftime("%Y-%m-%d")
         frame = load_cache(ts_orig, load_end)
 
         train = frame[frame["trade_date"].between(ts_orig, maturity_cutoff)].copy()
         pred = frame[frame["trade_date"].between(ps, pe)].copy()
-
         if pred.empty:
             continue
 
-        result = train_and_predict(train, pred, scheme)
+        result, w_stats = train_and_predict(train, pred, scheme)
         if not result.empty:
             all_preds.append(result)
+            scheme_w_acc["n_rows"] += w_stats["n_rows"]
+            scheme_w_acc["w1"] += w_stats["w1"]
+            scheme_w_acc["w2"] += w_stats["w2"]
+            scheme_w_acc["w3"] += w_stats["w3"]
+            scheme_w_acc["mean_w_sum"] += w_stats["mean_w"] * w_stats["n_rows"]
+            scheme_w_acc["max_w"] = max(scheme_w_acc["max_w"], w_stats["max_w"])
+            scheme_w_acc["wind_count"] += 1
 
         if (i + 1) % 20 == 0:
             print(f"  [{i+1}/{len(windows)}] ({time.time()-t0:.0f}s)", flush=True)
@@ -219,12 +254,33 @@ for scheme in WEIGHT_SCHEMES:
         out_path = PRED_DIR / f"{scheme}.parquet"
         combined.to_parquet(out_path, index=False)
         print(f"  Saved: {out_path} ({len(combined)} rows)", flush=True)
+
+        weight_summary_rows.append({
+            "scheme": scheme, "windows": scheme_w_acc["wind_count"],
+            "n_rows_total": scheme_w_acc["n_rows"],
+            "weight_1_count": scheme_w_acc["w1"],
+            "weight_2_count": scheme_w_acc["w2"],
+            "weight_3_count": scheme_w_acc["w3"],
+            "mean_weight": scheme_w_acc["mean_w_sum"] / scheme_w_acc["n_rows"] if scheme_w_acc["n_rows"] > 0 else 0,
+            "max_weight": scheme_w_acc["max_w"],
+        })
+        print(f"  Weight dist: 1x={scheme_w_acc['w1']} 2x={scheme_w_acc['w2']} 3x={scheme_w_acc['w3']}",
+              flush=True)
     else:
         print(f"  NO predictions for {scheme}", flush=True)
 
-    # Weight distribution summary
-    print(f"  Total time: {time.time()-t0:.0f}s", flush=True)
+    print(f"  Time: {time.time()-t0:.0f}s", flush=True)
 
+# ── Weight summary CSV ──
+ws_df = pd.DataFrame(weight_summary_rows)
+ws_path = OUT / "weight_scheme_summary.csv"
+ws_df.to_csv(ws_path, index=False)
+print(f"\nWeight summary → {ws_path}")
+print(ws_df.to_string(index=False))
+
+# ── Storage note ──
 print(f"\n{'=' * 60}")
-print("  Done — predictions saved to", PRED_DIR)
+print("  Storage: research artifact-level signal (NOT production SignalStore)")
+print("  Each scheme = independent model idea; same scheme rerun overwrites")
+print(f"  Predictions → {PRED_DIR}")
 print(f"{'=' * 60}")

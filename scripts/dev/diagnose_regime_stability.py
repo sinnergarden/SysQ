@@ -265,14 +265,14 @@ for _, r in ydf.iterrows():
 print("\n--- Industry distribution: Top50 in 2024 vs 2025 ---")
 for target_year in [2024, 2025]:
     sub = df[df["year"] == target_year]
-    # Monthly Top50, aggregate industry counts
-    monthly_industries = []
-    for month in sorted(sub["month"].unique()):
-        m = sub[sub["month"] == month].sort_values("score", ascending=False).head(50)
-        monthly_industries.append(m["industry"].value_counts())
-    if monthly_industries:
-        ind_freq = pd.concat(monthly_industries, axis=1).fillna(0).sum(axis=1).sort_values(ascending=False)
-        print(f"\n  {target_year} Top50 industries (total monthly occurrences):")
+    # Per-date Top50 then aggregate industry counts
+    all_ind = []
+    for dt in sorted(sub["trade_date"].unique()):
+        day_slice = sub[sub["trade_date"] == dt].sort_values("score", ascending=False).head(50)
+        all_ind.extend(day_slice["industry"].dropna().tolist())
+    if all_ind:
+        ind_freq = pd.Series(all_ind).value_counts()
+        print(f"\n  {target_year} Top50 industries (per-date Top50 aggregated):")
         print(f"  {ind_freq.head(15).to_string()}")
 
 # Save

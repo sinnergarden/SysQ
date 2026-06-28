@@ -1,0 +1,5 @@
+scheme,windows,n_rows_total,weight_1_count,weight_2_count,weight_3_count,mean_weight,max_weight
+baseline_no_weight,2,799859,799859,0,0,1.0,1.0
+top10pct_weight_3x,2,799859,719369,0,80490,1.2012604721582179,3.0
+top20pct_weight_2x,2,799859,639339,160520,0,1.200685370796603,2.0
+top10pct_3x_top20pct_2x,2,799859,639339,80030,80490,1.301315606875712,3.0
