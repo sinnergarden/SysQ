@@ -200,7 +200,7 @@ for idx, this_date in enumerate(dates):
     })
 
     if (idx + 1) % 100 == 0:
-        print(f"  [{idx+1}/{len(dates)}] TV={tv:,.0f} cash={cash:,.0f} pos={len(portfolio)}")
+        print(f"  [{idx+1}/{len(dates)}] TV={tv:,.0f} avail_cash={cash:,.0f} pos={len(portfolio)}")
 
 # ═══════════════════════════════════════════════════════════════════
 # 5. Result
@@ -216,8 +216,9 @@ print(f"{'=' * 60}")
 print(f"  Initial capital: {INITIAL_CAPITAL:,.0f}")
 print(f"  Final value:     {rdf.iloc[-1]['total_value']:,.0f}")
 print(f"  Total return:    {tr:.2%}")
-print(f"  Cash:            {rdf.iloc[-1]['cash']:,.0f}")
-print(f"  Pending (next):  {rdf.iloc[-1]['pending_cash']:,.0f}")
+print(f"  Available cash:  {rdf.iloc[-1]['available_cash']:,.0f}")
+print(f"  Pending cash:    {rdf.iloc[-1]['pending_cash']:,.0f}")
+print(f"  Total cash:      {rdf.iloc[-1]['total_cash']:,.0f}")
 print(f"  Positions:       {rdf.iloc[-1]['pos_count']}")
 print(f"  Max TV:          {rdf['total_value'].max():,.0f}")
 print(f"  Stop events:     {int(rdf['stops'].sum())}")
