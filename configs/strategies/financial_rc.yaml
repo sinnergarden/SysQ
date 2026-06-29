@@ -1,0 +1,23 @@
+strategy_id: financial_rc
+display_name: "60d/180d Financial Research Candidate"
+stage: research
+family: ml_ensemble
+account_id: research_financial_rc
+universe: csi800
+feature_set: v3a_plus_liquidity_financial_rc
+model_version: financial_rc_202606
+signal_version: blend_0.3_60d_0.7_180d
+
+hypothesis: >
+  Ensemble of 60d and 180d financial_rc models with trailing stop.
+  Top5 concentration. Research candidate — not production.
+
+lifecycle:
+  created: 2026-06-28
+  stage_history:
+    - stage: research
+      at: 2026-06-28
+
+promotion_gates:
+  backtest_verified: false
+  contract_tests_pass: false
