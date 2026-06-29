@@ -879,19 +879,38 @@ class TushareCollector:
         return df
 
     def get_index_weights(self, index_code='000300.SH', trade_date=None):
-        """Fetch index components"""
-        if trade_date is None:
-            # Use latest available date? Or today?
-            # Tushare index_weight might need a specific date or start/end.
-            # Let's try fetching for last month to be safe if trade_date not provided.
-            start_date = (datetime.now() - timedelta(days=30)).strftime('%Y%m%d')
-            end_date = datetime.now().strftime('%Y%m%d')
-        else:
-            start_date = trade_date
-            end_date = trade_date
+        """Fetch index components with robust snapshot search.
 
-        df = self._fetch_with_retry(self.pro.index_weight, index_code=index_code, start_date=start_date, end_date=end_date)
-        return df
+        Tushare index_weight is updated monthly (last trading day of the month).
+        The search window must be wide enough to catch the latest snapshot.
+        Falls back to progressively wider windows if empty.
+        """
+        if trade_date is not None:
+            df = self._fetch_with_retry(
+                self.pro.index_weight,
+                index_code=index_code,
+                start_date=trade_date,
+                end_date=trade_date,
+            )
+            return df
+
+        # Widening windows: 45d → 90d → 180d → 365d
+        windows = [45, 90, 180, 365]
+        now = datetime.now()
+        for window in windows:
+            start_date = (now - timedelta(days=window)).strftime('%Y%m%d')
+            end_date = now.strftime('%Y%m%d')
+            df = self._fetch_with_retry(
+                self.pro.index_weight,
+                index_code=index_code,
+                start_date=start_date,
+                end_date=end_date,
+            )
+            if df is not None and not df.empty:
+                return df
+
+        # Last resort: no date filter at all (Tushare returns up to 7000 rows)
+        return self._fetch_with_retry(self.pro.index_weight, index_code=index_code)
 
     def get_universe(self, universe):
         if universe is None:
