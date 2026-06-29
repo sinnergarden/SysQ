@@ -384,6 +384,61 @@ def compute_coverage(
     return merged.rename(columns={"trade_date": "date"})
 
 
+# ── Binary classification: daily AUC ────────────────────────────────────────
+
+
+def compute_daily_auc(
+    joined: pd.DataFrame,
+    score_column: str = "score",
+    min_count: int = 5,
+) -> pd.DataFrame:
+    """Compute daily AUC for binary classification.
+
+    Rows where ``label_value`` is NaN are excluded.  At least one sample
+    of each class (0/1) is required per date.
+    All columns are cast to float via ``.astype({{str}})`` to resolve dtype
+    mismatches that can arise from the lightgbm predict path.
+
+    Returns a DataFrame with columns ``date``, ``auc``, ``n``, ``n_pos``, ``n_neg``.
+    """
+    from sklearn.metrics import roc_auc_score
+
+    dates = joined["trade_date"].unique()
+    rows = []
+    for d in sorted(dates):
+        day = joined[joined["trade_date"] == d].dropna(subset=[score_column, "label_value"])
+        if len(day) < min_count:
+            rows.append({"date": d, "auc": None, "n": len(day), "n_pos": 0, "n_neg": 0})
+            continue
+        # Cast to float to resolve dtype mismatches from lightgbm predict
+        y_true = day["label_value"].astype(float).astype(int)
+        y_score = day[score_column].astype(float)
+        n_pos = int((y_true == 1).sum())
+        n_neg = int((y_true == 0).sum())
+        if n_pos < 1 or n_neg < 1:
+            rows.append({"date": d, "auc": None, "n": len(day), "n_pos": n_pos, "n_neg": n_neg})
+            continue
+        try:
+            auc = float(roc_auc_score(y_true, y_score))
+        except Exception:
+            auc = None
+        rows.append({"date": d, "auc": auc, "n": len(day), "n_pos": n_pos, "n_neg": n_neg})
+    return pd.DataFrame(rows)
+
+
+def _auc_stats(auc_series: pd.Series) -> dict[str, float | None]:
+    """Compute AUC mean, std, min, max from a daily AUC series."""
+    valid = auc_series.dropna()
+    if len(valid) < 2:
+        return {"mean": None, "std": None, "min": None, "max": None}
+    return {
+        "mean": float(valid.mean()),
+        "std": float(valid.std(ddof=1)),
+        "min": float(valid.min()),
+        "max": float(valid.max()),
+    }
+
+
 # ── Result dataclass ─────────────────────────────────────────────────────────
 
 
@@ -415,6 +470,12 @@ class SignalEvaluationResult:
 
     # ── Regime IC (new) ─────────────────────────────────────────────
     regime_ic: dict[str, Any] | None = None
+
+    # ── Binary AUC (new) ────────────────────────────────────────────
+    auc_mean: float | None = None
+    auc_std: float | None = None
+    auc_min: float | None = None
+    auc_max: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
@@ -522,7 +583,17 @@ class SignalEvaluator:
                     "positive_ratio": float(r["positive_ratio"]) if r["positive_ratio"] is not None else None,
                 }
 
-        # 9. Resolve output dir
+        # 8b. AUC — only meaningful for binary labels {0, 1}
+        unique_labels = set(joined["label_value"].dropna().unique())
+        is_binary = unique_labels.issubset({0, 1, 0.0, 1.0}) and len(unique_labels) == 2
+        if is_binary:
+            auc_df = compute_daily_auc(joined, score_column, min_count)
+            auc_stats = _auc_stats(auc_df["auc"])
+        else:
+            auc_df = pd.DataFrame(columns=["date", "auc", "n", "n_pos", "n_neg"])
+            auc_stats = {"mean": None, "std": None, "min": None, "max": None}
+
+        # 8c. Resolve output dir
         if output_dir is None:
             output_dir = self._paths.signal_eval_dir(signal_id, signal_run_id, label_id)
 
@@ -559,6 +630,11 @@ class SignalEvaluator:
             "decay_icirs": decay_icirs,
             # Regime-aware IC
             "regime_ic": regime_ic,
+            # Binary AUC
+            "auc_mean": auc_stats["mean"],
+            "auc_std": auc_stats["std"],
+            "auc_min": auc_stats["min"],
+            "auc_max": auc_stats["max"],
         }
         summary = with_standard_metadata(summary)
         write_manifest(output_dir / "summary.json", summary)
@@ -569,6 +645,8 @@ class SignalEvaluator:
         _write_parquet_or_csv(cov_df, output_dir / "coverage.parquet")
         _write_parquet_or_csv(decay_df, output_dir / "decay.parquet")
         _write_parquet_or_csv(regime_df, output_dir / "regime_ic.parquet")
+        if is_binary and not auc_df.empty:
+            _write_parquet_or_csv(auc_df, output_dir / "auc_daily.parquet")
 
         manifest = {
             "artifact_type": "signal_evaluation",
@@ -600,4 +678,8 @@ class SignalEvaluator:
             ic_extreme_ratio=ic_dist["extreme_ratio"],
             decay_icirs=decay_icirs,
             regime_ic=regime_ic,
+            auc_mean=auc_stats["mean"],
+            auc_std=auc_stats["std"],
+            auc_min=auc_stats["min"],
+            auc_max=auc_stats["max"],
         )
