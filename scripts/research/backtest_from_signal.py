@@ -48,10 +48,24 @@ def main() -> None:
     parser.add_argument("--output-dir", type=Path, default=None)
     parser.add_argument("--artifact-mode", choices=["summary", "debug"], default="summary")
     parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument("--stop-loss", type=float, default=None,
+                        help="Stop-loss threshold e.g. 0.07 = sell at -7%%")
+    parser.add_argument("--trailing-stop", type=float, default=None,
+                        help="Trailing stop e.g. 0.10 = sell if -10%% from peak")
+    parser.add_argument("--use-adjusted-price", action="store_true",
+                        help="Multiply prices by factor for signal-consistent backtest")
+    parser.add_argument("--signal-id-2", default=None,
+                        help="Second signal ID for blending")
+    parser.add_argument("--signal-run-id-2", default=None,
+                        help="Second signal run ID for blending")
+    parser.add_argument("--blend-weight", type=float, default=1.0,
+                        help="Weight for primary signal (0.0-1.0). Secondary gets 1-w.")
+    parser.add_argument("--accumulate", action="store_true",
+                        help="Only buy to fill up to top_n, never sell existing positions")
     args = parser.parse_args()
 
     runner = BacktestRunner(artifact_mode=args.artifact_mode)
-    result = runner.run_from_signal_cache(
+    kwargs = dict(
         signal_id=args.signal_id,
         signal_run_id=args.signal_run_id,
         start_date=args.start_date,
@@ -59,7 +73,6 @@ def main() -> None:
         initial_capital=args.initial_capital,
         score_column=args.score_column,
         top_n=args.top_n,
-        max_weight=args.max_weight,
         commission=args.commission,
         stamp_duty=args.stamp_duty,
         min_commission=args.min_commission,
@@ -69,7 +82,18 @@ def main() -> None:
         output_dir=args.output_dir,
         artifact_mode=args.artifact_mode,
         overwrite=args.overwrite,
+        stop_loss=args.stop_loss,
+        trailing_stop=args.trailing_stop,
+        use_adjusted_price=args.use_adjusted_price,
+        signal_id_2=args.signal_id_2,
+        signal_run_id_2=args.signal_run_id_2,
+        blend_weight=args.blend_weight,
     )
+    if args.accumulate:
+        result = runner.run_accumulate(**kwargs)
+    else:
+        kwargs.update(max_weight=args.max_weight)
+        result = runner.run_from_signal_cache(**kwargs)
 
     print(json.dumps({
         "status": result.status,

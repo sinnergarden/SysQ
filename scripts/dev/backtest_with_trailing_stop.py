@@ -47,6 +47,10 @@ parser.add_argument("--signal-60d", default="rolling__60d_v3a_growth_financial__
 parser.add_argument("--signal-180d", default="rolling__180d_v3a_growth_financial__v3a_growth_financial_180d__fwd_ret_180d_raw__daily_zscore__2020-01-01_2025-12-31")
 parser.add_argument("--start-date", default="2021-01-01")
 parser.add_argument("--end-date", default="2025-08-27")
+parser.add_argument("--sma-window", type=int, default=1,
+                    help="Rolling SMA window for signal smoothing (1 = no smoothing)")
+parser.add_argument("--no-trailing-stop", action="store_true",
+                    help="Disable trailing stop and stop-loss (pure rebalance only)")
 args = parser.parse_args()
 
 INITIAL_CAPITAL = 10_000_000
@@ -71,6 +75,7 @@ SIGNAL_180D_ID = "fwd_ret_180d_raw__daily_zscore"
 DESC_PARTS = []
 if W60 > 0: DESC_PARTS.append(f"60d_{W60}")
 if W180 > 0: DESC_PARTS.append(f"180d_{W180}")
+if args.sma_window > 1: DESC_PARTS.append(f"sma{args.sma_window}")
 DESC = "_".join(DESC_PARTS) if DESC_PARTS else "empty"
 OUT_CSV = f"backtest_top{TOP_N}_{DESC}.csv"
 
@@ -111,6 +116,17 @@ for col in score_cols:
 sig = sig[sig["trade_date"].between(START_DATE, END_DATE)].sort_values("trade_date").reset_index(drop=True)
 dates = sorted(sig["trade_date"].unique())
 print(f"  Signal: {len(sig)} rows, {len(dates)} dates, blend={W60}x60d/{W180}x180d")
+
+# ── Optional: SMA smoothing ──
+if args.sma_window > 1:
+    orig_len = len(sig)
+    sig = sig.sort_values(["ts_code", "trade_date"]).reset_index(drop=True)
+    sig["score"] = sig.groupby("ts_code")["score"].transform(
+        lambda s: s.rolling(window=args.sma_window, min_periods=1).mean()
+    )
+    sig = sig[sig["trade_date"].between(START_DATE, END_DATE)].reset_index(drop=True)
+    dates = sorted(sig["trade_date"].unique())
+    print(f"  SMA({args.sma_window}): {orig_len} → {len(sig)} rows, {len(dates)} dates")
 
 # Per-date TopN lookup
 daily_top20 = {}
