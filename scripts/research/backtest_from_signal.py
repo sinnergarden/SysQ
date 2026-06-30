@@ -48,6 +48,8 @@ def main() -> None:
     parser.add_argument("--output-dir", type=Path, default=None)
     parser.add_argument("--artifact-mode", choices=["summary", "debug"], default="summary")
     parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument("--accumulate", action="store_true",
+                        help="Accumulate mode: never sell based on signal; only buy to fill top_n")
     parser.add_argument("--stop-loss", type=float, default=None,
                         help="Stop-loss threshold e.g. 0.07 = sell at -7%%")
     parser.add_argument("--trailing-stop", type=float, default=None,
@@ -63,7 +65,7 @@ def main() -> None:
     args = parser.parse_args()
 
     runner = BacktestRunner(artifact_mode=args.artifact_mode)
-    result = runner.run_from_signal_cache(
+    kwargs = dict(
         signal_id=args.signal_id,
         signal_run_id=args.signal_run_id,
         start_date=args.start_date,
@@ -71,7 +73,6 @@ def main() -> None:
         initial_capital=args.initial_capital,
         score_column=args.score_column,
         top_n=args.top_n,
-        max_weight=args.max_weight,
         commission=args.commission,
         stamp_duty=args.stamp_duty,
         min_commission=args.min_commission,
@@ -88,6 +89,11 @@ def main() -> None:
         signal_run_id_2=args.signal_run_id_2,
         blend_weight=args.blend_weight,
     )
+    if args.accumulate:
+        result = runner.run_accumulate(**kwargs)
+    else:
+        kwargs["max_weight"] = args.max_weight
+        result = runner.run_from_signal_cache(**kwargs)
 
     print(json.dumps({
         "status": result.status,

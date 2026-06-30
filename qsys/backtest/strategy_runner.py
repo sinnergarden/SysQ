@@ -550,6 +550,268 @@ class BacktestRunner:
                   "build_plan_for_backtest hooks; full backtest not implemented",
         )
 
+    def run_accumulate(
+        self,
+        *,
+        signal_id: str,
+        signal_run_id: str,
+        start_date: str,
+        end_date: str,
+        initial_capital: float = 10_000_000.0,
+        score_column: str = "score",
+        top_n: int = 20,
+        commission: float = 0.0003,
+        stamp_duty: float = 0.001,
+        min_commission: float = 5.0,
+        slippage: float = 0.001,
+        rebalance_freq: str = "weekly",
+        strategy_template_id: str = "rank_weight_top20",
+        output_dir: Path | None = None,
+        artifact_mode: str = "summary",
+        overwrite: bool = False,
+        research_root: str | Path = "data/research",
+        stop_loss: float | None = None,
+        trailing_stop: float | None = None,
+        use_adjusted_price: bool = True,
+        signal_id_2: str | None = None,
+        signal_run_id_2: str | None = None,
+        blend_weight: float = 1.0,
+    ) -> BacktestRunResult:
+        """Accumulate-mode backtest: never sell based on signal decay.
+
+        Only buys to fill up to *top_n*.  Positions exit only via
+        stop-loss or trailing-stop.  Equal cash allocation per buy
+        (one-shot budget, dev-script compatible).
+
+        Shares price loading, signal loading, blend, no-lookahead check,
+        and stop-loss logic with ``run_from_signal_cache`` but uses its
+        own trading loop (no ``build_order_intents`` / ``execute_trade_day``).
+        """
+        self._artifact_mode = artifact_mode
+        if start_date > end_date:
+            raise ValueError(f"start_date {start_date!r} is after end_date {end_date!r}")
+
+        hash_input = (f"accumulate_{strategy_template_id}_{signal_id}_{signal_run_id}_"
+                      f"{top_n}_{commission}_{slippage}_{rebalance_freq}_"
+                      f"{start_date}_{end_date}_{initial_capital}_{signal_id_2}_"
+                      f"{blend_weight}")
+        short_hash = hashlib.sha256(hash_input.encode()).hexdigest()[:8]
+        strategy_run_id = f"accumulate_{strategy_template_id}__{signal_id}__{short_hash}"
+        backtest_id = f"acc_{start_date}_{end_date}_{short_hash}"
+
+        if output_dir is None:
+            output_dir = Path("data/research/backtests") / strategy_run_id / backtest_id
+        output_dir = Path(output_dir)
+        if output_dir.exists() and not overwrite:
+            raise FileExistsError(f"Backtest output dir exists: {output_dir} (use overwrite=True)")
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        trading_dates = _resolve_trading_dates(start_date, end_date)
+        trading_dates = [d for d in trading_dates if start_date <= d <= end_date]
+        if not trading_dates:
+            raise ValueError(f"No trading dates in range [{start_date}, {end_date}]")
+
+        signal_store = SignalStore(str(research_root))
+        account = Account(init_cash=initial_capital)
+        daily_summaries: list[dict[str, Any]] = []
+        self._last_prices = {}
+        self._last_trade_date = None
+        self._position_peaks: dict[str, float] = {}
+
+        for trade_date in trading_dates:
+            mtm_prices: dict[str, float] = {}
+            if account.positions:
+                try:
+                    mtm_prices, _ = fetch_market_snapshot(
+                        trade_date, list(account.positions.keys()),
+                        price_col="close" if self._execution_price_mode == "open" else "close",
+                    )
+                    if use_adjusted_price:
+                        mtm_prices = self._apply_adjustment_factor(mtm_prices, list(account.positions.keys()), trade_date)
+                except Exception:
+                    pass
+
+            # Weekly skip
+            if should_skip_weekly_rebalance(rebalance_freq, trade_date, self._last_trade_date):
+                cash_before = float(account.cash)
+                mv_before = float(sum(max(0, mtm_prices.get(code, 0)) * pos.total_amount for code, pos in account.positions.items())) if mtm_prices else 0.0
+                tv_before = cash_before + mv_before
+                sl_result = self._stop_loss_check(account, mtm_prices, stop_loss, trailing_stop, slippage, commission, min_commission, stamp_duty)
+                stop_events = int(sl_result["stop_events"])
+                self._last_trade_date = trade_date
+                mv_after = float(sum(max(0, mtm_prices.get(code, 0)) * pos.total_amount for code, pos in account.positions.items())) if mtm_prices else 0.0
+                daily_summaries.append({
+                    "trade_date": trade_date, "execution_price_mode": self._execution_price_mode,
+                    "cash_before": cash_before, "market_value_before": mv_before, "total_value_before": tv_before,
+                    "cash_after": float(account.cash), "market_value_after": mv_after,
+                    "total_value_after": float(account.cash) + mv_after,
+                    "order_count": 0, "buy_count": 0, "sell_count": 0,
+                    "filled_count": 0, "rejected_count": 0, "turnover": 0.0,
+                    "position_count": len(account.positions), "stop_events": stop_events,
+                    "status": "weekly_rebalance_skip",
+                })
+                continue
+
+            # Load signal
+            day_signal = signal_store.load_signal_for_date(signal_id, signal_run_id, trade_date)
+            if day_signal.empty:
+                cash_before = float(account.cash)
+                mv_before = float(sum(max(0, mtm_prices.get(code, 0)) * pos.total_amount for code, pos in account.positions.items())) if mtm_prices else 0.0
+                sl_result = self._stop_loss_check(account, mtm_prices, stop_loss, trailing_stop, slippage, commission, min_commission, stamp_duty)
+                stop_events = int(sl_result["stop_events"])
+                self._last_trade_date = trade_date
+                mv_after = float(sum(max(0, mtm_prices.get(code, 0)) * pos.total_amount for code, pos in account.positions.items())) if mtm_prices else 0.0
+                daily_summaries.append({
+                    "trade_date": trade_date, "execution_price_mode": self._execution_price_mode,
+                    "cash_before": cash_before, "market_value_before": mv_before,
+                    "total_value_before": cash_before + mv_before,
+                    "cash_after": float(account.cash), "market_value_after": mv_after,
+                    "total_value_after": float(account.cash) + mv_after,
+                    "order_count": 0, "buy_count": 0, "sell_count": 0, "filled_count": 0,
+                    "rejected_count": 0, "turnover": 0.0, "position_count": len(account.positions),
+                    "stop_events": stop_events, "status": "no_signal_data",
+                })
+                continue
+
+            # No-lookahead check
+            if "data_date" in day_signal.columns and "trade_date" in day_signal.columns:
+                day_signal["_dd"] = pd.to_datetime(day_signal["data_date"]).dt.strftime("%Y-%m-%d")
+                day_signal["_td"] = pd.to_datetime(day_signal["trade_date"]).dt.strftime("%Y-%m-%d")
+                _v = day_signal[day_signal["_dd"] >= day_signal["_td"]]
+                if len(_v) > 0:
+                    raise ValueError(f"Signal lookahead at {trade_date}: {len(_v)} rows")
+                day_signal.drop(columns=["_dd", "_td"], inplace=True)
+
+            # Optional blend
+            if signal_id_2 and signal_run_id_2 and blend_weight < 1.0:
+                day_signal_2 = signal_store.load_signal_for_date(signal_id_2, signal_run_id_2, trade_date)
+                if not day_signal_2.empty:
+                    if "data_date" in day_signal_2.columns and "trade_date" in day_signal_2.columns:
+                        day_signal_2["_dd"] = pd.to_datetime(day_signal_2["data_date"]).dt.strftime("%Y-%m-%d")
+                        day_signal_2["_td"] = pd.to_datetime(day_signal_2["trade_date"]).dt.strftime("%Y-%m-%d")
+                        if len(day_signal_2[day_signal_2["_dd"] >= day_signal_2["_td"]]) > 0:
+                            raise ValueError(f"Signal-2 lookahead at {trade_date}")
+                        day_signal_2.drop(columns=["_dd", "_td"], inplace=True)
+                    sc2 = score_column + "_2"
+                    day_signal_2 = day_signal_2[["instrument", score_column]].rename(columns={score_column: sc2})
+                    day_signal = day_signal.merge(day_signal_2, on="instrument", how="inner")
+                    if score_column in day_signal.columns and sc2 in day_signal.columns:
+                        day_signal[score_column] = blend_weight * day_signal[score_column] + (1 - blend_weight) * day_signal[sc2]
+                        day_signal = day_signal.drop(columns=[sc2])
+
+            # Fetch prices
+            instruments = sorted(set(day_signal["instrument"].astype(str)) | set(account.positions.keys()))
+            try:
+                if self._execution_price_mode == "open":
+                    exec_prices_raw, market_status = fetch_market_snapshot(trade_date, instruments, price_col="open")
+                    mtm_prices_raw, _ = fetch_market_snapshot(trade_date, instruments, price_col="close")
+                else:
+                    exec_prices_raw, market_status = fetch_market_snapshot(trade_date, instruments)
+                    mtm_prices_raw = exec_prices_raw
+                if use_adjusted_price:
+                    exec_prices = self._apply_adjustment_factor(exec_prices_raw, instruments, trade_date)
+                    mtm_prices = self._apply_adjustment_factor(mtm_prices_raw, instruments, trade_date)
+                else:
+                    exec_prices, mtm_prices = exec_prices_raw, mtm_prices_raw
+            except Exception as exc:
+                daily_summaries.append(dict(status="no_market_data"))
+                continue
+
+            # Before-state
+            cash_before = float(account.cash)
+            mv_before = float(sum(max(0, mtm_prices.get(c, 0)) * pos.total_amount for c, pos in account.positions.items()))
+            tv_before = cash_before + mv_before
+
+            # Buy to fill up to top_n (equal cash allocation, one-shot budget)
+            orders: list[dict] = []
+            if len(account.positions) < top_n and account.cash > 0:
+                sorted_scores = day_signal.sort_values(score_column, ascending=False)
+                held_set = set(account.positions.keys())
+                slot_count = top_n - len(account.positions)
+                buy_codes = sorted_scores[~sorted_scores["instrument"].isin(held_set)].head(slot_count)["instrument"].tolist()
+                if buy_codes:
+                    alloc_once = account.cash / len(buy_codes)
+                    for code in buy_codes:
+                        px = exec_prices.get(code)
+                        if px is None or px <= 0:
+                            continue
+                        buy_px = px * (1 + slippage)
+                        qty = int(alloc_once / buy_px / 100) * 100
+                        while qty > 0:
+                            total = qty * buy_px + max(min_commission, qty * buy_px * commission)
+                            if total <= account.cash:
+                                break
+                            qty -= 100
+                        if qty <= 0:
+                            continue
+                        fee = max(min_commission, qty * buy_px * commission)
+                        account.update_after_deal(code, qty, buy_px, fee, "buy")
+                        orders.append({"symbol": code, "side": "buy", "amount": qty, "price": buy_px})
+
+            # MTM
+            mv = float(sum(max(0, mtm_prices.get(c, 0)) * p.total_amount for c, p in account.positions.items()))
+            day_result = {
+                "trade_date": trade_date, "execution_price_mode": self._execution_price_mode,
+                "cash_before": cash_before, "market_value_before": mv_before, "total_value_before": tv_before,
+                "cash_after": float(account.cash), "market_value_after": mv,
+                "total_value_after": float(account.cash) + mv,
+                "order_count": len(orders), "buy_count": sum(1 for o in orders if o["side"] == "buy"),
+                "sell_count": 0, "filled_count": len(orders), "rejected_count": 0,
+                "turnover": sum(o["amount"] * o["price"] for o in orders),
+                "position_count": len(account.positions), "stop_events": 0, "status": "success",
+            }
+            self._last_prices = mtm_prices
+            self._last_trade_date = trade_date
+
+            # Stop-loss
+            sl_result = self._stop_loss_check(account, mtm_prices, stop_loss, trailing_stop, slippage, commission, min_commission, stamp_duty)
+            stop_events = int(sl_result["stop_events"])
+            day_result["stop_events"] = stop_events
+            if stop_events > 0:
+                mv2 = float(sum(max(0, mtm_prices.get(c, 0)) * p.total_amount for c, p in account.positions.items()))
+                day_result.update({"cash_after": float(account.cash), "market_value_after": mv2,
+                                   "total_value_after": float(account.cash) + mv2, "position_count": len(account.positions)})
+            day_result["sell_count"] = day_result.get("sell_count", 0) + stop_events
+            day_result["filled_count"] = day_result.get("filled_count", 0) + stop_events
+            day_result["turnover"] = day_result.get("turnover", 0.0) + sl_result["stop_turnover"]
+            daily_summaries.append(day_result)
+
+        # Final metrics
+        final_mv = sum(max(0, mtm_prices.get(c, 0)) * p.total_amount for c, p in account.positions.items()) if mtm_prices else 0
+        final_value = daily_summaries[-1].get("total_value_after", account.cash + final_mv) if daily_summaries else account.cash
+        total_return = (final_value / initial_capital) - 1.0 if initial_capital > 0 else 0.0
+
+        # Manifest
+        from qsys.research.manifest import with_standard_metadata, write_manifest
+        manifest = with_standard_metadata({
+            "artifact_type": "backtest_run", "backtest_id": backtest_id,
+            "strategy_run_id": strategy_run_id, "strategy_template_id": strategy_template_id,
+            "signal_id": signal_id, "signal_run_id": signal_run_id, "score_column": score_column,
+            "allocation_method": "accumulate_equal_weight",
+            "allocation_params": {"top_n": top_n, "mode": "accumulate"},
+            "start_date": start_date, "end_date": end_date,
+            "trading_day_count": len(trading_dates),
+            "initial_capital": initial_capital, "final_value": final_value,
+            "total_return": total_return,
+            "stop_loss": stop_loss, "trailing_stop": trailing_stop,
+            "use_adjusted_price": use_adjusted_price,
+            "signal_id_2": signal_id_2, "signal_run_id_2": signal_run_id_2, "blend_weight": blend_weight,
+        })
+        write_manifest(output_dir / "manifest.json", manifest)
+        if daily_summaries:
+            pd.DataFrame(daily_summaries).to_csv(output_dir / "daily_summary.csv", index=False)
+
+        result = BacktestRunResult(
+            strategy_id=strategy_template_id, backtest_id=backtest_id,
+            start_date=start_date, end_date=end_date,
+            mode="cached_signal", rebalance_freq=rebalance_freq,
+            initial_capital=initial_capital, final_value=final_value,
+            total_return=total_return, status="completed",
+            daily_summary=daily_summaries,
+            notes=f"accumulate backtest over {len(trading_dates)} dates",
+        )
+        self._write_summary(result, output_dir)
+        return result
 
 
     @staticmethod
@@ -578,6 +840,66 @@ class BacktestRunner:
             )
 
     # ── PR109: cached-signal backtest ─────────────────────────────────────
+    @staticmethod
+    def _apply_adjustment_factor(prices: dict[str, float], instruments: list[str], trade_date: str) -> dict[str, float]:
+        """Multiply raw prices by ``\$factor`` for signal-consistent pricing."""
+        from qsys.data.adapter import QlibAdapter as _QA
+        try:
+            _fact = _QA().get_features(instruments, ["$factor"], start_time=trade_date, end_time=trade_date)
+        except Exception:
+            return prices
+        if _fact is None or _fact.empty:
+            return prices
+        _fvals = _fact.reset_index()
+        _fvals["datetime"] = _fvals["datetime"].astype(str).str[:10]
+        _fvals = _fvals[_fvals["datetime"] == trade_date]
+        _fm = dict(zip(_fvals["instrument"], _fvals["$factor"]))
+        return {k: v * _fm.get(k, 1.0) for k, v in prices.items()}
+
+    def _stop_loss_check(self, account: Account, mtm_prices: dict[str, float],
+                         stop_loss: float | None, trailing_stop: float | None,
+                         slippage: float, commission: float, min_commission: float,
+                         stamp_duty: float = 0.0) -> dict[str, float]:
+        """Check and execute stop-loss/trailing-stop.
+
+        Returns dict with keys: stop_events, stop_turnover, stop_fee, stop_tax
+        """
+        result = {"stop_events": 0, "stop_turnover": 0.0, "stop_fee": 0.0, "stop_tax": 0.0}
+        if (stop_loss is None and trailing_stop is None) or not account.positions:
+            return result
+        for sym in list(account.positions.keys()):
+            pos = account.positions.get(sym)
+            if pos is None or pos.total_amount <= 0:
+                continue
+            px = mtm_prices.get(sym)
+            if px is None or px <= 0:
+                continue
+            cost = pos.avg_cost
+            pnl = px / cost - 1
+            if sym in self._position_peaks:
+                self._position_peaks[sym] = max(self._position_peaks[sym], px)
+            else:
+                self._position_peaks[sym] = px
+            do_sell = False
+            if stop_loss is not None and pnl < -abs(stop_loss):
+                do_sell = True
+            if not do_sell and trailing_stop is not None and pnl > 0 and px < self._position_peaks[sym] * (1 - abs(trailing_stop)):
+                do_sell = True
+            if do_sell:
+                qty = pos.total_amount
+                gross = qty * px
+                rev = gross * (1 - slippage)
+                fee = max(min_commission, rev * commission)
+                tax = rev * stamp_duty
+                account.cash += rev - fee - tax
+                account.positions.pop(sym, None)
+                self._position_peaks.pop(sym, None)
+                result["stop_events"] += 1
+                result["stop_turnover"] += rev
+                result["stop_fee"] += fee
+                result["stop_tax"] += tax
+        return result
+
 
 
     # ── Helpers for run_from_signal_cache ───────────────────────────────
