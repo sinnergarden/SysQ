@@ -291,6 +291,15 @@ def _create_generator_from_config(
             feature_cache_root=feature_cache_root,
             source_manifest_hash=source_manifest_hash,
         )
+    if gen_type in ("single_label_lightgbm_binary",):
+        from qsys.research.generators.lightgbm_binary import LightGBMBinaryGenerator
+        return LightGBMBinaryGenerator(
+            label_id=params["label_id"],
+            universe=params.get("universe", "csi300"),
+            n_estimators=params.get("n_estimators", 300),
+            feature_list_id=feature_list_id or params.get("feature_list_id"),
+            lgb_params=params.get("lgb_params"),
+        )
     raise ValueError(f"Unknown generator type: {gen_type!r}")
 
 

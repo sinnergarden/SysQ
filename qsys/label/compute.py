@@ -110,6 +110,107 @@ def compute_raw_forward_return(
     return compute_forward_return(universe, horizon, start, end, price_field=price_field, norm_type="", clip_val=None)
 
 
+def compute_future_max_drawdown(
+    universe: str,
+    horizon: int = 5,
+    start: str = "2020-01-01",
+    end: str = "2026-01-01",
+    price_field: str = "close",
+) -> pd.DataFrame:
+    """Compute forward window peak-to-trough max drawdown label.
+
+    For each feature date T, measures the worst peak-to-trough drawdown
+    within the forward window [T+1, T+horizon]:
+
+        adj_price_i = close_i * factor_i
+        for i in [T+1, T+horizon]:
+            cummax_i = max(adj_price_{T+1}, ..., adj_price_i)
+            drawdown_i = adj_price_i / cummax_i - 1   (always <= 0)
+        label_T = min(drawdown_i)
+
+    Important: drawdown is computed INSIDE the forward window only.
+    It does NOT anchor to the T close price.  This label is designed
+    for T-date features predicting T+1 entry risk.
+
+    A more negative value means a deeper drawdown.  Binary thresholding
+    is done separately via :func:`compute_binary_max_drawdown`.
+
+    Returns DataFrame(trade_date, instrument, label_id, horizon, label_value).
+    label_id = ``fwd_maxdd_{horizon}d_raw``.
+    """
+    from qsys.data.adapter import QlibAdapter
+
+    adapter = QlibAdapter()
+    adapter.init_qlib()
+
+    price_col = f"${price_field}"
+
+    # Extend fetch end by ~2× horizon so forward labels can be computed
+    from datetime import datetime, timedelta
+    end_buf = (datetime.strptime(end, "%Y-%m-%d") + timedelta(days=horizon * 2)).strftime("%Y-%m-%d")
+
+    raw = adapter.get_features(universe, [price_col, "$factor"],
+                               start_time=start, end_time=end_buf)
+    frame = raw.reset_index().rename(columns={"datetime": "trade_date"})
+    frame["trade_date"] = frame["trade_date"].astype(str).str[:10]
+    frame["_adj_price"] = frame[price_col] * frame["$factor"]
+
+    def _max_dd_series(vals: np.ndarray, h: int) -> np.ndarray:
+        n = len(vals)
+        result = np.full(n, np.nan, dtype=np.float32)
+        for i in range(n - h):
+            win = vals[i + 1:i + 1 + h]
+            if len(win) < h:
+                continue
+            cmax = np.maximum.accumulate(win)
+            dd = win / cmax - 1.0
+            result[i] = np.min(dd)
+        return result
+
+    frame["_maxdd"] = frame.groupby("instrument")["_adj_price"].transform(
+        lambda s: _max_dd_series(s.values, horizon)
+    )
+
+    # Trim to requested range (exclude the buffer we added for forward lookahead)
+    trimmed = frame[frame["trade_date"].between(start, end)].copy()
+    label_id = f"fwd_maxdd_{horizon}d_raw"
+    result = pd.DataFrame({
+        "trade_date": trimmed["trade_date"],
+        "instrument": trimmed["instrument"],
+        "label_id": label_id,
+        "horizon": int(horizon),
+        "label_value": trimmed["_maxdd"].astype(np.float32),
+    })
+    return result.dropna(subset=["label_value"]).reset_index(drop=True)
+
+
+def compute_binary_max_drawdown(
+    universe: str,
+    horizon: int = 5,
+    start: str = "2020-01-01",
+    end: str = "2026-01-01",
+    threshold: float = -0.05,
+    price_field: str = "close",
+) -> pd.DataFrame:
+    """Binary version of future max drawdown — for stop-loss classification.
+
+    1 = future max drawdown is WORSE than *threshold* (i.e. deeper loss).
+    0 = no drawdown beyond threshold.
+    NaN = label not yet observable (forward tail).
+
+    label_id = ``fwd_maxdd_{horizon}d_binary_{pct}pct``.
+    """
+    continuous = compute_future_max_drawdown(universe, horizon, start, end, price_field)
+    label_value = continuous["label_value"].apply(
+        lambda v: 1.0 if pd.notna(v) and v < threshold else (0.0 if pd.notna(v) else np.nan)
+    )
+    pct = int(abs(threshold) * 100)
+    result = continuous.copy()
+    result["label_id"] = f"fwd_maxdd_{horizon}d_binary_{pct}pct"
+    result["label_value"] = label_value.astype(np.float32)
+    return result.dropna(subset=["label_value"]).reset_index(drop=True)
+
+
 def coverage(row_count: int, expected: int) -> float:
     """Coverage ratio: actual rows / expected (dates x universe)."""
     if expected <= 0:
