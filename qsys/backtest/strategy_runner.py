@@ -645,8 +645,11 @@ class BacktestRunner:
                     "cash_before": cash_before, "market_value_before": mv_before, "total_value_before": tv_before,
                     "cash_after": float(account.cash), "market_value_after": mv_after,
                     "total_value_after": float(account.cash) + mv_after,
-                    "order_count": 0, "buy_count": 0, "sell_count": 0,
-                    "filled_count": 0, "rejected_count": 0, "turnover": 0.0,
+                    "order_count": 0, "buy_count": 0,
+                    "sell_count": stop_events,
+                    "filled_count": stop_events,
+                    "rejected_count": 0,
+                    "turnover": sl_result["stop_turnover"],
                     "position_count": len(account.positions), "stop_events": stop_events,
                     "status": "weekly_rebalance_skip",
                 })
@@ -667,8 +670,12 @@ class BacktestRunner:
                     "total_value_before": cash_before + mv_before,
                     "cash_after": float(account.cash), "market_value_after": mv_after,
                     "total_value_after": float(account.cash) + mv_after,
-                    "order_count": 0, "buy_count": 0, "sell_count": 0, "filled_count": 0,
-                    "rejected_count": 0, "turnover": 0.0, "position_count": len(account.positions),
+                    "order_count": 0, "buy_count": 0,
+                    "sell_count": stop_events,
+                    "filled_count": stop_events,
+                    "rejected_count": 0,
+                    "turnover": sl_result["stop_turnover"],
+                    "position_count": len(account.positions),
                     "stop_events": stop_events, "status": "no_signal_data",
                 })
                 continue
@@ -840,68 +847,6 @@ class BacktestRunner:
             )
 
     # ── PR109: cached-signal backtest ─────────────────────────────────────
-    @staticmethod
-    def _apply_adjustment_factor(prices: dict[str, float], instruments: list[str], trade_date: str) -> dict[str, float]:
-        """Multiply raw prices by ``\$factor`` for signal-consistent pricing."""
-        from qsys.data.adapter import QlibAdapter as _QA
-        try:
-            _fact = _QA().get_features(instruments, ["$factor"], start_time=trade_date, end_time=trade_date)
-        except Exception:
-            return prices
-        if _fact is None or _fact.empty:
-            return prices
-        _fvals = _fact.reset_index()
-        _fvals["datetime"] = _fvals["datetime"].astype(str).str[:10]
-        _fvals = _fvals[_fvals["datetime"] == trade_date]
-        _fm = dict(zip(_fvals["instrument"], _fvals["$factor"]))
-        return {k: v * _fm.get(k, 1.0) for k, v in prices.items()}
-
-    def _stop_loss_check(self, account: Account, mtm_prices: dict[str, float],
-                         stop_loss: float | None, trailing_stop: float | None,
-                         slippage: float, commission: float, min_commission: float,
-                         stamp_duty: float = 0.0) -> dict[str, float]:
-        """Check and execute stop-loss/trailing-stop.
-
-        Returns dict with keys: stop_events, stop_turnover, stop_fee, stop_tax
-        """
-        result = {"stop_events": 0, "stop_turnover": 0.0, "stop_fee": 0.0, "stop_tax": 0.0}
-        if (stop_loss is None and trailing_stop is None) or not account.positions:
-            return result
-        for sym in list(account.positions.keys()):
-            pos = account.positions.get(sym)
-            if pos is None or pos.total_amount <= 0:
-                continue
-            px = mtm_prices.get(sym)
-            if px is None or px <= 0:
-                continue
-            cost = pos.avg_cost
-            pnl = px / cost - 1
-            if sym in self._position_peaks:
-                self._position_peaks[sym] = max(self._position_peaks[sym], px)
-            else:
-                self._position_peaks[sym] = px
-            do_sell = False
-            if stop_loss is not None and pnl < -abs(stop_loss):
-                do_sell = True
-            if not do_sell and trailing_stop is not None and pnl > 0 and px < self._position_peaks[sym] * (1 - abs(trailing_stop)):
-                do_sell = True
-            if do_sell:
-                qty = pos.total_amount
-                gross = qty * px
-                rev = gross * (1 - slippage)
-                fee = max(min_commission, rev * commission)
-                tax = rev * stamp_duty
-                account.cash += rev - fee - tax
-                account.positions.pop(sym, None)
-                self._position_peaks.pop(sym, None)
-                result["stop_events"] += 1
-                result["stop_turnover"] += rev
-                result["stop_fee"] += fee
-                result["stop_tax"] += tax
-        return result
-
-
-
     # ── Helpers for run_from_signal_cache ───────────────────────────────
 
     @staticmethod
