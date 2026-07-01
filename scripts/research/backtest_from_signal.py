@@ -62,6 +62,14 @@ def main() -> None:
                         help="Second signal run ID for blending")
     parser.add_argument("--blend-weight", type=float, default=1.0,
                         help="Weight for primary signal (0.0-1.0). Secondary gets 1-w.")
+    parser.add_argument("--maxdd-signal-id", default=None,
+                        help="Signal ID for maxdd binary probability (risk filter)")
+    parser.add_argument("--maxdd-signal-run-id", default=None,
+                        help="Signal run ID for maxdd binary probability")
+    parser.add_argument("--maxdd-threshold", type=float, default=None,
+                        help="MaxDD calibrated prob threshold: skip candidates with prob >= this value")
+    parser.add_argument("--maxdd-percentile", type=float, default=None,
+                        help="MaxDD risk percentile: skip candidates in top-N%% risk (0-1, e.g. 0.80 = top 20%% risk)")
     args = parser.parse_args()
 
     runner = BacktestRunner(artifact_mode=args.artifact_mode)
@@ -88,6 +96,10 @@ def main() -> None:
         signal_id_2=args.signal_id_2,
         signal_run_id_2=args.signal_run_id_2,
         blend_weight=args.blend_weight,
+        maxdd_signal_id=args.maxdd_signal_id,
+        maxdd_signal_run_id=args.maxdd_signal_run_id,
+        maxdd_threshold=args.maxdd_threshold,
+        maxdd_percentile=args.maxdd_percentile,
     )
     if args.accumulate:
         result = runner.run_accumulate(**kwargs)

@@ -1,0 +1,47 @@
+experiment_id: maxdd_binary_rolling
+title: "5d MAXDD Binary Probability Rolling Research"
+description: |
+  Rolling binary classifier to predict 5d peak-to-trough max drawdown < -5%.
+  Uses alpha_v1_clean_132 (pure OHLCV-derived features).  Output is raw
+  predicted probability [0, 1] — stored as-is (no z-score).
+
+calendar:
+  start_date: "2020-01-01"
+  end_date: "2025-12-31"
+  train_window_days: 504
+  step_days: 20
+
+feature_list_id: alpha_v1_clean_132
+
+signal:
+  signal_id: maxdd_binary_raw_prob
+  score_column: score
+
+generators:
+  - generator_id: maxdd_binary
+    type: single_label_lightgbm_binary
+    params:
+      label_id: fwd_maxdd_5d_binary_5pct
+      universe: csi800
+      n_estimators: 300
+      lgb_params:
+        objective: "binary"
+        metric: "auc"
+        colsample_bytree: 0.8879
+        learning_rate: 0.0421
+        subsample: 0.8789
+        lambda_l1: 205.6999
+        lambda_l2: 580.9768
+        max_depth: 6
+        num_leaves: 64
+        num_threads: 8
+        verbosity: -1
+        seed: 42
+
+signal_transforms:
+  - transform_id: identity
+    type: identity
+
+labels:
+  - label_id: fwd_maxdd_5d_binary_5pct
+    label_maturity_lag_trading_days: 5

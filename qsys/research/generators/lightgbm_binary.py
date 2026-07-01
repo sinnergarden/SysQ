@@ -19,6 +19,7 @@ from qsys.research.generators.utils import (
     build_prev_trading_date_lookup as _build_prev_trading_date_lookup,
     cs_zscore as _cs_zscore,
 )
+from qsys.signal.alpha_v1.calibrate import ProbabilityCalibrator
 from qsys.utils.logger import log
 
 
@@ -136,19 +137,41 @@ class LightGBMBinaryGenerator:
             mode="binary",
         )
 
-        # ── Predict — output probability directly ──
+        # ── Calibrate: isotonic on trailing holdout of training window ──
+        from qsys.signal.alpha_v1.labels import robust_zscore_transform as _rzt
+        cal_train_dates = sorted(set(
+            d for d in frame["trade_date"].unique() if train_start <= d <= train_end
+        ))
+        n_calib = max(1, int(len(cal_train_dates) * 0.15))
+        calib_start = cal_train_dates[-n_calib]
+        cal_sub = frame[frame["trade_date"].between(calib_start, cal_train_dates[-1])].copy()
+        calibrator = None
+        if not cal_sub.empty and len(cal_sub) > 100:
+            Xz_c = _rzt(cal_sub[clean_features].fillna(0.0).astype(np.float32), center, scale)
+            cal_sub["raw_prob"] = model.predict(Xz_c.values)
+            cm = cal_sub.merge(
+                label_df[["trade_date", "instrument", "label_value"]],
+                on=["trade_date", "instrument"], how="inner")
+            if not cm.empty and cm["label_value"].nunique() == 2:
+                pobj = ProbabilityCalibrator(method="isotonic", use_margin=False)
+                pobj.fit(cm["raw_prob"].values, cm["label_value"].values)
+                calibrator = pobj
+                log.info("Calibrator fitted on %d holdout samples", len(cm))
+
+        # ── Predict calibrated probability ──
         pred = frame[frame["trade_date"].between(predict_start, predict_end)].copy()
         if pred.empty:
             raise ValueError(f"No data for predict window [{predict_start}, {predict_end}]")
 
-        pred_prob = predict_model(
-            model, center, scale,
-            pred[clean_features].fillna(0.0).astype(np.float32),
-            mode="binary",
-        )
-        pred["pred_prob"] = pred_prob.values
+        pred_prob = predict_model(model, center, scale,
+                                  pred[clean_features].fillna(0.0).astype(np.float32), mode="binary")
 
-        # Assemble output — probability IS the score (no z-score needed)
+        if calibrator is not None:
+            pred["score"] = calibrator.predict(pred_prob.values)
+        else:
+            pred["score"] = pred_prob.values
+
+        # Assemble output — calibrated probability as score
         prev_td = _build_prev_trading_date_lookup(predict_start, predict_end)
         rows: list[dict] = []
         for d in sorted(pred["trade_date"].unique()):
@@ -161,7 +184,7 @@ class LightGBMBinaryGenerator:
                     "instrument": str(r["instrument"]),
                     "signal_id": signal_id,
                     "signal_run_id": signal_run_id,
-                    "score": float(r["pred_prob"]) if pd.notna(r["pred_prob"]) else 0.0,
+                    "score": float(r["score"]) if pd.notna(r["score"]) else 0.0,
                 })
 
         result = pd.DataFrame(rows)
