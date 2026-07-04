@@ -1,11 +1,17 @@
-"""AlphaV1Trainer — wraps the existing weekly training script.
+"""AlphaV1Trainer — DEPRECATED legacy trainer for alpha_v1.
 
-Calls ``scripts/run_alpha_v1_weekly_train.py`` via subprocess and produces
-a ``TrainingResult``.
+Not used by current production training path.  Kept only for historical
+compatibility.
 
-This is a **thin wrapper** — the goal is interface stabilisation, not
-training rewrite.  All LGBM logic, feature engineering, and model saving
-remain in the script.
+Do NOT use for new training work.  Do NOT add new feature-combination-specific
+training scripts (e.g. ``run_alpha_vX_weekly_train.py``).
+
+Future direction: generic training entrypoint driven by::
+
+    model_id + label_id + feature_list_id + universe + train_window + output_dir + pointer_mode
+
+The underlying script called by this class (``run_alpha_v1_weekly_train.py``)
+has been moved to ``scripts/deprecated/`` and is also legacy.
 """
 from __future__ import annotations
 
@@ -18,6 +24,7 @@ from typing import Any
 
 from qsys.model.training import TrainingResult
 
+# Legacy-only path — not an active production training entrypoint.
 _TRAIN_SCRIPT = "scripts/deprecated/run_alpha_v1_weekly_train.py"
 
 
@@ -90,9 +97,15 @@ def _discover_model_dir(project_root: Path) -> str:
 
 
 class AlphaV1Trainer:
-    """Alpha V1 weekly training wrapper.
+    """DEPRECATED — Alpha V1 weekly training wrapper.
 
-    Usage::
+    .. deprecated::
+        This trainer is not part of the current production training path.
+        Kept for historical compatibility.
+        Future direction: generic training entrypoint driven by
+        ``model_id + label_id + feature_list_id + universe + train_window``.
+
+    Usage (legacy)::
 
         trainer = AlphaV1Trainer(project_root=Path("."))
         result = trainer.run(ctx)
