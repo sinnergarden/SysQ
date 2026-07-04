@@ -112,22 +112,8 @@ usecases:
       - qsys/backtest/
       - deploy/
 
-  UC_SINGLE_STOCK_REVIEW:
-    status: draft
-    owner_agent: research_agent
-    entrypoints:
-      - TBD
-    artifacts:
-      - TBD (reuses existing data sources)
-    checks:
-      - TBD
-    allowed_paths:
-      - scripts/dev/
-      - notebooks/
-    forbidden_paths:
-      - qsys/ledger/
-      - qsys/trader/
-      - qsys/broker/
+  # NOTE: UC_SINGLE_STOCK_REVIEW has been merged into UC_UI_ANALYSIS as the
+  # "single stock review" view.  No independent CLI/notebook entrypoint needed.
 
   UC_CANDIDATE_PROMOTION:
     status: stable
@@ -178,6 +164,7 @@ usecases:
     status: draft
     owner_agent: stock_research_agent
     entrypoints:
+      - scripts/research/run_stock_research.py
       - prompts/stock_research/final_stock_memo.md
     artifacts:
       - research_memos/{ts_code}/{date}/stock_research_memo.md

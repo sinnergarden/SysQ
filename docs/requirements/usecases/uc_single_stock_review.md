@@ -1,10 +1,14 @@
-# UC_SINGLE_STOCK_REVIEW: Single Stock Review
+# UC_SINGLE_STOCK_REVIEW: Single Stock Review（已融合到 UC_UI_ANALYSIS）
 
 ## Status
-draft
+merged — 此 use case 已融合到 `UC_UI_ANALYSIS` 首批交付，不再作为独立 use case 开发。
+详见 `uc_ui_analysis.md` 中"单股视角 review"。
 
 ## User Goal
 研究员或 operator 可以查看单只股票的 K 线、信号得分、特征值、持仓历史、交易记录，用于 debug 和归因分析。
+
+## 融合说明
+本文件保留供历史参考。后续开发请走 UC_UI_ANALYSIS 入口。
 
 ## Scope
 包含：

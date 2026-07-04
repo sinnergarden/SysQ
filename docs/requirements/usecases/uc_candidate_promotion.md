@@ -56,4 +56,4 @@ operator_agent
 - `qsys/ops/daily_runner.py`
 
 ## Open Questions
-- 自动 gate 评估（IC/IR/drawdown check）是 Phase 2 做还是 Phase 1 收尾做？
+- （已定）自动 gate 评估（IC/IR/drawdown check）以后做，当前留 TODO 标记即可。

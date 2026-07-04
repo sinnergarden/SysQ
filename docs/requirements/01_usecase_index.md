@@ -7,6 +7,14 @@
 
 ---
 
+## 原则
+
+- 每个正式 use case（status=stable）有唯一 canonical entrypoint，且必须有测试。
+- Entrypoint 输入输出变更（新增参数、扩展 schema 等）必须确保向后兼容。
+- 所有命令必须对应一个 use case。agent 发现请求不在任何 use case 中时，必须先与用户确认是否为临时请求。若是，注册为 UC_TEMPORARY_REQUESTS；同一临时请求执行超过 2 次，必须补文档并考虑收束为正式 use case。
+
+---
+
 ## 索引
 
 | ID | 名称 | 类别 | 状态 | 入口 | Owner |
@@ -15,11 +23,12 @@
 | UC_RESEARCH_BACKTEST | Research Backtest | B — Research Backtest | stable | `scripts/run_research.py`, `scripts/research/backtest_from_signal.py`, `scripts/run_signal_analytics.py` | research_agent |
 | UC_MODEL_TRAINING | Model Training | C — Model Training | stable | `scripts/run_daily_batch.py --mode train` | builder_agent |
 | UC_UI_ANALYSIS | UI Analysis | D — UI Analysis | draft | `scripts/run_research_ui_api.py` | ui_agent |
-| UC_SINGLE_STOCK_REVIEW | Single Stock Review | E — Single Stock Review | draft | TBD | research_agent |
 | UC_CANDIDATE_PROMOTION | Candidate Promotion | F — Candidate Promotion | stable | `scripts/promote_candidate.py` | operator_agent |
 | UC_DIAGNOSTICS | Diagnostics | G — Diagnostics | draft | `scripts/checks/`, `harness/checks/` | reviewer_agent |
-| UC_STOCK_FUNDAMENTAL_RESEARCH | Stock Fundamental Research | H — Stock Fundamental Research | draft | TBD (prompt-based) | stock_research_agent |
+| UC_STOCK_FUNDAMENTAL_RESEARCH | Stock Fundamental Research | H — Stock Fundamental Research | draft | `scripts/research/run_stock_research.py` | stock_research_agent |
 | UC_TEMPORARY_REQUESTS | Temporary Requests | I — Temporary | experimental | ad-hoc scripts | main_agent |
+
+> **注意**: UC_SINGLE_STOCK_REVIEW 已融合到 UC_UI_ANALYSIS 首批交付（单股视角 review），不再作为独立 use case。文档保留供参考。
 
 ---
 
@@ -29,8 +38,7 @@
 A — Daily Ops       → 每日生产运行链路
 B — Research BT     → 历史回放研究链路
 C — Model Training  → 模型训练与 artifact 管理
-D — UI Analysis     → 只读可视化层
-E — Single Stock    → 单票级 debug
+D — UI Analysis     → 只读可视化层（含单股 review）
 F — Candidate       → 晋级 → shadow → prod
 G — Diagnostics     → 质量检查
 H — Stock Research  → 基本面/消息面 agent 研究

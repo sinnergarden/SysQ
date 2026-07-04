@@ -21,8 +21,8 @@ SysQ 是一个**个人可维护的 A 股日频量化系统**，当前正在从�
 
 继承自 `docs/ARCHITECTURE.md` 的设计原则，额外补充：
 
-- **需求文档驱动** — 重要的长期功能先更新 use case registry，再实现。不做无文档的"看起来有用"功能。
-- **入口收束** — 所有代码入口必须对应一个 use case。临时脚本不占 canonical entrypoint 名额。
+- **需求文档驱动** — 所有命令必须对应一个 use case。如果 agent 发现用户请求不在任何 use case 中，必须先与用户确认是否为临时请求。若是，注册为 UC_TEMPORARY_REQUESTS；若同一临时请求出现超过 2 次，必须补文档并考虑是否收束为正式 use case。
+- **唯一入口 + 测试兜底** — 每个正式 use case 有唯一 canonical entrypoint，且必须有测试。当 use case 的输入输出发生变更（如新增参数、扩展 schema）时，必须确保向后兼容。
 - **Agent 角色分离** — 不同类型的工作由不同的 agent 角色主导，避免单 agent 跨界越权。
 - **Harness 优先** — 关键约束写成自动化 check，不依赖人的记忆。
 
@@ -54,7 +54,7 @@ SysQ 是一个**个人可维护的 A 股日频量化系统**，当前正在从�
 | B | Research Backtest | 特征/信号/候选回测，模型比较 |
 | C | Model Training | shadow retrain、模型 artifact、训练评估 |
 | D | UI Analysis | 策略看板、回测查看、信号可视化 |
-| E | Single Stock Review | 单票 K线、信号、特征、交易记录 debug |
+| E | _(已融合到 D)_ | 单票 review 合入 UI Analysis |
 | F | Candidate Promotion | candidate → shadow → prod 晋级流程 |
 | G | Diagnostics | 数据/信号/ledger/artifact 质量检查 |
 | H | Stock Fundamental Research | 财报/公告/新闻研究，输出 stock memo |

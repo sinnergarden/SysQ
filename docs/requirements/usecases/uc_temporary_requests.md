@@ -52,4 +52,4 @@ main_agent
 - `deploy/`
 
 ## Open Questions
-- 临时请求是否需要在 use case registry 中注册？建议：如果执行超过 2 次，应升级为 draft UC 并补文档。
+- （已定）所有命令必须对应一个 use case。agent 发现用户请求不在任何 use case 中时，必须先与用户确认是否为临时请求。若是，注册为 UC_TEMPORARY_REQUESTS。同一临时请求执行超过 2 次，必须补文档并考虑收束为正式 use case。

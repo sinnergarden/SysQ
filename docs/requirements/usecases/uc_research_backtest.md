@@ -75,4 +75,4 @@ research_agent
 - `deploy/`
 
 ## Open Questions
-- IC 计算存在两套实现（`signal_analytics.py` DuckDB 路径 vs `evaluation.py` 路径），何时统一？
+- （已定）IC 计算统一路线：rolling 过程中模型和信号层都存档，通过 SignalStore 做信号组合，然后统一算 IC/metrics 以及运行回测。后续应逐步收束到单一路径。

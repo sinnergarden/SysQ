@@ -36,6 +36,8 @@ stable
 - `scripts/run_daily.py --strategy <id> --mode preopen|postclose|train`
 - `scripts/run_daily_batch.py --stage candidate --mode preopen|postclose`
 
+每个 canonical entrypoint 必须有对应测试。entrypoint 的输入输出变更（新增参数、扩展 schema 等）必须确保向后兼容。
+
 ## Key Artifacts
 - `data/trade.db` — ledger SOT
 - `daily/{date}/pre_open/signals/` — signal basket

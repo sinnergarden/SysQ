@@ -35,7 +35,7 @@ REQUIRED_MAP_FIELDS = {
     "forbidden_paths",
 }
 
-# Sections every uc_*.md must have
+# Sections every uc_*.md must have (skipped for merged/deprecated/archived files)
 REQUIRED_SECTIONS = {
     "Status",
     "User Goal",
@@ -51,6 +51,8 @@ REQUIRED_SECTIONS = {
     "Open Questions",
 }
 
+SKIP_STATUSES = {"merged", "deprecated", "archived"}
+
 
 def _find_sections(content: str) -> set[str]:
     """Extract markdown section headings (## or higher) from content."""
@@ -60,6 +62,16 @@ def _find_sections(content: str) -> set[str]:
         if m:
             sections.add(m.group(1).strip())
     return sections
+
+
+def _is_skipped_file(content: str) -> bool:
+    """Check if a uc_*.md file has a status that exempts it from full checks."""
+    lines = content.splitlines()
+    for i, line in enumerate(lines):
+        if line.strip() == "## Status":
+            if i + 1 < len(lines) and lines[i + 1].strip().lower() in SKIP_STATUSES:
+                return True
+    return False
 
 
 def check_harness_map() -> list[str]:
@@ -100,7 +112,7 @@ def check_harness_map() -> list[str]:
 
 
 def check_usecase_md_files() -> list[str]:
-    """Check every uc_*.md has all required sections."""
+    """Check every uc_*.md has all required sections (skip merged/deprecated)."""
     violations: list[str] = []
 
     if not USECASES_DIR.exists():
@@ -119,11 +131,12 @@ def check_usecase_md_files() -> list[str]:
             violations.append(f"  {md_path.name}: cannot read — {e}")
             continue
 
-        sections = _find_sections(content)
+        if _is_skipped_file(content):
+            continue
 
-        uc_id = md_path.stem  # e.g. "uc_daily_ops"
+        sections = _find_sections(content)
+        uc_id = md_path.stem
         for req_sec in REQUIRED_SECTIONS:
-            # Support both "## Status" and "### Status"
             if req_sec not in sections:
                 violations.append(f"  {uc_id}: missing required section '## {req_sec}'")
 
@@ -144,9 +157,15 @@ def check_usecase_index() -> list[str]:
         return violations
 
     for md_path in USECASES_DIR.glob("uc_*.md"):
-        uc_id = md_path.stem  # e.g. "uc_daily_ops"
-        uc_id_upper = uc_id.upper()  # e.g. "UC_DAILY_OPS"
-        # Check either form appears in index
+        try:
+            content = md_path.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        if _is_skipped_file(content):
+            continue
+
+        uc_id = md_path.stem
+        uc_id_upper = uc_id.upper()
         if uc_id not in index_content and uc_id_upper not in index_content:
             violations.append(f"  {uc_id}/{uc_id_upper}: not listed in {USECASE_INDEX_PATH.name}")
 

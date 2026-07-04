@@ -82,11 +82,12 @@ watch / pass / candidate
 ```
 
 ## Canonical Entrypoints
-TBD — 当前为 prompt-based agent 工作流，没有 Python entrypoint。
-远期可考虑 `scripts/research/run_stock_research.py --ts-code <code>`。
+- `scripts/research/run_stock_research.py --ts-code <code>`（首批实现，后续着重开发）
+- `prompts/stock_research/final_stock_memo.md` — prompt template（agent 辅助使用）
 
 ## Key Artifacts
 - `research_memos/{ts_code}/{date}/stock_research_memo.md`
+  - 此目录应加入 `.gitignore`（避免 PDF、csv 等大文件污染仓库）
 - `prompts/stock_research/final_stock_memo.md` — prompt template
 
 ## Required Checks
@@ -111,6 +112,6 @@ stock_research_agent
 - `deploy/`
 
 ## Open Questions
-- 是否需要独立 CLI 入口？还是通过 agent shell 直接使用 prompt template 即可？
+- （已定）首批提供轻量 CLI `scripts/research/run_stock_research.py --ts-code <code>`，后续着重开发。
 - 财报 PDF 的获取路径是什么（tushare 财报接口？手动下载？）
-- research_memo 目录是否应该 gitignore（避免大文件污染仓库）？
+- （已定）`research_memos/` 加入 `.gitignore`。
