@@ -67,6 +67,26 @@ class DailyRunner:
         """Path to daily/<trade_date>/pre_open/signals/ (legacy contract path)."""
         return ctx.project_root / "daily" / ctx.trade_date / "pre_open" / "signals"
 
+    @staticmethod
+    def _resolve_model_path(ctx: DailyRunContext) -> Path:
+        """Resolve model path via approved pointer — never guess latest.
+
+        This is called inside preopen *after* ``strategy.load_model()`` has
+        already succeeded, so the pointer should always be valid.  The catch
+        is only a safety net for debug-run edge cases.
+        """
+        from qsys.ops.model_resolver import resolve_model_for_strategy  # noqa: PLC0415
+
+        try:
+            resolved = resolve_model_for_strategy(
+                project_root=ctx.project_root,
+                strategy_id=ctx.strategy_id,
+                mode="shadow",
+            )
+            return resolved.model_path
+        except FileNotFoundError:
+            return ctx.run_root
+
     def _save_signal_basket(
         self, predictions: pd.DataFrame, ctx: DailyRunContext, data_date: str
     ) -> None:
@@ -119,7 +139,7 @@ class DailyRunner:
             "price_basis_field": "close",
             "price_basis_label": f"close@{data_date} -> next-session signal basket",
             "model_name": ctx.strategy_id,
-            "model_path": str(ctx.project_root / "experiments" / f"{ctx.strategy_id}_models" / "latest"),
+            "model_path": str(self._resolve_model_path(ctx)),
             "universe": "csi300",
         }).sort_values("score_rank").reset_index(drop=True)
 

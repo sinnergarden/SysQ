@@ -60,6 +60,35 @@ def _try_discover_metrics(project_root: Path, model_dir_str: str) -> dict[str, A
     return metrics
 
 
+def _discover_model_dir(project_root: Path) -> str:
+    """Find the latest timestamped model dir under experiments/alpha_v1_models/.
+
+    The training script creates a timestamped directory (e.g. ``20260704_153000``).
+    We pick the directory with the newest name alphabetically (ISO timestamps
+    sort chronologically).
+
+    Returns
+    -------
+    str
+        Relative path from *project_root* to the model directory.
+        Empty string if nothing was found.
+    """
+    base = project_root / "experiments" / "alpha_v1_models"
+    if not base.exists():
+        return ""
+    candidates = sorted(
+        [d for d in base.iterdir() if d.is_dir() and not d.name.startswith(".")],
+        reverse=True,
+    )
+    if not candidates:
+        return ""
+    model_dir = candidates[0]
+    try:
+        return str(model_dir.relative_to(project_root))
+    except ValueError:
+        return str(model_dir)
+
+
 class AlphaV1Trainer:
     """Alpha V1 weekly training wrapper.
 
@@ -127,15 +156,34 @@ class AlphaV1Trainer:
                 message=f"Training exited with code {result.returncode}",
             )
 
-        # Discover model dir from the latest symlink
-        model_dir_symlink = self._project_root / "experiments" / "alpha_v1_models" / "latest"
-        model_dir_str = ""
-        if model_dir_symlink.exists():
-            try:
-                resolved = model_dir_symlink.resolve()
-                model_dir_str = str(resolved.relative_to(self._project_root))
-            except ValueError:
-                model_dir_str = str(resolved)
+        # Resolve model directory by discovering the newest timestamped dir
+        model_dir_str = _discover_model_dir(self._project_root)
+        if not model_dir_str:
+            return TrainingResult(
+                strategy_id=strategy_id,
+                model_version=model_version,
+                model_dir="",
+                status="failed",
+                message="No model dir found after training",
+            )
+
+        model_id = f"{strategy_id}_{model_version}"
+
+        # Write shadow pointer — this is the canonical way to publish a model
+        from qsys.ops.model_resolver import write_model_pointer  # noqa: PLC0415
+
+        write_model_pointer(
+            project_root=self._project_root,
+            strategy_id=strategy_id,
+            mode="shadow",
+            model_id=model_id,
+            model_path=model_dir_str,
+            created_at=datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+            status="approved",
+            source_run_id=getattr(ctx, "run_id", ""),
+            approved_by="system",
+        )
+        print(f"  ✓ Shadow pointer written: artifacts/registry/models/{strategy_id}/shadow.json → {model_dir_str}")
 
         artifacts = _discover_artifacts(self._project_root, model_dir_str)
         metrics = _try_discover_metrics(self._project_root, model_dir_str)

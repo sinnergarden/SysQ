@@ -195,7 +195,14 @@ class AlphaV1StrategyAdapter(BaseStrategyAdapter):
     def _model_dir(self) -> Path:
         if self._config_model_dir is not None:
             return self._config_model_dir
-        return self._project_root / "experiments/alpha_v1_models/latest"
+        from qsys.ops.model_resolver import resolve_model_for_strategy  # noqa: PLC0415
+
+        resolved = resolve_model_for_strategy(
+            project_root=self._project_root,
+            strategy_id="alpha_v1",
+            mode="shadow",
+        )
+        return resolved.model_path
 
     @property
     def _predictions_dir(self) -> Path:
