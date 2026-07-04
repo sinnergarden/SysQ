@@ -576,6 +576,10 @@ class BacktestRunner:
         signal_id_2: str | None = None,
         signal_run_id_2: str | None = None,
         blend_weight: float = 1.0,
+        maxdd_signal_id: str | None = None,
+        maxdd_signal_run_id: str | None = None,
+        maxdd_threshold: float | None = None,
+        maxdd_percentile: float | None = None,
     ) -> BacktestRunResult:
         """Accumulate-mode backtest: never sell based on signal decay.
 
@@ -594,7 +598,7 @@ class BacktestRunner:
         hash_input = (f"accumulate_{strategy_template_id}_{signal_id}_{signal_run_id}_"
                       f"{top_n}_{commission}_{slippage}_{rebalance_freq}_"
                       f"{start_date}_{end_date}_{initial_capital}_{signal_id_2}_"
-                      f"{blend_weight}")
+                      f"{blend_weight}_{maxdd_signal_id}_{maxdd_signal_run_id}_{maxdd_threshold}_{maxdd_percentile}")
         short_hash = hashlib.sha256(hash_input.encode()).hexdigest()[:8]
         strategy_run_id = f"accumulate_{strategy_template_id}__{signal_id}__{short_hash}"
         backtest_id = f"acc_{start_date}_{end_date}_{short_hash}"
@@ -735,7 +739,34 @@ class BacktestRunner:
                 sorted_scores = day_signal.sort_values(score_column, ascending=False)
                 held_set = set(account.positions.keys())
                 slot_count = top_n - len(account.positions)
-                buy_codes = sorted_scores[~sorted_scores["instrument"].isin(held_set)].head(slot_count)["instrument"].tolist()
+                buy_codes = sorted_scores[~sorted_scores["instrument"].isin(held_set)].head(slot_count if maxdd_percentile is None else 50)["instrument"].tolist()
+                
+                # ── MaxDD risk filter (absolute threshold or percentile) ──
+                if (maxdd_threshold is not None or maxdd_percentile is not None) and maxdd_signal_id and buy_codes:
+                    try:
+                        maxdd_sig = signal_store.load_signal_for_date(maxdd_signal_id, maxdd_signal_run_id, trade_date)
+                        maxdd_sig = None if maxdd_sig.empty else maxdd_sig
+                    except Exception:
+                        maxdd_sig = None
+
+                    if maxdd_sig is not None:
+                        # No-lookahead check — violation raises, not swallowed
+                        if "data_date" in maxdd_sig.columns and "trade_date" in maxdd_sig.columns:
+                            _dd = pd.to_datetime(maxdd_sig["data_date"]).dt.strftime("%Y-%m-%d")
+                            _td = pd.to_datetime(maxdd_sig["trade_date"]).dt.strftime("%Y-%m-%d")
+                            _v = maxdd_sig[_dd >= _td]
+                            if len(_v) > 0:
+                                raise ValueError(f"Maxdd signal lookahead at {trade_date}: {len(_v)} rows")
+
+                        maxdd_map = dict(zip(maxdd_sig["instrument"], maxdd_sig["score"]))
+                        if maxdd_threshold is not None:
+                            buy_codes = [c for c in buy_codes if maxdd_map.get(c, 0) < maxdd_threshold]
+                        else:
+                            scores = maxdd_sig["score"].dropna()
+                            threshold = float(scores.quantile(maxdd_percentile)) if len(scores) > 1 else 1.0
+                            buy_codes = [c for c in buy_codes if maxdd_map.get(c, 0) < threshold]
+                    # maxdd_sig is None → proceed without filter
+                
                 if buy_codes:
                     alloc_once = account.cash / len(buy_codes)
                     for code in buy_codes:
@@ -1270,6 +1301,10 @@ class BacktestRunner:
             "signal_id_2": signal_id_2,
             "signal_run_id_2": signal_run_id_2,
             "blend_weight": blend_weight,
+            "maxdd_signal_id": maxdd_signal_id,
+            "maxdd_signal_run_id": maxdd_signal_run_id,
+            "maxdd_threshold": maxdd_threshold,
+            "maxdd_percentile": maxdd_percentile,
             "strategy_run_id": strategy_run_id,
             "strategy_template_id": strategy_template_id,
             "signal_id": signal_id,
