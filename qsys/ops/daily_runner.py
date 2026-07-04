@@ -69,23 +69,19 @@ class DailyRunner:
 
     @staticmethod
     def _resolve_model_path(ctx: DailyRunContext) -> Path:
-        """Resolve model path via approved pointer — never guess latest.
+        """Resolve model path via approved pointer — fail-fast on missing pointer.
 
         This is called inside preopen *after* ``strategy.load_model()`` has
-        already succeeded, so the pointer should always be valid.  The catch
-        is only a safety net for debug-run edge cases.
+        already succeeded, so the pointer should always be valid.
         """
         from qsys.ops.model_resolver import resolve_model_for_strategy  # noqa: PLC0415
 
-        try:
-            resolved = resolve_model_for_strategy(
-                project_root=ctx.project_root,
-                strategy_id=ctx.strategy_id,
-                mode="shadow",
-            )
-            return resolved.model_path
-        except FileNotFoundError:
-            return ctx.run_root
+        resolved = resolve_model_for_strategy(
+            project_root=ctx.project_root,
+            strategy_id=ctx.strategy_id,
+            mode="shadow",
+        )
+        return resolved.model_path
 
     def _save_signal_basket(
         self, predictions: pd.DataFrame, ctx: DailyRunContext, data_date: str

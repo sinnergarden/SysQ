@@ -83,8 +83,13 @@ def resolve_model_for_strategy(
     """
     # 1. Strategy-aware pointer
     pointer = pointer_path_for_strategy(project_root, strategy_id, mode)
-    payload = _try_load_pointer(pointer, strategy_id, mode)
-    if payload is not None:
+    if pointer.exists():
+        payload = load_json(pointer)
+        if not payload:
+            raise ValueError(
+                f"Pointer file exists but is empty or invalid JSON: {pointer}"
+            )
+        _validate_pointer_payload(payload, strategy_id, mode)
         return _build_resolved(project_root, payload, pointer)
 
     # 2. Backward compat: legacy singleton pointer (alpha_v1/shadow only)
@@ -308,6 +313,9 @@ def _try_load_legacy_pointer(
         return None
 
     is_usable = latest_shadow_model_is_usable(project_root, payload)
+    if not is_usable:
+        return None
+
     return {
         "schema_version": 1,
         "strategy_id": "alpha_v1",
@@ -315,7 +323,7 @@ def _try_load_legacy_pointer(
         "model_id": payload.get("model_name", ""),
         "model_path": model_path,
         "created_at": payload.get("trained_at", ""),
-        "status": "approved" if is_usable else "unknown",
+        "status": "approved",
         "source_run_id": payload.get("train_run_id", ""),
         "artifact_hash": "",
         "approved_by": "system",

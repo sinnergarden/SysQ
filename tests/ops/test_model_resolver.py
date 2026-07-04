@@ -66,10 +66,22 @@ def _write_valid_pointer(
 
 def _write_legacy_pointer(
     project_root: Path, model_path: str | None = None
-) -> None:
-    """Write a legacy ``models/latest_shadow_model.json``."""
+) -> str:
+    """Write a legacy ``models/latest_shadow_model.json``.
+
+    Uses an **absolute** ``model_path`` because the legacy
+    ``latest_shadow_model_is_usable()`` function does ``Path(model_path).exists()``
+    without resolving relative to the project root.
+
+    Returns the absolute model path string written to the pointer.
+    """
     if model_path is None:
-        model_path = "experiments/alpha_v1_models/my_trained_model"
+        model_path = str(project_root / "experiments" / "alpha_v1_models" / "my_trained_model")
+    else:
+        # Resolve relative paths to absolute for legacy pointer tests
+        mp = Path(model_path)
+        if not mp.is_absolute():
+            model_path = str(project_root / mp)
     legacy_dir = project_root / "models"
     legacy_dir.mkdir(parents=True, exist_ok=True)
     payload = {
@@ -84,6 +96,13 @@ def _write_legacy_pointer(
     (legacy_dir / "latest_shadow_model.json").write_text(
         json.dumps(payload, indent=2) + "\n"
     )
+    # Create required artifact stubs so latest_shadow_model_is_usable passes
+    model_dir = Path(model_path)
+    model_dir.mkdir(parents=True, exist_ok=True)
+    for stub in ("config_snapshot.json", "training_summary.json",
+                 "decisions.json", "meta.yaml", "model.pkl"):
+        (model_dir / stub).write_text("")
+    return model_path
 
 
 # ── Tests ───────────────────────────────────────────────────────────────────
@@ -236,6 +255,32 @@ class TestWriteAndReadPointer:
         assert str(p2).endswith("artifacts/registry/models/alpha_v2/prod.json")
 
 
+class TestPointerMalformed:
+    def test_malformed_pointer_file_raises_value_error(self, tmp_project: Path) -> None:
+        """Canonical pointer file exists but malformed → ValueError, not missing."""
+        pointer = pointer_path_for_strategy(tmp_project, "alpha_v1", "shadow")
+        pointer.parent.mkdir(parents=True, exist_ok=True)
+        pointer.write_text('{"schema_version": 999, "strategy_id": "alpha_v1", "mode": "shadow"}')
+        with pytest.raises(ValueError, match="schema_version"):
+            resolve_model_for_strategy(
+                project_root=tmp_project,
+                strategy_id="alpha_v1",
+                mode="shadow",
+            )
+
+    def test_empty_pointer_file_raises_value_error(self, tmp_project: Path) -> None:
+        """Canonical pointer file exists but is empty → ValueError."""
+        pointer = pointer_path_for_strategy(tmp_project, "alpha_v1", "shadow")
+        pointer.parent.mkdir(parents=True, exist_ok=True)
+        pointer.write_text("{}")
+        with pytest.raises(ValueError, match="empty or invalid"):
+            resolve_model_for_strategy(
+                project_root=tmp_project,
+                strategy_id="alpha_v1",
+                mode="shadow",
+            )
+
+
 class TestBackwardCompat:
     def test_legacy_pointer_resolve(self, tmp_project: Path) -> None:
         """9. Legacy models/latest_shadow_model.json resolves for alpha_v1/shadow."""
@@ -284,6 +329,30 @@ class TestBackwardCompat:
         )
         # Should use new pointer, not legacy
         assert resolved.model_path.name == "my_trained_model"
+
+    def test_legacy_pointer_unusable_model_fails(self, tmp_project: Path) -> None:
+        """Legacy pointer exists but model directory missing → fail-fast."""
+        # Write legacy pointer JSON manually — pointing to a non-existent dir
+        legacy_dir = tmp_project / "models"
+        legacy_dir.mkdir(parents=True, exist_ok=True)
+        bad_path = str(tmp_project / "experiments" / "alpha_v1_models" / "nonexistent")
+        (legacy_dir / "latest_shadow_model.json").write_text(
+            json.dumps({
+                "model_name": "alpha_v1_bad",
+                "model_path": bad_path,
+                "mainline_object_name": "feature_173",
+                "bundle_id": "bundle_semantic_demo",
+                "train_run_id": "weekly_retrain_bad",
+                "trained_at": "2026-07-04T15:30:00Z",
+                "status": "success",
+            }, indent=2) + "\n"
+        )
+        with pytest.raises(FileNotFoundError):
+            resolve_model_for_strategy(
+                project_root=tmp_project,
+                strategy_id="alpha_v1",
+                mode="shadow",
+            )
 
 
 class TestResolvedModel:

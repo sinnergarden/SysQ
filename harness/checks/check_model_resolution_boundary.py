@@ -22,6 +22,14 @@ EXPECTED_RESOLVER_USE: dict[str, str] = {
     "qsys/ops/daily_runner.py": "resolve_model_for_strategy",
 }
 
+# daily_runner's _resolve_model_path must NOT have a fallback path after
+# calling resolve_model_for_strategy (no except, no ctx.run_root return).
+FORBIDDEN_IN_DAILY_RUNNER_RESOLVE: list[str] = [
+    "ctx.run_root",
+    "except FileNotFoundError",
+    "except Exception",
+]
+
 FORBIDDEN_IN_SCHEDULER: list[str] = [
     ".stat().st_mtime",
     "sort(key=lambda x: x.stat().st_mtime",
@@ -78,6 +86,27 @@ def main() -> int:
     # 4. Check find_latest_model is NOT a mtime-based implementation
     if "stat().st_mtime" in scheduler_content:
         violations.append(f"  {scheduler_rel}: find_latest_model must not use mtime sorting")
+
+    # 5. Check daily_runner._resolve_model_path has no fallback
+    dr_rel = "qsys/ops/daily_runner.py"
+    dr_path = PROJECT_ROOT / dr_rel
+    dr_content = dr_path.read_text(encoding="utf-8")
+    if "_resolve_model_path" in dr_content:
+        # Find the method body and check for forbidden patterns
+        in_resolve = False
+        for lineno, line in enumerate(dr_content.splitlines(), 1):
+            if "def _resolve_model_path" in line:
+                in_resolve = True
+                continue
+            if in_resolve and line.startswith("    ") and "def " in line:
+                in_resolve = False
+            if in_resolve:
+                for pattern in FORBIDDEN_IN_DAILY_RUNNER_RESOLVE:
+                    if pattern in line:
+                        violations.append(
+                            f"  {dr_rel}:{lineno}: _resolve_model_path must not "
+                            f"contain '{pattern}' (no fallback allowed)"
+                        )
 
     if violations:
         print(f"❌ Found {len(violations)} boundary violation(s):\n")
