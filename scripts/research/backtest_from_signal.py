@@ -104,6 +104,10 @@ def main() -> None:
     if args.accumulate:
         result = runner.run_accumulate(**kwargs)
     else:
+        kwargs.pop("maxdd_signal_id", None)
+        kwargs.pop("maxdd_signal_run_id", None)
+        kwargs.pop("maxdd_threshold", None)
+        kwargs.pop("maxdd_percentile", None)
         kwargs["max_weight"] = args.max_weight
         result = runner.run_from_signal_cache(**kwargs)
 

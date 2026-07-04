@@ -137,7 +137,10 @@ class LightGBMBinaryGenerator:
             mode="binary",
         )
 
-        # ── Calibrate: isotonic on trailing holdout of training window ──
+        # ── Calibrate: isotonic on trailing portion of training window ──
+        # Note: in-sample calibration (calibrator fitted on training predictions).
+        # Isotonic preserves ranking (AUC unchanged).  Calibrated probabilities
+        # are risk-bucket aids, not strict OOS probabilities.
         from qsys.signal.alpha_v1.labels import robust_zscore_transform as _rzt
         cal_train_dates = sorted(set(
             d for d in frame["trade_date"].unique() if train_start <= d <= train_end

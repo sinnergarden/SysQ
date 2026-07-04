@@ -598,7 +598,7 @@ class BacktestRunner:
         hash_input = (f"accumulate_{strategy_template_id}_{signal_id}_{signal_run_id}_"
                       f"{top_n}_{commission}_{slippage}_{rebalance_freq}_"
                       f"{start_date}_{end_date}_{initial_capital}_{signal_id_2}_"
-                      f"{blend_weight}_{maxdd_signal_id}_{maxdd_threshold}_{maxdd_percentile}")
+                      f"{blend_weight}_{maxdd_signal_id}_{maxdd_signal_run_id}_{maxdd_threshold}_{maxdd_percentile}")
         short_hash = hashlib.sha256(hash_input.encode()).hexdigest()[:8]
         strategy_run_id = f"accumulate_{strategy_template_id}__{signal_id}__{short_hash}"
         backtest_id = f"acc_{start_date}_{end_date}_{short_hash}"
@@ -741,23 +741,26 @@ class BacktestRunner:
                 slot_count = top_n - len(account.positions)
                 buy_codes = sorted_scores[~sorted_scores["instrument"].isin(held_set)].head(slot_count if maxdd_percentile is None else 50)["instrument"].tolist()
                 
-                # ── MaxDD risk filter (percentile-based) ──
-                if maxdd_threshold is not None and maxdd_signal_id and buy_codes:
+                # ── MaxDD risk filter (absolute threshold or percentile) ──
+                if (maxdd_threshold is not None or maxdd_percentile is not None) and maxdd_signal_id and buy_codes:
                     try:
                         maxdd_sig = signal_store.load_signal_for_date(maxdd_signal_id, maxdd_signal_run_id, trade_date)
                         if not maxdd_sig.empty:
+                            # No-lookahead check (preopen semantics: data_date < trade_date)
+                            if "data_date" in maxdd_sig.columns and "trade_date" in maxdd_sig.columns:
+                                _dd = pd.to_datetime(maxdd_sig["data_date"]).dt.strftime("%Y-%m-%d")
+                                _td = pd.to_datetime(maxdd_sig["trade_date"]).dt.strftime("%Y-%m-%d")
+                                _v = maxdd_sig[_dd >= _td]
+                                if len(_v) > 0:
+                                    raise ValueError(f"Maxdd signal lookahead at {trade_date}: {len(_v)} rows")
+                            
                             maxdd_map = dict(zip(maxdd_sig["instrument"], maxdd_sig["score"]))
-                            buy_codes = [c for c in buy_codes if maxdd_map.get(c, 0) < maxdd_threshold]
-                    except Exception:
-                        pass
-                if maxdd_percentile is not None and maxdd_signal_id and buy_codes:
-                    try:
-                        maxdd_sig = signal_store.load_signal_for_date(maxdd_signal_id, maxdd_signal_run_id, trade_date)
-                        if not maxdd_sig.empty:
-                            scores = maxdd_sig["score"].dropna()
-                            threshold = float(scores.quantile(maxdd_percentile)) if len(scores) > 1 else 1.0
-                            maxdd_map = dict(zip(maxdd_sig["instrument"], maxdd_sig["score"]))
-                            buy_codes = [c for c in buy_codes if maxdd_map.get(c, 0) < threshold]
+                            if maxdd_threshold is not None:
+                                buy_codes = [c for c in buy_codes if maxdd_map.get(c, 0) < maxdd_threshold]
+                            else:
+                                scores = maxdd_sig["score"].dropna()
+                                threshold = float(scores.quantile(maxdd_percentile)) if len(scores) > 1 else 1.0
+                                buy_codes = [c for c in buy_codes if maxdd_map.get(c, 0) < threshold]
                     except Exception:
                         pass  # maxdd signal unavailable, proceed without filter
                 
