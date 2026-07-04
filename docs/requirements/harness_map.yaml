@@ -1,19 +1,21 @@
 # Harness Map — SysQ v0.1
 # Maps use cases to entrypoints, artifacts, checks, and owner agents.
 # Used by harness checks and multi-agent routing.
+# Canonical entrypoints aligned with docs/USE_CASES.md §7.
 
 usecases:
   UC_DAILY_OPS:
     status: stable
     owner_agent: operator_agent
     entrypoints:
+      - scripts/data_sync.py
       - scripts/run_daily.py
-      - scripts/run_daily_batch.py
     artifacts:
       - daily/{trade_date}/pre_open/signals/
       - daily/{trade_date}/post_close/
       - runs/{trade_date}/{run_id}/
       - data/trade.db
+      - data/canonical/daily/
     checks:
       - harness/checks/check_model_resolution_boundary.py
       - harness/checks/check_no_latest_model_resolution.py
@@ -35,7 +37,7 @@ usecases:
     entrypoints:
       - scripts/run_research.py
       - scripts/run_signal_analytics.py
-      - scripts/research/backtest_from_signal.py
+      - scripts/run_backtest.py
       - scripts/compute_labels.py
     artifacts:
       - data/research/signals/{signal_id}/{signal_run_id}/
@@ -69,7 +71,7 @@ usecases:
     status: stable
     owner_agent: builder_agent
     entrypoints:
-      - scripts/run_daily_batch.py --mode train
+      - scripts/run_daily.py --mode train
     artifacts:
       - experiments/{strategy_id}_models/{timestamp}/
       - artifacts/registry/models/{strategy_id}/shadow.json
@@ -143,8 +145,6 @@ usecases:
     entrypoints:
       - scripts/checks/
       - harness/checks/
-      - scripts/check_framework_stability.py
-      - scripts/check_dr_bt_equivalence.py
     artifacts:
       - TBD (check results are stdout / JSON, no persistent storage)
     checks:

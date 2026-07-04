@@ -32,10 +32,12 @@ draft
 
 ## Outputs
 - UI 页面（只读，不产生持久化 artifact）
-- Research UI API（`scripts/run_research_ui_api.py`）
 
 ## Canonical Entrypoints
-- `scripts/run_research_ui_api.py`
+
+| Entrypoint | 职责 | Inputs | Outputs / Artifacts |
+|-----------|------|--------|---------------------|
+| `scripts/run_research_ui_api.py` | Research UI API 服务 | daily read model、research index、ledger query | UI 页面（只读） |
 
 ## Key Artifacts
 - 无持久化 artifact（UI 是读取层）

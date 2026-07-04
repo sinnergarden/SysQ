@@ -34,10 +34,15 @@ stable
 - 信号评估 metrics
 
 ## Canonical Entrypoints
-- `scripts/run_research.py --config <path>`
-- `scripts/run_signal_analytics.py --experiment-id <id>`
-- `scripts/research/backtest_from_signal.py --signal-id <id> --signal-run-id <id>`
-- `scripts/compute_labels.py --config <path>`
+
+| Entrypoint | 职责 | 对应 UC | Inputs | Outputs / Artifacts |
+|-----------|------|---------|--------|---------------------|
+| `scripts/run_research.py --config <path>` | 信号研究 + 信号组合 | UC-4/6 | 研究配置 YAML | `data/research/signals/`, `data/research/experiments/` |
+| `scripts/run_signal_analytics.py --experiment-id <id>` | 信号只读分析 | UC-5 | experiment_id / signal_run_ref + label_id | IC/RankIC/ICIR 矩阵 |
+| `scripts/run_backtest.py --config <path>` | 信号驱动回测 | UC-7 | SignalRunRef + 策略配置 | `data/research/backtests/` |
+| `scripts/compute_labels.py --config <path>` | 标签计算 | UC-3 | 标签配置 YAML | `data/research/labels/` |
+
+对齐 `docs/USE_CASES.md` §7。
 
 ## Key Artifacts
 - `data/research/signals/` — SignalStore

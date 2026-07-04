@@ -82,8 +82,11 @@ watch / pass / candidate
 ```
 
 ## Canonical Entrypoints
-- `scripts/research/run_stock_research.py --ts-code <code>`（首批实现，后续着重开发）
-- `prompts/stock_research/final_stock_memo.md` — prompt template（agent 辅助使用）
+
+| Entrypoint | 职责 | Inputs | Outputs / Artifacts |
+|-----------|------|--------|---------------------|
+| `scripts/research/run_stock_research.py --ts-code <code>` | 执行单票基本面研究 | ts_code、财报 PDF、公告、新闻 | `research_memos/{ts_code}/{date}/stock_research_memo.md` |
+| `prompts/stock_research/final_stock_memo.md` | prompt template（agent 辅助使用） | — | 结构化 memo 输出格式约束 |
 
 ## Key Artifacts
 - `research_memos/{ts_code}/{date}/stock_research_memo.md`

@@ -32,10 +32,11 @@ draft
 - 检查报告（控制台、结构化 JSON）
 
 ## Canonical Entrypoints
-- `scripts/checks/` 下各 checker
-- `harness/checks/` 下各 harness check
-- `scripts/check_framework_stability.py`
-- `scripts/check_dr_bt_equivalence.py`
+
+| Entrypoint | 职责 | Inputs | Outputs / Artifacts |
+|-----------|------|--------|---------------------|
+| `scripts/checks/` 下各 checker | 运行时数据/产物质量检查 | signal/label/order intent 产物 | 控制台报告、JSON |
+| `harness/checks/` 下各 check | 静态边界检查 | 代码和配置文件 | 控制台报告 |
 
 ## Key Artifacts
 - 无独立持久化 artifact（检查结果 stdout / JSON）

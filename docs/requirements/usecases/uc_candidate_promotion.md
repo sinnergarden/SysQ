@@ -30,7 +30,12 @@ stable
 - （远期）`data/research/promotions/production.yaml`
 
 ## Canonical Entrypoints
-- `scripts/promote_candidate.py create|promote`
+
+| Entrypoint | 职责 | Inputs | Outputs / Artifacts |
+|-----------|------|--------|---------------------|
+| `scripts/promote_candidate.py create|promote` | 创建 Candidate + 晋级到 shadow | 回测路径、信号引用、策略配置 | `data/research/candidates/{id}.yaml`, `data/research/promotions/shadow.yaml` |
+
+对齐 `docs/USE_CASES.md` §7。
 
 ## Key Artifacts
 - `data/research/candidates/{candidate_id}.yaml`

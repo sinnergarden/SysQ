@@ -31,8 +31,12 @@ stable
 - `runs/{date}/{run_id}/training_result.json` — 训练结果
 
 ## Canonical Entrypoints
-- `scripts/run_daily_batch.py --stage candidate --mode train`
-- `scripts/ops/run_shadow_retrain_weekly.py`（deprecated，仍可调用）
+
+| Entrypoint | 职责 | Inputs | Outputs / Artifacts |
+|-----------|------|--------|---------------------|
+| `scripts/run_daily.py --mode train` | 模型训练（通过 DailyRunner 调度） | 策略配置、训练日期窗口 | `experiments/{strategy}_models/{timestamp}/`, `artifacts/registry/models/{strategy}/shadow.json` |
+
+通过 `run_daily.py` 统一入口的 train mode 调度。对齐 `docs/USE_CASES.md` §7。
 
 ## Key Artifacts
 - `artifacts/registry/models/{strategy}/shadow.json` — shadow pointer

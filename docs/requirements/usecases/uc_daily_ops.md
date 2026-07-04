@@ -26,6 +26,7 @@ stable
 - promotion pointer（`data/research/promotions/shadow.yaml`）
 
 ## Outputs
+- `data/canonical/daily/` — 规范行情数据
 - `daily/{trade_date}/pre_open/signals/signal_basket_*.csv`
 - `daily/{trade_date}/post_close/reconciliation_result.json`
 - `runs/{trade_date}/{run_id}/` 各阶段产物
@@ -33,10 +34,11 @@ stable
 - Telegram 通知
 
 ## Canonical Entrypoints
-- `scripts/run_daily.py --strategy <id> --mode preopen|postclose|train`
-- `scripts/run_daily_batch.py --stage candidate --mode preopen|postclose`
+- `scripts/data_sync.py` — 数据同步（对应 UC-1）
+- `scripts/run_daily.py --mode preopen|postclose` — 盘前/盘后（对应 UC-8/9）
+- `scripts/run_daily_batch.py` — 批量 wrapper，非独立 canonical entrypoint
 
-每个 canonical entrypoint 必须有对应测试。entrypoint 的输入输出变更（新增参数、扩展 schema 等）必须确保向后兼容。
+对齐 `docs/USE_CASES.md` §7。
 
 ## Key Artifacts
 - `data/trade.db` — ledger SOT
