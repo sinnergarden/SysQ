@@ -1,4 +1,4 @@
-"""Tests for qsys/model/alpha_v1_trainer.py — AlphaV1Trainer wrapper."""
+"""Tests for qsys/model/alpha_v1_trainer.py — AlphaV1Trainer wrapper (legacy)."""
 from __future__ import annotations
 
 import json
@@ -22,7 +22,6 @@ class TestDiscoverArtifacts:
         model_dir = tmp_path / "models" / "v2"
         model_dir.mkdir(parents=True)
         (model_dir / "model_5d.txt").write_text("data")
-        # No model_20d.txt, no features.json, etc
         arts = _discover_artifacts(tmp_path, str(model_dir.relative_to(tmp_path)))
         assert "model_5d.txt" in arts
         assert "model_20d.txt" not in arts
@@ -60,97 +59,74 @@ class TestTryDiscoverMetrics:
         assert metrics == {}
 
 
+def _make_script_and_model(tmp_path: Path) -> None:
+    """Create stub script + model dir that AlphaV1Trainer.run() expects."""
+    script_dir = tmp_path / "scripts" / "deprecated"
+    script_dir.mkdir(parents=True)
+    (script_dir / "run_alpha_v1_weekly_train.py").write_text("")
+    model_dir = tmp_path / "experiments" / "alpha_v1_models" / "20260704"
+    model_dir.mkdir(parents=True)
+    for f in ("model_5d.txt", "model_20d.txt", "features.json", "meta.json"):
+        (model_dir / f).write_text("")
+
+
+def _make_ctx() -> MagicMock:
+    ctx = MagicMock()
+    ctx.strategy_id = "alpha_v1"
+    ctx.run_id = "test_run_123"
+    ctx.no_notify = False
+    return ctx
+
+
 class TestAlphaV1Trainer:
     def test_script_not_found(self, tmp_path):
-        """If training script does not exist, return failed TrainingResult."""
         trainer = AlphaV1Trainer(project_root=tmp_path)
-        ctx = MagicMock()
-        ctx.strategy_id = "alpha_v1"
+        ctx = _make_ctx()
         result = trainer.run(ctx)
         assert result.status == "failed"
         assert "Training script not found" in (result.message or "")
 
     @patch("qsys.model.alpha_v1_trainer.subprocess.run")
     def test_success_result(self, mock_run, tmp_path):
-        """On subprocess success, return TrainingResult with status success."""
         mock_run.return_value.returncode = 0
-
-        # Create dummy scripts/ directory
-        script_dir = tmp_path / "scripts"
-        script_dir.mkdir(parents=True)
-        (script_dir / "run_alpha_v1_weekly_train.py").write_text("")
-
+        _make_script_and_model(tmp_path)
         trainer = AlphaV1Trainer(project_root=tmp_path)
-        ctx = MagicMock()
-        ctx.strategy_id = "alpha_v1"
+        ctx = _make_ctx()
         result = trainer.run(ctx)
         assert result.status == "success"
         assert result.strategy_id == "alpha_v1"
 
     @patch("qsys.model.alpha_v1_trainer.subprocess.run")
     def test_failure_result(self, mock_run, tmp_path):
-        """On subprocess failure, return TrainingResult with status failed."""
         mock_run.return_value.returncode = 1
-
-        script_dir = tmp_path / "scripts"
-        script_dir.mkdir(parents=True)
-        (script_dir / "run_alpha_v1_weekly_train.py").write_text("")
-
+        _make_script_and_model(tmp_path)
         trainer = AlphaV1Trainer(project_root=tmp_path)
-        ctx = MagicMock()
-        ctx.strategy_id = "alpha_v1"
+        ctx = _make_ctx()
         result = trainer.run(ctx)
         assert result.status == "failed"
         assert "exited with code" in (result.message or "")
 
     @patch("qsys.model.alpha_v1_trainer.subprocess.run")
     def test_passes_end_date_from_config(self, mock_run, tmp_path):
-        """If config has training.end_date, it is passed to subprocess."""
         mock_run.return_value.returncode = 0
-
-        script_dir = tmp_path / "scripts"
-        script_dir.mkdir(parents=True)
-        (script_dir / "run_alpha_v1_weekly_train.py").write_text("")
-
+        _make_script_and_model(tmp_path)
         trainer = AlphaV1Trainer(
             project_root=tmp_path,
             config={"training": {"end_date": "2026-05-15"}},
         )
-        ctx = MagicMock()
-        ctx.strategy_id = "alpha_v1"
+        ctx = _make_ctx()
         trainer.run(ctx)
-
         args = mock_run.call_args[0]
-        # Check that --end-date 2026-05-15 is in the args list
         cmd_args = args[0]
         assert "--end-date" in cmd_args
         assert cmd_args[cmd_args.index("--end-date") + 1] == "2026-05-15"
 
     @patch("qsys.model.alpha_v1_trainer.subprocess.run")
     def test_discovers_artifacts_on_success(self, mock_run, tmp_path):
-        """On success, artifacts are populated if model dir exists."""
         mock_run.return_value.returncode = 0
-
-        script_dir = tmp_path / "scripts"
-        script_dir.mkdir(parents=True)
-        (script_dir / "run_alpha_v1_weekly_train.py").write_text("")
-
-        # Create model dir + latest symlink
-        models_dir = tmp_path / "experiments" / "alpha_v1_models"
-        models_dir.mkdir(parents=True)
-        model_version_dir = models_dir / "20260523"
-        model_version_dir.mkdir(parents=True)
-        (model_version_dir / "model_5d.txt").write_text("")
-        (model_version_dir / "model_20d.txt").write_text("")
-        (model_version_dir / "features.json").write_text("[]")
-
-        # Create symlink
-        latest_link = models_dir / "latest"
-        latest_link.symlink_to("20260523")
-
+        _make_script_and_model(tmp_path)
         trainer = AlphaV1Trainer(project_root=tmp_path)
-        ctx = MagicMock()
-        ctx.strategy_id = "alpha_v1"
+        ctx = _make_ctx()
         result = trainer.run(ctx)
         assert result.status == "success"
         assert "model_5d.txt" in result.artifacts

@@ -7,7 +7,7 @@ Use `train-split-discipline` to enforce the approved evaluation contract before 
 
 Preferred underlying entrypoints:
 - `scripts/research/run_backtest.py`
-- `scripts/run_strict_eval.py`
+- `scripts/checks/run_strict_eval.py`
 
 Required output:
 - evaluation window

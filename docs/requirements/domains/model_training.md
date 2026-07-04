@@ -71,3 +71,18 @@ builder_agent
 
 ### Open Questions
 - 无
+
+### Future Work
+
+Replace alpha_v1-specific weekly training scripts with a generic training entrypoint.
+Target shape:
+
+- ``model_id``
+- ``label_id``
+- ``feature_list_id``
+- ``universe``
+- ``train_start`` / ``train_end``
+- ``output_artifact_dir``
+- ``registry_pointer_write_mode``: `none` / `shadow` / `candidate`
+
+Do **not** add new feature-combination-specific train scripts (e.g. ``run_alpha_vX_weekly_train.py``).

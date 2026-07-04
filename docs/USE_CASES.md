@@ -7,7 +7,8 @@
 > - [`docs/requirements/harness_map.yaml`](requirements/harness_map.yaml) — machine-readable mapping
 > - [`docs/requirements/domains/`](requirements/domains/) — detailed use case definitions by domain
 >
-> Historical content is preserved below for reference.
+> Historical content has been superseded by docs/requirements/.
+See git history before PR #212 for the old full document.
 > Do not add new use cases here.
 
 ---
