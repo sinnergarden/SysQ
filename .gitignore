@@ -29,3 +29,6 @@ home/
 # Runtime state
 shadow/
 shadow_*/
+
+# Stock research memos (PDFs, CSVs, large files)
+research_memos/
