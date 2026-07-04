@@ -38,6 +38,7 @@ REQUIRED_MAP_FIELDS = {
 # Sections every uc_*.md must have (skipped for merged/deprecated/archived files)
 REQUIRED_SECTIONS = {
     "Status",
+    "Source",
     "User Goal",
     "Scope",
     "Inputs",
@@ -69,8 +70,11 @@ def _is_skipped_file(content: str) -> bool:
     lines = content.splitlines()
     for i, line in enumerate(lines):
         if line.strip() == "## Status":
-            if i + 1 < len(lines) and lines[i + 1].strip().lower() in SKIP_STATUSES:
-                return True
+            if i + 1 < len(lines):
+                status_val = lines[i + 1].strip().lower()
+                for skip in SKIP_STATUSES:
+                    if status_val.startswith(skip):
+                        return True
     return False
 
 

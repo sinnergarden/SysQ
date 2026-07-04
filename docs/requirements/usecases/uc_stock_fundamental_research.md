@@ -3,6 +3,10 @@
 ## Status
 draft
 
+## Source
+**新增 use case**，不在 `docs/USE_CASES.md` 现有 UC 编号中。
+设计留 TODO，后续逐步明确。
+
 ## User Goal
 利用 LLM agent 对 SysQ 候选池中的股票进行基本面/消息面研究：阅读财报 PDF、公告、新闻、行业信息，输出结构化股票研究 memo，辅助人工判断候选股票是否值得关注。
 

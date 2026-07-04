@@ -3,6 +3,11 @@
 ## Status
 stable
 
+## Source
+`docs/USE_CASES.md` 无独立 UC 编号。模型训练在 USE_CASES.md 中是 UC-4 信号研究的一部分，
+通过 `scripts/run_daily.py --mode train` 调度。USE_CASES.md 是权威来源，本文档是超集补充。
+本文档将其独立为 use case 便于分配 owner 和治理。
+
 ## User Goal
 系统按周（或按需）自动训练模型，产出模型 artifact 并写入 shadow pointer。训练流程稳定、可重现、训练后产物可被 daily ops 消费。
 

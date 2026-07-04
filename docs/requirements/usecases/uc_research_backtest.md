@@ -3,6 +3,11 @@
 ## Status
 stable
 
+## Source
+`docs/USE_CASES.md` UC-2（Feature List）、UC-3（Label Config）、UC-4（Signal Research）、
+UC-5（Signal Analytics）、UC-6（Signal Combination）、UC-7（Signal Backtest）。
+USE_CASES.md 是权威来源，本文档是超集补充。
+
 ## User Goal
 研究员可以定义实验（特征集、标签、模型参数），运行滚动训练/预测，评估信号质量，基于信号运行回测，并比较不同实验的结果。
 
@@ -37,10 +42,10 @@ stable
 
 | Entrypoint | 职责 | 对应 UC | Inputs | Outputs / Artifacts |
 |-----------|------|---------|--------|---------------------|
+| `scripts/compute_labels.py --config <path>` | 标签定义与计算 | UC-3 | 标签配置 YAML | `data/research/labels/` |
 | `scripts/run_research.py --config <path>` | 信号研究 + 信号组合 | UC-4/6 | 研究配置 YAML | `data/research/signals/`, `data/research/experiments/` |
 | `scripts/run_signal_analytics.py --experiment-id <id>` | 信号只读分析 | UC-5 | experiment_id / signal_run_ref + label_id | IC/RankIC/ICIR 矩阵 |
 | `scripts/run_backtest.py --config <path>` | 信号驱动回测 | UC-7 | SignalRunRef + 策略配置 | `data/research/backtests/` |
-| `scripts/compute_labels.py --config <path>` | 标签计算 | UC-3 | 标签配置 YAML | `data/research/labels/` |
 
 对齐 `docs/USE_CASES.md` §7。
 

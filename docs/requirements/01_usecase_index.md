@@ -30,6 +30,7 @@
 | UC_TEMPORARY_REQUESTS | Temporary Requests | I — Temporary | experimental | ad-hoc scripts | main_agent |
 
 > **注意**: UC_SINGLE_STOCK_REVIEW 已融合到 UC_UI_ANALYSIS 首批交付（单股视角 review），不再作为独立 use case。文档保留供参考。
+> **TODO**: `docs/USE_CASES.md` 中的 UC-W（Live vs Backtest Reconciliation，state: FUTURE）未映射到新 registry，需确认为独立 UC 或归入 UC_DIAGNOSTICS。
 
 ---
 

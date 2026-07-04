@@ -3,6 +3,10 @@
 ## Status
 draft
 
+## Source
+`docs/USE_CASES.md` UC-12（Research Diagnostics & Candidate Explanation）。
+USE_CASES.md 是权威来源，本文档是超集补充（新增 harness 边界检查维度）。
+
 ## User Goal
 对系统运行状态做只读检查，发现数据质量、信号质量、ledger 状态、artifact schema 的异常。提供阻挡（blocker）和警告（warning）等级别，供 operator 决策。
 

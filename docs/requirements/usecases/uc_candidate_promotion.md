@@ -3,6 +3,10 @@
 ## Status
 stable
 
+## Source
+`docs/USE_CASES.md` UC-10（Candidate Promotion）。
+USE_CASES.md 是权威来源，本文档是超集补充。
+
 ## User Goal
 基于信号研究和回测证据，生成 Candidate 并将其 promotion 到 shadow（或后续 production）。晋级链路有审计记录，可回滚。
 

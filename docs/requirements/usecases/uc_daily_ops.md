@@ -3,6 +3,10 @@
 ## Status
 stable
 
+## Source
+`docs/USE_CASES.md` UC-1（Data Sync）、UC-8（Shadow Trading）、UC-9（Production Trading，远期）。
+USE_CASES.md 是权威来源，本文档是超集补充。
+
 ## User Goal
 每日自动执行数据同步 → 信号推理 → 交易计划 → 盘后对账的全链路。operator 可查看每日状态和产物，异常时有阻断和通知。
 
@@ -34,10 +38,14 @@ stable
 - Telegram 通知
 
 ## Canonical Entrypoints
-- `scripts/data_sync.py` — 数据同步（对应 UC-1）
-- `scripts/run_daily.py --mode preopen|postclose` — 盘前/盘后（对应 UC-8/9）
-- `scripts/run_daily_batch.py` — 批量 wrapper，非独立 canonical entrypoint
 
+| Entrypoint | 职责 | 对应 UC | Inputs | Outputs / Artifacts |
+|-----------|------|---------|--------|---------------------|
+| `scripts/data_sync.py` | 数据同步与校验 | UC-1 | 数据源配置 | `data/canonical/daily/`, `data/audit/` |
+| `scripts/run_daily.py --mode preopen` | 盘前推理 + 交易计划 | UC-8/9 | 策略配置、模型 pointer | 信号篮子、order intents、manifest |
+| `scripts/run_daily.py --mode postclose` | 盘后执行 + MTM | UC-8/9 | preopen 产物、收盘行情 | ledger 写入、MTM、reconciliation |
+
+`scripts/run_daily_batch.py` 是批量 wrapper，非独立 canonical entrypoint。
 对齐 `docs/USE_CASES.md` §7。
 
 ## Key Artifacts

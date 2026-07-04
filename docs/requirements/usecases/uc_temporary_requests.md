@@ -3,6 +3,10 @@
 ## Status
 experimental
 
+## Source
+**新增 use case**，不在 `docs/USE_CASES.md` 现有 UC 编号中。
+设计留 TODO，后续逐步明确。
+
 ## User Goal
 处理临时的、非 canonical 的需求：新增指标、临时图表、一次性实验、小范围 UI 面板改动。这些请求不应自动成为正式 use case，但需要可追踪。
 

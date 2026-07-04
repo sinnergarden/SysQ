@@ -3,6 +3,10 @@
 ## Status
 draft
 
+## Source
+**新增 use case**，不在 `docs/USE_CASES.md` 现有 UC 编号中。
+设计留 TODO，后续逐步明确。
+
 ## User Goal
 通过只读 UI 查看策略状态、回测结果、信号指标、账户摘要。不通过 UI 发起交易或修改状态。
 
