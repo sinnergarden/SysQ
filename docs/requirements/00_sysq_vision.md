@@ -62,7 +62,15 @@ SysQ 是一个**个人可维护的 A 股日频量化系统**，当前正在从�
 
 ---
 
-## 5. 收束目标
+## 5. AI 操作入口
+
+- `AGENTS.md` 和 `docs/agents/` 存放 SysQ 的 AI 操作规则。
+- workspace 级 `.claude.md` 只做 SysQ 任务分流（见 `docs/agents/workspace_claude_redirect.md`），不包含仓库内部规则。
+- 所有 SysQ 的 agent 规则、use case、harness、角色说明都放在仓库内，随代码版本化和审查。
+
+---
+
+## 6. 收束目标
 
 - 每个正式 use case 有唯一 canonical entrypoint
 - `scripts/` 顶层只保留 canonical entrypoints（对应 `harness_map.yaml` 中 `status=stable` 的 UC）
