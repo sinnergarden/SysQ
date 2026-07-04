@@ -7,8 +7,8 @@ Purpose:
 - emit structured training report
 
 Typical usage:
-- python scripts/run_train.py --model qlib_lgbm --start 2020-01-01 --end 2026-03-20 --feature_set extended
-- python scripts/run_train.py --model qlib_lgbm --start 2020-01-01 --end 2026-03-20 --bundle_id bundle_semantic_demo
+- python scripts/ops/run_train.py --model qlib_lgbm --start 2020-01-01 --end 2026-03-20 --feature_set extended
+- python scripts/ops/run_train.py --model qlib_lgbm --start 2020-01-01 --end 2026-03-20 --bundle_id bundle_semantic_demo
 
 Key args:
 - --model: currently qlib_lgbm
@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any
 
 # Add project root to sys.path
-project_root = Path(__file__).resolve().parent.parent
+project_root = Path(__file__).resolve().parents[2]
 sys.path.append(str(project_root))
 
 import click

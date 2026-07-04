@@ -6,7 +6,7 @@ Purpose:
 - save daily result csv + structured backtest report
 
 Typical usage:
-- python scripts/run_backtest.py --model_path data/models/qlib_lgbm_phase123_extended --start 2025-01-01 --end 2026-03-20 --top_k 5
+- python scripts/research/run_backtest.py --model_path data/models/qlib_lgbm_phase123_extended --start 2025-01-01 --end 2026-03-20 --top_k 5
 
 Key args:
 - --model_path: model directory to evaluate

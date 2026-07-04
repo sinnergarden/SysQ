@@ -430,13 +430,13 @@ python scripts/research/backtest_from_signal.py \
   --overwrite
 
 # 模型回测（训练 + 推理 + 回测，基于 model artifact）
-python scripts/run_backtest.py \
+python scripts/research/run_backtest.py \
   --model_path data/models/qlib_lgbm_phase123_extended \
   --start 2025-01-01 --end 2026-03-20 \
   --top_k 5
 
 # strict eval（baseline vs extended 比较）
-python scripts/run_strict_eval.py \
+python scripts/checks/run_strict_eval.py \
   --baseline data/models/qlib_lgbm_phase123 \
   --extended data/models/qlib_lgbm_phase123_extended
 ```

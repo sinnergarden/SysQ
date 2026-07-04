@@ -330,7 +330,7 @@ class TestShadowOpsNotification(unittest.TestCase):
                 training_report_path=str(Path(tmpdir) / "runs" / "2026-04-25" / "shadow_retrain_2026-04-25_090807" / "training_report.json"),
                 trained_at="2026-04-25T09:08:07",
                 train_run_id="shadow_retrain_2026-04-25_090807",
-                command=["python", "scripts/run_train.py"],
+                command=["python", "scripts/ops/run_train.py"],
             )
             model_dir = Path(artifacts.model_path)
             model_dir.mkdir(parents=True)
@@ -356,7 +356,7 @@ class TestShadowOpsNotification(unittest.TestCase):
             _make_usable_latest_model(base_dir)
             exc = TrainingInvocationError(
                 "train failed",
-                command=["python", "scripts/run_train.py"],
+                command=["python", "scripts/ops/run_train.py"],
                 returncode=1,
                 stdout_tail="",
                 stderr_tail="boom",

@@ -297,7 +297,7 @@ class TestShadowOpsProtocol(unittest.TestCase):
                 training_report_path=str(report_path),
                 trained_at="2026-04-25T09:08:07",
                 train_run_id="shadow_retrain_2026-04-25_090807",
-                command=["python", "scripts/run_train.py"],
+                command=["python", "scripts/ops/run_train.py"],
             )
 
             with patch(
@@ -369,7 +369,7 @@ class TestShadowOpsProtocol(unittest.TestCase):
                 "scripts.ops.run_shadow_retrain_weekly.run_weekly_shadow_training",
                 side_effect=TrainingInvocationError(
                     "boom",
-                    command=["python", "scripts/run_train.py"],
+                    command=["python", "scripts/ops/run_train.py"],
                     returncode=2,
                     stdout_tail="tail out",
                     stderr_tail="tail err",
@@ -391,7 +391,7 @@ class TestShadowOpsProtocol(unittest.TestCase):
             self.assertTrue(summary["model_used"]["fallback"])
             self.assertEqual(summary["model_used"]["model_name"], "retained_model")
             failure_payload = load_json(run_dir / "run_training.json")
-            self.assertEqual(failure_payload["command"], ["python", "scripts/run_train.py"])
+            self.assertEqual(failure_payload["command"], ["python", "scripts/ops/run_train.py"])
             self.assertEqual(failure_payload["returncode"], 2)
             self.assertEqual(failure_payload["stdout_tail"], "tail out")
             self.assertEqual(failure_payload["stderr_tail"], "tail err")
@@ -414,7 +414,7 @@ class TestShadowOpsProtocol(unittest.TestCase):
                 "scripts.ops.run_shadow_retrain_weekly.run_weekly_shadow_training",
                 side_effect=TrainingInvocationError(
                     "boom",
-                    command=["python", "scripts/run_train.py"],
+                    command=["python", "scripts/ops/run_train.py"],
                     returncode=3,
                     stdout_tail="stdout tail",
                     stderr_tail="stderr tail",
@@ -432,7 +432,7 @@ class TestShadowOpsProtocol(unittest.TestCase):
             self.assertEqual(summary["train_status"], "failed")
             self.assertTrue(summary["model_used"]["fallback"] is False)
             failure_payload = load_json(run_dir / "run_training.json")
-            self.assertEqual(failure_payload["command"], ["python", "scripts/run_train.py"])
+            self.assertEqual(failure_payload["command"], ["python", "scripts/ops/run_train.py"])
             self.assertEqual(failure_payload["returncode"], 3)
             self.assertEqual(failure_payload["stdout_tail"], "stdout tail")
             self.assertEqual(failure_payload["stderr_tail"], "stderr tail")
@@ -460,7 +460,7 @@ class TestShadowOpsProtocol(unittest.TestCase):
                 training_report_path=str(report_path),
                 trained_at="2026-04-25T09:08:07",
                 train_run_id="shadow_retrain_2026-04-25_090807",
-                command=["python", "scripts/run_train.py"],
+                command=["python", "scripts/ops/run_train.py"],
             )
 
             with patch(

@@ -18,13 +18,13 @@ from qsys.strategy.validators import validate_strategy_spec
 import importlib.util
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-SCRIPT_PATH = PROJECT_ROOT / "scripts" / "check_framework_stability.py"
+SCRIPT_PATH = PROJECT_ROOT / "scripts" / "checks" / "check_framework_stability.py"
 
 spec = importlib.util.spec_from_file_location(
-    "check_framework_stability", str(SCRIPT_PATH),
+    "scripts.checks.check_framework_stability", str(SCRIPT_PATH),
 )
 mod = importlib.util.module_from_spec(spec)
-sys.modules["check_framework_stability"] = mod
+sys.modules["scripts.checks.check_framework_stability"] = mod
 spec.loader.exec_module(mod)
 
 CheckResult = mod.CheckResult

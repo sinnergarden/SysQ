@@ -88,7 +88,7 @@ class ModelScheduler:
 
             # Run training script preserving the original feature set
             cmd = [
-                sys.executable, "scripts/run_train.py",
+                sys.executable, "scripts/ops/run_train.py",
                 "--model", "qlib_lgbm",
                 "--start", new_start,
                 "--end", new_end,

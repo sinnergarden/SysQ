@@ -7,9 +7,9 @@ Purpose:
 - serve as the narrow/targeted data refresh tool
 
 Typical usage:
-- python scripts/run_update.py --init
-- python scripts/run_update.py --universe csi300 --start 20230101
-- python scripts/run_update.py --history 000001.SZ --start 20240101
+- python scripts/deprecated/run_update.py --init
+- python scripts/deprecated/run_update.py --universe csi300 --start 20230101
+- python scripts/deprecated/run_update.py --history 000001.SZ --start 20240101
 
 Key args:
 - --init: refresh stock list + calendar
@@ -28,7 +28,7 @@ import datetime
 import sys
 from pathlib import Path
 # Add project root to sys.path
-project_root = Path(__file__).resolve().parent.parent
+project_root = Path(__file__).resolve().parents[2]
 sys.path.append(str(project_root))
 
 import pandas as pd

@@ -42,9 +42,9 @@ usecases:
       - scripts/run_signal_analytics.py
       - scripts/research/backtest_from_signal.py
     supporting_tools:
-      - scripts/compute_labels.py
+      - scripts/research/compute_labels.py
     legacy_entrypoints:
-      - scripts/run_backtest.py
+      - scripts/research/run_backtest.py
     artifacts:
       - data/research/signals/{signal_id}/{signal_run_id}/
       - data/research/labels/{label_id}/

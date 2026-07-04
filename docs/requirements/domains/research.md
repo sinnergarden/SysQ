@@ -49,10 +49,10 @@ UC-5（Signal Analytics）、UC-6（Signal Combination）、UC-7（Signal Backte
 - `scripts/research/backtest_from_signal.py` — 信号驱动回测（UC-7）
 
 ### Supporting Tools
-- `scripts/compute_labels.py` — 标签计算（UC-3）
+- `scripts/research/compute_labels.py` — 标签计算（UC-3）
 
 ### Legacy Entrypoints
-- `scripts/run_backtest.py` — 旧版回测入口，待收束
+- `scripts/research/run_backtest.py` — 旧版回测入口，待收束
 
 ### Key Artifacts
 - `data/research/signals/` — SignalStore

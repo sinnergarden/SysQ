@@ -67,7 +67,7 @@ def run_weekly_shadow_training(
 
     command = [
         sys.executable,
-        str(project_root / "scripts" / "run_train.py"),
+        str(project_root / "scripts" / "ops" / "run_train.py"),
         "--model",
         "qlib_lgbm",
         "--bundle_id",

@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 # Add project root to sys.path
-project_root = Path(__file__).resolve().parent.parent
+project_root = Path(__file__).resolve().parents[2]
 sys.path.append(str(project_root))
 
 from qsys.data.adapter import QlibAdapter

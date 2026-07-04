@@ -8,7 +8,7 @@ Usage
 -----
 
     # Self-check: run BacktestRunner twice and verify determinism
-    python scripts/check_dr_bt_equivalence.py \\
+    python scripts/checks/check_dr_bt_equivalence.py \\
         --strategy alpha_v1 \\
         --start-date 2026-05-16 \\
         --end-date 2026-05-22 \\
@@ -17,7 +17,7 @@ Usage
         --output-dir /tmp/qsys_dr_bt_check
 
     # Baseline comparison: compare against a directory of DailyRunner outputs
-    python scripts/check_dr_bt_equivalence.py \\
+    python scripts/checks/check_dr_bt_equivalence.py \\
         --strategy alpha_v1 \\
         --start-date 2026-05-16 \\
         --end-date 2026-05-22 \\
@@ -36,7 +36,7 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from qsys.backtest.strategy_runner import BacktestRunner

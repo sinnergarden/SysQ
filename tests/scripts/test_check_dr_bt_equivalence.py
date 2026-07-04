@@ -12,13 +12,13 @@ from pathlib import Path
 
 # Make scripts/ importable via importlib
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-SCRIPT_PATH = PROJECT_ROOT / "scripts" / "check_dr_bt_equivalence.py"
+SCRIPT_PATH = PROJECT_ROOT / "scripts" / "checks" / "check_dr_bt_equivalence.py"
 
 spec = importlib.util.spec_from_file_location(
-    "check_dr_bt_equivalence", str(SCRIPT_PATH),
+    "scripts.checks.check_dr_bt_equivalence", str(SCRIPT_PATH),
 )
 check_module = importlib.util.module_from_spec(spec)
-sys.modules["check_dr_bt_equivalence"] = check_module
+sys.modules["scripts.checks.check_dr_bt_equivalence"] = check_module
 spec.loader.exec_module(check_module)
 
 from qsys.backtest.result import BacktestRunResult

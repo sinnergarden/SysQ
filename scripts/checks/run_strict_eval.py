@@ -8,7 +8,7 @@ Purpose:
 - emit structured strict-eval report
 
 Typical usage:
-- python scripts/run_strict_eval.py --baseline data/models/qlib_lgbm_phase123 --extended data/models/qlib_lgbm_phase123_extended
+- python scripts/checks/run_strict_eval.py --baseline data/models/qlib_lgbm_phase123 --extended data/models/qlib_lgbm_phase123_extended
 
 Key args:
 - --baseline / --extended: model paths to compare
@@ -29,7 +29,7 @@ from typing import Any
 
 import yaml
 
-project_root = Path(__file__).resolve().parent.parent
+project_root = Path(__file__).resolve().parents[2]
 sys.path.append(str(project_root))
 
 from qsys.evaluation import StrictEvaluator

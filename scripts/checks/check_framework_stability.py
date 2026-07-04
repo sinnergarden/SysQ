@@ -7,13 +7,13 @@ stability into a single runnable command.  Writes a JSON result file.
 Usage::
 
     # Quick check (no DR=BT, no batch dry-run)
-    python scripts/check_framework_stability.py --quick
+    python scripts/checks/check_framework_stability.py --quick
 
     # Full check
-    python scripts/check_framework_stability.py --full
+    python scripts/checks/check_framework_stability.py --full
 
     # Customised
-    python scripts/check_framework_stability.py \\
+    python scripts/checks/check_framework_stability.py \\
         --skip-dr-bt --skip-batch-dry-run \\
         --strategy alpha_v1 \\
         --start-date 2026-05-16 --end-date 2026-05-22 \\
@@ -31,7 +31,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from qsys.strategy.spec import load_strategy_specs
@@ -218,7 +218,7 @@ def run_checks(
         drbt = CheckResult("dr_bt_equivalence", required=False)
         out = output_dir or "/tmp/qsys_framework_stability"
         _run_script(
-            drbt, "scripts/check_dr_bt_equivalence.py",
+            drbt, "scripts/checks/check_dr_bt_equivalence.py",
             "--strategy", strategy,
             "--start-date", start_date,
             "--end-date", end_date,

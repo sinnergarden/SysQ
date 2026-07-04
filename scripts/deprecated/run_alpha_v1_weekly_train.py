@@ -35,7 +35,7 @@ import lightgbm as lgb
 import numpy as np
 import pandas as pd
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 warnings.filterwarnings("ignore")
 
 from qsys.common.deprecation import print_legacy_entrypoint_warning  # noqa: E402

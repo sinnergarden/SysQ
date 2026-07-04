@@ -136,7 +136,7 @@ class TestTradeDateResolver(unittest.TestCase):
             "training_report_path": None,
             "trained_at": "2026-04-25T09:08:07",
             "train_run_id": "shadow_retrain_2026-04-25_090807",
-            "command": ["python", "scripts/run_train.py", "--end", "2026-04-17"],
+            "command": ["python", "scripts/ops/run_train.py", "--end", "2026-04-17"],
         })()
         with tempfile.TemporaryDirectory() as tmpdir:
             base_dir = Path(tmpdir)
