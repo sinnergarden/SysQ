@@ -1,16 +1,21 @@
-# UC_DAILY_OPS: Daily Operations
+# Domain: Daily Operations
 
-## Status
+## Domain Scope
+每日生产运行链路：数据同步、盘前推理、盘后执行、MTM、ledger 写入、通知。
+不包含：模型训练（model_training domain）、研究回测（research domain）、promotion 流程（promotion domain）。
+
+## UC_DAILY_OPS
+
+### Status
 stable
 
-## Source
+### Source
 `docs/USE_CASES.md` UC-1（Data Sync）、UC-8（Shadow Trading）、UC-9（Production Trading，远期）。
-USE_CASES.md 是权威来源，本文档是超集补充。
 
-## User Goal
+### User Goal
 每日自动执行数据同步 → 信号推理 → 交易计划 → 盘后对账的全链路。operator 可查看每日状态和产物，异常时有阻断和通知。
 
-## Scope
+### Scope
 包含：
 - 数据同步（csi800 daily）
 - 盘前推理（signal → prediction → plan）
@@ -19,17 +24,17 @@ USE_CASES.md 是权威来源，本文档是超集补充。
 - manifest 产物写入
 
 不包含：
-- 实盘 broker 下单（见 UC_CANDIDATE_PROMOTION 远期）
-- 模型训练（见 UC_MODEL_TRAINING）
-- 研究回测（见 UC_RESEARCH_BACKTEST）
+- 实盘 broker 下单（见 promotion domain）
+- 模型训练（见 model_training domain）
+- 研究回测（见 research domain）
 
-## Inputs
+### Inputs
 - 行情数据（canonical daily / qlib_bin）
-- 策略配置（`configs/strategies/*.yaml`）
+- 策略配置
 - 模型 pointer（`artifacts/registry/models/{strategy_id}/shadow.json` 或 legacy pointer）
 - promotion pointer（`data/research/promotions/shadow.yaml`）
 
-## Outputs
+### Outputs
 - `data/canonical/daily/` — 规范行情数据
 - `daily/{trade_date}/pre_open/signals/signal_basket_*.csv`
 - `daily/{trade_date}/post_close/reconciliation_result.json`
@@ -37,33 +42,29 @@ USE_CASES.md 是权威来源，本文档是超集补充。
 - Ledger 写入（`data/trade.db`）
 - Telegram 通知
 
-## Canonical Entrypoints
+### Canonical Entrypoints
+- `scripts/data_sync.py` — 数据同步
+- `scripts/run_daily.py --mode preopen|postclose` — 盘前/盘后
+- `scripts/run_daily_batch.py` — 批量 wrapper，非独立 canonical entrypoint
 
-| Entrypoint | 职责 | 对应 UC | Inputs | Outputs / Artifacts |
-|-----------|------|---------|--------|---------------------|
-| `scripts/data_sync.py` | 数据同步与校验 | UC-1 | 数据源配置 | `data/canonical/daily/`, `data/audit/` |
-| `scripts/run_daily.py --mode preopen` | 盘前推理 + 交易计划 | UC-8/9 | 策略配置、模型 pointer | 信号篮子、order intents、manifest |
-| `scripts/run_daily.py --mode postclose` | 盘后执行 + MTM | UC-8/9 | preopen 产物、收盘行情 | ledger 写入、MTM、reconciliation |
-
-`scripts/run_daily_batch.py` 是批量 wrapper，非独立 canonical entrypoint。
 对齐 `docs/USE_CASES.md` §7。
 
-## Key Artifacts
+### Key Artifacts
 - `data/trade.db` — ledger SOT
 - `daily/{date}/pre_open/signals/` — signal basket
 - `daily/{date}/post_close/` — reconciliation, MTM
 - `runs/{date}/{run_id}/` — 完整运行产物
 
-## Required Checks
+### Required Checks
 - `harness/checks/check_model_resolution_boundary.py`
 - `harness/checks/check_no_latest_model_resolution.py`
 - TBD: daily artifact schema check
 - TBD: preopen/postclose stage integrity check
 
-## Owner Agent
+### Owner Agent
 operator_agent
 
-## Allowed Paths
+### Allowed Paths
 - `scripts/data_sync.py`
 - `scripts/run_daily.py`
 - `qsys/ops/`
@@ -71,11 +72,11 @@ operator_agent
 - `harness/checks/`
 - `tests/`
 
-## Forbidden Paths
+### Forbidden Paths
 - `qsys/ledger/`（只读分析，不直接改 schema）
-- `qsys/backtest/`（不混入研究层变化）
+- `qsys/backtest/`
 - `qsys/trader/`
 - `qsys/broker/`
 
-## Open Questions
+### Open Questions
 - 无

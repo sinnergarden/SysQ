@@ -1,10 +1,11 @@
 # Harness Map — SysQ v0.1
 # Maps use cases to entrypoints, artifacts, checks, and owner agents.
 # Used by harness checks and multi-agent routing.
-# Canonical entrypoints aligned with docs/USE_CASES.md §7.
+# Every UC must have a 'domain' field matching docs/requirements/domains/{domain}.md.
 
 usecases:
   UC_DAILY_OPS:
+    domain: daily_ops
     status: stable
     owner_agent: operator_agent
     entrypoints:
@@ -33,12 +34,16 @@ usecases:
       - qsys/broker/
 
   UC_RESEARCH_BACKTEST:
+    domain: research
     status: stable
     owner_agent: research_agent
     entrypoints:
-      - scripts/compute_labels.py
       - scripts/run_research.py
       - scripts/run_signal_analytics.py
+      - scripts/research/backtest_from_signal.py
+    supporting_tools:
+      - scripts/compute_labels.py
+    legacy_entrypoints:
       - scripts/run_backtest.py
     artifacts:
       - data/research/signals/{signal_id}/{signal_run_id}/
@@ -69,6 +74,7 @@ usecases:
       - deploy/
 
   UC_MODEL_TRAINING:
+    domain: model_training
     status: stable
     owner_agent: builder_agent
     entrypoints:
@@ -95,6 +101,7 @@ usecases:
       - deploy/
 
   UC_UI_ANALYSIS:
+    domain: ui_analysis
     status: draft
     owner_agent: ui_agent
     entrypoints:
@@ -116,10 +123,8 @@ usecases:
       - qsys/backtest/
       - deploy/
 
-  # NOTE: UC_SINGLE_STOCK_REVIEW merged into UC_UI_ANALYSIS.
-  # No independent canonical entrypoint.
-
   UC_CANDIDATE_PROMOTION:
+    domain: promotion
     status: stable
     owner_agent: operator_agent
     entrypoints:
@@ -143,6 +148,7 @@ usecases:
       - qsys/ops/daily_runner.py
 
   UC_DIAGNOSTICS:
+    domain: diagnostics
     status: draft
     owner_agent: reviewer_agent
     entrypoints:
@@ -164,10 +170,13 @@ usecases:
       - qsys/backtest/
 
   UC_STOCK_FUNDAMENTAL_RESEARCH:
+    domain: stock_research
     status: draft
     owner_agent: stock_research_agent
     entrypoints:
       - TBD
+    prompt_templates:
+      - prompts/stock_research/final_stock_memo.md
     artifacts:
       - research_memos/{ts_code}/{date}/stock_research_memo.md
     checks:
@@ -186,6 +195,7 @@ usecases:
       - deploy/
 
   UC_TEMPORARY_REQUESTS:
+    domain: temporary_requests
     status: experimental
     owner_agent: main_agent
     entrypoints:

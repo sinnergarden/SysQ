@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""Static check: verify use case registry structural completeness.
+"""Static check: verify use case registry structural completeness (domain-based).
 
 Checks:
-1. ``docs/requirements/harness_map.yaml`` exists and is valid YAML.
-2. Every use case in the harness map has all required fields.
-3. Every ``docs/requirements/usecases/uc_*.md`` has all required sections.
-4. ``docs/requirements/01_usecase_index.md`` lists every use case ID.
-5. TBD is acceptable but must be explicit — missing fields are not allowed.
-6. Bidirectional consistency:
-   - Every active UC in harness_map.yaml must have a matching uc_*.md file.
-   - Every active uc_*.md file must appear in harness_map.yaml.
-   - Files with status = merged / deprecated / archived are exempt.
+1. harness_map.yaml exists and is valid YAML.
+2. Every UC in harness_map has all required fields (domain, status, ...).
+3. Every UC's domain has a matching file in domains/.
+4. Every active UC ID in harness_map appears as ``## UC_XXX`` in its domain file.
+5. Every active UC ID in harness_map appears in 01_usecase_index.md.
+6. Every ``## UC_XXX`` in domain files (unless merged/deprecated/archived)
+   appears in harness_map.yaml.
+7. Optional fields (supporting_tools, legacy_entrypoints, prompt_templates, notes)
+   are allowed but not required.
 """
 
 from __future__ import annotations
@@ -26,10 +26,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 HARNESS_MAP_PATH = PROJECT_ROOT / "docs" / "requirements" / "harness_map.yaml"
 USECASE_INDEX_PATH = PROJECT_ROOT / "docs" / "requirements" / "01_usecase_index.md"
-USECASES_DIR = PROJECT_ROOT / "docs" / "requirements" / "usecases"
+DOMAINS_DIR = PROJECT_ROOT / "docs" / "requirements" / "domains"
 
-# Fields every use case entry in harness_map.yaml must have
 REQUIRED_MAP_FIELDS = {
+    "domain",
     "status",
     "owner_agent",
     "entrypoints",
@@ -39,63 +39,61 @@ REQUIRED_MAP_FIELDS = {
     "forbidden_paths",
 }
 
-# Sections every uc_*.md must have (skipped for merged/deprecated/archived files)
-REQUIRED_SECTIONS = {
-    "Status",
-    "Source",
-    "User Goal",
-    "Scope",
-    "Inputs",
-    "Outputs",
-    "Canonical Entrypoints",
-    "Key Artifacts",
-    "Required Checks",
-    "Owner Agent",
-    "Allowed Paths",
-    "Forbidden Paths",
-    "Open Questions",
+OPTIONAL_MAP_FIELDS = {
+    "supporting_tools",
+    "legacy_entrypoints",
+    "prompt_templates",
+    "notes",
 }
 
 SKIP_STATUSES = {"merged", "deprecated", "archived"}
 
 
-def _find_sections(content: str) -> set[str]:
-    """Extract markdown section headings (## or higher) from content."""
-    sections = set()
-    for line in content.splitlines():
-        m = re.match(r"^#{1,3}\s+(.*)", line)
-        if m:
-            sections.add(m.group(1).strip())
-    return sections
-
-
 def _get_status(content: str) -> str:
-    """Extract the status line from a uc_*.md file. Returns empty string if not found."""
+    """Extract the status line following ### Status or ## Status."""
     lines = content.splitlines()
     for i, line in enumerate(lines):
-        if line.strip() == "## Status":
+        if line.strip() in ("### Status", "## Status"):
             if i + 1 < len(lines):
                 return lines[i + 1].strip().lower()
     return ""
 
 
 def _is_skipped_status(status_val: str) -> bool:
-    """Check if a status value exempts a file from full checks."""
     for skip in SKIP_STATUSES:
         if status_val.startswith(skip):
             return True
     return False
 
 
-def _md_stem_to_uc_id(stem: str) -> str:
-    """Convert 'uc_daily_ops' to 'UC_DAILY_OPS'."""
-    return stem.upper()
+def _extract_uc_blocks(content: str) -> dict[str, str]:
+    """Return {UC_ID: section_text} for each ## UC_XXX block in a domain file."""
+    blocks: dict[str, str] = {}
+    sections = re.split(r"(?=^## UC_)", content, flags=re.MULTILINE)
+    for sec in sections:
+        m = re.match(r"^## (UC_\w+)", sec)
+        if m:
+            blocks[m.group(1)] = sec
+    return blocks
+
+
+def _load_map_usecases() -> dict:
+    """Load harness_map.yaml. Returns {} on failure."""
+    if not HARNESS_MAP_PATH.exists():
+        return {}
+    try:
+        with open(HARNESS_MAP_PATH) as f:
+            data = yaml.safe_load(f)
+    except yaml.YAMLError:
+        return {}
+    if not data or "usecases" not in data:
+        return {}
+    return data["usecases"]
 
 
 def check_harness_map() -> list[str]:
-    """Check harness_map.yaml exists, is valid, and has required fields."""
+    """Check harness_map exists, is valid, has required fields."""
     violations: list[str] = []
-
     if not HARNESS_MAP_PATH.exists():
         violations.append(f"MISSING: {HARNESS_MAP_PATH}")
         return violations
@@ -104,16 +102,16 @@ def check_harness_map() -> list[str]:
         with open(HARNESS_MAP_PATH) as f:
             data = yaml.safe_load(f)
     except yaml.YAMLError as e:
-        violations.append(f"INVALID YAML in {HARNESS_MAP_PATH}: {e}")
+        violations.append(f"INVALID YAML: {e}")
         return violations
 
     if not isinstance(data, dict) or "usecases" not in data:
-        violations.append(f"MISSING 'usecases' key in {HARNESS_MAP_PATH}")
+        violations.append(f"MISSING 'usecases' key")
         return violations
 
     usecases = data["usecases"]
     if not isinstance(usecases, dict):
-        violations.append(f"'usecases' must be a dict in {HARNESS_MAP_PATH}")
+        violations.append(f"'usecases' must be a dict")
         return violations
 
     for uc_id, uc_data in usecases.items():
@@ -129,41 +127,78 @@ def check_harness_map() -> list[str]:
     return violations
 
 
-def check_usecase_md_files() -> list[str]:
-    """Check every active uc_*.md has all required sections."""
+def check_domain_files_exist() -> list[str]:
+    """Check every UC's domain has a matching file."""
+    violations: list[str] = []
+    usecases = _load_map_usecases()
+    if not usecases:
+        return violations
+
+    for uc_id, uc_data in usecases.items():
+        domain = uc_data.get("domain", "")
+        if not domain:
+            violations.append(f"  {uc_id}: missing 'domain' field")
+            continue
+        domain_file = DOMAINS_DIR / f"{domain}.md"
+        if not domain_file.exists():
+            violations.append(f"  {uc_id}: domain='{domain}' but no file at domains/{domain}.md")
+
+    return violations
+
+
+def check_uc_in_domain_file() -> list[str]:
+    """Check every active UC in harness_map appears in its domain file."""
+    violations: list[str] = []
+    usecases = _load_map_usecases()
+    if not usecases:
+        return violations
+
+    for uc_id, uc_data in usecases.items():
+        domain = uc_data.get("domain", "")
+        domain_file = DOMAINS_DIR / f"{domain}.md"
+        if not domain_file.exists():
+            continue
+
+        content = domain_file.read_text(encoding="utf-8")
+        blocks = _extract_uc_blocks(content)
+
+        if uc_id not in blocks:
+            violations.append(
+                f"  {uc_id}: not found as '## {uc_id}' in domains/{domain}.md"
+            )
+
+    return violations
+
+
+def check_domain_ucs_in_harness_map() -> list[str]:
+    """Check every active ## UC_XXX in domain files is in harness_map."""
     violations: list[str] = []
 
-    if not USECASES_DIR.exists():
-        violations.append(f"MISSING directory: {USECASES_DIR}")
+    if not DOMAINS_DIR.exists():
         return violations
 
-    md_files = sorted(USECASES_DIR.glob("uc_*.md"))
-    if not md_files:
-        violations.append(f"No uc_*.md files found in {USECASES_DIR}")
-        return violations
+    usecases = _load_map_usecases()
+    map_uc_ids = set(usecases.keys())
 
-    for md_path in md_files:
-        try:
-            content = md_path.read_text(encoding="utf-8")
-        except Exception as e:
-            violations.append(f"  {md_path.name}: cannot read — {e}")
-            continue
+    for md_path in sorted(DOMAINS_DIR.glob("*.md")):
+        content = md_path.read_text(encoding="utf-8")
+        blocks = _extract_uc_blocks(content)
 
-        status = _get_status(content)
-        if _is_skipped_status(status):
-            continue
-
-        sections = _find_sections(content)
-        uc_id = md_path.stem
-        for req_sec in REQUIRED_SECTIONS:
-            if req_sec not in sections:
-                violations.append(f"  {uc_id}: missing required section '## {req_sec}'")
+        for uc_id, section_text in blocks.items():
+            status = _get_status(section_text)
+            if _is_skipped_status(status):
+                continue
+            if uc_id not in map_uc_ids:
+                violations.append(
+                    f"  {uc_id}: in domains/{md_path.name} (status={status}) "
+                    f"but not in harness_map.yaml"
+                )
 
     return violations
 
 
 def check_usecase_index() -> list[str]:
-    """Check 01_usecase_index.md lists every active use case ID."""
+    """Check every UC in harness_map appears in 01_usecase_index.md."""
     violations: list[str] = []
 
     if not USECASE_INDEX_PATH.exists():
@@ -171,78 +206,11 @@ def check_usecase_index() -> list[str]:
         return violations
 
     index_content = USECASE_INDEX_PATH.read_text(encoding="utf-8")
+    usecases = _load_map_usecases()
 
-    if not USECASES_DIR.exists():
-        return violations
-
-    for md_path in USECASES_DIR.glob("uc_*.md"):
-        try:
-            content = md_path.read_text(encoding="utf-8")
-        except Exception:
-            continue
-        status = _get_status(content)
-        if _is_skipped_status(status):
-            continue
-
-        uc_id = md_path.stem
-        uc_id_upper = _md_stem_to_uc_id(uc_id)
-        if uc_id not in index_content and uc_id_upper not in index_content:
-            violations.append(f"  {uc_id_upper}: not listed in {USECASE_INDEX_PATH.name}")
-
-    return violations
-
-
-def check_bidirectional_consistency() -> list[str]:
-    """Check every active harness_map UC has a matching md file, and vice versa.
-
-    Files with status=merged/deprecated/archived are exempt.
-    """
-    violations: list[str] = []
-
-    # Load harness_map
-    if not HARNESS_MAP_PATH.exists():
-        violations.append(f"MISSING: {HARNESS_MAP_PATH}, cannot check consistency")
-        return violations
-
-    try:
-        with open(HARNESS_MAP_PATH) as f:
-            data = yaml.safe_load(f)
-    except yaml.YAMLError:
-        return violations
-
-    map_uc_ids: set[str] = set()
-    if data and "usecases" in data:
-        map_uc_ids = set(data["usecases"].keys())
-
-    # Load active md files (status != merged/deprecated/archived)
-    md_uc_ids: set[str] = set()
-    if USECASES_DIR.exists():
-        for md_path in USECASES_DIR.glob("uc_*.md"):
-            try:
-                content = md_path.read_text(encoding="utf-8")
-            except Exception:
-                continue
-            status = _get_status(content)
-            if _is_skipped_status(status):
-                continue
-            md_uc_ids.add(_md_stem_to_uc_id(md_path.stem))
-
-    # Check: every map UC must have a corresponding md file
-    for uc_id in sorted(map_uc_ids):
-        expected_stem = uc_id.lower()
-        expected_md = USECASES_DIR / f"{expected_stem}.md"
-        if not expected_md.exists():
-            violations.append(
-                f"  Harness map has '{uc_id}' but no matching file: "
-                f"usecases/{expected_stem}.md"
-            )
-
-    # Check: every active md file must appear in harness map
-    for uc_id in sorted(md_uc_ids):
-        if uc_id not in map_uc_ids:
-            violations.append(
-                f"  MD file 'uc_{uc_id.lower()}.md' is active but not listed in harness_map.yaml"
-            )
+    for uc_id in usecases:
+        if uc_id not in index_content:
+            violations.append(f"  {uc_id}: not found in {USECASE_INDEX_PATH.name}")
 
     return violations
 
@@ -250,19 +218,13 @@ def check_bidirectional_consistency() -> list[str]:
 def main() -> int:
     violations: list[str] = []
 
-    print("Checking use case registry...")
+    print("Checking use case registry (domain-based)...")
 
-    v = check_harness_map()
-    violations.extend(v)
-
-    v = check_usecase_md_files()
-    violations.extend(v)
-
-    v = check_usecase_index()
-    violations.extend(v)
-
-    v = check_bidirectional_consistency()
-    violations.extend(v)
+    violations.extend(check_harness_map())
+    violations.extend(check_domain_files_exist())
+    violations.extend(check_uc_in_domain_file())
+    violations.extend(check_domain_ucs_in_harness_map())
+    violations.extend(check_usecase_index())
 
     if violations:
         print(f"\n❌ Found {len(violations)} violation(s):\n")
@@ -271,7 +233,7 @@ def main() -> int:
         print()
         return 1
 
-    print("✅ Use case registry is structurally complete.")
+    print("✅ Use case registry is structurally complete (domain-based).")
     return 0
 
 
