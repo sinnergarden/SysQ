@@ -36,7 +36,7 @@ SysQ 是一个**个人可维护的 A 股日频量化系统**，当前正在从�
 |------|------|-----------|
 | **main_agent** | 总体决策、需求拆解、任务路由、PR 创建与合并 | 全 UC（主导路由、协调） |
 | **builder_agent** | 代码实现、测试修复、工程落地 | UC_DIAGNOSTICS, UC_TEMPORARY |
-| **research_agent** | 量化研究、特征/模型/回测方案 | UC_RESEARCH_BT, UC_MODEL_TRAINING |
+| **research_agent** | 量化研究、特征/模型/回测方案 | UC_RESEARCH_BACKTEST, UC_MODEL_TRAINING |
 | **stock_research_agent** | 财报 PDF、公告、新闻、消息面研究，输出股票研究 memo | UC_STOCK_FUNDAMENTAL_RESEARCH |
 | **ui_agent** | UI/API/可视化相关需求 | UC_UI_ANALYSIS |
 | **reviewer_agent** | 代码审查、架构边界、harness/check 维护 | 全 UC（审查视角） |

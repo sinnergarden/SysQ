@@ -49,6 +49,9 @@ USE_CASES.md 是权威来源，本文档是超集补充。
 
 对齐 `docs/USE_CASES.md` §7。
 
+> 当前实现中 `scripts/research/backtest_from_signal.py` 是 `run_backtest.py` 的子入口，
+> 后续统一收束到 `run_backtest.py`。
+
 ## Key Artifacts
 - `data/research/signals/` — SignalStore
 - `data/research/labels/` — LabelStore

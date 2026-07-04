@@ -64,8 +64,9 @@ USE_CASES.md 是权威来源，本文档是超集补充。
 operator_agent
 
 ## Allowed Paths
+- `scripts/data_sync.py`
+- `scripts/run_daily.py`
 - `qsys/ops/`
-- `scripts/`
 - `configs/strategies/`
 - `harness/checks/`
 - `tests/`

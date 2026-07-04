@@ -86,11 +86,10 @@ watch / pass / candidate
 ```
 
 ## Canonical Entrypoints
+TBD — 当前是 prompt-based agent workflow，没有独立 CLI entrypoint。
 
-| Entrypoint | 职责 | Inputs | Outputs / Artifacts |
-|-----------|------|--------|---------------------|
-| `scripts/research/run_stock_research.py --ts-code <code>` | 执行单票基本面研究 | ts_code、财报 PDF、公告、新闻 | `research_memos/{ts_code}/{date}/stock_research_memo.md` |
-| `prompts/stock_research/final_stock_memo.md` | prompt template（agent 辅助使用） | — | 结构化 memo 输出格式约束 |
+## Prompt Templates
+- `prompts/stock_research/final_stock_memo.md` — 最终输出格式模板
 
 ## Key Artifacts
 - `research_memos/{ts_code}/{date}/stock_research_memo.md`
@@ -119,6 +118,5 @@ stock_research_agent
 - `deploy/`
 
 ## Open Questions
-- （已定）首批提供轻量 CLI `scripts/research/run_stock_research.py --ts-code <code>`，后续着重开发。
 - 财报 PDF 的获取路径是什么（tushare 财报接口？手动下载？）
 - （已定）`research_memos/` 加入 `.gitignore`。

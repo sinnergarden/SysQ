@@ -68,7 +68,6 @@ builder_agent
 - `qsys/trader/`
 - `qsys/broker/`
 - `qsys/backtest/`
-- `qsys/strategy/alpha_v1/adapter.py`（只读）
 - `deploy/`
 
 ## Open Questions

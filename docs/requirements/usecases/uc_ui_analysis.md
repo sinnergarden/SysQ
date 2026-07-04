@@ -53,9 +53,11 @@ draft
 ui_agent
 
 ## Allowed Paths
+- `scripts/run_research_ui_api.py`
 - `qsys/research_ui/`
 - `qsys/ops_api/`
-- `scripts/`
+- `docs/requirements/`
+- `tests/`
 
 ## Forbidden Paths
 - `qsys/ledger/`

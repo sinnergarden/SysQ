@@ -31,7 +31,7 @@ USE_CASES.md 是权威来源，本文档是超集补充。
 ## Outputs
 - `data/research/candidates/{candidate_id}.yaml`
 - `data/research/promotions/shadow.yaml` — shadow pointer
-- （远期）`data/research/promotions/production.yaml`
+- `artifacts/registry/models/{strategy_id}/prod.json` — prod pointer（远期，promotion workflow 最终要写 prod pointer）
 
 ## Canonical Entrypoints
 
@@ -44,6 +44,7 @@ USE_CASES.md 是权威来源，本文档是超集补充。
 ## Key Artifacts
 - `data/research/candidates/{candidate_id}.yaml`
 - `data/research/promotions/shadow.yaml`
+- `artifacts/registry/models/{strategy_id}/prod.json`
 
 ## Required Checks
 - TBD: candidate artifact schema check

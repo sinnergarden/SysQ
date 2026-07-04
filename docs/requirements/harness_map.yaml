@@ -20,8 +20,9 @@ usecases:
       - harness/checks/check_model_resolution_boundary.py
       - harness/checks/check_no_latest_model_resolution.py
     allowed_paths:
+      - scripts/data_sync.py
+      - scripts/run_daily.py
       - qsys/ops/
-      - scripts/
       - configs/strategies/
       - harness/checks/
       - tests/
@@ -35,10 +36,10 @@ usecases:
     status: stable
     owner_agent: research_agent
     entrypoints:
+      - scripts/compute_labels.py
       - scripts/run_research.py
       - scripts/run_signal_analytics.py
       - scripts/run_backtest.py
-      - scripts/compute_labels.py
     artifacts:
       - data/research/signals/{signal_id}/{signal_run_id}/
       - data/research/labels/{label_id}/
@@ -91,7 +92,6 @@ usecases:
       - qsys/trader/
       - qsys/broker/
       - qsys/backtest/
-      - qsys/strategy/alpha_v1/adapter.py
       - deploy/
 
   UC_UI_ANALYSIS:
@@ -104,9 +104,11 @@ usecases:
     checks:
       - TBD: UI read-only check
     allowed_paths:
+      - scripts/run_research_ui_api.py
       - qsys/research_ui/
       - qsys/ops_api/
-      - scripts/
+      - docs/requirements/
+      - tests/
     forbidden_paths:
       - qsys/ledger/
       - qsys/trader/
@@ -114,8 +116,8 @@ usecases:
       - qsys/backtest/
       - deploy/
 
-  # NOTE: UC_SINGLE_STOCK_REVIEW has been merged into UC_UI_ANALYSIS as the
-  # "single stock review" view.  No independent CLI/notebook entrypoint needed.
+  # NOTE: UC_SINGLE_STOCK_REVIEW merged into UC_UI_ANALYSIS.
+  # No independent canonical entrypoint.
 
   UC_CANDIDATE_PROMOTION:
     status: stable
@@ -125,6 +127,7 @@ usecases:
     artifacts:
       - data/research/candidates/{candidate_id}.yaml
       - data/research/promotions/shadow.yaml
+      - artifacts/registry/models/{strategy_id}/prod.json
     checks:
       - TBD: candidate artifact schema check
       - TBD: promotion lineage check
@@ -164,8 +167,7 @@ usecases:
     status: draft
     owner_agent: stock_research_agent
     entrypoints:
-      - scripts/research/run_stock_research.py
-      - prompts/stock_research/final_stock_memo.md
+      - TBD
     artifacts:
       - research_memos/{ts_code}/{date}/stock_research_memo.md
     checks:
