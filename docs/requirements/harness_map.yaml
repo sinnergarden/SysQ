@@ -1,0 +1,219 @@
+# Harness Map — SysQ v0.1
+# Maps use cases to entrypoints, artifacts, checks, and owner agents.
+# Used by harness checks and multi-agent routing.
+
+usecases:
+  UC_DAILY_OPS:
+    status: stable
+    owner_agent: operator_agent
+    entrypoints:
+      - scripts/run_daily.py
+      - scripts/run_daily_batch.py
+    artifacts:
+      - daily/{trade_date}/pre_open/signals/
+      - daily/{trade_date}/post_close/
+      - runs/{trade_date}/{run_id}/
+      - data/trade.db
+    checks:
+      - harness/checks/check_model_resolution_boundary.py
+      - harness/checks/check_no_latest_model_resolution.py
+    allowed_paths:
+      - qsys/ops/
+      - scripts/
+      - configs/strategies/
+      - harness/checks/
+      - tests/
+    forbidden_paths:
+      - qsys/ledger/
+      - qsys/backtest/
+      - qsys/trader/
+      - qsys/broker/
+
+  UC_RESEARCH_BACKTEST:
+    status: stable
+    owner_agent: research_agent
+    entrypoints:
+      - scripts/run_research.py
+      - scripts/run_signal_analytics.py
+      - scripts/research/backtest_from_signal.py
+      - scripts/compute_labels.py
+    artifacts:
+      - data/research/signals/{signal_id}/{signal_run_id}/
+      - data/research/labels/{label_id}/
+      - data/research/experiments/{experiment_id}/
+      - data/research/backtests/{run_id}/
+    checks:
+      - TBD: research artifact schema check
+      - TBD: label maturity gate check
+    allowed_paths:
+      - qsys/research/
+      - qsys/signal/
+      - qsys/label/
+      - qsys/feature/
+      - qsys/evaluation/
+      - qsys/backtest/
+      - qsys/analysis/
+      - configs/research/
+      - configs/features/
+      - configs/labels/
+      - scripts/research/
+      - tests/
+    forbidden_paths:
+      - qsys/ledger/
+      - qsys/trader/
+      - qsys/broker/
+      - qsys/ops/daily_runner.py
+      - deploy/
+
+  UC_MODEL_TRAINING:
+    status: stable
+    owner_agent: builder_agent
+    entrypoints:
+      - scripts/run_daily_batch.py --mode train
+    artifacts:
+      - experiments/{strategy_id}_models/{timestamp}/
+      - artifacts/registry/models/{strategy_id}/shadow.json
+      - runs/{date}/{run_id}/training_result.json
+    checks:
+      - harness/checks/check_no_latest_model_resolution.py
+      - harness/checks/check_model_resolution_boundary.py
+    allowed_paths:
+      - qsys/model/
+      - qsys/ops/model_registry.py
+      - qsys/ops/model_resolver.py
+      - configs/strategies/
+      - harness/checks/
+      - tests/
+    forbidden_paths:
+      - qsys/ledger/
+      - qsys/trader/
+      - qsys/broker/
+      - qsys/backtest/
+      - qsys/strategy/alpha_v1/adapter.py
+      - deploy/
+
+  UC_UI_ANALYSIS:
+    status: draft
+    owner_agent: ui_agent
+    entrypoints:
+      - scripts/run_research_ui_api.py
+    artifacts:
+      - TBD (UI artifacts not yet defined)
+    checks:
+      - TBD: UI read-only check
+    allowed_paths:
+      - qsys/research_ui/
+      - qsys/ops_api/
+      - scripts/
+    forbidden_paths:
+      - qsys/ledger/
+      - qsys/trader/
+      - qsys/broker/
+      - qsys/backtest/
+      - deploy/
+
+  UC_SINGLE_STOCK_REVIEW:
+    status: draft
+    owner_agent: research_agent
+    entrypoints:
+      - TBD
+    artifacts:
+      - TBD (reuses existing data sources)
+    checks:
+      - TBD
+    allowed_paths:
+      - scripts/dev/
+      - notebooks/
+    forbidden_paths:
+      - qsys/ledger/
+      - qsys/trader/
+      - qsys/broker/
+
+  UC_CANDIDATE_PROMOTION:
+    status: stable
+    owner_agent: operator_agent
+    entrypoints:
+      - scripts/promote_candidate.py
+    artifacts:
+      - data/research/candidates/{candidate_id}.yaml
+      - data/research/promotions/shadow.yaml
+    checks:
+      - TBD: candidate artifact schema check
+      - TBD: promotion lineage check
+    allowed_paths:
+      - scripts/promote_candidate.py
+      - qsys/research/candidate.py
+      - configs/strategies/
+    forbidden_paths:
+      - qsys/ledger/
+      - qsys/trader/
+      - qsys/broker/
+      - qsys/backtest/
+      - qsys/ops/daily_runner.py
+
+  UC_DIAGNOSTICS:
+    status: draft
+    owner_agent: reviewer_agent
+    entrypoints:
+      - scripts/checks/
+      - harness/checks/
+      - scripts/check_framework_stability.py
+      - scripts/check_dr_bt_equivalence.py
+    artifacts:
+      - TBD (check results are stdout / JSON, no persistent storage)
+    checks:
+      - harness/checks/check_usecase_registry.py
+    allowed_paths:
+      - scripts/checks/
+      - harness/checks/
+      - qsys/data/health.py
+      - qsys/common/
+    forbidden_paths:
+      - qsys/ledger/
+      - qsys/trader/
+      - qsys/broker/
+      - qsys/backtest/
+
+  UC_STOCK_FUNDAMENTAL_RESEARCH:
+    status: draft
+    owner_agent: stock_research_agent
+    entrypoints:
+      - prompts/stock_research/final_stock_memo.md
+    artifacts:
+      - research_memos/{ts_code}/{date}/stock_research_memo.md
+    checks:
+      - TBD: stock research memo schema check
+    allowed_paths:
+      - prompts/stock_research/
+      - docs/requirements/
+      - research_memos/
+    forbidden_paths:
+      - qsys/ledger/
+      - qsys/backtest/
+      - qsys/trader/
+      - qsys/broker/
+      - qsys/signal/
+      - qsys/ops/daily_runner.py
+      - deploy/
+
+  UC_TEMPORARY_REQUESTS:
+    status: experimental
+    owner_agent: main_agent
+    entrypoints:
+      - TBD (ad-hoc scripts under scripts/dev/)
+    artifacts:
+      - scratch/
+      - outputs/
+    checks:
+      - TBD: cleanup required after completion
+    allowed_paths:
+      - scripts/dev/
+      - scratch/
+      - notebooks/
+    forbidden_paths:
+      - qsys/ledger/
+      - qsys/trader/
+      - qsys/broker/
+      - qsys/backtest/
+      - qsys/ops/daily_runner.py
+      - deploy/
