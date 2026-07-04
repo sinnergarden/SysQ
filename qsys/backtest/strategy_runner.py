@@ -745,24 +745,27 @@ class BacktestRunner:
                 if (maxdd_threshold is not None or maxdd_percentile is not None) and maxdd_signal_id and buy_codes:
                     try:
                         maxdd_sig = signal_store.load_signal_for_date(maxdd_signal_id, maxdd_signal_run_id, trade_date)
-                        if not maxdd_sig.empty:
-                            # No-lookahead check (preopen semantics: data_date < trade_date)
-                            if "data_date" in maxdd_sig.columns and "trade_date" in maxdd_sig.columns:
-                                _dd = pd.to_datetime(maxdd_sig["data_date"]).dt.strftime("%Y-%m-%d")
-                                _td = pd.to_datetime(maxdd_sig["trade_date"]).dt.strftime("%Y-%m-%d")
-                                _v = maxdd_sig[_dd >= _td]
-                                if len(_v) > 0:
-                                    raise ValueError(f"Maxdd signal lookahead at {trade_date}: {len(_v)} rows")
-                            
-                            maxdd_map = dict(zip(maxdd_sig["instrument"], maxdd_sig["score"]))
-                            if maxdd_threshold is not None:
-                                buy_codes = [c for c in buy_codes if maxdd_map.get(c, 0) < maxdd_threshold]
-                            else:
-                                scores = maxdd_sig["score"].dropna()
-                                threshold = float(scores.quantile(maxdd_percentile)) if len(scores) > 1 else 1.0
-                                buy_codes = [c for c in buy_codes if maxdd_map.get(c, 0) < threshold]
+                        maxdd_sig = None if maxdd_sig.empty else maxdd_sig
                     except Exception:
-                        pass  # maxdd signal unavailable, proceed without filter
+                        maxdd_sig = None
+
+                    if maxdd_sig is not None:
+                        # No-lookahead check — violation raises, not swallowed
+                        if "data_date" in maxdd_sig.columns and "trade_date" in maxdd_sig.columns:
+                            _dd = pd.to_datetime(maxdd_sig["data_date"]).dt.strftime("%Y-%m-%d")
+                            _td = pd.to_datetime(maxdd_sig["trade_date"]).dt.strftime("%Y-%m-%d")
+                            _v = maxdd_sig[_dd >= _td]
+                            if len(_v) > 0:
+                                raise ValueError(f"Maxdd signal lookahead at {trade_date}: {len(_v)} rows")
+
+                        maxdd_map = dict(zip(maxdd_sig["instrument"], maxdd_sig["score"]))
+                        if maxdd_threshold is not None:
+                            buy_codes = [c for c in buy_codes if maxdd_map.get(c, 0) < maxdd_threshold]
+                        else:
+                            scores = maxdd_sig["score"].dropna()
+                            threshold = float(scores.quantile(maxdd_percentile)) if len(scores) > 1 else 1.0
+                            buy_codes = [c for c in buy_codes if maxdd_map.get(c, 0) < threshold]
+                    # maxdd_sig is None → proceed without filter
                 
                 if buy_codes:
                     alloc_once = account.cash / len(buy_codes)
