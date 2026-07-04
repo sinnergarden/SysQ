@@ -110,75 +110,84 @@ class ModelScheduler:
 
     @staticmethod
     def find_latest_model(models_dir="data/models", experiments_dir=str(DEFAULT_EXPERIMENTS_ROOT)):
-        """Find the latest model directory."""
-        candidates = []
-        
-        # Check data/models (Preferred for production/rolling models)
-        models_root = Path(models_dir)
-        if models_root.exists():
-            candidates.extend([d for d in models_root.iterdir() if d.is_dir()])
-            
-        experiments_path = Path(experiments_dir)
-        if experiments_path.exists():
-            candidates.extend([d for d in experiments_path.iterdir() if d.is_dir()])
-            
-        if not candidates:
+        """Find the latest model directory via explicit pointer, NOT mtime.
+
+        .. deprecated::
+            Use ``resolve_model_for_strategy()`` in production code.
+            This method is kept as a stub for backward compatibility only.
+            It resolves via the unified model resolver, not by mtime sorting.
+        """
+        from qsys.ops.model_resolver import resolve_model_for_strategy  # noqa: PLC0415
+
+        project_root = Path(models_dir).parent
+        try:
+            resolved = resolve_model_for_strategy(
+                project_root=project_root,
+                strategy_id="alpha_v1",
+                mode="shadow",
+            )
+            return resolved.model_path
+        except (FileNotFoundError, ValueError):
             return None
-            
-        # Sort by modification time (newest first)
-        candidates.sort(key=lambda x: x.stat().st_mtime, reverse=True)
-        return candidates[0]
 
     @staticmethod
     def resolve_production_model(manifest_path: str = None) -> str:
         """
         Resolve the production model path from the manifest.
-        
+
         This is the preferred method for daily ops to get the model to use.
         It reads production_manifest.yaml to determine which model is approved.
-        
+
         Args:
             manifest_path: Path to manifest file. If None, uses default location.
-        
+
         Returns:
             Path to the production model directory.
-            Falls back to find_latest_model() if manifest not found.
+
+        Raises
+        ------
+        FileNotFoundError
+            If no valid production manifest exists.  Never falls back to
+            mtime sorting or symlink discovery.
         """
         data_root = cfg.get_path("root")
         repo_root = data_root.parent if data_root is not None else Path.cwd()
 
         if manifest_path is None:
-            # cfg.get_path("root") points to the data root.
             models_dir = data_root / "models"
             manifest_path = str(models_dir / DEFAULT_MANIFEST_FILENAME)
-        
+
         manifest_file = Path(manifest_path)
-        
+
         if manifest_file.exists():
             try:
                 with open(manifest_file) as f:
                     manifest = yaml.safe_load(f)
                     model_path = manifest.get("model_path")
                     if model_path:
-                        # Resolve relative paths relative to repo root
                         model_path_obj = Path(model_path)
                         if not model_path_obj.is_absolute():
                             model_path_obj = repo_root / model_path_obj
-                        
+
                         if model_path_obj.exists():
                             log.info(f"Production model resolved from manifest: {model_path_obj}")
                             log.info(f"  Manifest version: {manifest.get('version', 'unknown')}")
                             log.info(f"  Status: {manifest.get('status', 'unknown')}")
                             return str(model_path_obj)
                         else:
-                            log.warning(f"Model path in manifest does not exist: {model_path_obj}")
+                            raise FileNotFoundError(
+                                f"Model path in production manifest does not exist: {model_path_obj}. "
+                                "Run approval workflow or update manifest."
+                            )
+            except FileNotFoundError:
+                raise
             except Exception as e:
-                log.warning(f"Failed to read production manifest: {e}")
-        
-        # Fallback to latest model
-        log.warning("Production manifest not found or invalid. Falling back to latest model.")
-        latest = ModelScheduler.find_latest_model()
-        if latest:
-            return str(latest)
-        
-        raise FileNotFoundError("No production model found and no fallback available.")
+                raise FileNotFoundError(
+                    f"Failed to read production manifest at {manifest_path}: {e}. "
+                    "Run approval workflow first."
+                )
+
+        raise FileNotFoundError(
+            f"No production manifest found at {manifest_path}. "
+            "Run approval workflow first."
+        )
