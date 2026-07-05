@@ -23,7 +23,8 @@ SysQ 是一个**个人可维护的 A 股日频量化系统**，当前正在从�
 
 - **需求文档驱动** — 所有命令必须对应一个 use case。如果 agent 发现用户请求不在任何 use case 中，必须先与用户确认是否为临时请求。若是，注册为 UC_TEMPORARY_REQUESTS；若同一临时请求出现超过 2 次，必须补文档并考虑是否收束为正式 use case。
 - **唯一入口 + 测试兜底** — 每个正式 use case 有唯一 canonical entrypoint，且必须有测试。当 use case 的输入输出发生变更（如新增参数、扩展 schema）时，必须确保向后兼容。
-- **Agent 角色分离** — 不同类型的工作由不同的 agent 角色主导，避免单 agent 跨界越权。
+- **Skill-first + harness-first** — task skills 定义执行轨道，harness checks 提供可执行护栏。不依赖 agent 人格或模型记忆。主对话拥有状态和最终决定权。Subagent 只做只读辅助。
+- **Agent role notes 是 lightweight 参考，不是 runtime agent team** — 不需要用户维护多个常驻 agent。
 - **Harness 优先** — 关键约束写成自动化 check，不依赖人的记忆。
 
 ---
@@ -62,7 +63,16 @@ SysQ 是一个**个人可维护的 A 股日频量化系统**，当前正在从�
 
 ---
 
-## 5. 收束目标
+## 5. AI 操作入口
+
+- `AGENTS.md` 和 `docs/agents/` 存放 SysQ 的 AI 操作规则。
+- workspace 级 `.claude.md` 只做 SysQ 任务分流（见 `docs/agents/workspace_claude_redirect.md`），不包含仓库内部规则。
+- 所有 SysQ 的 agent 规则、use case、harness、角色说明都放在仓库内，随代码版本化和审查。
+- 本 PR 新增：`.claude/skills/` 定义 task skills，`harness/checks/check_label_maturity.py` 和 `check_daily_inference_ready.py` 是可执行决策检查。
+
+---
+
+## 6. 收束目标
 
 - 每个正式 use case 有唯一 canonical entrypoint
 - `scripts/` 顶层只保留 canonical entrypoints（对应 `harness_map.yaml` 中 `status=stable` 的 UC）

@@ -1,153 +1,165 @@
-# AGENTS — AI 操作协议
+# AGENTS — SysQ AI 操作总入口
 
-系统设计见 `docs/ARCHITECTURE.md`，当前优先级见 `ROADMAP.md`。
-
----
-
-## 1. 当前工作模式
-
-Framework Stabilization + 投研研发迭代。人主导、AI 辅助执行。
-
-- 人负责方向判断、验收标准、高风险裁决。
-- AI 负责读代码、提出方案、实施小步改动、跑测试、同步文档。
-- 单轮尽量只解决一个主题，避免跨层大改。
+> 本文档是 SysQ 仓库的 AI 操作权威入口。所有 SysQ 相关工作必须从这里开始。
+> 系统架构见 `docs/ARCHITECTURE.md`，use case registry 见 `docs/requirements/01_usecase_index.md`。
 
 ---
 
-## 2. 核心原则
+## 1. Mission
 
-- **Research 不能直接进入 Production** — 必须经过 Candidate/Shadow。
-- **三条链路**：Research（回放）/ Daily Ops（推进）/ Candidate→Shadow→Production（晋级）。
-- **Ledger SOT**：`data/trade.db` 是目标账户状态 SOT。`data/meta/real_account.db` 和 `shadow/` 是 legacy，不能擅自删除。
-- **Data readiness check** 是训练、回测、daily ops 的前置条件。
+SysQ 是一个个人可维护的 A 股日频量化系统。AI 负责：需求拆解、方案实施、测试修复、文档同步、边界检查。
+人主导方向与高风险决策，AI 辅助执行。
 
----
-
-## 3. 文档事实优先级
-
-实际代码调用链 → `docs/ARCHITECTURE.md` → `ROADMAP.md` → `docs/adr/` → `archive/docs/features/`。
+执行模式是 **skill-first + harness-first**，不是 agent-first：
+- **Skills** 定义任务执行轨道（`sysq-daily`、`sysq-dev`）
+- **Harness checks** 是执行护栏，模型声称不能替代可执行检查
+- **Subagents** 是可选的只读辅助工具
+- **主对话** 拥有状态和最终决定权
 
 ---
 
-## 4. 必读文档路由
+## 2. 必须工作流
 
-| 任务 | 优先阅读 |
-|------|---------|
-| 系统架构、模块边界 | `docs/ARCHITECTURE.md`, `docs/CONTRACTS.md` |
-| 数据对象、artifact 字段 | `docs/CONTRACTS.md`, `docs/schema/`, `docs/REPO_LAYOUT.md` |
-| 新增策略/feature/label/signal | `docs/ops/RESEARCH_STRATEGY_SOP.md`, `docs/CONTRACTS.md`, `docs/GENERATOR_DEV_GUIDE.md` |
-| 新信号生成器 | `docs/GENERATOR_DEV_GUIDE.md` |
-| 运行 daily ops、修改入口 | `docs/ops/DAILY_OPS_SOP.md`, `docs/ARCHITECTURE.md` |
-| 修改 ledger/portfolio/execution | `docs/CONTRACTS.md`, `docs/ARCHITECTURE.md` |
-| 新增/移动文件或产物 | `docs/REPO_LAYOUT.md` |
-| 修改路线图 | `ROADMAP.md`, `docs/ARCHITECTURE.md` |
-| 清理 legacy/shadow/real_account | `docs/ARCHITECTURE.md`, `docs/REPO_LAYOUT.md` |
-
----
-
-## 5. 许可
-
-AI 可直接处理：
-- 文档修订、bug fix、测试补充、只读审查
-- 不改变语义的重构、小范围研究实验
-- 在独立分支做低风险改动并运行测试
-
-必须说明：改了什么、为什么改、如何验证、是否影响 Research / Daily Ops / Production。
-
----
-
-## 6. PR Workflow
-
-**代码变更必须走 PR。禁止直接推送到 main 分支。零例外。**
+所有 SysQ 任务必须按以下顺序：
 
 ```
-git checkout -b pr-<topic>
-git add -A && git commit -m "..."
-git push origin <branch>
-gh pr create --title "..." --body "..."
-# 用户 approve 后
-gh pr merge <number> --squash --delete-branch
+1. 将请求归类到 docs/requirements/01_usecase_index.md 中的一个 use case。
+2. 读取 docs/requirements/harness_map.yaml，查看 owner_agent、skills、entrypoints、allowed/forbidden_paths、checks。
+3. 读取对应的 domain 文档（docs/requirements/domains/*.md）。
+4. 选择主 skill（如果 UC 在 harness_map 中定义了 skills），或有针对性地执行。
+5. 声明检测到的 UC、skill、影响范围、禁止路径、需要运行的 checks。
+6. 仅在 allowed 范围内实施变更。
+7. 运行相关的 harness checks 和 tests。
 ```
 
 ---
 
-## 7. 必须先讨论
+## 3. Use Case First
 
-以下不能自动改，必须先说明影响并等待确认：
-- DB schema、ledger/account/position/cash/order/fill 语义变化
-- `data/trade.db`、`data/meta/real_account.db`、`shadow/` 的迁移或删除
-- systemd、production entry、broker bridge、MiniQMT
-- 交易规则变更（手续费、T+1、撮合规则）
-- 公共接口删除或重命名
-- Protected Core 核心语义变更
-- 不可逆清理
-- 真实下单/撤单/持仓修正
+- **不得在识别 use case 之前开始任何 SysQ 代码变更。**
+- 如果请求不匹配任何 use case，使用 `UC_TEMPORARY_REQUESTS` 并向用户确认是否作为临时请求处理。
+- 同一临时请求出现超过 2 次，必须补文档并考虑收束为正式 use case。
 
 ---
 
-## 8. Protected Core
+## 4. Skill-First Execution
 
-以下路径默认只允许只读分析、测试补充和文档说明：
-`qsys/ledger/`、`qsys/backtest/`、`qsys/trader/`、`qsys/ops/daily_runner.py`、`qsys/broker/`、`qsys/strategy/alpha_v1/`、`scripts/ops/`、systemd 配置、artifact contract schema。
+SysQ 的执行是 skill-first，不是 agent-first。使用 task skills 执行具体工作流：
 
-修改必须给出：修改原因、影响范围、回滚方式、最小验证命令、是否影响 production。
+| Skill | 用途 | 对应 UC |
+|-------|------|---------|
+| `sysq-daily` | 日频运营：数据就绪、标签成熟度、重训资格、推理就绪、候选输出 | UC_DAILY_OPS, UC_MODEL_TRAINING |
+| `sysq-dev` | 开发：bug fix、测试、harness、PR 工作 | UC_DIAGNOSTICS, UC_TEMPORARY |
+| `sysq-stock-research` | 基本面研究：财报/公告/新闻 PDF 研究、memo 生成 | UC_STOCK_FUNDAMENTAL_RESEARCH |
 
----
-
-## 9. 零造轮子原则
-
-**禁止在已有代码路径的情况下，手写一份等价的业务逻辑。**
-
-## 9a. 新功能与文档规则
-
-- 影响架构边界、引入新长期接口、改 schema/artifact、影响 Candidate/Shadow/Production、改 ledger/daily entry/broker → 先补设计文档。
-- 普通实验、bugfix、小脚本可以直接实现并在 PR 里说明。
-- `docs/adr/` 放长期架构决策；`docs/schema/` 放 artifact 字段约束。
+规则：
+- **不要依赖 agent 人格来执行任务行为。** 如果行为重要，编码为 skill。
+- **不要依赖模型记忆来保证正确性。** 如果正确性重要，编码为 harness check。
+- Skills 在 `.claude/skills/*/SKILL.md` 中定义。没有 skill 的 UC 使用通用的 builder 行为。
 
 ---
 
-## 10. 测试
+## 5. Harness-First Reliability
 
-提交前默认执行：
+Skills 是 prompt。Harness checks 是可执行护栏。
+
+**模型的说法不能保证日频/训练/推理的安全性。** 关键决策点必须有自动化 check 覆盖。
+
+目标 harness checks：
 
 ```bash
-python -m compileall qsys scripts tests
-python -m unittest discover tests
+python harness/checks/check_label_maturity.py
+python harness/checks/check_daily_inference_ready.py
+python harness/checks/check_scripts_entrypoints.py
+python harness/checks/check_model_resolution_boundary.py
+python harness/checks/check_no_latest_model_resolution.py
+python harness/checks/check_usecase_registry.py
 ```
 
-按改动范围可用 `python -m unittest tests/<module>/`。
+执行原则：
+- 每个 daily/training/inference 决策前检查对应 check
+- check 失败时：停止，报告，不要静默绕过
+- check 待实现时显式失败或 warning，不要无条件 PASS
 
 ---
 
-## 11. 日期与数据语义
+## 6. Subagent Policy
 
-- `signal_date`：信号来源日期（最近已收盘交易日）。
-- `execution_date`：实际计划执行日期。
-- 盘前推荐基于 T-1 收盘。数据 readiness 不满足时显式失败。
-- 训练、回测、推理必须避免未来数据泄露。
-
-### 11a. Lookahead 铁律（违反 = 无效结果）
-
-**任何推理任务使用的模型训练截止日（train_end）必须不晚于推理目标日期（trade_date）。**
-
-- 正常 daily ops：用 latest 模型做当天 prediction，OK。
-- **回溯 backfill**：必须显式指定目标日期当时的模型版本，禁止用 latest。
-- 禁止用 target_date 之后才产生的数据来预测 target_date 的信号。
-
----
-
-## 12. 输出方式
-
-结论 → 关键依据 → 风险/阻塞点 → 下一步动作。引用代码给明确路径。不把推测写成事实。
+- **默认在主对话中执行。** 主对话拥有任务连续性、最终决策和代码写入权限。
+- **Subagent 只用于有界的只读辅助任务：**
+  - 仓库探索
+  - 引用搜索
+  - 调用链路总结
+  - PR / diff 审查
+  - 日志/测试失败总结
+  - 长文档提取
+- **不得委托最终决策给 subagent：**
+  - 是否重训
+  - 是否推理
+  - 最终候选股票输出
+  - 生产/promotion 决策
+  - 代码实现所有权
 
 ---
 
-## 13. 禁止事项
+## 7. 边界规则
 
-**PR/分支**：禁止直接推送或合并到 main。零例外。
+- **不得修改** `harness_map.yaml` 中定义的 `forbidden_paths`。
+- **不得创建顶层脚本**，除非该脚本被列为 canonical entrypoint。
+- **不得在同一个 PR 中混合** 架构重构、业务逻辑变更、文档清理、测试重写。
+- **不得修改** production/daily/promotion 行为，除非 selected UC 明确允许。
+- **docs/requirements/harness_map.yaml** 是机器约束源，entrypoints 和 allowed/forbidden paths 以它为准。
 
-**数据/状态**：禁止删除 `shadow/`；删除或迁移 `real_account.db`；绕过 LedgerService 直接写生产状态；直接编辑 `data/trade.db`（只能通过 `run_daily.py` / `LedgerService` 写入）；切换 production systemd 入口。
+---
 
-**交易/生产**：禁止绕过 artifact contract 接入 Candidate/Production；让 Research artifact 直接进入 Production；自动提交真实券商订单；修改生产密钥。
+## 8. 基础 Checks
 
-**代码/依赖**：禁止从 `archive/` import 或调用脚本。
+根据 UC 选择相关检查，至少运行：
+
+```bash
+python harness/checks/check_usecase_registry.py
+python harness/checks/check_scripts_entrypoints.py
+python harness/checks/check_no_latest_model_resolution.py
+python harness/checks/check_model_resolution_boundary.py
+```
+
+根据情况额外运行：
+
+```bash
+python harness/checks/check_label_maturity.py --trade-date <date> --horizon <h> --train-end <date>
+python harness/checks/check_daily_inference_ready.py --trade-date <date> --strategy-id <strategy>
+```
+
+不强制每次都跑全部 pytest，根据更改范围选择相关测试目录：
+
+```bash
+python -m pytest tests/<module>/ -q
+```
+
+---
+
+## 9. Handoff 格式
+
+每次输出完成后，按以下格式提供摘要：
+
+```
+Detected UC: <UC_ID>
+Selected skill: <sysq-daily | sysq-dev | sysq-stock-research>
+Scope: <本次变更的范围>
+Allowed paths: <相关的 allowed_paths>
+Forbidden paths: <本次未触碰的 forbidden_paths>
+Changed files: <文件路径列表>
+Checks run: <运行的 check 和测试>
+Risks: <剩余风险>
+Open questions: <需要用户决策的事项>
+```
+
+---
+
+## 10. 文档同步义务
+
+修改了以下内容，必须同步更新对应文档：
+- 新增/修改 entrypoint → 同步 `harness_map.yaml` 和对应 domain doc
+- 新增 use case → 同步 `01_usecase_index.md`、`harness_map.yaml`、对应 domain doc
+- 修改架构/角色 → 同步 `00_sysq_vision.md`、本文档
+- 新增 skill → 同步 `.claude/skills/`、本文档 §4

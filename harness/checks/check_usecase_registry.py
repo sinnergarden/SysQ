@@ -44,6 +44,7 @@ OPTIONAL_MAP_FIELDS = {
     "legacy_entrypoints",
     "prompt_templates",
     "notes",
+    "skills",
 }
 
 SKIP_STATUSES = {"merged", "deprecated", "archived"}
