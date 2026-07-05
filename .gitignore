@@ -21,6 +21,10 @@ logs/
 config/settings.yaml
 !qsys/data
 .claude/
+!.claude/skills/
+!.claude/skills/*/SKILL.md
+!.claude/agents/
+!.claude/agents/*.md
 backfill_checkpoint.json*
 .trae/
 .tmp/

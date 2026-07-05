@@ -37,3 +37,10 @@ workspace .claude.md          ← 只做 SysQ 任务分流
 | stock_research_agent | 财报/公告/新闻 agent 研究 |
 
 这些角色等需求明确后再独立。**目前不需要**。
+
+## Loop Engineering
+
+- `SYSQ_LOOP_ENGINEERING.md` — failure-driven improvement loop model.
+- `loop_memory.md` — validated lessons learned from real failures. Stores accepted lessons only; not a scratchpad or conversation transcript.
+
+\`sysq-reviewer\` subagent (\`.claude/agents/sysq-reviewer.md\`) may propose improvements read-only. The main conversation owns decisions.

@@ -112,7 +112,34 @@ python harness/checks/check_usecase_registry.py
 
 ---
 
-## 8. 基础 Checks
+## 8. Improvement Loop
+
+SysQ uses a failure-driven improvement loop.
+
+**Triggers:**
+- user correction
+- failed harness check
+- PR review finding
+- repeated agent mistake
+
+**Process:**
+1. capture the failure
+2. classify the failure type (see `docs/agents/SYSQ_LOOP_ENGINEERING.md`)
+3. propose the smallest skill/harness/usecase/memory update
+4. validate with the original failure case
+5. update `docs/agents/loop_memory.md` only after validation
+
+**Rules:**
+- Reviewer subagents (\`sysq-reviewer\`) may propose improvements, but must not directly modify files.
+- The main conversation owns the decision.
+- Implementation uses the relevant skill, usually \`sysq-dev\`.
+- Harness changes must not weaken existing safety checks.
+
+**Reference:**
+- \`docs/agents/SYSQ_LOOP_ENGINEERING.md\` — full loop model and failure taxonomy
+- \`docs/agents/loop_memory.md\` — validated lessons
+
+## 9. 基础 Checks
 
 根据 UC 选择相关检查，至少运行：
 
@@ -138,7 +165,7 @@ python -m pytest tests/<module>/ -q
 
 ---
 
-## 9. Handoff 格式
+## 10. Handoff 格式
 
 每次输出完成后，按以下格式提供摘要：
 
@@ -156,7 +183,7 @@ Open questions: <需要用户决策的事项>
 
 ---
 
-## 10. 文档同步义务
+## 11. 文档同步义务
 
 修改了以下内容，必须同步更新对应文档：
 - 新增/修改 entrypoint → 同步 `harness_map.yaml` 和对应 domain doc
