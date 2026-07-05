@@ -1,192 +1,181 @@
 # AGENTS — SysQ AI 操作总入口
 
-> 本文档是 SysQ 仓库的 AI 操作权威入口。所有 SysQ 相关工作必须从这里开始。
+> 所有 SysQ 相关工作必须从这里开始。
 > 系统架构见 `docs/ARCHITECTURE.md`，use case registry 见 `docs/requirements/01_usecase_index.md`。
 
 ---
 
 ## 1. Mission
 
-SysQ 是一个个人可维护的 A 股日频量化系统。AI 负责：需求拆解、方案实施、测试修复、文档同步、边界检查。
-人主导方向与高风险决策，AI 辅助执行。
+SysQ 是一个**个人可维护的 A 股日频量化系统**。AI 负责：需求拆解、方案实施、测试修复、文档同步、边界检查。
 
-执行模式是 **skill-first + harness-first**，不是 agent-first：
-- **Skills** 定义任务执行轨道（`sysq-daily`、`sysq-dev`）
-- **Harness checks** 是执行护栏，模型声称不能替代可执行检查
-- **Subagents** 是可选的只读辅助工具
-- **主对话** 拥有状态和最终决定权
+执行模式：**skill-first + harness-first** — 行为编码为 skill，正确性编码为 harness check。主对话拥有最终权。
 
 ---
 
-## 2. 必须工作流
-
-所有 SysQ 任务必须按以下顺序：
+## 2. 执行 FSM
 
 ```
-1. 将请求归类到 docs/requirements/01_usecase_index.md 中的一个 use case。
-2. 读取 docs/requirements/harness_map.yaml，查看 owner_agent、skills、entrypoints、allowed/forbidden_paths、checks。
-3. 读取对应的 domain 文档（docs/requirements/domains/*.md）。
-4. 选择主 skill（如果 UC 在 harness_map 中定义了 skills），或有针对性地执行。
-5. 声明检测到的 UC、skill、影响范围、禁止路径、需要运行的 checks。
-6. 仅在 allowed 范围内实施变更。
-7. 运行相关的 harness checks 和 tests。
+INIT → UC → SKILL → SCOPE → GATE → EXECUTE → HARNESS → LOOP → DONE
 ```
 
----
-
-## 3. Use Case First
-
-- **不得在识别 use case 之前开始任何 SysQ 代码变更。**
-- 如果请求不匹配任何 use case，使用 `UC_TEMPORARY_REQUESTS` 并向用户确认是否作为临时请求处理。
-- 同一临时请求出现超过 2 次，必须补文档并考虑收束为正式 use case。
+不得跳步。
 
 ---
 
-## 4. Skill-First Execution
+## 3. UC（归类）
 
-SysQ 的执行是 skill-first，不是 agent-first。使用 task skills 执行具体工作流：
+归类到 `01_usecase_index.md` 中的一个 UC。读取 `harness_map.yaml` 和对应 `domains/*.md`。
+
+UC 一旦确定，必须同时确定：
+- 主 skill（从 UC 在 harness_map 中定义的 skills）
+- 对应 harness checks
+
+**禁止先选 skill 再回填 UC，禁止 skill 与 UC 解耦选择。**
+
+- 无 UC → 停止，走 `UC_TEMPORARY_REQUESTS`
+- 同类请求 ≥2 次 → 补文档
+
+---
+
+## 4. SKILL（选技能）
 
 | Skill | 用途 | 对应 UC |
 |-------|------|---------|
-| `sysq-daily` | 日频运营：数据就绪、标签成熟度、重训资格、推理就绪、候选输出 | UC_DAILY_OPS, UC_MODEL_TRAINING |
-| `sysq-dev` | 开发：bug fix、测试、harness、PR 工作 | UC_DIAGNOSTICS, UC_TEMPORARY |
-| `sysq-stock-research` | 基本面研究：财报/公告/新闻 PDF 研究、memo 生成 | UC_STOCK_FUNDAMENTAL_RESEARCH |
+| `sysq-daily` | 日频运营 + 手工推理 | UC_DAILY_OPS, UC_DAILY_INFERENCE_RUN, UC_MODEL_TRAINING |
+| `sysq-dev` | 开发 | UC_DIAGNOSTICS, UC_TEMPORARY |
+| `sysq-stock-research` | 基本面研究 | UC_STOCK_FUNDAMENTAL_RESEARCH |
 
-规则：
-- **不要依赖 agent 人格来执行任务行为。** 如果行为重要，编码为 skill。
-- **不要依赖模型记忆来保证正确性。** 如果正确性重要，编码为 harness check。
-- Skills 在 `.claude/skills/*/SKILL.md` 中定义。没有 skill 的 UC 使用通用的 builder 行为。
+必须显式选择（`.claude/skills/*/SKILL.md`）。无 skill → 停止。
 
 ---
 
-## 5. Harness-First Reliability
+## 5. SCOPE（声明范围）
 
-Skills 是 prompt。Harness checks 是可执行护栏。
+**必须显式输出，不得默认继承 scope，不得隐式执行。否则视为任务未开始，直接 STOP。**
 
-**模型的说法不能保证日频/训练/推理的安全性。** 关键决策点必须有自动化 check 覆盖。
-
-目标 harness checks：
-
-```bash
-python harness/checks/check_label_maturity.py
-python harness/checks/check_daily_inference_ready.py
-python harness/checks/check_scripts_entrypoints.py
-python harness/checks/check_model_resolution_boundary.py
-python harness/checks/check_no_latest_model_resolution.py
-python harness/checks/check_usecase_registry.py
+```
+Task type: <analysis / inference / code_change / docs>
+UC:
+Skill:
+Scope: <read-only / write-code / PR required>
 ```
 
-执行原则：
-- 每个 daily/training/inference 决策前检查对应 check
-- check 失败时：停止，报告，不要静默绕过
-- check 待实现时显式失败或 warning，不要无条件 PASS
+PR 不确定 → 默认 PR。
 
 ---
 
-## 6. Subagent Policy
+## 6. EXECUTION_GATE（阻断条件）
 
-- **默认在主对话中执行。** 主对话拥有任务连续性、最终决策和代码写入权限。
-- **Subagent 只用于有界的只读辅助任务：**
-  - 仓库探索
-  - 引用搜索
-  - 调用链路总结
-  - PR / diff 审查
-  - 日志/测试失败总结
-  - 长文档提取
-- **不得委托最终决策给 subagent：**
-  - 是否重训
-  - 是否推理
-  - 最终候选股票输出
-  - 生产/promotion 决策
-  - 代码实现所有权
+**GATE 是执行阻断器，不是检查清单。未通过 GATE = 不存在执行权限。**
+
+| 条件 | 不通过 → |
+|------|---------|
+| UC 已显式输出 | HARD STOP |
+| SKILL 已显式选择 | HARD STOP |
+| SCOPE 已显式声明 | HARD STOP |
+| 路径在 allowed_paths 内 | STOP |
+| forbidden_paths 未触碰 | STOP |
+| PR requirement 明确 | 默认 PR |
+
+不允许"隐式默认满足"任何条件。全部通过才有执行权限。
 
 ---
 
-## 7. 边界规则
+## 7. EXECUTE（执行）
 
-- **不得修改** `harness_map.yaml` 中定义的 `forbidden_paths`。
-- **不得创建顶层脚本**，除非该脚本被列为 canonical entrypoint。
-- **不得在同一个 PR 中混合** 架构重构、业务逻辑变更、文档清理、测试重写。
-- **不得修改** production/daily/promotion 行为，除非 selected UC 明确允许。
-- **docs/requirements/harness_map.yaml** 是机器约束源，entrypoints 和 allowed/forbidden paths 以它为准。
+在 `allowed_paths` 内实施变更。
 
----
-
-## 8. Improvement Loop
-
-SysQ uses a failure-driven improvement loop.
-
-**Triggers:**
-- user correction
-- failed harness check
-- PR review finding
-- repeated agent mistake
-
-**Process:**
-1. capture the failure
-2. classify the failure type (see `docs/agents/SYSQ_LOOP_ENGINEERING.md`)
-3. propose the smallest skill/harness/usecase/memory update
-4. validate with the original failure case
-5. update `docs/agents/loop_memory.md` only after validation
-
-**Rules:**
-- Reviewer subagents (\`sysq-reviewer\`) may propose improvements, but must not directly modify files.
-- The main conversation owns the decision.
-- Implementation uses the relevant skill, usually \`sysq-dev\`.
-- Harness changes must not weaken existing safety checks.
-
-**Reference:**
-- \`docs/agents/SYSQ_LOOP_ENGINEERING.md\` — full loop model and failure taxonomy
-- \`docs/agents/loop_memory.md\` — validated lessons
-
-## 9. 基础 Checks
-
-根据 UC 选择相关检查，至少运行：
-
-```bash
-python harness/checks/check_usecase_registry.py
-python harness/checks/check_scripts_entrypoints.py
-python harness/checks/check_no_latest_model_resolution.py
-python harness/checks/check_model_resolution_boundary.py
-```
-
-根据情况额外运行：
-
-```bash
-python harness/checks/check_label_maturity.py --trade-date <date> --horizon <h> --train-end <date>
-python harness/checks/check_daily_inference_ready.py --trade-date <date> --strategy-id <strategy>
-```
-
-不强制每次都跑全部 pytest，根据更改范围选择相关测试目录：
-
-```bash
-python -m pytest tests/<module>/ -q
-```
+推理类任务（infer / pred / candidate / shadow 前检查）：
+1. 归类 `UC_DAILY_INFERENCE_RUN`，读 `sysq-daily/SKILL.md` 的 Manual Inference 章节
+2. 确认 model_hash、train_start/end、signal_date 等 provenance
+3. 运行 `check_daily_inference_ready.py` + `check_inference_artifact.py`
+4. 缺 provenance → 标记 exploratory
 
 ---
 
-## 10. Handoff 格式
+## 8. HARNESS（检查）
 
-每次输出完成后，按以下格式提供摘要：
+按 UC 运行对应 checks（定义在 `harness_map.yaml`）。check 失败 → 停止+报告。
+
+---
+
+## 9. LOOP_CHECK（复盘）
+
+每个任务结束时强制输出：
 
 ```
-Detected UC: <UC_ID>
-Selected skill: <sysq-daily | sysq-dev | sysq-stock-research>
-Scope: <本次变更的范围>
-Allowed paths: <相关的 allowed_paths>
-Forbidden paths: <本次未触碰的 forbidden_paths>
-Changed files: <文件路径列表>
-Checks run: <运行的 check 和测试>
-Risks: <剩余风险>
-Open questions: <需要用户决策的事项>
+Loop Result:
+- Status: <clean / found>
+- Type: <gap type or none>
+- Root cause:
+- Fix suggestion:
+- Reviewer needed: <yes / no>
+```
+
+检查是否遵守了 UC/skill/harness、有无 correction/retry/缺 provenance/临时 workaround、是否暴露了 gap（skill / harness / usecase / memory / provenance 等）。
+
+**如果检测到 gap → 必须在下一任务执行前显式提升为约束条件，不能仅记录日志。**
+
+---
+
+## 10. REVIEWER_TRIGGER（审查触发）
+
+触发条件：跳过规则 / 出现 latest/mtime/symlink / 缺 provenance / 用户指异常 / 重复错误 / 改 skill/harness/memory。
+
+输出：`Reviewer needed: yes` + 审查任务描述。
+
+---
+
+## 11. 不可越界规则
+
+- **禁止推 main**（必须 PR，零例外）
+- 禁止 `latest` / mtime / symlink
+- 禁止改 broker / trader / ledger / deploy / systemd
+- 禁止从 `archive/` import
+- 禁止混 PR（架构+业务+文档+测试分开）
+
+---
+
+## 12. 框架扩展规则
+
+超出已有 UC / skill / harness 覆盖时，先走 `UC_TEMPORARY`，结束时通过 LOOP_CHECK 判定如何扩展：
+
+| 发现 | 产出 | 位置 |
+|------|------|------|
+| 归类不了 | 新建 UC | 对应 domain.md 加 ## UC_XXX |
+| 现有 UC 缺约束/步骤 | 增补 skill | .claude/skills/*/SKILL.md |
+| 缺自动化检查 | 新增 harness | harness/checks/check_*.py + 同步 harness_map.yaml |
+| 反复踩坑 | 记录 LM | docs/agents/loop_memory.md |
+
+判定由 LOOP_CHECK 产出，main 对话决定，sysq-dev 实施。
+
+**禁止：不补文档直接加功能、不加 harness_map 直接加 harness check。**
+
+---
+
+## 13. OUTPUT CONTRACT
+
+按序输出：
+
+```
+Summary
+Detected UC:
+Skill:
+Scope:
+Actions:
+Changed files:
+Harness checks:
+Loop Result:
+Reviewer needed:
+Open questions:
 ```
 
 ---
 
-## 11. 文档同步义务
+## ⚠️ 强制阻断规则
 
-修改了以下内容，必须同步更新对应文档：
-- 新增/修改 entrypoint → 同步 `harness_map.yaml` 和对应 domain doc
-- 新增 use case → 同步 `01_usecase_index.md`、`harness_map.yaml`、对应 domain doc
-- 修改架构/角色 → 同步 `00_sysq_vision.md`、本文档
-- 新增 skill → 同步 `.claude/skills/`、本文档 §4
+如果 UC / SKILL / SCOPE 缺失或不明确：
+→ **立即停止**
+→ 不得进入 EXECUTE / HARNESS / LOOP
+→ 禁止部分执行

@@ -18,6 +18,13 @@ Trigger → Capture → Classify → Propose → Validate → Update memory → 
 
 ## Trigger
 
+
+Loop is not only a document.
+Loop requires a trigger.
+SysQ uses two triggers:
+1. **Failure trigger**: failed check, user correction, abnormal output.
+2. **Post-task trigger**: every task ends with a loop check.
+
 Loop 由以下事件触发：
 
 - user correction

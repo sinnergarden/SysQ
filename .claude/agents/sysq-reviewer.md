@@ -56,6 +56,17 @@ Do not modify files. Do not make final decisions.
 | `artifact_contract_gap` | Artifact path or field inconsistency |
 | `documentation_conflict` | Docs inconsistent with each other or code |
 
+## Loop Trigger Review
+When reviewing a failed or partially failed task, identify:
+1. Which step should have triggered the loop?
+2. Which rule was missing or ignored?
+3. Whether this is skill_gap, harness_gap, usecase_gap, or memory_gap.
+4. The smallest durable fix.
+
+Add to output:
+- Missed loop trigger:
+- Should this become loop memory:
+
 ## Output Format
 
 ```

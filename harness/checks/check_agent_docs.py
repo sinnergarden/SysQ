@@ -46,12 +46,14 @@ ROLE_REQUIRED_SECTIONS = {
 AGENTS_REQUIRED_KEYWORDS = [
     "skill-first",
     "sysq-daily",
-    "Subagent Policy",
-    "Harness-First",
     "harness_map.yaml",
-    "Improvement Loop",
-    "loop_memory.md",
-    "sysq-reviewer",
+    "EXECUTION_GATE",
+    "UC_DAILY_INFERENCE_RUN",
+    "check_inference_artifact.py",
+    "LOOP_CHECK",
+    "REVIEWER_TRIGGER",
+    "OUTPUT CONTRACT",
+    "不可越界规则",
 ]
 
 SKILL_DIRS = [
