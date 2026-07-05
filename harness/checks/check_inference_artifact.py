@@ -42,9 +42,10 @@ REQUIRED_MODEL_LINEAGE = {
 
 REQUIRED_CANDIDATE_FIELDS = {
     "ts_code",
-    "score",
     "rank",
 }
+# Accept either "score" or "ranking_score" in candidate rows
+CANDIDATE_SCORE_ALIAS = {"score", "ranking_score"}
 
 
 def _has_model_id_or_path(payload: dict) -> bool:
@@ -128,6 +129,9 @@ def check_artifact(artifact_path: str) -> list[str]:
         for field in REQUIRED_CANDIDATE_FIELDS:
             if field not in first:
                 violations.append(f"Candidate row missing required field: {field}")
+        # Check score or ranking_score
+        if not (first.get("score") is not None or first.get("ranking_score") is not None):
+            violations.append("Candidate row missing score field (score or ranking_score)")
 
     return violations
 
