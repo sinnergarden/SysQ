@@ -122,16 +122,19 @@ def check_artifact(artifact_path: str) -> list[str]:
     if "created_at" not in payload:
         violations.append("Missing created_at timestamp")
 
-    # Check candidates if present
+    # Check candidates — validate ALL rows, not just first
     candidates = payload.get("candidates")
     if isinstance(candidates, list) and len(candidates) > 0:
-        first = candidates[0]
-        for field in REQUIRED_CANDIDATE_FIELDS:
-            if field not in first:
-                violations.append(f"Candidate row missing required field: {field}")
-        # Check score or ranking_score
-        if not (first.get("score") is not None or first.get("ranking_score") is not None):
-            violations.append("Candidate row missing score field (score or ranking_score)")
+        for idx, row in enumerate(candidates):
+            if not isinstance(row, dict):
+                violations.append(f"Candidate row {idx} must be a dict")
+                continue
+            for field in REQUIRED_CANDIDATE_FIELDS:
+                if field not in row or row[field] is None:
+                    violations.append(f"Candidate row {idx} missing required field: {field}")
+            # Check score or ranking_score
+            if not (row.get("score") is not None or row.get("ranking_score") is not None):
+                violations.append(f"Candidate row {idx} missing score field (score or ranking_score)")
 
     return violations
 
