@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Static check: verify AI agent documentation completeness (skill-first + harness-first).
+"""Static check: verify AI agent documentation completeness (skill-first + harness-first + loop).
 
 Checks:
-1. ``AGENTS.md`` exists and contains skill-first keywords.
-2. ``docs/agents/README.md`` exists.
-3. ``docs/agents/main_agent.md``, ``builder_agent.md``, ``reviewer_agent.md`` exist.
-4. ``docs/agents/workspace_claude_redirect.md`` exists.
-5. Role docs have required sections (Mission, 开工前必读, 禁止, 交接格式).
-6. Skill file at ``.claude/skills/sysq-daily/SKILL.md`` exists.
+1. AGENTS.md exists and contains required keywords.
+2. docs/agents/*.md files exist (README, role docs, loop docs).
+3. Role docs have required sections.
+4. Skill file at .claude/skills/sysq-daily/SKILL.md exists.
+5. Reviewer subagent at .claude/agents/sysq-reviewer.md exists.
+6. Loop memory at docs/agents/loop_memory.md exists.
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 AGENTS = PROJECT_ROOT / "AGENTS.md"
 AGENTS_DIR = PROJECT_ROOT / "docs" / "agents"
 SKILLS_DIR = PROJECT_ROOT / ".claude" / "skills"
+AGENTS_SUBDIR = PROJECT_ROOT / ".claude" / "agents"
 
 ROLE_FILES = [
     "main_agent.md",
@@ -30,6 +31,8 @@ ROLE_FILES = [
 REQUIRED_FILES = [
     "README.md",
     "workspace_claude_redirect.md",
+    "SYSQ_LOOP_ENGINEERING.md",
+    "loop_memory.md",
     *ROLE_FILES,
 ]
 
@@ -46,6 +49,9 @@ AGENTS_REQUIRED_KEYWORDS = [
     "Subagent Policy",
     "Harness-First",
     "harness_map.yaml",
+    "Improvement Loop",
+    "loop_memory.md",
+    "sysq-reviewer",
 ]
 
 SKILL_DIRS = [
@@ -99,6 +105,11 @@ def main() -> int:
         if not skill_path.exists():
             violations.append(f"MISSING: .claude/skills/{sdir}/SKILL.md")
 
+    # Reviewer subagent
+    reviewer_agent = AGENTS_SUBDIR / "sysq-reviewer.md"
+    if not reviewer_agent.exists():
+        violations.append(f"MISSING: .claude/agents/sysq-reviewer.md")
+
     if violations:
         print(f"❌ Found {len(violations)} agent doc violation(s):\n")
         for v in violations:
@@ -106,7 +117,7 @@ def main() -> int:
         print()
         return 1
 
-    print("✅ All agent docs are present and structurally complete (skill-first).")
+    print("✅ All agent docs are present and structurally complete (skill-first + loop).")
     return 0
 
 
