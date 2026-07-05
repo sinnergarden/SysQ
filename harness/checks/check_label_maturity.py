@@ -1,11 +1,22 @@
 #!/usr/bin/env python3
 """Check label maturity: given trade_date and horizon, determine latest mature label date.
 
+For a future-return label with horizon H, label date D matures only after D + H trading days.
+Therefore, at trade_date T, the latest mature label date is T - H trading days.
+
 Usage:
-    python harness/checks/check_label_maturity.py \
-        --trade-date YYYY-MM-DD \
-        --horizon 5 \
-        --train-end YYYY-MM-DD
+
+    # Should PASS: train_end is before or equal latest mature label date
+    python harness/checks/check_label_maturity.py \\
+        --trade-date 2026-07-05 \\
+        --horizon 5 \\
+        --train-end 2026-06-29
+
+    # Should FAIL: train_end is too recent (labels not yet mature)
+    python harness/checks/check_label_maturity.py \\
+        --trade-date 2026-07-05 \\
+        --horizon 5 \\
+        --train-end 2026-06-30
 
 Output:
     PASS if train_end <= latest_mature_label_date, FAIL otherwise.
@@ -19,24 +30,27 @@ from datetime import datetime, timedelta
 
 
 def _weekday_calendar_date(date_str: str, offset_days: int) -> str:
-    """Simple weekday calendar: move offset_days business days forward from date_str.
+    """Move *offset_days* business days from *date_str* using weekday calendar.
+
+    Positive offset moves forward; negative offset moves backward.
 
     TODO: Replace with qlib trading calendar when available.
       Use: from qsys.data.calendar import get_trading_calendar
            cal = get_trading_calendar(start_date, end_date)
     """
     dt = datetime.strptime(date_str, "%Y-%m-%d")
-    count = 0
-    while count < offset_days:
-        dt += timedelta(days=1)
+    step = 1 if offset_days >= 0 else -1
+    remaining = abs(offset_days)
+    while remaining > 0:
+        dt += timedelta(days=step)
         if dt.weekday() < 5:
-            count += 1
+            remaining -= 1
     return dt.strftime("%Y-%m-%d")
 
 
 def check_label_maturity(trade_date: str, horizon: int, train_end: str) -> tuple[str, str, str, str, str]:
     """Returns (trade_date, horizon, latest_mature_label_date, train_end, verdict)."""
-    latest_mature = _weekday_calendar_date(trade_date, horizon)
+    latest_mature = _weekday_calendar_date(trade_date, -horizon)
     verdict = "PASS" if train_end <= latest_mature else "FAIL"
     return (trade_date, str(horizon), latest_mature, train_end, verdict)
 
