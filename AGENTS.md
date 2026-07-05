@@ -27,6 +27,12 @@ INIT → UC → SKILL → SCOPE → GATE → EXECUTE → HARNESS → LOOP → DO
 
 归类到 `01_usecase_index.md` 中的一个 UC。读取 `harness_map.yaml` 和对应 `domains/*.md`。
 
+UC 一旦确定，必须同时确定：
+- 主 skill（从 UC 在 harness_map 中定义的 skills）
+- 对应 harness checks
+
+**禁止先选 skill 再回填 UC，禁止 skill 与 UC 解耦选择。**
+
 - 无 UC → 停止，走 `UC_TEMPORARY_REQUESTS`
 - 同类请求 ≥2 次 → 补文档
 
@@ -46,7 +52,7 @@ INIT → UC → SKILL → SCOPE → GATE → EXECUTE → HARNESS → LOOP → DO
 
 ## 5. SCOPE（声明范围）
 
-开始执行前输出：
+**必须显式输出，不得默认继承 scope，不得隐式执行。否则视为任务未开始，直接 STOP。**
 
 ```
 Task type: <analysis / inference / code_change / docs>
@@ -61,15 +67,18 @@ PR 不确定 → 默认 PR。
 
 ## 6. EXECUTION_GATE（阻断条件）
 
-| 条件 | 不满足 → |
+**GATE 是执行阻断器，不是检查清单。未通过 GATE = 不存在执行权限。**
+
+| 条件 | 不通过 → |
 |------|---------|
-| UC 已识别 | 走 UC_TEMPORARY |
-| skill 已选 | 停止 |
-| 路径在 allowed_paths 内 | 停止 |
-| forbidden_paths 未触碰 | 停止 |
+| UC 已显式输出 | HARD STOP |
+| SKILL 已显式选择 | HARD STOP |
+| SCOPE 已显式声明 | HARD STOP |
+| 路径在 allowed_paths 内 | STOP |
+| forbidden_paths 未触碰 | STOP |
 | PR requirement 明确 | 默认 PR |
 
-全部通过才能执行。
+不允许"隐式默认满足"任何条件。全部通过才有执行权限。
 
 ---
 
@@ -106,6 +115,8 @@ Loop Result:
 
 检查是否遵守了 UC/skill/harness、有无 correction/retry/缺 provenance/临时 workaround、是否暴露了 gap（skill / harness / usecase / memory / provenance 等）。
 
+**如果检测到 gap → 必须在下一任务执行前显式提升为约束条件，不能仅记录日志。**
+
 ---
 
 ## 10. REVIEWER_TRIGGER（审查触发）
@@ -126,7 +137,24 @@ Loop Result:
 
 ---
 
-## 12. OUTPUT CONTRACT
+## 12. 框架扩展规则
+
+超出已有 UC / skill / harness 覆盖时，先走 `UC_TEMPORARY`，结束时通过 LOOP_CHECK 判定如何扩展：
+
+| 发现 | 产出 | 位置 |
+|------|------|------|
+| 归类不了 | 新建 UC | 对应 domain.md 加 ## UC_XXX |
+| 现有 UC 缺约束/步骤 | 增补 skill | .claude/skills/*/SKILL.md |
+| 缺自动化检查 | 新增 harness | harness/checks/check_*.py + 同步 harness_map.yaml |
+| 反复踩坑 | 记录 LM | docs/agents/loop_memory.md |
+
+判定由 LOOP_CHECK 产出，main 对话决定，sysq-dev 实施。
+
+**禁止：不补文档直接加功能、不加 harness_map 直接加 harness check。**
+
+---
+
+## 13. OUTPUT CONTRACT
 
 按序输出：
 
