@@ -29,16 +29,20 @@ REQUIRED_LESSON_FIELDS = {
 }
 
 
-def _extract_lesson_blocks(content: str) -> dict[str, str]:
-    """Extract each accepted lesson block. Returns {LM-001: full_block_text}."""
-    blocks: dict[str, str] = {}
-    # Split by ### LM- headers
-    sections = re.split(r"(?=^### (LM-\d+))", content, flags=re.MULTILINE)
-    for i, sec in enumerate(sections):
-        m = re.match(r"^### (LM-\d+):?\s*(.*)", sec, re.MULTILINE)
-        if m:
-            blocks[m.group(1).strip()] = sec
-    return blocks
+def _extract_lesson_blocks(content: str) -> list[tuple[str, str]]:
+    """Extract accepted lesson blocks. Returns [(LM-001, full_block_text), ...].
+
+    Uses positional slicing so duplicate LM-IDs are detected — dict would
+    silently overwrite them.
+    """
+    lessons: list[tuple[str, str]] = []
+    matches = list(re.finditer(r"^### (LM-\d+):?.*$", content, flags=re.MULTILINE))
+    for idx, match in enumerate(matches):
+        lesson_id = match.group(1)
+        start = match.start()
+        end = matches[idx + 1].start() if idx + 1 < len(matches) else len(content)
+        lessons.append((lesson_id, content[start:end]))
+    return lessons
 
 
 def _has_fields(block: str) -> list[str]:
@@ -55,9 +59,13 @@ def _has_fields(block: str) -> list[str]:
 
 def _get_status(block: str) -> str:
     """Extract Status value from lesson block."""
-    m = re.search(r"^- (?:Status|\\*\\*Status\\*\\*):\s*(.*)", block, re.MULTILINE)
-    if m:
-        return m.group(1).strip().lower()
+    for prefix in ("- **Status**:", "- Status:"):
+        if prefix in block:
+            # Extract the text after the prefix
+            for line in block.splitlines():
+                if line.startswith(prefix):
+                    val = line[len(prefix):].strip()
+                    return val.lower() if val else ""
     return ""
 
 
@@ -77,8 +85,11 @@ def main() -> int:
 
     # 3-4. Extract and validate lessons
     lessons = _extract_lesson_blocks(content)
+    if not lessons:
+        violations.append("No accepted lessons found under '## Accepted Lessons'")
+
     seen_ids: set[str] = set()
-    for lid, block in lessons.items():
+    for lid, block in lessons:
         if lid in seen_ids:
             violations.append(f"Duplicate lesson ID: {lid}")
         seen_ids.add(lid)
