@@ -35,6 +35,38 @@ usecases:
       - qsys/backtest/
       - qsys/trader/
       - qsys/broker/
+  UC_DAILY_INFERENCE_RUN:
+    domain: daily_ops
+    status: draft
+    owner_agent: operator_agent
+    skills:
+      primary: sysq-daily
+      review: sysq-review
+    entrypoints:
+      - TBD (no canonical inference entrypoint yet; uses scripts/dev/ or run_research.py for now)
+    artifacts:
+      - outputs/{trade_date}/candidates.json
+      - outputs/{trade_date}/candidates_top*.json
+      - outputs/{trade_date}/stop_loss_prob.json
+      - data/research/signals/{signal_id}/{signal_run_id}/
+    checks:
+      - harness/checks/check_daily_inference_ready.py
+      - harness/checks/check_inference_artifact.py
+    allowed_paths:
+      - outputs/
+      - data/research/signals/
+      - data/research/models/
+      - scripts/dev/
+      - harness/checks/
+      - docs/requirements/
+      - .claude/skills/
+    forbidden_paths:
+      - qsys/broker/
+      - qsys/trader/
+      - qsys/ledger/
+      - deploy/
+      - qsys/ops/daily_runner.py
+
 
   UC_RESEARCH_BACKTEST:
     domain: research

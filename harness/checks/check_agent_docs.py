@@ -52,6 +52,8 @@ AGENTS_REQUIRED_KEYWORDS = [
     "Improvement Loop",
     "loop_memory.md",
     "sysq-reviewer",
+    "UC_DAILY_INFERENCE_RUN",
+    "check_inference_artifact.py",
 ]
 
 SKILL_DIRS = [

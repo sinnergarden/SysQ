@@ -59,6 +59,17 @@ SysQ 的执行是 skill-first，不是 agent-first。使用 task skills 执行�
 
 ---
 
+## 4a. 运行型任务规则
+
+所有 SysQ **运行型任务**（即使不修改代码）也必须走 use case / skill / harness。
+涉及 infer、prediction、signal、candidate、latest feature、shadow 前检查的任务：
+1. 归类为 UC_DAILY_INFERENCE_RUN。
+2. 读取 `docs/agents/sysq-daily` skill 中的 **Manual / Ad-hoc Inference Run** 章节。
+3. 确认：signal_date、execution_date、strategy_id、feature_snapshot、model_pointer（解析到具体 model_hash）、train_start/train_end。
+4. 输出 provenance（模型 hash、训练范围、数据日期）。
+5. 运行 `check_daily_inference_ready.py` 和 `check_inference_artifact.py`。
+6. 不得直接给无法追溯的候选股票（缺少 provenance 字段的结果标记为 exploratory）。
+
 ## 5. Harness-First Reliability
 
 Skills 是 prompt。Harness checks 是可执行护栏。

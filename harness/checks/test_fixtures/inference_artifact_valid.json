@@ -1,0 +1,14 @@
+{
+  "run_id": "manual_infer_20260703",
+  "strategy_id": "financial_rc",
+  "signal_date": "2026-07-03",
+  "execution_date": "2026-07-03",
+  "model_id": "7d05534663a389b7",
+  "train_start": "2024-01-24",
+  "train_end": "2026-03-03",
+  "feature_snapshot": "qlib_bin_2026-07-03",
+  "created_at": "2026-07-03T22:00:00+08:00",
+  "candidates": [
+    {"ts_code": "300857.SZ", "score": 3.3986, "rank": 1}
+  ]
+}

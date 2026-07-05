@@ -78,5 +78,69 @@ operator_agent
 - `qsys/trader/`
 - `qsys/broker/`
 
+
+## UC_DAILY_INFERENCE_RUN
+
+### Status
+draft
+
+### Source
+新增 use case，响应临时推理/手动 trigger prediction 场景。不在现有 UC 编号中。
+
+### User Goal
+手动或临时运行某个 strategy/model 在最新 feature/date 上的 prediction，产出 signal/candidate artifact，用于 shadow 前观察和验证信号。
+
+### Scope
+包含：
+- 读取数据、读取模型、运行推理
+- 生成本地 artifact（candidates、signals）
+- 检查 provenance
+- 输出可追溯的候选列表
+
+不包含：
+- 下单、改持仓、写 ledger
+- promotion、修改 broker/trader/production
+- 正式 daily shadow
+
+### Inputs
+- trade_date / execution_date
+- strategy_id / feature_list_id
+- model pointer（需要解析到具体 model_id）
+- calibration artifact（如有）
+
+### Outputs
+- `outputs/{trade_date}/candidates_top*.json`
+- `outputs/{trade_date}/stop_loss_prob*.json`
+- 或 `scripts/dev/` 下的临时推理结果
+
+### Canonical Entrypoints
+TBD — 当前没有 canonical inference entrypoint。`scripts/dev/financial_rc/adapter.py` 和 `scripts/dev/gen_candidate_top200.py` 是临时实现。
+
+### Key Artifacts
+- `outputs/{trade_date}/candidates_top*.json`
+- `data/research/signals/{signal_id}/{signal_run_id}/`
+
+### Required Checks
+- `harness/checks/check_daily_inference_ready.py`
+- `harness/checks/check_inference_artifact.py`
+
+### Owner Agent
+operator_agent
+
+### Allowed Paths
+- `outputs/`
+- `data/research/signals/`
+- `data/research/models/`
+- `scripts/dev/`
+- `harness/checks/`
+
+### Forbidden Paths
+- `qsys/broker/`
+- `qsys/trader/`
+- `qsys/ledger/`
+- `deploy/`
+- `qsys/ops/daily_runner.py`
+
 ### Open Questions
-- 无
+- 需要一个稳定的 canonical inference entrypoint。
+
