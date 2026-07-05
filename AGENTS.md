@@ -142,3 +142,12 @@ Loop Result:
 Reviewer needed:
 Open questions:
 ```
+
+---
+
+## ⚠️ 强制阻断规则
+
+如果 UC / SKILL / SCOPE 缺失或不明确：
+→ **立即停止**
+→ 不得进入 EXECUTE / HARNESS / LOOP
+→ 禁止部分执行
