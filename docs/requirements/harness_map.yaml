@@ -8,6 +8,8 @@ usecases:
     domain: daily_ops
     status: stable
     owner_agent: operator_agent
+    skills:
+      primary: sysq-daily
     entrypoints:
       - scripts/data_sync.py
       - scripts/run_daily.py
@@ -20,6 +22,7 @@ usecases:
     checks:
       - harness/checks/check_model_resolution_boundary.py
       - harness/checks/check_no_latest_model_resolution.py
+      - harness/checks/check_daily_inference_ready.py
     allowed_paths:
       - scripts/data_sync.py
       - scripts/run_daily.py
@@ -77,6 +80,9 @@ usecases:
     domain: model_training
     status: stable
     owner_agent: builder_agent
+    skills:
+      primary: sysq-daily
+      dev: sysq-dev
     entrypoints:
       - scripts/run_daily.py --mode train
     artifacts:
@@ -86,6 +92,7 @@ usecases:
     checks:
       - harness/checks/check_no_latest_model_resolution.py
       - harness/checks/check_model_resolution_boundary.py
+      - harness/checks/check_label_maturity.py
     allowed_paths:
       - qsys/model/
       - qsys/ops/model_registry.py
@@ -151,6 +158,9 @@ usecases:
     domain: diagnostics
     status: draft
     owner_agent: reviewer_agent
+    skills:
+      primary: sysq-dev
+      review: sysq-review
     entrypoints:
       - scripts/checks/
       - harness/checks/
@@ -173,6 +183,8 @@ usecases:
     domain: stock_research
     status: draft
     owner_agent: stock_research_agent
+    skills:
+      primary: sysq-stock-research
     entrypoints:
       - TBD
     prompt_templates:
@@ -198,6 +210,8 @@ usecases:
     domain: temporary_requests
     status: experimental
     owner_agent: main_agent
+    skills:
+      primary: sysq-dev
     entrypoints:
       - TBD (ad-hoc scripts under scripts/dev/)
     artifacts:

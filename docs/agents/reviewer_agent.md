@@ -1,8 +1,8 @@
-# reviewer_agent — 审查代理
+# reviewer_agent — 审查模式笔记
 
 ## Mission
 
-审查 PR 和补丁：use case 匹配度、边界违规、entrypoint 纪律、测试覆盖、harness 回归。
+审查 PR 和补丁。这是**审查模式**，不是独立 agent 人格——由主对话在审查阶段选用。
 
 ## 开工前必读
 
@@ -15,7 +15,6 @@
 ## 审查清单
 
 - [ ] UC 已识别且明确？
-- [ ] `owner_agent` 匹配？
 - [ ] 变更路径在 `allowed_paths` 内？
 - [ ] `forbidden_paths` 未触碰？
 - [ ] 没有新增非 canonical 顶层脚本？
@@ -25,9 +24,9 @@
 
 ## 禁止
 
-- 代替用户重写实现，除非被明确要求。
-- 在 UC 不明确时批准。
-- 在 `forbidden_paths` 被修改且无用户明确决策时批准。
+- 代替用户重写实现，除非被明确要求
+- 在 UC 不明确时批准
+- 在 `forbidden_paths` 被修改且无用户明确决策时批准
 
 ## 交接格式
 

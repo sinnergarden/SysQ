@@ -1,32 +1,31 @@
-# docs/agents — AI Agent 操作文档
+# docs/agents — AI 操作参考笔记
 
 ## 文件分层
 
 ```
-workspace .claude.md          ← 只做 SysQ 任务分流，不包含内部规则
-  └→ AGENTS.md                ← SysQ AI 操作权威入口（本文档）
-       ├→ docs/agents/main_agent.md     ← 主代理行为规范
-       ├→ docs/agents/builder_agent.md  ← 构建代理行为规范
-       ├→ docs/agents/reviewer_agent.md ← 审查代理行为规范
-       └→ docs/requirements/            ← use case registry + harness 约束
-            ├→ 01_usecase_index.md
-            ├→ harness_map.yaml
-            └→ domains/*.md
+workspace .claude.md          ← 只做 SysQ 任务分流
+  └→ AGENTS.md                ← SysQ AI 操作权威入口（skill-first + harness-first）
+       ├→ .claude/skills/*/   ← task skills（sysq-daily 等）
+       ├→ docs/agents/        ← lightweight role notes（非 runtime agent team）
+       ├→ harness/checks/     ← 可执行护栏
+       └→ docs/requirements/  ← use case registry + harness 约束
 ```
 
 ## 核心原则
 
-- **用户不需要手动切换多个 agent**。`main_agent` 是默认接口，其他角色是 `main_agent` 内部选择的模式。
-- **所有 SysQ AI 规则都在仓库内**，随代码版本化、随 PR 审查。不从 workspace 级配置加载复杂规则。
-- **Harness 优先**：关键约束写成自动化 check，不在 prompt 中反复强调。
+- **主对话拥有状态和最终决定权。** 所有代码写入和最终决策在主对话中完成。
+- **task first, not agent first。** 如果任务行为重要，编码为 skill（`.claude/skills/`）。
+  如果正确性重要，编码为 harness check（`harness/checks/`）。
+- **Role notes 不是 skill 或 harness 的替代品。** 它们是辅助性参考，不定义执行行为。
+- **不鼓励用户维护多个 agent。** 默认 main_agent 对用户服务，builder/reviewer 是内部模式。
 
-## 已落地的角色
+## 角色笔记（lightweight）
 
-| 角色 | 文档 | 职责 |
-|------|------|------|
-| main_agent | `main_agent.md` | 需求路由、角色选择、scope 声明、PR 管理 |
-| builder_agent | `builder_agent.md` | 在已选定的 UC 和 scope 内实现变更 |
-| reviewer_agent | `reviewer_agent.md` | 审查 PR：UC 匹配、边界违规、entrypoint 纪律、测试 |
+| 文件 | 说明 |
+|------|------|
+| `main_agent.md` | 默认角色：需求归类、scope 声明、PR 管理 |
+| `builder_agent.md` | 实现模式（非独立人格）：工程实现、测试、文档同步 |
+| `reviewer_agent.md` | 审查模式（非独立人格）：审查清单、边界检查 |
 
 ## 已规划但暂未独立的角色
 
@@ -37,4 +36,4 @@ workspace .claude.md          ← 只做 SysQ 任务分流，不包含内部规�
 | ui_agent | UI/API/可视化需求 |
 | stock_research_agent | 财报/公告/新闻 agent 研究 |
 
-这些角色等需求明确后再独立成文档。
+这些角色等需求明确后再独立。**目前不需要**。

@@ -1,15 +1,13 @@
 #!/usr/bin/env python3
-"""Static check: verify AI agent documentation completeness.
+"""Static check: verify AI agent documentation completeness (skill-first + harness-first).
 
 Checks:
-1. ``AGENTS.md`` exists at repo root.
+1. ``AGENTS.md`` exists and contains skill-first keywords.
 2. ``docs/agents/README.md`` exists.
-3. ``docs/agents/main_agent.md`` exists and has required sections.
-4. ``docs/agents/builder_agent.md`` exists and has required sections.
-5. ``docs/agents/reviewer_agent.md`` exists and has required sections.
-6. ``docs/agents/workspace_claude_redirect.md`` exists.
-7. ``AGENTS.md`` must mention: use case, harness_map.yaml, allowed_paths,
-   forbidden_paths, UC_TEMPORARY_REQUESTS.
+3. ``docs/agents/main_agent.md``, ``builder_agent.md``, ``reviewer_agent.md`` exist.
+4. ``docs/agents/workspace_claude_redirect.md`` exists.
+5. Role docs have required sections (Mission, 开工前必读, 禁止, 交接格式).
+6. Skill file at ``.claude/skills/sysq-daily/SKILL.md`` exists.
 """
 
 from __future__ import annotations
@@ -21,6 +19,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 AGENTS = PROJECT_ROOT / "AGENTS.md"
 AGENTS_DIR = PROJECT_ROOT / "docs" / "agents"
+SKILLS_DIR = PROJECT_ROOT / ".claude" / "skills"
 
 ROLE_FILES = [
     "main_agent.md",
@@ -42,11 +41,15 @@ ROLE_REQUIRED_SECTIONS = {
 }
 
 AGENTS_REQUIRED_KEYWORDS = [
-    "use case",
+    "skill-first",
+    "sysq-daily",
+    "Subagent Policy",
+    "Harness-First",
     "harness_map.yaml",
-    "allowed_paths",
-    "forbidden_paths",
-    "UC_TEMPORARY_REQUESTS",
+]
+
+SKILL_DIRS = [
+    "sysq-daily",
 ]
 
 
@@ -62,14 +65,16 @@ def _find_role_sections(content: str) -> set[str]:
 def main() -> int:
     violations: list[str] = []
 
+    # AGENTS.md
     if not AGENTS.exists():
         violations.append("MISSING: AGENTS.md at repo root")
     else:
         content = AGENTS.read_text(encoding="utf-8")
         for kw in AGENTS_REQUIRED_KEYWORDS:
             if kw not in content:
-                violations.append(f"  AGENTS.md: missing keyword '{kw}'")
+                violations.append(f"  AGENTS.md: missing required keyword '{kw}'")
 
+    # docs/agents/ files
     if not AGENTS_DIR.exists():
         violations.append(f"MISSING directory: {AGENTS_DIR}")
     else:
@@ -88,6 +93,12 @@ def main() -> int:
             if sec not in sections:
                 violations.append(f"  docs/agents/{fname}: missing required section '## {sec}'")
 
+    # Skills
+    for sdir in SKILL_DIRS:
+        skill_path = SKILLS_DIR / sdir / "SKILL.md"
+        if not skill_path.exists():
+            violations.append(f"MISSING: .claude/skills/{sdir}/SKILL.md")
+
     if violations:
         print(f"❌ Found {len(violations)} agent doc violation(s):\n")
         for v in violations:
@@ -95,7 +106,7 @@ def main() -> int:
         print()
         return 1
 
-    print("✅ All agent docs are present and structurally complete.")
+    print("✅ All agent docs are present and structurally complete (skill-first).")
     return 0
 
 
