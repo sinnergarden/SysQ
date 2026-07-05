@@ -54,6 +54,10 @@ AGENTS_REQUIRED_KEYWORDS = [
     "sysq-reviewer",
     "UC_DAILY_INFERENCE_RUN",
     "check_inference_artifact.py",
+    "Loop check: no new framework gap found",
+    "Reviewer needed",
+    "Loop Finding",
+    "Post-task Loop Check",
 ]
 
 SKILL_DIRS = [

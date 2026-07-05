@@ -70,6 +70,19 @@ checks_run: <list>
 known_gaps: <list>
 ```
 
+## End-of-task Loop Check
+For daily ops, inference, signal, candidate, retrain, or shadow-related tasks:
+Before final answer, check whether:
+- UC was selected
+- this skill was read
+- harness checks were run or intentionally skipped
+- output artifact has provenance
+- any temporary workaround was used
+- user had to correct the workflow
+
+If any answer indicates a gap, output Loop Finding and propose the smallest fix.
+
+
 ## Never
 - invent stocks
 - train with immature labels

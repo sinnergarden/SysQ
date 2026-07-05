@@ -150,6 +150,46 @@ SysQ uses a failure-driven improvement loop.
 - \`docs/agents/SYSQ_LOOP_ENGINEERING.md\` — full loop model and failure taxonomy
 - \`docs/agents/loop_memory.md\` — validated lessons
 
+
+### Post-task Loop Check
+Every SysQ task, including read-only analysis and runtime inference tasks, must end with a loop check.
+Before final response, answer:
+1. Did the task follow UC / skill / harness?
+2. Was there any user correction, retry, abnormal result, missing provenance, skipped check, or temporary workaround?
+3. Did the task reveal one of:
+   - skill_gap / harness_gap / harness_semantic_bug / usecase_gap / boundary_gap / memory_gap / artifact_contract_gap / documentation_conflict
+4. If yes, output a `Loop Finding`.
+5. If the issue is likely to repeat, propose the smallest update to skill / harness / use case / loop_memory.
+
+Output format when issue found:
+```
+Loop Finding:
+- Trigger:
+- Failure type:
+- Root cause:
+- Proposed update:
+- Should update skill:
+- Should update harness:
+- Should update loop_memory:
+- Reviewer needed:
+```
+
+If no issue: `Loop check: no new framework gap found.`
+
+Must request sysq-reviewer or produce reviewer-style analysis when:
+- user says the framework did not help
+- agent skipped UC / skill / harness
+- task output lacks provenance
+- same error appears twice
+- modifying skill / harness / loop_memory
+- PR changes AI operation rules
+
+When reviewer cannot be called automatically, output:
+```
+Reviewer needed: yes
+Suggested reviewer task: ...
+```
+
 ## 9. 基础 Checks
 
 根据 UC 选择相关检查，至少运行：
