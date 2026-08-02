@@ -6,7 +6,7 @@ SysQ 代码审查 skill：审查 PR / 改动是否满足框架规则（use case 
 ## Inputs
 - PR / 改动范围（分支、diff、changed files）
 - 相关 UC、harness checks
-- 审查 checklist（qsys-framework-guard skill）
+- 审查 checklist（框架守卫规则：use case / entrypoint / lookahead / latest / ledger / PR scope）
 
 ## Required reads
 - `AGENTS.md`
