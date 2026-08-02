@@ -491,6 +491,32 @@ class TestDailyRunnerOrchestration(unittest.TestCase):
             self.runner.run_postclose(ctx, strategy)
         self.assertEqual(cm.exception.code, 1)
 
+    def test_postclose_force_rerun_committed_blocked(self):
+        """F04: force-rerun on a COMMITTED run is BLOCKED (no ledger reversal)."""
+        exec_dir = self.run_root / "execution"
+        exec_dir.mkdir(parents=True, exist_ok=True)
+        (exec_dir / "COMMITTED").write_text("")
+
+        ctx = DailyRunContext(
+            trade_date="2026-05-18",
+            mode="postclose",
+            run_root=self.run_root,
+            project_root=self.project_root,
+            strategy_id="fake_strat",
+            account_id="shadow_fake",
+            force_rerun=True,
+            reason="test rerun",
+            no_notify=True,
+        )
+        strategy = FakeStrategy()
+        with self.assertRaises(SystemExit) as cm:
+            self.runner.run_postclose(ctx, strategy)
+        # Blocks loudly (F04), and must NOT re-execute/re-commit (no silent
+        # divergence between data/trade.db and shadow/execution).
+        self.assertIn("F04", str(cm.exception))
+        self.assertNotIn("execute_plan", strategy.calls)
+        self.assertNotIn("commit_execution", strategy.calls)
+
     def test_path_helpers(self):
         """Path helpers return correct locations."""
         ctx = DailyRunContext(
@@ -527,6 +553,37 @@ class TestDailyRunnerOrchestration(unittest.TestCase):
         self.assertIn("load_artifacts_for_notification", strategy.calls)
         self.assertIn("build_postclose_message", strategy.calls)
         self.assertIn("send_notification", strategy.calls)
+
+
+        self.assertIn("load_artifacts_for_notification", strategy.calls)
+        self.assertIn("build_postclose_message", strategy.calls)
+        self.assertIn("send_notification", strategy.calls)
+
+    def test_postclose_idempotent_skip_records_append_only(self):
+        """P2: committed skip must NOT overwrite daily_manifest.json; it records
+        an append-only skip attempt instead (preserving original audit fields)."""
+        from unittest import mock
+
+        exec_dir = self.run_root / "execution"
+        exec_dir.mkdir(parents=True, exist_ok=True)
+        (exec_dir / "COMMITTED").write_text("")
+        # original committed manifest must be preserved
+        manifest_path = self.run_root / "daily_manifest.json"
+        manifest_path.write_text('{"artifact_type":"daily_run","original":true}')
+
+        ctx = DailyRunContext(
+            trade_date="2026-05-18", mode="postclose",
+            run_root=self.run_root, project_root=self.project_root,
+            strategy_id="fake_strat", account_id="shadow_fake",
+            no_notify=True,
+        )
+        strategy = FakeStrategy()
+        with mock.patch("qsys.ops.daily_runner.append_skip_attempt") as m_append:
+            self.runner.run_postclose(ctx, strategy)
+
+        # append-only skip recorded, canonical manifest untouched
+        m_append.assert_called_once()
+        self.assertEqual(manifest_path.read_text(), '{"artifact_type":"daily_run","original":true}')
 
 
 if __name__ == "__main__":

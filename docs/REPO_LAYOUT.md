@@ -49,7 +49,7 @@
 | `scripts/ops/` | data sync、shadow daily、ops 入口 | Protected Core 运维 |
 | `scripts/ops/audit_state_paths.py` | data/trade.db + real_account.db + shadow/ 只读审计 | 0 write，0 migration |
 | `scripts/research/` | rolling research、signal eval、backtest from signal、experiment index | research 入口 |
-| `scripts/live/` | broker order、reconciliation、alpha_v1 live plan | live ops 入口 |
+| `scripts/deprecated/` | broker order、reconciliation、alpha_v1 live plan（原 `scripts/live/`，F06 移入） | 废弃，待归 UC 或重接 miniqmt 后启用 |
 | `scripts/checks/` | data leakage / schema / order intents / portfolio snapshot / reconciliation result / daily read model / experiment index 检查 | 产检工具（run_daily.py 产物验证）|
 | `tests/` | unit / regression tests | 改动必须补测试 |
 
@@ -99,7 +99,8 @@
 | `data/audit/` | JSON | 数据检查结果（如 `sync_csi800_*.json`） | **主线** |
 | `data/research/` | 混合 | research analytics 中间数据（signal、label、evaluation 缓存） | **主线** |
 | `data/models/` | 混合 | model artifact + manifest + `production_manifest.yaml` | **主线** |
-| `data/trade.db` | SQLite | **目标** Account State / Execution Ledger SOT | **主线** |
+| `data/trade.db` | SQLite | **目标** Account State / Execution Ledger SOT（LedgerService） | **主线** |
+| `data/execution/execution.db` | SQLite | TradeLedger 执行状态（orders/fills/execution_requests）——**隔离兼容库**，非账户 SOT（F05 隔离，避免与 LedgerService schema 冲突） | **隔离兼容** |
 | `data/meta/real_account.db` | SQLite | legacy account store | active legacy compatibility |
 | `data/meta/meta.db` | SQLite | 元数据缓存（日历、股票基本信息） | **主线** |
 | `data/meta/shadow_test.db` | SQLite | shadow 测试用 | 测试 |

@@ -18,8 +18,27 @@ class TradeLedger:
     Every intent passes through: pending -> submitted -> (partial | filled | cancelled | rejected).
     """
 
-    def __init__(self, db_path: str | Path = "data/trade.db") -> None:
+    # F05: canonical LedgerService SOT, normalized to an absolute path so that
+    # relative (data/trade.db) AND absolute (/…/SysQ/data/trade.db) references
+    # are both rejected.
+    _CANONICAL_SOT = (Path(__file__).resolve().parents[2] / "data" / "trade.db").resolve()
+
+    def _is_canonical_sot(self, db_path: str | Path) -> bool:
+        p = Path(db_path)
+        return str(p) == "data/trade.db" or p.resolve() == self._CANONICAL_SOT
+
+    def __init__(self, db_path: str | Path = "data/execution/execution.db") -> None:
         self.db_path = Path(db_path)
+        # F05: TradeLedger must NEVER write to the LedgerService SOT.  An empty
+        # data/trade.db has no tables for the schema guard to check, so the
+        # guard alone would let TradeLedger pollute the SOT with its own schema
+        # (then LedgerService writes fail).  Reject the canonical SOT path
+        # outright, including absolute-path spellings.
+        if self._is_canonical_sot(self.db_path):
+            raise RuntimeError(
+                "F05: TradeLedger must not use data/trade.db (LedgerService SOT). "
+                "Use the dedicated execution DB (data/execution/execution.db)."
+            )
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.initialize()
 
@@ -28,8 +47,62 @@ class TradeLedger:
         connection.row_factory = sqlite3.Row
         return connection
 
+    # Expected full schema of the orders/fills tables this system owns.
+    # Each tuple is (name, type, notnull, pk) from PRAGMA table_info.  Used by
+    # the F05 schema-collision guard to detect a competing writer
+    # (LedgerService) or an injected incompatible column: we require an EXACT
+    # signature match, not just the presence of expected column names.
+    _EXPECTED_ORDERS_SCHEMA = {
+        ("order_id", "TEXT", 0, 1), ("run_id", "TEXT", 1, 0),
+        ("trading_date", "TEXT", 1, 0), ("account_name", "TEXT", 1, 0),
+        ("symbol", "TEXT", 1, 0), ("side", "TEXT", 1, 0),
+        ("quantity", "INTEGER", 1, 0), ("price", "REAL", 1, 0),
+        ("status", "TEXT", 1, 0), ("created_at", "TEXT", 1, 0),
+        ("updated_at", "TEXT", 1, 0), ("note", "TEXT", 0, 0),
+    }
+    _EXPECTED_FILLS_SCHEMA = {
+        ("fill_id", "TEXT", 0, 1), ("order_id", "TEXT", 1, 0),
+        ("run_id", "TEXT", 1, 0), ("trading_date", "TEXT", 1, 0),
+        ("symbol", "TEXT", 1, 0), ("side", "TEXT", 1, 0),
+        ("quantity", "INTEGER", 1, 0), ("price", "REAL", 1, 0),
+        ("fee", "REAL", 1, 0), ("tax", "REAL", 1, 0),
+        ("filled_at", "TEXT", 1, 0), ("note", "TEXT", 0, 0),
+    }
+
+    def _assert_no_schema_collision(self, connection: sqlite3.Connection) -> None:
+        """F05: if orders/fills already exist with a DIFFERENT schema (e.g.
+        LedgerService's account_id/trade_date/... shape, or any injected
+        extra column), refuse to write here.
+
+        LedgerService and TradeLedger must not silently co-exist on the same
+        SQLite file with conflicting orders/fills schemas (first-writer-wins +
+        swallowed OperationalError / IntegrityError)."""
+        expected = {
+            "orders": self._EXPECTED_ORDERS_SCHEMA,
+            "fills": self._EXPECTED_FILLS_SCHEMA,
+        }
+        for table, exp_sig in expected.items():
+            exists = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                (table,),
+            ).fetchone()
+            if not exists:
+                continue
+            actual = {
+                (r[1], r[2].upper(), r[3], r[5])
+                for r in connection.execute(f"PRAGMA table_info({table})").fetchall()
+            }
+            if actual != exp_sig:
+                raise RuntimeError(
+                    f"F05 schema collision: {self.db_path} already has a '{table}' table "
+                    f"with incompatible signature {sorted(actual)} "
+                    f"(expected TradeLedger signature {sorted(exp_sig)}). "
+                    f"LedgerService and TradeLedger must not share the same SQLite file."
+                )
+
     def initialize(self) -> None:
         with self.connect() as connection:
+            self._assert_no_schema_collision(connection)
             cursor = connection.cursor()
             cursor.execute(
                 """
