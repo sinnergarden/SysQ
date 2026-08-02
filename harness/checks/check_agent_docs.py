@@ -56,19 +56,22 @@ AGENTS_REQUIRED_KEYWORDS = [
     "不可越界规则",
 ]
 
-def _skill_dirs_from_harness_map() -> list[str]:
-    """Derive every skill referenced in harness_map.yaml so a missing
-    SKILL.md (e.g. sysq-dev / sysq-review / sysq-stock-research, audit F11)
-    fails this check instead of silently passing."""
+def _skill_dirs_from_harness_map() -> list[str] | None:
+    """Derive every skill referenced in harness_map.yaml.
+
+    Returns ``None`` when the map cannot be parsed (missing PyYAML or a
+    malformed file) so the check FAILS CLOSED instead of silently validating
+    only ``sysq-daily`` — a missing skill like sysq-dev must not slip through.
+    """
     try:
         import yaml
     except ImportError:
-        return ["sysq-daily"]
+        return None
     map_path = PROJECT_ROOT / "docs" / "requirements" / "harness_map.yaml"
     try:
         data = yaml.safe_load(map_path.read_text(encoding="utf-8"))
     except Exception:
-        return ["sysq-daily"]
+        return None
     dirs: list[str] = []
     for uc in (data or {}).get("usecases", {}).values():
         skills = uc.get("skills") or {}
@@ -76,10 +79,7 @@ def _skill_dirs_from_harness_map() -> list[str]:
             s = skills.get(role)
             if isinstance(s, str) and s and s not in dirs:
                 dirs.append(s)
-    return dirs or ["sysq-daily"]
-
-
-SKILL_DIRS = _skill_dirs_from_harness_map()
+    return dirs
 
 
 def _find_role_sections(content: str) -> set[str]:
@@ -122,11 +122,18 @@ def main() -> int:
             if sec not in sections:
                 violations.append(f"  docs/agents/{fname}: missing required section '## {sec}'")
 
-    # Skills
-    for sdir in SKILL_DIRS:
-        skill_path = SKILLS_DIR / sdir / "SKILL.md"
-        if not skill_path.exists():
-            violations.append(f"MISSING: .claude/skills/{sdir}/SKILL.md")
+    # Skills — derived from harness_map.yaml, fail-closed on parse error.
+    skill_dirs = _skill_dirs_from_harness_map()
+    if skill_dirs is None:
+        violations.append(
+            "  cannot parse harness_map.yaml skills (fail-closed): "
+            "missing PyYAML or malformed map"
+        )
+    else:
+        for sdir in skill_dirs:
+            skill_path = SKILLS_DIR / sdir / "SKILL.md"
+            if not skill_path.exists():
+                violations.append(f"MISSING: .claude/skills/{sdir}/SKILL.md")
 
     # Reviewer subagent
     reviewer_agent = AGENTS_SUBDIR / "sysq-reviewer.md"

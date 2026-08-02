@@ -46,5 +46,5 @@ Required fix: ...
 python harness/checks/check_no_latest_model_resolution.py
 python harness/checks/check_model_resolution_boundary.py
 python harness/checks/check_scripts_entrypoints.py
-python harness/checks/check_promotion_pointer.py
+# 合并后补充：check_promotion_pointer.py（PR #218 引入，见 F03）
 ```

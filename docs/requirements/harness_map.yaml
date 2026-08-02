@@ -72,6 +72,9 @@ usecases:
     domain: research
     status: stable
     owner_agent: research_agent
+    skills:
+      primary: sysq-daily
+      review: sysq-review
     entrypoints:
       - scripts/run_research.py
       - scripts/run_signal_analytics.py
@@ -143,6 +146,8 @@ usecases:
     domain: ui_analysis
     status: draft
     owner_agent: ui_agent
+    skills:
+      primary: sysq-daily
     entrypoints:
       - scripts/run_research_ui_api.py
     artifacts:
@@ -166,6 +171,9 @@ usecases:
     domain: promotion
     status: stable
     owner_agent: operator_agent
+    skills:
+      primary: sysq-daily
+      review: sysq-review
     entrypoints:
       - scripts/promote_candidate.py
     artifacts:
@@ -205,6 +213,7 @@ usecases:
       - harness/checks/
       - qsys/data/health.py
       - qsys/common/
+      - .claude/skills/
     forbidden_paths:
       - qsys/ledger/
       - qsys/trader/
