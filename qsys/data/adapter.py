@@ -883,7 +883,7 @@ class QlibAdapter:
     def _run_dump_script(self, csv_dir, mode="dump_all", *, refresh_universes=None, cleanup_csv_dir=True):
         """Helper to run the dump_bin.py script"""
         # Use cfg.project_root to find the script reliably
-        dump_script = cfg.project_root / "scripts" / "dump_bin.py"
+        dump_script = cfg.project_root / "scripts" / "dev" / "dump_bin.py"
         
         if not dump_script.exists():
              # Fallback: check if we are in development mode and script is in relative path
