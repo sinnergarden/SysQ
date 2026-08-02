@@ -49,7 +49,7 @@
 | `scripts/ops/` | data sync、shadow daily、ops 入口 | Protected Core 运维 |
 | `scripts/ops/audit_state_paths.py` | data/trade.db + real_account.db + shadow/ 只读审计 | 0 write，0 migration |
 | `scripts/research/` | rolling research、signal eval、backtest from signal、experiment index | research 入口 |
-| `scripts/live/` | broker order、reconciliation、alpha_v1 live plan | live ops 入口 |
+| `scripts/deprecated/` | broker order、reconciliation、alpha_v1 live plan（原 `scripts/live/`，F06 移入） | 废弃，待归 UC 或重接 miniqmt 后启用 |
 | `scripts/checks/` | data leakage / schema / order intents / portfolio snapshot / reconciliation result / daily read model / experiment index 检查 | 产检工具（run_daily.py 产物验证）|
 | `tests/` | unit / regression tests | 改动必须补测试 |
 
