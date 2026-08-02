@@ -345,6 +345,18 @@ def run_calibrated(
     Xz = robust_zscore_transform(Xp, center, scale)
     raw_prob = model.predict(Xz.values)
     calibrated_prob = calibrator.predict(raw_prob)
+    # F02 quality guard: a calibrator output that is ALL exactly 0/1 is the
+    # signature of the old LogisticRegression.predict() bug (hard class
+    # labels) and must not be shipped as a valid risk sidecar.  We reject
+    # ONLY the degenerate hard-0/1 case — isotonic buckets may legitimately
+    # produce few distinct values, so a low n_unique is NOT a failure.
+    if len(calibrated_prob) and np.all((calibrated_prob == 0.0) | (calibrated_prob == 1.0)):
+        raise ValueError(
+            "F02: calibrated probabilities are degenerate hard 0/1 "
+            "(all values exactly 0 or 1); refusing to write "
+            "stop_loss_prob_calibrated.json. "
+            "Check the calibrator path (sigmoid must use predict_proba)."
+        )
     risk_pct = compute_risk_percentile(calibrated_prob)
 
     # ── Compute alpha scores for eval (60d+180d ranking) ──

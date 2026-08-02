@@ -1,0 +1,13 @@
+artifact_type: shadow_promotion_pointer
+promotion_target: shadow
+candidate_id: cand_alpha_v1_existing_score_20260522
+candidate_path: data/research/candidates/cand_alpha_v1_existing_score_20260522/candidate.yaml
+signal_ref:
+  signal_id: alpha_v1_existing_score__alpha_v1__raw
+  signal_run_id: rolling__alpha_v1_rolling_full_2024_2026__alpha_v1__raw__2024-01-01_2026-05-22
+strategy_config_id: alpha_v1_config_v1
+strategy_template_id: rank_weight_top20
+backtest_id: bt_2024-01-01_2026-05-22_5b29903a
+strategy_run_id: rank_weight_top20__alpha_v1_existing_score__alpha_v1__raw__rolling__alpha_v1_rolling_full_2024_2026__alpha_v1__raw__2024-01-01_2026-05-22__5b29903a
+promoted_at: '2026-08-02T06:31:41.206046+00:00'
+promoted_by: operator_agent
