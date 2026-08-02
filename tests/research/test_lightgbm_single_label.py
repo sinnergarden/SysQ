@@ -28,6 +28,20 @@ def _fake_predict_model(model, center, scale, X):
     return pd.Series(model.predict(X), index=X.index)
 
 
+def _fake_calendar(start: str, end: str) -> list[str]:
+    """Deterministic business-day calendar for date-semantics tests."""
+    from datetime import datetime, timedelta
+
+    out: list[str] = []
+    cur = datetime.strptime(start, "%Y-%m-%d")
+    endd = datetime.strptime(end, "%Y-%m-%d")
+    while cur <= endd:
+        if cur.weekday() < 5:
+            out.append(cur.strftime("%Y-%m-%d"))
+        cur += timedelta(days=1)
+    return out
+
+
 class TestLightGBMSingleLabelContract:
     """Verify output matches SignalStore 6-column contract."""
 
@@ -73,13 +87,14 @@ class TestLightGBMSingleLabelContract:
         assert (result["signal_run_id"] == "run1").all()
         assert result["score"].notna().all()
 
+    @patch("qsys.data.calendar.get_trading_calendar", _fake_calendar)
     @patch("qsys.signal.alpha_v1.training.train_model", _fake_train_model)
     @patch("qsys.signal.alpha_v1.training.predict_model", _fake_predict_model)
     @patch("qsys.label.store.LabelStore.load_labels")
     def test_generate_output_filtered_by_predict_window(
         self, mock_labels,
     ) -> None:
-        """generate() only returns dates in predict window."""
+        """generate() emits trade_date = next trading day after the feature date."""
         mock_labels.return_value = self._fake_labels()
         gen = LightGBMSingleLabelGenerator(label_id="fwd_ret_5d_xsz_clip3")
         with patch.object(gen, "_load_data") as mock_load:
@@ -92,9 +107,36 @@ class TestLightGBMSingleLabelContract:
                     predict_end="2026-01-15",
                     signal_id="s", signal_run_id="r",
                 )
+        # feature dates 2026-01-14/15 -> execution days 2026-01-15/16
         dates = sorted(result["trade_date"].unique())
-        assert all(d >= "2026-01-14" for d in dates)
-        assert all(d <= "2026-01-15" for d in dates)
+        assert dates == ["2026-01-15", "2026-01-16"], dates
+        # F01 invariant: every signal's feature date (data_date) is strictly
+        # before its trade_date, and data_date lies in the predict window.
+        assert (result["data_date"] < result["trade_date"]).all()
+        assert result["data_date"].between("2026-01-14", "2026-01-15").all()
+
+    @patch("qsys.data.calendar.get_trading_calendar", _fake_calendar)
+    @patch("qsys.signal.alpha_v1.training.train_model", _fake_train_model)
+    @patch("qsys.signal.alpha_v1.training.predict_model", _fake_predict_model)
+    @patch("qsys.label.store.LabelStore.load_labels")
+    def test_generate_no_lookahead_invariant(self, mock_labels) -> None:
+        """F01: every emitted signal uses features strictly before trade_date."""
+        mock_labels.return_value = self._fake_labels()
+        gen = LightGBMSingleLabelGenerator(label_id="fwd_ret_5d_xsz_clip3")
+        with patch.object(gen, "_load_data") as mock_load:
+            mock_load.return_value = self._make_fake_data(), ["f1", "f2"]
+            with patch.object(gen, "_ensure_qlib"):
+                result = gen.generate(
+                    train_start="2026-01-01", train_end="2026-01-10",
+                    predict_start="2026-01-13", predict_end="2026-01-15",
+                    signal_id="s", signal_run_id="r",
+                )
+        assert len(result) > 0
+        # Framework invariant (F01): no feature bar at/after trade_date.
+        assert (result["data_date"] < result["trade_date"]).all()
+        # data_date is a real feature date present in the input frame.
+        input_dates = set(self._make_fake_data()["trade_date"])
+        assert set(result["data_date"]).issubset(input_dates)
 
     @staticmethod
     def _make_fake_data() -> pd.DataFrame:
@@ -210,6 +252,7 @@ class TestSingleLabelFactory:
 class TestLightGBMSingleLabelGolden:
     """Golden test: deterministic input → exact score values."""
 
+    @patch("qsys.data.calendar.get_trading_calendar", _fake_calendar)
     @patch("qsys.signal.alpha_v1.training.train_model", _fake_train_model)
     @patch("qsys.signal.alpha_v1.training.predict_model", _fake_predict_model)
     @patch("qsys.label.store.LabelStore.load_labels")
@@ -231,24 +274,25 @@ class TestLightGBMSingleLabelGolden:
         result = result.sort_values(["trade_date", "instrument"]).reset_index(drop=True)
 
         # FakeModel.predict returns [0.0, 0.1, 0.2] for 3 instruments.
-        # _cs_zscore normalizes this to [-1.2247, 0.0, 1.2247] per date.
-        # With flat data, these values are the same across all 3 trade dates.
-        assert len(result) == 9  # 3 dates × 3 instruments
+        # _cs_zscore normalizes this to [-1.2247, 0.0, 1.2247] per feature date.
+        # F01: emitted trade_date = next trading day after the feature date.
+        # feature dates 01-13/14/15 -> execution days 01-14/15/16.
+        assert len(result) == 9  # 3 feature dates × 3 instruments
         assert list(result.columns) == [
             "trade_date", "data_date", "instrument",
             "signal_id", "signal_run_id", "score",
         ]
 
         expected = [
-            ("2026-01-13", "000001.SZ", -1.224744871),
-            ("2026-01-13", "000002.SZ", 0.0),
-            ("2026-01-13", "000003.SZ", 1.224744871),
             ("2026-01-14", "000001.SZ", -1.224744871),
             ("2026-01-14", "000002.SZ", 0.0),
             ("2026-01-14", "000003.SZ", 1.224744871),
             ("2026-01-15", "000001.SZ", -1.224744871),
             ("2026-01-15", "000002.SZ", 0.0),
             ("2026-01-15", "000003.SZ", 1.224744871),
+            ("2026-01-16", "000001.SZ", -1.224744871),
+            ("2026-01-16", "000002.SZ", 0.0),
+            ("2026-01-16", "000003.SZ", 1.224744871),
         ]
         for i, (td, inst, exp_score) in enumerate(expected):
             row = result.iloc[i]
@@ -348,3 +392,28 @@ class TestMultiLabelBuildMatrixJobs:
         _ = expand_multi_label_generators(original)
         assert len(original) == 1  # unchanged
         assert original[0]["type"] == "multi_label_lightgbm"
+
+
+class TestTradingDateLookups:
+    """Unit tests for the F01 next-trading-day lookup."""
+
+    def test_next_trading_date_lookup(self) -> None:
+        from qsys.research.generators.utils import build_next_trading_date_lookup
+
+        with patch("qsys.data.calendar.get_trading_calendar", _fake_calendar):
+            lookup = build_next_trading_date_lookup("2026-01-12", "2026-01-16")
+        assert lookup["2026-01-12"] == "2026-01-13"
+        assert lookup["2026-01-13"] == "2026-01-14"
+        assert lookup["2026-01-15"] == "2026-01-16"
+        # The lookup extends past predict_end so the last predict date's next
+        # trading day (01-19) is available to the generator.
+        assert lookup["2026-01-16"] == "2026-01-19"
+
+    def test_next_skips_weekend(self) -> None:
+        from qsys.research.generators.utils import build_next_trading_date_lookup
+
+        with patch("qsys.data.calendar.get_trading_calendar", _fake_calendar):
+            lookup = build_next_trading_date_lookup("2026-01-15", "2026-01-19")
+        # 01-15 (Thu) -> 01-16 (Fri); 01-16 (Fri) -> 01-19 (Mon)
+        assert lookup["2026-01-15"] == "2026-01-16"
+        assert lookup["2026-01-16"] == "2026-01-19"

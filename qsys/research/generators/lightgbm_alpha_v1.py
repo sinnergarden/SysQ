@@ -21,7 +21,7 @@ import numpy as np
 import pandas as pd
 
 from qsys.research.generators.utils import (
-    build_prev_trading_date_lookup as _build_prev_trading_date_lookup,
+    build_next_trading_date_lookup as _build_next_trading_date_lookup,
     cs_zscore as _cs_zscore,
 )
 
@@ -144,18 +144,23 @@ class LightGBMAlphaV1Generator:
 
         # Train
         print(f"  Training window: {train_start} → {train_end}")
+        # F01 (Option A, strict): pair features at date f with labels realized
+        # from the NEXT trading day onward, matching inference where
+        # trade_date = next_td(f) — removes same-day-close lookahead.
+        next_td = _build_next_trading_date_lookup(train_start, train_end)
         train = frame[
             (frame["trade_date"] >= train_start) &
             (frame["trade_date"] <= train_end)
         ].copy()
+        train["label_date"] = train["trade_date"].map(next_td)
 
-        # Merge labels into training frame
+        # Merge labels into training frame (aligned to the next trading day)
         train_merged = train.copy()
         for lid in self.label_ids:
             sub = label_dfs[lid][["trade_date", "instrument", "label_value"]].rename(
-                columns={"label_value": f"label_{lid}"}
+                columns={"trade_date": "label_date", "label_value": f"label_{lid}"}
             )
-            train_merged = train_merged.merge(sub, on=["trade_date", "instrument"], how="left")
+            train_merged = train_merged.merge(sub, on=["label_date", "instrument"], how="left")
 
         models = {}
         for lid in self.label_ids:
@@ -187,13 +192,19 @@ class LightGBMAlphaV1Generator:
         for tag in ["5d", "20d"]:
             pred[f"pred_{tag}"] = predict_model(*models[tag], X_test).values
 
-        # Assemble output
-        prev_td = _build_prev_trading_date_lookup(predict_start, predict_end)
+        # Assemble output — F01: signal for trade_date=td uses only features
+        # strictly before td (feature date f < trade_date).
+        next_td = _build_next_trading_date_lookup(predict_start, predict_end)
         rows: list[dict] = []
 
-        for d in sorted(pred["trade_date"].unique()):
-            sub = pred[pred["trade_date"] == d]
-            dd = prev_td.get(str(d), str(d))
+        for f in sorted(pred["trade_date"].unique()):
+            sub = pred[pred["trade_date"] == f]
+            td = next_td.get(str(f))
+            if td is None:
+                # Last trading day in the window has no execution day.
+                print(f"  Skip {f}: no next trading day")
+                continue
+            assert str(f) < td, f"F01 lookahead: feature date {f} >= trade_date {td}"
 
             # Inline blend: cross-sectional zscore per horizon, weighted sum
             z5 = _cs_zscore(sub["pred_5d"])
@@ -204,8 +215,8 @@ class LightGBMAlphaV1Generator:
 
             for i, (_, r) in enumerate(sub.iterrows()):
                 rows.append({
-                    "trade_date": str(d),
-                    "data_date": dd,
+                    "trade_date": td,
+                    "data_date": str(f),
                     "instrument": str(r["instrument"]),
                     "signal_id": signal_id,
                     "signal_run_id": signal_run_id,

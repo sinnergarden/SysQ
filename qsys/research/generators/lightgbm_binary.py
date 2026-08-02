@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 
 from qsys.research.generators.utils import (
-    build_prev_trading_date_lookup as _build_prev_trading_date_lookup,
+    build_next_trading_date_lookup as _build_next_trading_date_lookup,
     cs_zscore as _cs_zscore,
 )
 from qsys.signal.alpha_v1.calibrate import ProbabilityCalibrator
@@ -107,11 +107,18 @@ class LightGBMBinaryGenerator:
 
         # ── Train ──
         log.info("Binary training window: %s -> %s", train_start, train_end)
+        # F01 (Option A, strict): align features at date f with the binary label
+        # realized from the NEXT trading day onward, matching inference where
+        # trade_date = next_td(f) — removes same-day-close lookahead.
+        next_td = _build_next_trading_date_lookup(train_start, train_end)
         train = frame[
             (frame["trade_date"] >= train_start) & (frame["trade_date"] <= train_end)
-        ].copy().merge(
-            label_df[["trade_date", "instrument", "label_value"]],
-            on=["trade_date", "instrument"], how="left",
+        ].copy()
+        train["label_date"] = train["trade_date"].map(next_td)
+        train = train.merge(
+            label_df[["trade_date", "instrument", "label_value"]].rename(
+                columns={"trade_date": "label_date"}),
+            on=["label_date", "instrument"], how="left",
         )
 
         y_valid = train["label_value"].notna()
@@ -152,9 +159,11 @@ class LightGBMBinaryGenerator:
         if not cal_sub.empty and len(cal_sub) > 100:
             Xz_c = _rzt(cal_sub[clean_features].fillna(0.0).astype(np.float32), center, scale)
             cal_sub["raw_prob"] = model.predict(Xz_c.values)
+            cal_sub["label_date"] = cal_sub["trade_date"].map(next_td)
             cm = cal_sub.merge(
-                label_df[["trade_date", "instrument", "label_value"]],
-                on=["trade_date", "instrument"], how="inner")
+                label_df[["trade_date", "instrument", "label_value"]].rename(
+                    columns={"trade_date": "label_date"}),
+                on=["label_date", "instrument"], how="inner")
             if not cm.empty and cm["label_value"].nunique() == 2:
                 pobj = ProbabilityCalibrator(method="isotonic", use_margin=False)
                 pobj.fit(cm["raw_prob"].values, cm["label_value"].values)
@@ -175,15 +184,21 @@ class LightGBMBinaryGenerator:
             pred["score"] = pred_prob.values
 
         # Assemble output — calibrated probability as score
-        prev_td = _build_prev_trading_date_lookup(predict_start, predict_end)
+        # F01: signal for trade_date=td uses only features strictly before td.
+        next_td = _build_next_trading_date_lookup(predict_start, predict_end)
         rows: list[dict] = []
-        for d in sorted(pred["trade_date"].unique()):
-            sub = pred[pred["trade_date"] == d]
-            dd = prev_td.get(str(d), str(d))
+        for f in sorted(pred["trade_date"].unique()):
+            sub = pred[pred["trade_date"] == f]
+            td = next_td.get(str(f))
+            if td is None:
+                # Last trading day in the window has no execution day.
+                log.info("Skip %s: no next trading day", f)
+                continue
+            assert str(f) < td, f"F01 lookahead: feature date {f} >= trade_date {td}"
             for _, r in sub.iterrows():
                 rows.append({
-                    "trade_date": str(d),
-                    "data_date": dd,
+                    "trade_date": td,
+                    "data_date": str(f),
                     "instrument": str(r["instrument"]),
                     "signal_id": signal_id,
                     "signal_run_id": signal_run_id,

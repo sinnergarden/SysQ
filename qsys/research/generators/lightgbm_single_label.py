@@ -24,7 +24,7 @@ import numpy as np
 import pandas as pd
 
 from qsys.research.generators.utils import (
-    build_prev_trading_date_lookup as _build_prev_trading_date_lookup,
+    build_next_trading_date_lookup as _build_next_trading_date_lookup,
     cs_zscore as _cs_zscore,
 )
 from qsys.utils.logger import log
@@ -206,11 +206,19 @@ class LightGBMSingleLabelGenerator:
 
         # Train
         log.info("Training window: %s -> %s", train_start, train_end)
+        # F01 (Option A, strict): features at date f are paired with the forward
+        # return that starts on the NEXT trading day (the actual buy day's
+        # close-to-close proxy), matching inference where trade_date = next_td(f).
+        # Removes the same-day-close lookahead from research signal generation.
+        next_td = _build_next_trading_date_lookup(train_start, train_end)
         train = frame[
             (frame["trade_date"] >= train_start) & (frame["trade_date"] <= train_end)
-        ].copy().merge(
-            label_df[["trade_date", "instrument", "label_value"]],
-            on=["trade_date", "instrument"], how="left",
+        ].copy()
+        train["label_date"] = train["trade_date"].map(next_td)
+        train = train.merge(
+            label_df[["trade_date", "instrument", "label_value"]].rename(
+                columns={"trade_date": "label_date"}),
+            on=["label_date", "instrument"], how="left",
         )
 
         y_valid = train["label_value"].notna()
@@ -233,17 +241,23 @@ class LightGBMSingleLabelGenerator:
             model, center, scale, pred[clean_features].fillna(0.0).astype(np.float32)
         ).values
 
-        # Assemble output
-        prev_td = _build_prev_trading_date_lookup(predict_start, predict_end)
+        # Assemble output — F01: a signal for trade_date=td must use only
+        # features strictly before td (feature date f < trade_date).
+        next_td = _build_next_trading_date_lookup(predict_start, predict_end)
         rows: list[dict] = []
-        for d in sorted(pred["trade_date"].unique()):
-            sub = pred[pred["trade_date"] == d]
-            dd = prev_td.get(str(d), str(d))
+        for f in sorted(pred["trade_date"].unique()):
+            sub = pred[pred["trade_date"] == f]
+            td = next_td.get(str(f))
+            if td is None:
+                # Last trading day in the window has no execution day.
+                log.info("Skip %s: no next trading day", f)
+                continue
+            assert str(f) < td, f"F01 lookahead: feature date {f} >= trade_date {td}"
             z = _cs_zscore(sub["pred"])
             for i, (_, r) in enumerate(sub.iterrows()):
                 rows.append({
-                    "trade_date": str(d),
-                    "data_date": dd,
+                    "trade_date": td,
+                    "data_date": str(f),
                     "instrument": str(r["instrument"]),
                     "signal_id": signal_id,
                     "signal_run_id": signal_run_id,
