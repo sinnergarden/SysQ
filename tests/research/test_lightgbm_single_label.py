@@ -50,7 +50,7 @@ class TestLightGBMSingleLabelContract:
         """Fake label DataFrame covering same dates and instruments as _make_fake_data."""
         rows = []
         inst_labels = {"000001.SZ": 0.01, "000002.SZ": 0.02, "000003.SZ": 0.03}
-        for td in [f"2026-01-{d:02d}" for d in range(2, 17)]:
+        for td in [f"2026-01-{d:02d}" for d in range(2, 23)]:
             for inst, val in inst_labels.items():
                 rows.append({
                     "trade_date": td,
@@ -72,10 +72,10 @@ class TestLightGBMSingleLabelContract:
             mock_load.return_value = self._make_fake_data(), ["f1", "f2"]
             with patch.object(gen, "_ensure_qlib"):
                 result = gen.generate(
-                    train_start="2026-01-01",
+                    train_start="2026-01-02",
                     train_end="2026-01-10",
-                    predict_start="2026-01-13",
-                    predict_end="2026-01-15",
+                    predict_start="2026-01-20",
+                    predict_end="2026-01-22",
                     signal_id="lgbm_test",
                     signal_run_id="run1",
                 )
@@ -101,19 +101,19 @@ class TestLightGBMSingleLabelContract:
             mock_load.return_value = self._make_fake_data(), ["f1", "f2"]
             with patch.object(gen, "_ensure_qlib"):
                 result = gen.generate(
-                    train_start="2026-01-01",
+                    train_start="2026-01-02",
                     train_end="2026-01-10",
-                    predict_start="2026-01-14",
-                    predict_end="2026-01-15",
+                    predict_start="2026-01-20",
+                    predict_end="2026-01-21",
                     signal_id="s", signal_run_id="r",
                 )
-        # feature dates 2026-01-14/15 -> execution days 2026-01-15/16
+        # execution window 2026-01-20/21 -> feature dates 2026-01-19/20
         dates = sorted(result["trade_date"].unique())
-        assert dates == ["2026-01-15", "2026-01-16"], dates
+        assert dates == ["2026-01-20", "2026-01-21"], dates
         # F01 invariant: every signal's feature date (data_date) is strictly
-        # before its trade_date, and data_date lies in the predict window.
+        # before its trade_date, and data_date lies just before the window.
         assert (result["data_date"] < result["trade_date"]).all()
-        assert result["data_date"].between("2026-01-14", "2026-01-15").all()
+        assert result["data_date"].between("2026-01-19", "2026-01-20").all()
 
     @patch("qsys.data.calendar.get_trading_calendar", _fake_calendar)
     @patch("qsys.signal.alpha_v1.training.train_model", _fake_train_model)
@@ -127,8 +127,8 @@ class TestLightGBMSingleLabelContract:
             mock_load.return_value = self._make_fake_data(), ["f1", "f2"]
             with patch.object(gen, "_ensure_qlib"):
                 result = gen.generate(
-                    train_start="2026-01-01", train_end="2026-01-10",
-                    predict_start="2026-01-13", predict_end="2026-01-15",
+                    train_start="2026-01-02", train_end="2026-01-10",
+                    predict_start="2026-01-20", predict_end="2026-01-22",
                     signal_id="s", signal_run_id="r",
                 )
         assert len(result) > 0
@@ -140,7 +140,7 @@ class TestLightGBMSingleLabelContract:
 
     @staticmethod
     def _make_fake_data() -> pd.DataFrame:
-        dates = [f"2026-01-{d:02d}" for d in range(2, 17)]
+        dates = [f"2026-01-{d:02d}" for d in range(2, 23)]
         rows = []
         for td in dates:
             for inst in ["000001.SZ", "000002.SZ", "000003.SZ"]:
@@ -264,10 +264,10 @@ class TestLightGBMSingleLabelGolden:
             mock_load.return_value = self._make_fake_data(), ["f1", "f2"]
             with patch.object(gen, "_ensure_qlib"):
                 result = gen.generate(
-                    train_start="2026-01-01",
+                    train_start="2026-01-02",
                     train_end="2026-01-10",
-                    predict_start="2026-01-13",
-                    predict_end="2026-01-15",
+                    predict_start="2026-01-20",
+                    predict_end="2026-01-22",
                     signal_id="lgbm_golden",
                     signal_run_id="run_golden",
                 )
@@ -275,24 +275,25 @@ class TestLightGBMSingleLabelGolden:
 
         # FakeModel.predict returns [0.0, 0.1, 0.2] for 3 instruments.
         # _cs_zscore normalizes this to [-1.2247, 0.0, 1.2247] per feature date.
-        # F01: emitted trade_date = next trading day after the feature date.
-        # feature dates 01-13/14/15 -> execution days 01-14/15/16.
-        assert len(result) == 9  # 3 feature dates × 3 instruments
+        # F01 backward-shift: emitted trade_date = execution window days,
+        # each using features from the previous trading day.
+        # execution days 01-20/21/22 -> feature dates 01-19/20/21.
+        assert len(result) == 9  # 3 execution days × 3 instruments
         assert list(result.columns) == [
             "trade_date", "data_date", "instrument",
             "signal_id", "signal_run_id", "score",
         ]
 
         expected = [
-            ("2026-01-14", "000001.SZ", -1.224744871),
-            ("2026-01-14", "000002.SZ", 0.0),
-            ("2026-01-14", "000003.SZ", 1.224744871),
-            ("2026-01-15", "000001.SZ", -1.224744871),
-            ("2026-01-15", "000002.SZ", 0.0),
-            ("2026-01-15", "000003.SZ", 1.224744871),
-            ("2026-01-16", "000001.SZ", -1.224744871),
-            ("2026-01-16", "000002.SZ", 0.0),
-            ("2026-01-16", "000003.SZ", 1.224744871),
+            ("2026-01-20", "000001.SZ", -1.224744871),
+            ("2026-01-20", "000002.SZ", 0.0),
+            ("2026-01-20", "000003.SZ", 1.224744871),
+            ("2026-01-21", "000001.SZ", -1.224744871),
+            ("2026-01-21", "000002.SZ", 0.0),
+            ("2026-01-21", "000003.SZ", 1.224744871),
+            ("2026-01-22", "000001.SZ", -1.224744871),
+            ("2026-01-22", "000002.SZ", 0.0),
+            ("2026-01-22", "000003.SZ", 1.224744871),
         ]
         for i, (td, inst, exp_score) in enumerate(expected):
             row = result.iloc[i]
@@ -306,7 +307,7 @@ class TestLightGBMSingleLabelGolden:
     def _fake_labels(label_id: str = "fwd_ret_5d_xsz_clip3") -> pd.DataFrame:
         rows = []
         inst_labels = {"000001.SZ": 0.01, "000002.SZ": 0.02, "000003.SZ": 0.03}
-        for td in [f"2026-01-{d:02d}" for d in range(2, 17)]:
+        for td in [f"2026-01-{d:02d}" for d in range(2, 23)]:
             for inst, val in inst_labels.items():
                 rows.append({
                     "trade_date": td, "instrument": inst,
@@ -316,7 +317,7 @@ class TestLightGBMSingleLabelGolden:
 
     @staticmethod
     def _make_fake_data() -> pd.DataFrame:
-        dates = [f"2026-01-{d:02d}" for d in range(2, 17)]
+        dates = [f"2026-01-{d:02d}" for d in range(2, 23)]
         rows = []
         for td in dates:
             for inst in ["000001.SZ", "000002.SZ", "000003.SZ"]:
