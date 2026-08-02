@@ -35,6 +35,16 @@
 
 ---
 
+## 审计整改（2026-08-02）
+
+2026-08-02 双轮只读审计发现：3 个 BLOCKER + 10 HIGH + 4 MEDIUM + 1 LOW（合规/健康），以及 2 个新 BLOCKER + 方法论低分项（Quant 方法论/框架合理性）。
+
+**整改计划（唯一事实源）**：`docs/AUDIT_2026-08-02_REMEDIATION.md` — 26 项（F01–F26），按 Wave 0–4 分优先级；含已确认决策（F01=方案 A、F17=方案 C、F18=权重 0.5/0.5）。
+
+**当前优先**：M1 正确性止血（F01 研究链路 lookahead → F02 校准器硬 0/1 → F03 promotion pointer），完成前不推进 Current Focus 之外的独立大功能。
+
+---
+
 ## Phase 0 — Foundation（已完成）
 
 目标：最小闭环跑通，系统从脚本集合进入框架化阶段。
