@@ -80,6 +80,18 @@ def main() -> int:
         print(f"❌ Promotion pointer missing required fields: {missing}")
         return 1
 
+    # Contract checks the daily consumer relies on (resolve_shadow_promotion).
+    if raw.get("artifact_type") != "shadow_promotion_pointer":
+        print(f"❌ artifact_type = {raw.get('artifact_type')!r}, expected 'shadow_promotion_pointer'")
+        return 1
+    if raw.get("promotion_target") != "shadow":
+        print(f"❌ promotion_target = {raw.get('promotion_target')!r}, expected 'shadow'")
+        return 1
+    cand_path = root / str(raw.get("candidate_path", ""))
+    if not cand_path.exists():
+        print(f"❌ candidate_path does not exist: {raw.get('candidate_path')}")
+        return 1
+
     sr = raw.get("signal_ref") or {}
     print(f"✅ Shadow promotion pointer valid: {POINTER_PATH}")
     print(f"   candidate_id = {raw.get('candidate_id')}")

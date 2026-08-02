@@ -17,7 +17,7 @@ strategy:
 backtest_ref:
   strategy_run_id: rank_weight_top20__alpha_v1_existing_score__alpha_v1__raw__rolling__alpha_v1_rolling_full_2024_2026__alpha_v1__raw__2024-01-01_2026-05-22__5b29903a
   backtest_id: bt_2024-01-01_2026-05-22_5b29903a
-  path: /home/liuming/.openclaw/workspace/SysQ/data/research/backtests/rank_weight_top20__alpha_v1_existing_score__alpha_v1__raw__rolling__alpha_v1_rolling_full_2024_2026__alpha_v1__raw__2024-01-01_2026-05-22__5b29903a/bt_2024-01-01_2026-05-22_5b29903a
+  path: data/research/backtests/rank_weight_top20__alpha_v1_existing_score__alpha_v1__raw__rolling__alpha_v1_rolling_full_2024_2026__alpha_v1__raw__2024-01-01_2026-05-22__5b29903a/bt_2024-01-01_2026-05-22_5b29903a
 evidence:
   metrics_path: data/research/backtests/rank_weight_top20__alpha_v1_existing_score__alpha_v1__raw__rolling__alpha_v1_rolling_full_2024_2026__alpha_v1__raw__2024-01-01_2026-05-22__5b29903a/bt_2024-01-01_2026-05-22_5b29903a/metrics.json
   manifest_path: data/research/backtests/rank_weight_top20__alpha_v1_existing_score__alpha_v1__raw__rolling__alpha_v1_rolling_full_2024_2026__alpha_v1__raw__2024-01-01_2026-05-22__5b29903a/bt_2024-01-01_2026-05-22_5b29903a/manifest.json
