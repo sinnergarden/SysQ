@@ -106,6 +106,40 @@ class TestLightGBMBinaryDateSemantics:
                     )
 
 
+class TestTrainingLabelMaturityGate:
+    """Regression: shifted vs non-shifted critical trading-day gaps (F01 review 3)."""
+
+    @staticmethod
+    def _run(train_end: str, predict_start: str, horizon: int, shifted: bool):
+        from qsys.research.generators.utils import check_training_label_maturity
+
+        with patch("qsys.data.calendar.get_trading_calendar", _fake_calendar):
+            return check_training_label_maturity(train_end, predict_start, horizon, shifted=shifted)
+
+    def test_shifted_requires_gap_h_plus_2(self) -> None:
+        # shifted (forward-return): needs gap >= horizon+2.
+        with pytest.raises(ValueError, match="maturity"):
+            self._run("2026-01-08", "2026-01-16", 5, shifted=True)  # gap=6 < 7
+        assert self._run("2026-01-07", "2026-01-16", 5, shifted=True) == 7  # gap=7 OK
+
+    def test_unshifted_requires_gap_h_plus_1(self) -> None:
+        # non-shifted (maxdd): needs gap >= horizon+1.
+        with pytest.raises(ValueError, match="maturity"):
+            self._run("2026-01-09", "2026-01-16", 5, shifted=False)  # gap=5 < 6
+        assert self._run("2026-01-08", "2026-01-16", 5, shifted=False) == 6  # gap=6 OK
+
+    def test_binary_training_pairs_feature_date_with_fwd_maxdd(self) -> None:
+        """Binary training must merge labels on the SAME trade_date (no
+        next_td shift), because fwd_maxdd[d] already spans [d+1, d+h]."""
+        import inspect
+
+        from qsys.research.generators.lightgbm_binary import LightGBMBinaryGenerator
+
+        src = inspect.getsource(LightGBMBinaryGenerator.generate)
+        assert "label_date" not in src, "binary training must not shift labels"
+        assert 'on=["trade_date", "instrument"]' in src
+
+
 class TestLightGBMAlphaV1DateSemantics:
     """Backward-shift emission + maturity gate for the multi-label generator."""
 
