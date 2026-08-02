@@ -406,15 +406,23 @@ class DailyRunner:
             print(f"\n✅ Post-close {ctx.trade_date} (已提交，跳过) completed in {elapsed:.0f}s")
             return
 
-        # ── Force-rerun: restore before-state, then archive ──
+        # ── Force-rerun on a COMMITTED run: BLOCK (F04) ──
+        # No ledger reversal/re-apply exists yet.  Allowing force-rerun here
+        # silently diverges: shadow/account.json + execution/ are rewritten,
+        # but write_execution_to_ledger skips a 'completed' run, so
+        # data/trade.db keeps the OLD fills.  Block loudly until an explicit
+        # reversal/supersede workflow exists (audit F04; AGENTS.md 不可越界规则).
         if already_committed and ctx.force_rerun:
             if not ctx.reason:
                 print("  ❌ --force-rerun 必须配合 --reason")
                 sys.exit(1)
-            print(f"  ⚠ --force-rerun 生效，原因: {ctx.reason}")
-            ctx.ledger_commit_status = "pending"
-            self._restore_before_state(ctx, run_root, strategy)
-            archive_execution(run_root)
+            raise SystemExit(
+                f"⛔ --force-rerun 对一个已 COMMITTED 的 run 被阻断（F04）：{ctx.trade_date}\n"
+                f"  ledger reversal/re-apply 尚未实现；直接重跑会让 data/trade.db 与\n"
+                f"  shadow/execution 发散（ledger 保留旧成交，shadow 反映重跑）。\n"
+                f"  请先实现 ledger reversal/supersede，或用新 run_id 重跑。\n"
+                f"  （原因: {ctx.reason}）"
+            )
 
         # ── Plan check ──
         if not has_plan and not has_skip:

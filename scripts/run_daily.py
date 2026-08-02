@@ -345,6 +345,10 @@ def run_daily_main(argv: list[str] | None = None) -> None:
         promotion_snapshot_path=promotion_snapshot_path_val,
         # Ledger boundary
         ledger_commit_status=default_ledger_status,
+        # F04: record the actual ledger run id (matches
+        # write_execution_to_ledger's default f"{trade_date}.{strategy_id}.shadow")
+        # so reruns/reversal can target the exact run.
+        ledger_run_id=f"{trade_date}.{strategy.strategy_id}.shadow",
     )
 
     # ── Notify-only ──────────────────────────────────────────────────
