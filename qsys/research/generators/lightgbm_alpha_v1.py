@@ -22,6 +22,8 @@ import pandas as pd
 
 from qsys.research.generators.utils import (
     build_next_trading_date_lookup as _build_next_trading_date_lookup,
+    build_prev_trading_date_lookup as _build_prev_trading_date_lookup,
+    check_training_label_maturity as _check_training_label_maturity,
     cs_zscore as _cs_zscore,
 )
 
@@ -148,6 +150,10 @@ class LightGBMAlphaV1Generator:
         # from the NEXT trading day onward, matching inference where
         # trade_date = next_td(f) — removes same-day-close lookahead.
         next_td = _build_next_trading_date_lookup(train_start, train_end)
+        # F01/F16: with labels shifted to next_td(f), enforce that no training
+        # label extends into the predict window (max horizon across labels).
+        _max_h = max(_horizon_from_label_id(lid) for lid in self.label_ids)
+        _check_training_label_maturity(train_end, predict_start, _max_h)
         train = frame[
             (frame["trade_date"] >= train_start) &
             (frame["trade_date"] <= train_end)
@@ -181,28 +187,31 @@ class LightGBMAlphaV1Generator:
                 lgb_params=self.lgb_params,
             )
 
-        # Predict
-        pred = frame[
-            frame["trade_date"].between(predict_start, predict_end)
-        ].copy()
+        # Predict — F01 backward-shift: the configured [predict_start,
+        # predict_end] is the EXECUTION window; each execution day d uses
+        # features from prev_td(d), so the output stays inside the window and
+        # no feature bar at/after trade_date is used.
+        from qsys.data.calendar import get_trading_calendar
+
+        window_cal = get_trading_calendar(predict_start, predict_end)
+        prev_td = _build_prev_trading_date_lookup(predict_start, predict_end)
+        feature_dates = sorted({prev_td.get(d, d) for d in window_cal})
+        pred = frame[frame["trade_date"].isin(feature_dates)].copy()
         if pred.empty:
-            raise ValueError(f"No data for predict window [{predict_start}, {predict_end}]")
+            raise ValueError(f"No feature data for execution window [{predict_start}, {predict_end}]")
 
         X_test = pred[clean_features].astype(np.float32).fillna(0.0)
         for tag in ["5d", "20d"]:
             pred[f"pred_{tag}"] = predict_model(*models[tag], X_test).values
 
-        # Assemble output — F01: signal for trade_date=td uses only features
-        # strictly before td (feature date f < trade_date).
-        next_td = _build_next_trading_date_lookup(predict_start, predict_end)
+        # Assemble output — feature date f -> execution day d (bijection).
+        f_to_d = {prev_td.get(d, d): d for d in window_cal}
         rows: list[dict] = []
 
-        for f in sorted(pred["trade_date"].unique()):
+        for f in feature_dates:
+            td = f_to_d.get(f)
             sub = pred[pred["trade_date"] == f]
-            td = next_td.get(str(f))
-            if td is None:
-                # Last trading day in the window has no execution day.
-                print(f"  Skip {f}: no next trading day")
+            if td is None or sub.empty:
                 continue
             assert str(f) < td, f"F01 lookahead: feature date {f} >= trade_date {td}"
 

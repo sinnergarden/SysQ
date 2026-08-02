@@ -114,3 +114,44 @@ def build_next_trading_date_lookup(
         if i + 1 < len(bdays):
             lookup[d] = bdays[i + 1]
     return lookup
+
+
+def horizon_from_label_id(label_id: str) -> int:
+    """Extract the horizon integer from a label ID.
+
+    Handles forward-return labels (``fwd_ret_5d_xsz_clip3``) and max-drawdown
+    labels (``fwd_maxdd_5d_binary_5pct``).
+    """
+    parts = label_id.split("_")
+    for i, p in enumerate(parts):
+        if p in ("ret", "maxdd") and i + 1 < len(parts):
+            cand = parts[i + 1]
+            if cand.endswith("d") and cand[:-1].isdigit():
+                return int(cand[:-1])
+    raise ValueError(f"Cannot extract horizon from label_id: {label_id}")
+
+
+def check_training_label_maturity(train_end: str, predict_start: str, horizon: int) -> int:
+    """F01/F16 maturity gate.
+
+    With training labels shifted to ``next_td(f)`` (strict F01 alignment), the
+    last training label ``fwd_ret[next_td(train_end)]`` is realized at
+    ``next_td(train_end) + horizon`` trading days, which must be strictly
+    before ``predict_start``'s feature cutoff.  This requires ``>= horizon + 2``
+    trading days in ``(train_end, predict_start]``.
+
+    Fails loudly when the declared ``label_maturity_lag_trading_days`` is too
+    small (a 1-day training-label lookahead into the predict window).
+    """
+    from qsys.data.calendar import get_trading_calendar
+
+    cal = get_trading_calendar(train_end, predict_start)
+    gap = len([d for d in cal if d > train_end and d <= predict_start])
+    if gap < horizon + 2:
+        raise ValueError(
+            f"F01/F16 label maturity violation: horizon={horizon}, "
+            f"train_end={train_end}, predict_start={predict_start}; "
+            f"trading-day gap={gap} < {horizon + 2}. "
+            f"Set label_maturity_lag_trading_days >= {horizon + 1}."
+        )
+    return gap

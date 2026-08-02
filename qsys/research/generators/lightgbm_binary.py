@@ -17,7 +17,10 @@ import pandas as pd
 
 from qsys.research.generators.utils import (
     build_next_trading_date_lookup as _build_next_trading_date_lookup,
+    build_prev_trading_date_lookup as _build_prev_trading_date_lookup,
+    check_training_label_maturity as _check_training_label_maturity,
     cs_zscore as _cs_zscore,
+    horizon_from_label_id as _horizon_from_label_id,
 )
 from qsys.signal.alpha_v1.calibrate import ProbabilityCalibrator
 from qsys.utils.logger import log
@@ -111,6 +114,11 @@ class LightGBMBinaryGenerator:
         # realized from the NEXT trading day onward, matching inference where
         # trade_date = next_td(f) — removes same-day-close lookahead.
         next_td = _build_next_trading_date_lookup(train_start, train_end)
+        # F01/F16: with the label shifted to next_td(f), enforce that no
+        # training label extends into the predict window (fail loudly).
+        _check_training_label_maturity(
+            train_end, predict_start, _horizon_from_label_id(self.label_id),
+        )
         train = frame[
             (frame["trade_date"] >= train_start) & (frame["trade_date"] <= train_end)
         ].copy()
@@ -170,10 +178,18 @@ class LightGBMBinaryGenerator:
                 calibrator = pobj
                 log.info("Calibrator fitted on %d holdout samples", len(cm))
 
-        # ── Predict calibrated probability ──
-        pred = frame[frame["trade_date"].between(predict_start, predict_end)].copy()
+        # ── Predict calibrated probability — F01 backward-shift ──
+        # The configured [predict_start, predict_end] is the EXECUTION window;
+        # each execution day d uses features from prev_td(d), so the output
+        # stays inside the window and no feature bar at/after trade_date is used.
+        from qsys.data.calendar import get_trading_calendar
+
+        window_cal = get_trading_calendar(predict_start, predict_end)
+        prev_td = _build_prev_trading_date_lookup(predict_start, predict_end)
+        feature_dates = sorted({prev_td.get(d, d) for d in window_cal})
+        pred = frame[frame["trade_date"].isin(feature_dates)].copy()
         if pred.empty:
-            raise ValueError(f"No data for predict window [{predict_start}, {predict_end}]")
+            raise ValueError(f"No feature data for execution window [{predict_start}, {predict_end}]")
 
         pred_prob = predict_model(model, center, scale,
                                   pred[clean_features].fillna(0.0).astype(np.float32), mode="binary")
@@ -184,15 +200,12 @@ class LightGBMBinaryGenerator:
             pred["score"] = pred_prob.values
 
         # Assemble output — calibrated probability as score
-        # F01: signal for trade_date=td uses only features strictly before td.
-        next_td = _build_next_trading_date_lookup(predict_start, predict_end)
+        f_to_d = {prev_td.get(d, d): d for d in window_cal}
         rows: list[dict] = []
-        for f in sorted(pred["trade_date"].unique()):
+        for f in feature_dates:
+            td = f_to_d.get(f)
             sub = pred[pred["trade_date"] == f]
-            td = next_td.get(str(f))
-            if td is None:
-                # Last trading day in the window has no execution day.
-                log.info("Skip %s: no next trading day", f)
+            if td is None or sub.empty:
                 continue
             assert str(f) < td, f"F01 lookahead: feature date {f} >= trade_date {td}"
             for _, r in sub.iterrows():
