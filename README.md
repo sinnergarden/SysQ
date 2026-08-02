@@ -53,7 +53,7 @@ SysQ 是面向 A 股日频量化研究与准实盘运营的个人系统，覆盖
 | `scripts/ops/` | 数据同步、shadow daily、入口编排 |
 | `scripts/checks/` | 产检工具（schema、order intents、snapshot、reconciliation 检查）|
 | `scripts/research/` | 研究评估入口（rolling research、signal eval、backtest、experiment index）|
-| `scripts/live/` | 实盘操作脚本（broker 下单、对账）|
+| `scripts/deprecated/` | 实盘操作脚本（broker 下单、对账，原 `scripts/live/`，F06 废弃）|
 | `tests/` | 测试 |
 | `config/` + `configs/` | 运行与研究配置 |
 | `data/` | 行情数据、model artifact、ledger DB |

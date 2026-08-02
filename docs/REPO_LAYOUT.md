@@ -99,7 +99,8 @@
 | `data/audit/` | JSON | 数据检查结果（如 `sync_csi800_*.json`） | **主线** |
 | `data/research/` | 混合 | research analytics 中间数据（signal、label、evaluation 缓存） | **主线** |
 | `data/models/` | 混合 | model artifact + manifest + `production_manifest.yaml` | **主线** |
-| `data/trade.db` | SQLite | **目标** Account State / Execution Ledger SOT | **主线** |
+| `data/trade.db` | SQLite | **目标** Account State / Execution Ledger SOT（LedgerService） | **主线** |
+| `data/execution/execution.db` | SQLite | TradeLedger 执行状态（orders/fills/execution_requests）——**隔离兼容库**，非账户 SOT（F05 隔离，避免与 LedgerService schema 冲突） | **隔离兼容** |
 | `data/meta/real_account.db` | SQLite | legacy account store | active legacy compatibility |
 | `data/meta/meta.db` | SQLite | 元数据缓存（日历、股票基本信息） | **主线** |
 | `data/meta/shadow_test.db` | SQLite | shadow 测试用 | 测试 |

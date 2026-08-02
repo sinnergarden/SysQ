@@ -2,7 +2,7 @@
 """Reconcile broker positions against local ledger after market close.
 
 Usage:
-    python scripts/live/reconcile_broker_state.py \\
+    python scripts/deprecated/reconcile_broker_state.py \\
         --run-id shadow_2026-04-25_090807 \\
         --broker-url http://localhost:8080 \\
         [--trade-date 2026-04-25]

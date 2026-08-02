@@ -2,7 +2,7 @@
 """Review, approve, and submit orders to the MiniQMT broker.
 
 Usage:
-    python scripts/live/approve_and_submit_orders.py \\
+    python scripts/deprecated/approve_and_submit_orders.py \\
         --order-intents-path /path/to/order_intents.csv \\
         --trade-date 2026-04-25 \\
         --run-id shadow_2026-04-25_090807 \\
@@ -188,7 +188,7 @@ def main() -> None:
     artifact_path.write_text(json.dumps(artifact, indent=2, ensure_ascii=False), encoding="utf-8")
     log.info("Wrote submit artifact: %s", artifact_path)
 
-    print(f"\nNext: python scripts/live/poll_broker_orders.py --run-id {args.run_id}")
+    print(f"\nNext: python scripts/deprecated/poll_broker_orders.py --run-id {args.run_id}")
     print()
 
 

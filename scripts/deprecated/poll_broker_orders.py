@@ -2,7 +2,7 @@
 """Poll the MiniQMT broker for order status updates and record fills.
 
 Usage:
-    python scripts/live/poll_broker_orders.py \\
+    python scripts/deprecated/poll_broker_orders.py \\
         --run-id shadow_2026-04-25_090807 \\
         --broker-url http://localhost:8080 \\
         [--trade-date 2026-04-25]

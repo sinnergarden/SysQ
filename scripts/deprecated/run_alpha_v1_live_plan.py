@@ -2,7 +2,7 @@
 """Generate a live execution plan from the alpha_v1 signal pipeline.
 
 Usage:
-    python scripts/live/run_alpha_v1_live_plan.py \\
+    python scripts/deprecated/run_alpha_v1_live_plan.py \\
         --trade-date 2026-04-25 \\
         --run-id shadow_2026-04-25_090807 \\
         [--predictions-path /path/to/predictions.csv]
@@ -55,7 +55,7 @@ def main() -> None:
     print(f"  Turnover:     {artifacts.turnover:.2f}")
     print(f"  Target weights: {artifacts.target_weights_path}")
     print(f"  Order intents:  {artifacts.order_intents_path}")
-    print(f"\nNext: python scripts/live/approve_and_submit_orders.py")
+    print(f"\nNext: python scripts/deprecated/approve_and_submit_orders.py")
     print(f"  --order-intents-path {artifacts.order_intents_path}")
     print(f"  --trade-date {args.trade_date}")
     print(f"  --run-id {args.run_id}")

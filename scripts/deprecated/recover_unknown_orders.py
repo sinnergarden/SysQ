@@ -3,7 +3,7 @@
 
 Usage::
 
-    python scripts/live/recover_unknown_orders.py \\
+    python scripts/deprecated/recover_unknown_orders.py \\
         --broker-url http://localhost:8080 \\
         --run-id shadow_2026-04-25_090807 \\
         --trade-date 2026-04-25
