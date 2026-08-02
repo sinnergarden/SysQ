@@ -169,11 +169,24 @@ class ProbabilityCalibrator:
 
     def predict(self, raw_prob: np.ndarray,
                 raw_margin: np.ndarray | None = None) -> np.ndarray:
-        """Return calibrated probabilities."""
+        """Return calibrated probabilities.
+
+        F02 fix: for the sigmoid (Platt) branch the calibrator is a
+        ``LogisticRegression`` whose ``.predict()`` returns hard class labels
+        (0/1) — use ``.predict_proba()[:, 1]`` to get a continuous calibrated
+        probability.  Without this the sigmoid path shipped degenerate 0/1
+        "probabilities" (logloss ~9.5-9.9) that were written as valid sidecar
+        risk data.  Isotonic branch returns continuous values via ``.predict``.
+        """
         if not self._fitted:
             raise RuntimeError("Calibrator not fitted. Call .fit() first.")
         X = self._build_input(raw_prob, raw_margin)
-        return np.clip(self._calibrator.predict(X.reshape(-1, 1) if X.ndim == 1 else X), 0.0, 1.0)
+        X2 = X.reshape(-1, 1) if X.ndim == 1 else X
+        if self.method == "sigmoid":
+            proba = self._calibrator.predict_proba(X2)[:, 1]
+        else:
+            proba = self._calibrator.predict(X2)
+        return np.clip(proba, 0.0, 1.0)
 
 
 def compute_risk_percentile(calibrated_probs: np.ndarray) -> np.ndarray:

@@ -345,6 +345,16 @@ def run_calibrated(
     Xz = robust_zscore_transform(Xp, center, scale)
     raw_prob = model.predict(Xz.values)
     calibrated_prob = calibrator.predict(raw_prob)
+    # F02 quality guard: a degenerate calibrator output (all 0/1, i.e. only two
+    # distinct values) is a symptom of the old LogisticRegression.predict() bug
+    # and must not be shipped as a valid risk sidecar.
+    n_uniq = int(np.unique(calibrated_prob).size)
+    if n_uniq < 3:
+        raise ValueError(
+            f"F02: calibrated probabilities are degenerate (n_unique={n_uniq}); "
+            f"refusing to write stop_loss_prob_calibrated.json. "
+            f"Check the calibrator path (sigmoid must use predict_proba)."
+        )
     risk_pct = compute_risk_percentile(calibrated_prob)
 
     # ── Compute alpha scores for eval (60d+180d ranking) ──
