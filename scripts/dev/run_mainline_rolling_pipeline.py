@@ -15,10 +15,10 @@ import click
 project_root = Path(__file__).resolve().parent.parent
 sys.path.append(str(project_root))
 
-from scripts.publish_mainline_rolling_ui_reports import main as publish_ui_main
-from scripts.run_mainline_rolling_comparison import main as comparison_main
-from scripts.run_mainline_rolling_eval import main as rolling_eval_main
-from scripts.update_mainline_decision_evidence import main as update_decision_main
+from scripts.ops.publish_mainline_rolling_ui_reports import main as publish_ui_main
+from scripts.dev.run_mainline_rolling_comparison import main as comparison_main
+from scripts.dev.run_mainline_rolling_eval import main as rolling_eval_main
+from scripts.ops.update_mainline_decision_evidence import main as update_decision_main
 
 
 @click.command(name="run_mainline_rolling_pipeline")

@@ -16,7 +16,7 @@ from qsys.research.readiness import (
     build_missingness_summary,
     build_readiness_summary,
 )
-from scripts.run_mainline_readiness_audit import main as readiness_main
+from scripts.dev.run_mainline_readiness_audit import main as readiness_main
 
 
 def _sample_frame() -> pd.DataFrame:
@@ -102,10 +102,10 @@ def test_absnorm_readiness_summary_compares_against_feature_254() -> None:
 def test_mainline_readiness_audit_writes_contract_files(tmp_path: Path) -> None:
     runner = CliRunner()
     sample = _sample_frame()
-    with patch("scripts.run_mainline_readiness_audit.project_root", tmp_path), \
-         patch("scripts.run_mainline_readiness_audit.fetch_mainline_feature_frame", return_value=sample), \
+    with patch("scripts.dev.run_mainline_readiness_audit.project_root", tmp_path), \
+         patch("scripts.dev.run_mainline_readiness_audit.fetch_mainline_feature_frame", return_value=sample), \
          patch(
-             "scripts.run_mainline_readiness_audit.resolve_mainline_specs",
+             "scripts.dev.run_mainline_readiness_audit.resolve_mainline_specs",
              return_value=[MAINLINE_OBJECTS["feature_173"], MAINLINE_OBJECTS["feature_254"], MAINLINE_OBJECTS["feature_254_absnorm"]],
          ), \
          patch(

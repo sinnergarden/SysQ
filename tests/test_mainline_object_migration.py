@@ -18,9 +18,9 @@ from qsys.research import (
     resolve_mainline_feature_config,
     resolve_mainline_object_name,
 )
-from scripts.run_backtest import build_backtest_lineage
-from scripts.run_strict_eval import build_lineage_payload
-from scripts.run_train import main as run_train_main, resolve_training_input
+from scripts.research.run_backtest import build_backtest_lineage
+from scripts.checks.run_strict_eval import build_lineage_payload
+from scripts.ops.run_train import main as run_train_main, resolve_training_input
 
 
 class _FakeHealth:
@@ -110,11 +110,11 @@ class TestMainlineObjectMigration(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             fake_report = _FakeReport()
-            with patch("scripts.run_train.assert_qlib_data_ready", return_value=_FakeHealth()), \
-                 patch("scripts.run_train.QlibAdapter", _FakeAdapter), \
-                 patch("scripts.run_train.cfg.get_path", return_value=root), \
-                 patch("scripts.run_train.TrainingReport.generate", return_value=fake_report), \
-                 patch("scripts.run_train.TrainingReport.save", return_value=str(root / "report.json")), \
+            with patch("scripts.ops.run_train.assert_qlib_data_ready", return_value=_FakeHealth()), \
+                 patch("scripts.ops.run_train.QlibAdapter", _FakeAdapter), \
+                 patch("scripts.ops.run_train.cfg.get_path", return_value=root), \
+                 patch("scripts.ops.run_train.TrainingReport.generate", return_value=fake_report), \
+                 patch("scripts.ops.run_train.TrainingReport.save", return_value=str(root / "report.json")), \
                  patch("qsys.model.zoo.qlib_native.QlibNativeModel", _FakeModel):
                 result = runner.invoke(
                     run_train_main,

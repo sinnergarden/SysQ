@@ -7,7 +7,7 @@ from unittest.mock import patch
 import pandas as pd
 from click.testing import CliRunner
 
-from scripts.run_mainline_rolling_comparison import main as rolling_comparison_main
+from scripts.dev.run_mainline_rolling_comparison import main as rolling_comparison_main
 
 
 SUMMARY_ROWS = {
@@ -65,7 +65,7 @@ def test_mainline_rolling_comparison_writes_csv_and_markdown(tmp_path: Path) -> 
         _write_summary(rolling_root, name, payload)
 
     runner = CliRunner()
-    with patch("scripts.run_mainline_rolling_comparison.project_root", tmp_path):
+    with patch("scripts.dev.run_mainline_rolling_comparison.project_root", tmp_path):
         result = runner.invoke(
             rolling_comparison_main,
             [

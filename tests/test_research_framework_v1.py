@@ -11,7 +11,7 @@ from qsys.research.spec import ExperimentSpec, V1_IMPL1_FIXED_LABEL_HORIZON
 from qsys.research.signal import to_signal_frame
 from qsys.reports.unified_schema import unified_run_artifacts
 from qsys.strategy.engine import StrategyEngine
-from scripts.run_backtest import main as run_backtest_main
+from scripts.research.run_backtest import main as run_backtest_main
 
 
 class TestResearchFrameworkV1(unittest.TestCase):
@@ -210,10 +210,10 @@ class TestResearchFrameworkV1(unittest.TestCase):
             (model_dir / "meta.yaml").write_text("feature_set: extended\n", encoding="utf-8")
             experiments_dir = root / "experiments"
             experiments_dir.mkdir(parents=True)
-            with patch("scripts.run_backtest.cfg.get_path", return_value=root), \
-                 patch("scripts.run_backtest.BacktestEngine", FakeEngine), \
-                 patch("scripts.run_backtest.BacktestReport.from_backtest_result", return_value=FakeReport()), \
-                 patch("scripts.run_backtest.BacktestReport.save", return_value=str(root / "experiments" / "reports" / "backtest.json")):
+            with patch("scripts.research.run_backtest.cfg.get_path", return_value=root), \
+                 patch("scripts.research.run_backtest.BacktestEngine", FakeEngine), \
+                 patch("scripts.research.run_backtest.BacktestReport.from_backtest_result", return_value=FakeReport()), \
+                 patch("scripts.research.run_backtest.BacktestReport.save", return_value=str(root / "experiments" / "reports" / "backtest.json")):
                 result = runner.invoke(
                     run_backtest_main,
                     [

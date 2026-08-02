@@ -7,7 +7,7 @@ from unittest.mock import patch
 from click.testing import CliRunner
 
 from qsys.research_ui.assembler import ResearchCockpitRepository
-from scripts.publish_mainline_rolling_ui_reports import main as publish_mainline_rolling_ui_reports_main
+from scripts.ops.publish_mainline_rolling_ui_reports import main as publish_mainline_rolling_ui_reports_main
 
 
 def test_publish_mainline_rolling_ui_reports_writes_backtest_reports(tmp_path: Path) -> None:
@@ -57,7 +57,7 @@ def test_publish_mainline_rolling_ui_reports_writes_backtest_reports(tmp_path: P
     )
 
     runner = CliRunner()
-    with patch("scripts.publish_mainline_rolling_ui_reports.project_root", tmp_path):
+    with patch("scripts.ops.publish_mainline_rolling_ui_reports.project_root", tmp_path):
         result = runner.invoke(publish_mainline_rolling_ui_reports_main, [])
     assert result.exit_code == 0, result.output
     report_path = reports_root / "backtest_mainline_rolling_feature_173.json"

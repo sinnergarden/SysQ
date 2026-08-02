@@ -7,7 +7,7 @@ from unittest.mock import patch
 import pandas as pd
 from click.testing import CliRunner
 
-from scripts.update_mainline_decision_evidence import main as update_decision_main
+from scripts.ops.update_mainline_decision_evidence import main as update_decision_main
 
 
 DECISION_TEMPLATE = """
@@ -57,9 +57,9 @@ def test_decision_evidence_updates_from_real_comparison(tmp_path: Path) -> None:
     decision_path.write_text(DECISION_TEMPLATE, encoding="utf-8")
 
     runner = CliRunner()
-    with patch("scripts.update_mainline_decision_evidence.project_root", tmp_path), \
-         patch("scripts.update_mainline_decision_evidence.DEFAULT_DECISION_FILES", {"feature_173": "research/decisions/feature_173_candidate.yaml", "feature_254": "research/decisions/feature_173_candidate.yaml", "feature_254_absnorm": "research/decisions/feature_173_candidate.yaml"}, create=True), \
-         patch("scripts.update_mainline_decision_evidence.MAINLINE_OBJECTS", {"feature_173": type("Spec", (), {"bundle_id": "bundle_feature_173", "legacy_feature_set_alias": "extended"})()}, create=True):
+    with patch("scripts.ops.update_mainline_decision_evidence.project_root", tmp_path), \
+         patch("scripts.ops.update_mainline_decision_evidence.DEFAULT_DECISION_FILES", {"feature_173": "research/decisions/feature_173_candidate.yaml", "feature_254": "research/decisions/feature_173_candidate.yaml", "feature_254_absnorm": "research/decisions/feature_173_candidate.yaml"}, create=True), \
+         patch("scripts.ops.update_mainline_decision_evidence.MAINLINE_OBJECTS", {"feature_173": type("Spec", (), {"bundle_id": "bundle_feature_173", "legacy_feature_set_alias": "extended"})()}, create=True):
         result = runner.invoke(
             update_decision_main,
             ["--comparison_csv", "experiments/mainline_rolling/comparison_summary.csv", "--comparison_source", "experiments/mainline_rolling/comparison_summary.csv"],

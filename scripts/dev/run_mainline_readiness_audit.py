@@ -15,13 +15,13 @@ import click
 project_root = Path(__file__).resolve().parent.parent
 sys.path.append(str(project_root))
 
+from qsys.common.io import write_json  # F07: readiness no longer exports write_json
 from qsys.research.readiness import (
     build_feature_coverage,
     build_missingness_summary,
     build_readiness_summary,
     fetch_mainline_feature_frame,
     resolve_mainline_specs,
-    write_json,
 )
 
 

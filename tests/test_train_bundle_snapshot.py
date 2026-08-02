@@ -10,7 +10,7 @@ from click.testing import CliRunner
 
 from qsys.research.manifest import FactorManifestRegistry
 from qsys.research.schemas import FactorBundle, FactorDefinition
-from scripts.run_train import build_training_snapshot, main as run_train_main, resolve_training_input
+from scripts.ops.run_train import build_training_snapshot, main as run_train_main, resolve_training_input
 
 
 class _FakeHealth:
@@ -107,7 +107,7 @@ class TestTrainBundleSnapshot(unittest.TestCase):
                 )
             },
         )
-        with patch("scripts.run_train.load_factor_registry", return_value=registry):
+        with patch("scripts.ops.run_train.load_factor_registry", return_value=registry):
             with self.assertRaisesRegex(ValueError, "unknown variant_id"):
                 resolve_training_input(feature_set=None, bundle_id="bundle_broken")
 
@@ -155,11 +155,11 @@ class TestTrainBundleSnapshot(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             fake_report = _FakeReport()
-            with patch("scripts.run_train.assert_qlib_data_ready", return_value=_FakeHealth()), \
-                 patch("scripts.run_train.QlibAdapter", _FakeAdapter), \
-                 patch("scripts.run_train.cfg.get_path", return_value=root), \
-                 patch("scripts.run_train.TrainingReport.generate", return_value=fake_report), \
-                 patch("scripts.run_train.TrainingReport.save", return_value=str(root / "report.json")), \
+            with patch("scripts.ops.run_train.assert_qlib_data_ready", return_value=_FakeHealth()), \
+                 patch("scripts.ops.run_train.QlibAdapter", _FakeAdapter), \
+                 patch("scripts.ops.run_train.cfg.get_path", return_value=root), \
+                 patch("scripts.ops.run_train.TrainingReport.generate", return_value=fake_report), \
+                 patch("scripts.ops.run_train.TrainingReport.save", return_value=str(root / "report.json")), \
                  patch("qsys.model.zoo.qlib_native.QlibNativeModel", _FakeModel):
                 result = runner.invoke(
                     run_train_main,
@@ -180,11 +180,11 @@ class TestTrainBundleSnapshot(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             fake_report = _FakeReport()
-            with patch("scripts.run_train.assert_qlib_data_ready", return_value=_FakeHealth()), \
-                 patch("scripts.run_train.QlibAdapter", _FakeAdapter), \
-                 patch("scripts.run_train.cfg.get_path", return_value=root), \
-                 patch("scripts.run_train.TrainingReport.generate", return_value=fake_report), \
-                 patch("scripts.run_train.TrainingReport.save", return_value=str(root / "report.json")), \
+            with patch("scripts.ops.run_train.assert_qlib_data_ready", return_value=_FakeHealth()), \
+                 patch("scripts.ops.run_train.QlibAdapter", _FakeAdapter), \
+                 patch("scripts.ops.run_train.cfg.get_path", return_value=root), \
+                 patch("scripts.ops.run_train.TrainingReport.generate", return_value=fake_report), \
+                 patch("scripts.ops.run_train.TrainingReport.save", return_value=str(root / "report.json")), \
                  patch("qsys.model.zoo.qlib_native.QlibNativeModel", _FakeModel):
                 result = runner.invoke(
                     run_train_main,
@@ -206,11 +206,11 @@ class TestTrainBundleSnapshot(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             fake_report = _FakeReport()
-            with patch("scripts.run_train.assert_qlib_data_ready", return_value=_FakeHealth()), \
-                 patch("scripts.run_train.QlibAdapter", _FakeAdapter), \
-                 patch("scripts.run_train.cfg.get_path", return_value=root), \
-                 patch("scripts.run_train.TrainingReport.generate", return_value=fake_report), \
-                 patch("scripts.run_train.TrainingReport.save", return_value=str(root / "report.json")), \
+            with patch("scripts.ops.run_train.assert_qlib_data_ready", return_value=_FakeHealth()), \
+                 patch("scripts.ops.run_train.QlibAdapter", _FakeAdapter), \
+                 patch("scripts.ops.run_train.cfg.get_path", return_value=root), \
+                 patch("scripts.ops.run_train.TrainingReport.generate", return_value=fake_report), \
+                 patch("scripts.ops.run_train.TrainingReport.save", return_value=str(root / "report.json")), \
                  patch("qsys.model.zoo.qlib_native.QlibNativeModel", _FakeModel):
                 result = runner.invoke(
                     run_train_main,
