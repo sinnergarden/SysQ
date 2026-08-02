@@ -18,14 +18,23 @@ class TradeLedger:
     Every intent passes through: pending -> submitted -> (partial | filled | cancelled | rejected).
     """
 
+    # F05: canonical LedgerService SOT, normalized to an absolute path so that
+    # relative (data/trade.db) AND absolute (/…/SysQ/data/trade.db) references
+    # are both rejected.
+    _CANONICAL_SOT = (Path(__file__).resolve().parents[2] / "data" / "trade.db").resolve()
+
+    def _is_canonical_sot(self, db_path: str | Path) -> bool:
+        p = Path(db_path)
+        return str(p) == "data/trade.db" or p.resolve() == self._CANONICAL_SOT
+
     def __init__(self, db_path: str | Path = "data/execution/execution.db") -> None:
         self.db_path = Path(db_path)
         # F05: TradeLedger must NEVER write to the LedgerService SOT.  An empty
         # data/trade.db has no tables for the schema guard to check, so the
         # guard alone would let TradeLedger pollute the SOT with its own schema
         # (then LedgerService writes fail).  Reject the canonical SOT path
-        # outright.
-        if str(self.db_path) == "data/trade.db":
+        # outright, including absolute-path spellings.
+        if self._is_canonical_sot(self.db_path):
             raise RuntimeError(
                 "F05: TradeLedger must not use data/trade.db (LedgerService SOT). "
                 "Use the dedicated execution DB (data/execution/execution.db)."
