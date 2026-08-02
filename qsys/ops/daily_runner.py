@@ -24,7 +24,12 @@ from qsys.ops.commit_guard import (
     committing_marker,
     is_execution_committed,
 )
-from qsys.ops.daily_artifacts import archive_execution, save_run_meta, write_daily_manifest
+from qsys.ops.daily_artifacts import (
+    append_skip_attempt,
+    archive_execution,
+    save_run_meta,
+    write_daily_manifest,
+)
 from qsys.ops.mtm import (
     StaleDataError,
     check_stale_prices,
@@ -422,35 +427,16 @@ class DailyRunner:
             artifacts = strategy.load_artifacts_for_notification(ctx)
             mtm = load_mtm_snapshot(run_root / "mtm" / "mtm_snapshot.json")
             stage_status["postclose"] = "skipped_idempotent"
-            write_daily_manifest(
+            # F04/P2 audit-provenance: do NOT overwrite the canonical
+            # daily_manifest.json of the original committed run (its
+            # ledger_commit_at / created_at / git_commit / promotion lineage
+            # must be preserved).  Record the skip append-only instead.
+            append_skip_attempt(
                 run_root,
-                trade_date=ctx.trade_date, stage="postclose",
-                run_mode=ctx.run_mode,
-                strategy_id=ctx.strategy_id, account_id=ctx.account_id,
-                candidate_id=ctx.candidate_id,
-                candidate_path=ctx.candidate_path,
-                signal_id=ctx.signal_id,
-                signal_run_id=ctx.signal_run_id,
-                strategy_config_id=ctx.strategy_config_id,
-                strategy_template_id=ctx.strategy_template_id,
-                strategy_run_id=ctx.strategy_run_id,
-                backtest_id=ctx.backtest_id,
-                promotion_pointer_path=ctx.promotion_pointer_path,
-                promoted_at=ctx.promoted_at,
-                promoted_by=ctx.promoted_by,
-                attempt_id=ctx.attempt_id,
-                attempt_seq=ctx.attempt_seq,
-                supersedes_attempt_id=ctx.supersedes_attempt_id,
-                rerun_reason=ctx.rerun_reason,
-                active_attempt=ctx.active_attempt,
-                promotion_snapshot_path=ctx.promotion_snapshot_path,
-                ledger_commit_status=ctx.ledger_commit_status,
-                ledger_run_id=ctx.ledger_run_id,
-                ledger_commit_at=ctx.ledger_commit_at,
-                ledger_error=ctx.ledger_error,
-                triggered_by=ctx.triggered_by,
-                debug_run=ctx.debug_run,
-                stage_status=stage_status,
+                trade_date=ctx.trade_date,
+                strategy_id=ctx.strategy_id,
+                stage="postclose",
+                reason=ctx.rerun_reason,
             )
             if not ctx.no_notify:
                 msg = strategy.build_postclose_message(

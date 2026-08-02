@@ -5,6 +5,7 @@ Extracted from scripts/run_alpha_v1_daily.py for Phase 1.5 boundary refactor.
 
 from __future__ import annotations
 
+import json
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -151,6 +152,37 @@ def write_daily_manifest(
     manifest = with_standard_metadata(manifest)
     run_root.mkdir(parents=True, exist_ok=True)
     write_json(run_root / "daily_manifest.json", manifest)
+
+
+def append_skip_attempt(
+    run_root: Path,
+    *,
+    trade_date: str,
+    strategy_id: str,
+    stage: str,
+    reason: str | None = None,
+) -> None:
+    """Append-only record of an idempotent skip of an already-COMMITTED run.
+
+    F04/P2 audit-provenance preservation: the canonical ``daily_manifest.json``
+    of the original committed run (with its original ledger_commit_at /
+    created_at / git_commit / promotion lineage) is NOT overwritten by a
+    repeated postclose.  Each skip is recorded as one append-only JSON line in
+    ``postclose_skip_attempts.jsonl``.
+    """
+    run_root.mkdir(parents=True, exist_ok=True)
+    path = run_root / "postclose_skip_attempts.jsonl"
+    record = {
+        "artifact_type": "postclose_skip_attempt",
+        "trade_date": trade_date,
+        "stage": stage,
+        "strategy_id": strategy_id,
+        "status": "skipped_idempotent",
+        "reason": reason,
+        "created_at": datetime.now().isoformat(),
+    }
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
 
 
 def archive_execution(run_root: Path) -> None:

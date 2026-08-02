@@ -169,3 +169,33 @@ def test_ledger_status_fail_closed() -> None:
     with mock.patch.object(dr, "_ledger_run_completed", side_effect=RuntimeError("boom")):
         with _pt.raises(RuntimeError, match="boom"):
             runner.run_postclose(ctx, None)
+
+
+def test_ledger_run_completed_fail_closed_wraps_and_closes() -> None:
+    """_ledger_run_completed raises a wrapped RuntimeError on ledger error and
+    closes the LedgerService connection (GPT P2: don't mock the helper)."""
+    import shutil
+    from pathlib import Path
+    from unittest import mock
+
+    from qsys.ops import daily_runner as dr
+    from qsys.ops.run_context import DailyRunContext
+
+    proj = Path(tempfile.mkdtemp())
+    try:
+        (proj / "data").mkdir(parents=True, exist_ok=True)
+        (proj / "data" / "trade.db").touch()
+        ctx = DailyRunContext(
+            trade_date="2026-05-18", mode="postclose",
+            run_root=Path(proj / "run"), project_root=proj,
+            strategy_id="fake", account_id="shadow_fake",
+            ledger_run_id="2026-05-18.fake.shadow",
+        )
+        fake_svc = mock.Mock()
+        fake_svc.get_run.side_effect = Exception("ledger down")
+        with mock.patch("qsys.ledger.service.LedgerService", return_value=fake_svc):
+            with pytest.raises(RuntimeError, match="fail-closed"):
+                dr._ledger_run_completed(ctx)
+        fake_svc.close.assert_called_once()
+    finally:
+        shutil.rmtree(proj, ignore_errors=True)
