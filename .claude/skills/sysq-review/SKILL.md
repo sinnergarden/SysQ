@@ -1,7 +1,7 @@
 # sysq-review
 
 ## Purpose
-SysQ 代码审查 skill：审查 PR / 改动是否满足框架规则（use case 归属、canonical entrypoint、lookahead/leakage、latest 禁令、ledger 安全、PR 分层、文档同步）。用于 UC_DAILY_INFERENCE_RUN 与 UC_DIAGNOSTICS 的 review 角色。
+SysQ 代码审查 skill：审查 PR / 改动是否满足框架规则（use case 归属、canonical entrypoint、lookahead/leakage、latest 禁令、ledger 安全、PR 分层、文档同步、promotion lineage）。作为各 UC 的 review 角色：UC_DAILY_INFERENCE_RUN、UC_DIAGNOSTICS、UC_RESEARCH_BACKTEST、UC_CANDIDATE_PROMOTION。
 
 ## Inputs
 - PR / 改动范围（分支、diff、changed files）

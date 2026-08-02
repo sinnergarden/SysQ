@@ -42,8 +42,10 @@ UC 一旦确定，必须同时确定：
 
 | Skill | 用途 | 对应 UC |
 |-------|------|---------|
-| `sysq-daily` | 日频运营 + 手工推理 | UC_DAILY_OPS, UC_DAILY_INFERENCE_RUN, UC_MODEL_TRAINING |
-| `sysq-dev` | 开发 | UC_DIAGNOSTICS, UC_TEMPORARY |
+| `sysq-daily` | 日频运营 + 手工推理 | UC_DAILY_OPS, UC_DAILY_INFERENCE_RUN, UC_MODEL_TRAINING, UC_CANDIDATE_PROMOTION |
+| `sysq-research` | 研究/回测/信号 | UC_RESEARCH_BACKTEST |
+| `sysq-dev` | 开发 | UC_DIAGNOSTICS, UC_TEMPORARY_REQUESTS, UC_UI_ANALYSIS |
+| `sysq-review` | 代码审查 | 各 UC 的 review 角色 |
 | `sysq-stock-research` | 基本面研究 | UC_STOCK_FUNDAMENTAL_RESEARCH |
 
 必须显式选择（`.claude/skills/*/SKILL.md`）。无 skill → 停止。

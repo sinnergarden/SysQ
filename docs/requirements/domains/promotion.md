@@ -57,6 +57,9 @@ operator_agent
 - `scripts/promote_candidate.py`
 - `qsys/research/candidate.py`
 - `configs/strategies/`
+- `data/research/candidates/`
+- `data/research/promotions/`
+- `harness/checks/`
 
 ### Forbidden Paths
 - `qsys/ledger/`
