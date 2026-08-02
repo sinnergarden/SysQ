@@ -12,8 +12,9 @@ Daily operational workflow for SysQ: data readiness, label maturity, retrain eli
 ## Required reads
 - `AGENTS.md`
 - `docs/requirements/harness_map.yaml`
-- relevant UC blocks: UC_DAILY_OPS, UC_DAILY_INFERENCE_RUN, UC_MODEL_TRAINING
+- relevant UC blocks: UC_DAILY_OPS, UC_DAILY_INFERENCE_RUN, UC_MODEL_TRAINING, UC_CANDIDATE_PROMOTION
 - model registry / pointer docs or code
+- promotion pointer (`data/research/promotions/shadow.yaml`) + candidate lineage
 - latest data readiness artifact if available
 
 ## Workflow
@@ -24,7 +25,8 @@ Daily operational workflow for SysQ: data readiness, label maturity, retrain eli
 5. Verify model pointer.
 6. Decide inference eligibility.
 7. Produce candidate list only from standard artifacts.
-8. Report checks and risks.
+8. For promotion: resolve the shadow promotion pointer (UC_CANDIDATE_PROMOTION), verify candidate lineage, and record provenance.
+9. Report checks and risks.
 
 ## Manual / Ad-hoc Inference Run
 

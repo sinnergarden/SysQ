@@ -131,8 +131,11 @@ operator_agent
 - `outputs/`
 - `data/research/signals/`
 - `data/research/models/`
+- `qsys/signal/`
 - `scripts/dev/`
 - `harness/checks/`
+- `docs/requirements/`
+- `.claude/skills/`
 
 ### Forbidden Paths
 - `qsys/broker/`

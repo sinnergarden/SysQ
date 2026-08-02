@@ -34,7 +34,7 @@ stable
 - 人工决策
 
 ### Outputs
-- `data/research/candidates/{candidate_id}.yaml`
+- `data/research/candidates/{candidate_id}/candidate.yaml`
 - `data/research/promotions/shadow.yaml`
 - `artifacts/registry/models/{strategy_id}/prod.json`（远期）
 
@@ -42,7 +42,7 @@ stable
 - `scripts/promote_candidate.py create|promote`
 
 ### Key Artifacts
-- `data/research/candidates/{candidate_id}.yaml`
+- `data/research/candidates/{candidate_id}/candidate.yaml`
 - `data/research/promotions/shadow.yaml`
 - `artifacts/registry/models/{strategy_id}/prod.json`
 
@@ -57,6 +57,9 @@ operator_agent
 - `scripts/promote_candidate.py`
 - `qsys/research/candidate.py`
 - `configs/strategies/`
+- `data/research/candidates/`
+- `data/research/promotions/`
+- `harness/checks/`
 
 ### Forbidden Paths
 - `qsys/ledger/`

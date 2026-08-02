@@ -56,6 +56,9 @@ reviewer_agent
 - `harness/checks/`
 - `qsys/data/health.py`
 - `qsys/common/`
+- `.claude/skills/`
+- `AGENTS.md`
+- `docs/requirements/`
 
 ### Forbidden Paths
 - `qsys/ledger/`（只读 SQL 可以，改 schema 不行）
