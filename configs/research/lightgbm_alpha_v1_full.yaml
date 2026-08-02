@@ -1,42 +1,39 @@
 experiment_id: lightgbm_alpha_v1_rolling_2024_2026
-title: "Alpha V1 LightGBM rolling retrain (full 2024-2026)"
-description: >
-  Rolling research — retrain LightGBM per window, 132 clean features,
+title: Alpha V1 LightGBM rolling retrain (full 2024-2026)
+description: 'Rolling research — retrain LightGBM per window, 132 clean features,
   multi-task 5d/20d forward returns, blend 0.8/0.2.
 
+  '
 calendar:
-  start_date: "2024-01-01"
-  end_date: "2026-05-22"
+  start_date: '2024-01-01'
+  end_date: '2026-05-22'
   train_window_days: 252
   step_days: 5
-
 signal:
   signal_id: alpha_v1_lgb_retrain
   score_column: score
-
 generators:
-  - generator_id: alpha_v1_lgb
-    type: lightgbm_alpha_v1
-    params:
-      universe: csi300
-      label_ids:
-        - fwd_ret_5d_xsz_clip3
-        - fwd_ret_20d_xsz_clip3
-      n_estimators: 200
-
+- generator_id: alpha_v1_lgb
+  type: lightgbm_alpha_v1
+  params:
+    universe: csi300
+    label_ids:
+    - fwd_ret_5d_xsz_clip3
+    - fwd_ret_20d_xsz_clip3
+    n_estimators: 200
 signal_transforms:
-  - transform_id: raw
-    type: identity
-
+- transform_id: raw
+  type: identity
 strategies:
-  - strategy_id: top20
-    strategy_template_id: rank_weight_top20
-    allocation_method: rank_weight
-    top_n: 20
-    initial_capital: 10000000
-    rebalance_freq: weekly
-    artifact_mode: summary
-
+- strategy_id: top20
+  strategy_template_id: rank_weight_top20
+  allocation_method: rank_weight
+  top_n: 20
+  initial_capital: 10000000
+  rebalance_freq: weekly
+  artifact_mode: summary
 labels:
-  - label_id: fwd_ret_5d_xsz_clip3
-  - label_id: fwd_ret_20d_xsz_clip3
+- label_id: fwd_ret_5d_xsz_clip3
+  label_maturity_lag_trading_days: 21
+- label_id: fwd_ret_20d_xsz_clip3
+  label_maturity_lag_trading_days: 21

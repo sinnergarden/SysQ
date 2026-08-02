@@ -16,7 +16,6 @@ import numpy as np
 import pandas as pd
 
 from qsys.research.generators.utils import (
-    build_next_trading_date_lookup as _build_next_trading_date_lookup,
     build_prev_trading_date_lookup as _build_prev_trading_date_lookup,
     check_training_label_maturity as _check_training_label_maturity,
     cs_zscore as _cs_zscore,
@@ -110,23 +109,20 @@ class LightGBMBinaryGenerator:
 
         # ── Train ──
         log.info("Binary training window: %s -> %s", train_start, train_end)
-        # F01 (Option A, strict): align features at date f with the binary label
-        # realized from the NEXT trading day onward, matching inference where
-        # trade_date = next_td(f) — removes same-day-close lookahead.
-        next_td = _build_next_trading_date_lookup(train_start, train_end)
-        # F01/F16: with the label shifted to next_td(f), enforce that no
-        # training label extends into the predict window (fail loudly).
+        # F01: the binary maxdd label fwd_maxdd[d] ALREADY means "features at d
+        # predict the downside window [d+1, d+horizon]" (starts at the next
+        # trading day), so training keeps the feature-date label — do NOT shift
+        # it to next_td(f) (that would double-shift to [f+2, f+h+1]).
+        # Only the prediction emission is backward-shifted (see below).
         _check_training_label_maturity(
             train_end, predict_start, _horizon_from_label_id(self.label_id),
+            shifted=False,
         )
         train = frame[
             (frame["trade_date"] >= train_start) & (frame["trade_date"] <= train_end)
-        ].copy()
-        train["label_date"] = train["trade_date"].map(next_td)
-        train = train.merge(
-            label_df[["trade_date", "instrument", "label_value"]].rename(
-                columns={"trade_date": "label_date"}),
-            on=["label_date", "instrument"], how="left",
+        ].copy().merge(
+            label_df[["trade_date", "instrument", "label_value"]],
+            on=["trade_date", "instrument"], how="left",
         )
 
         y_valid = train["label_value"].notna()
@@ -167,11 +163,9 @@ class LightGBMBinaryGenerator:
         if not cal_sub.empty and len(cal_sub) > 100:
             Xz_c = _rzt(cal_sub[clean_features].fillna(0.0).astype(np.float32), center, scale)
             cal_sub["raw_prob"] = model.predict(Xz_c.values)
-            cal_sub["label_date"] = cal_sub["trade_date"].map(next_td)
             cm = cal_sub.merge(
-                label_df[["trade_date", "instrument", "label_value"]].rename(
-                    columns={"trade_date": "label_date"}),
-                on=["label_date", "instrument"], how="inner")
+                label_df[["trade_date", "instrument", "label_value"]],
+                on=["trade_date", "instrument"], how="inner")
             if not cm.empty and cm["label_value"].nunique() == 2:
                 pobj = ProbabilityCalibrator(method="isotonic", use_margin=False)
                 pobj.fit(cm["raw_prob"].values, cm["label_value"].values)

@@ -1,49 +1,37 @@
-# value_growth_phase1_strategy_validation — 5yr rolling strategy validation
-#
-# UC-4 Signal Research — Phase 1 strategy validation.
-# Evaluation period: mid-2024 to 2025 (labels start 2023-06).
-# Eval frequency: every 20 trading days (step_days=20).
-#
-# ## Lookahead 声明
-# 本配置使用的 label 基于未来价格，只能用于研究评估，不进 daily/preopen。
-
 experiment_id: value_growth_phase1_strategy_validation
-title: "Value Growth Phase 1 — Strategy Validation"
-description: >
-  5yr rolling strategy validation with value_growth_multibagger_v1_features.
-  Single-task LightGBM per horizon on raw forward returns (60d/120d/180d).
-  504d train window, 20d eval step. Evaluates candidate pool quality
-  at top20/top50/top100 levels.
+title: Value Growth Phase 1 — Strategy Validation
+description: '5yr rolling strategy validation with value_growth_multibagger_v1_features.
+  Single-task LightGBM per horizon on raw forward returns (60d/120d/180d). 504d train
+  window, 20d eval step. Evaluates candidate pool quality at top20/top50/top100 levels.
 
+  '
 calendar:
-  start_date: "2023-06-01"
-  end_date: "2025-12-31"
+  start_date: '2023-06-01'
+  end_date: '2025-12-31'
   train_window_days: 504
   step_days: 20
-
 signal:
   signal_id: vgb_phase1_signal
   score_column: score
-
 feature_list_id: value_growth_multibagger_v1_features
-
 generators:
-  - generator_id: vgb_phase1
-    type: multi_label_lightgbm
-    params:
-      universe: csi800
-      n_estimators: 300
-      feature_list_id: value_growth_multibagger_v1_features
-      labels:
-        - label_id: fwd_ret_60d_raw
-        - label_id: fwd_ret_120d_raw
-        - label_id: fwd_ret_180d_raw
-
+- generator_id: vgb_phase1
+  type: multi_label_lightgbm
+  params:
+    universe: csi800
+    n_estimators: 300
+    feature_list_id: value_growth_multibagger_v1_features
+    labels:
+    - label_id: fwd_ret_60d_raw
+    - label_id: fwd_ret_120d_raw
+    - label_id: fwd_ret_180d_raw
 signal_transforms:
-  - transform_id: daily_zscore
-    type: daily_zscore
-
+- transform_id: daily_zscore
+  type: daily_zscore
 labels:
-  - label_id: fwd_ret_60d_raw
-  - label_id: fwd_ret_120d_raw
-  - label_id: fwd_ret_180d_raw
+- label_id: fwd_ret_60d_raw
+  label_maturity_lag_trading_days: 181
+- label_id: fwd_ret_120d_raw
+  label_maturity_lag_trading_days: 181
+- label_id: fwd_ret_180d_raw
+  label_maturity_lag_trading_days: 181

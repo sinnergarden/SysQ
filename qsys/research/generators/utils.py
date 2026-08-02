@@ -131,27 +131,34 @@ def horizon_from_label_id(label_id: str) -> int:
     raise ValueError(f"Cannot extract horizon from label_id: {label_id}")
 
 
-def check_training_label_maturity(train_end: str, predict_start: str, horizon: int) -> int:
+def check_training_label_maturity(
+    train_end: str, predict_start: str, horizon: int, *, shifted: bool = True,
+) -> int:
     """F01/F16 maturity gate.
 
-    With training labels shifted to ``next_td(f)`` (strict F01 alignment), the
-    last training label ``fwd_ret[next_td(train_end)]`` is realized at
-    ``next_td(train_end) + horizon`` trading days, which must be strictly
-    before ``predict_start``'s feature cutoff.  This requires ``>= horizon + 2``
-    trading days in ``(train_end, predict_start]``.
+    Enforces that no training label is realized inside the predict window.
+
+    - ``shifted=True`` (forward-return labels, F01 strict alignment): the last
+      training label ``fwd_ret[next_td(train_end)]`` is realized at
+      ``next_td(train_end) + horizon`` trading days -> requires
+      ``>= horizon + 2`` trading days in ``(train_end, predict_start]``.
+    - ``shifted=False`` (max-drawdown labels): ``fwd_maxdd[d]`` already spans
+      ``[d+1, d+horizon]``, so the last label ``fwd_maxdd[train_end]`` is
+      realized at ``train_end + horizon`` -> requires ``>= horizon + 1``.
 
     Fails loudly when the declared ``label_maturity_lag_trading_days`` is too
-    small (a 1-day training-label lookahead into the predict window).
+    small (a training-label lookahead into the predict window).
     """
     from qsys.data.calendar import get_trading_calendar
 
+    required = horizon + 2 if shifted else horizon + 1
     cal = get_trading_calendar(train_end, predict_start)
     gap = len([d for d in cal if d > train_end and d <= predict_start])
-    if gap < horizon + 2:
+    if gap < required:
         raise ValueError(
             f"F01/F16 label maturity violation: horizon={horizon}, "
-            f"train_end={train_end}, predict_start={predict_start}; "
-            f"trading-day gap={gap} < {horizon + 2}. "
-            f"Set label_maturity_lag_trading_days >= {horizon + 1}."
+            f"shifted={shifted}, train_end={train_end}, predict_start={predict_start}; "
+            f"trading-day gap={gap} < {required}. "
+            f"Set label_maturity_lag_trading_days >= {required - 1}."
         )
     return gap

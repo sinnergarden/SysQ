@@ -1,34 +1,32 @@
 experiment_id: alpha_v1_raw_5d_smoke
-title: "Alpha V1 Raw Label 6M Weekly Rolling"
-description: |
-  LightGBM single_label_lightgbm with alpha_v1_clean_132 features,
+title: Alpha V1 Raw Label 6M Weekly Rolling
+description: 'LightGBM single_label_lightgbm with alpha_v1_clean_132 features,
+
   trained against fwd_ret_5d_raw (raw forward return).  Weekly rolling
+
   windows over ~6 months.  Research only — no backtest/strategy.
 
+  '
 calendar:
-  start_date: "2026-01-01"
-  end_date: "2026-06-01"
+  start_date: '2026-01-01'
+  end_date: '2026-06-01'
   train_window_days: 252
   step_days: 5
-
 feature_list_id: alpha_v1_clean_132
-
 signal:
   signal_id: alpha_v1_raw_5d
   signal_run_id: raw_5d_2026h1
   score_column: score
-
 generators:
-  - generator_id: lgb_raw
-    type: single_label_lightgbm
-    params:
-      label_id: fwd_ret_5d_raw
-      universe: csi800
-      n_estimators: 200
-
+- generator_id: lgb_raw
+  type: single_label_lightgbm
+  params:
+    label_id: fwd_ret_5d_raw
+    universe: csi800
+    n_estimators: 200
 signal_transforms:
-  - transform_id: raw
-    type: identity
-
+- transform_id: raw
+  type: identity
 labels:
-  - label_id: fwd_ret_5d_raw
+- label_id: fwd_ret_5d_raw
+  label_maturity_lag_trading_days: 6
