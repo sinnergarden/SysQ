@@ -18,7 +18,7 @@ class TradeLedger:
     Every intent passes through: pending -> submitted -> (partial | filled | cancelled | rejected).
     """
 
-    def __init__(self, db_path: str | Path = "data/trade.db") -> None:
+    def __init__(self, db_path: str | Path = "data/execution/execution.db") -> None:
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.initialize()
@@ -28,8 +28,50 @@ class TradeLedger:
         connection.row_factory = sqlite3.Row
         return connection
 
+    # Expected columns of the orders/fills tables this system owns.  Used by
+    # the F05 schema-collision guard to detect a competing writer (LedgerService)
+    # that created the same table names with a different schema.
+    _EXPECTED_ORDERS_COLUMNS = {
+        "order_id", "run_id", "trading_date", "account_name", "symbol",
+        "side", "quantity", "price", "status", "created_at", "updated_at",
+    }
+    _EXPECTED_FILLS_COLUMNS = {
+        "fill_id", "order_id", "run_id", "trading_date", "symbol",
+        "side", "quantity", "price", "fee", "tax", "filled_at",
+    }
+
+    def _assert_no_schema_collision(self, connection: sqlite3.Connection) -> None:
+        """F05: if orders/fills already exist with a DIFFERENT schema (e.g.
+        LedgerService's account_id/trade_date/... shape), refuse to write here.
+
+        LedgerService and TradeLedger must not silently co-exist on the same
+        SQLite file with conflicting orders/fills schemas (first-writer-wins +
+        swallowed OperationalError)."""
+        expected = {
+            "orders": self._EXPECTED_ORDERS_COLUMNS,
+            "fills": self._EXPECTED_FILLS_COLUMNS,
+        }
+        for table, exp_cols in expected.items():
+            exists = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                (table,),
+            ).fetchone()
+            if not exists:
+                continue
+            actual = {
+                r[1] for r in connection.execute(f"PRAGMA table_info({table})").fetchall()
+            }
+            if not actual.issuperset(exp_cols):
+                raise RuntimeError(
+                    f"F05 schema collision: {self.db_path} already has a '{table}' table "
+                    f"with incompatible columns {sorted(actual)} "
+                    f"(expected TradeLedger columns {sorted(exp_cols)}). "
+                    f"LedgerService and TradeLedger must not share the same SQLite file."
+                )
+
     def initialize(self) -> None:
         with self.connect() as connection:
+            self._assert_no_schema_collision(connection)
             cursor = connection.cursor()
             cursor.execute(
                 """

@@ -53,7 +53,9 @@ class QsysRunner:
         recipe_version: str = "minimal-production-kernel",
         data_version_hash: str | None = None,
         runs_root: str | Path = "runs",
-        db_path: str | Path = "data/trade.db",
+        # F05: execution state (TradeLedger) must NOT default onto the
+        # LedgerService SOT (data/trade.db).  Use a dedicated execution DB.
+        db_path: str | Path = "data/execution/execution.db",
         broker_gateway: BrokerGateway | None = None,
     ) -> None:
         self.trading_date = trading_date
