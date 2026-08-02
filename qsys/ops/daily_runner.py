@@ -318,6 +318,21 @@ class DailyRunner:
         run_root = ctx.run_root
         run_root.mkdir(parents=True, exist_ok=True)
 
+        # F04: gate committed force-rerun BEFORE touching any state (run_meta /
+        # execution / account).  A blocked rerun must not rewrite the audit
+        # evidence of the original committed run.
+        if is_execution_committed(run_root) and ctx.force_rerun:
+            if not ctx.reason:
+                print("  ❌ --force-rerun 必须配合 --reason")
+                sys.exit(1)
+            raise SystemExit(
+                f"⛔ --force-rerun 对一个已 COMMITTED 的 run 被阻断（F04）：{ctx.trade_date}\n"
+                f"  ledger reversal/re-apply 尚未实现；直接重跑会让 data/trade.db 与\n"
+                f"  shadow/execution 发散（ledger 保留旧成交，shadow 反映重跑）。\n"
+                f"  请先实现 ledger reversal/supersede，或用新 run_id 重跑。\n"
+                f"  （原因: {ctx.reason}）"
+            )
+
         save_run_meta(
             run_root, ctx.trade_date, "postclose",
             debug_run=ctx.debug_run, reason=ctx.reason,
@@ -360,7 +375,8 @@ class DailyRunner:
         # ── Idempotent skip ──
         if already_committed and not ctx.force_rerun:
             print(f"  ⏭ 执行已提交（COMMITTED 标记存在），跳过")
-            print(f"  💡 如需重新执行请使用 --force-rerun + --reason")
+            print(f"  💡 已 COMMITTED 的 run 目前不能 --force-rerun（F04：ledger reversal 未实现）")
+            print(f"     如需重跑，请先实现 ledger reversal/supersede，或用新 run_id。")
             ctx.ledger_commit_status = "committed"
             artifacts = strategy.load_artifacts_for_notification(ctx)
             mtm = load_mtm_snapshot(run_root / "mtm" / "mtm_snapshot.json")
@@ -406,23 +422,9 @@ class DailyRunner:
             print(f"\n✅ Post-close {ctx.trade_date} (已提交，跳过) completed in {elapsed:.0f}s")
             return
 
-        # ── Force-rerun on a COMMITTED run: BLOCK (F04) ──
-        # No ledger reversal/re-apply exists yet.  Allowing force-rerun here
-        # silently diverges: shadow/account.json + execution/ are rewritten,
-        # but write_execution_to_ledger skips a 'completed' run, so
-        # data/trade.db keeps the OLD fills.  Block loudly until an explicit
-        # reversal/supersede workflow exists (audit F04; AGENTS.md 不可越界规则).
-        if already_committed and ctx.force_rerun:
-            if not ctx.reason:
-                print("  ❌ --force-rerun 必须配合 --reason")
-                sys.exit(1)
-            raise SystemExit(
-                f"⛔ --force-rerun 对一个已 COMMITTED 的 run 被阻断（F04）：{ctx.trade_date}\n"
-                f"  ledger reversal/re-apply 尚未实现；直接重跑会让 data/trade.db 与\n"
-                f"  shadow/execution 发散（ledger 保留旧成交，shadow 反映重跑）。\n"
-                f"  请先实现 ledger reversal/supersede，或用新 run_id 重跑。\n"
-                f"  （原因: {ctx.reason}）"
-            )
+        # NOTE: committed + force-rerun is gated EARLY (before run_meta),
+        # see the F04 block at the top of run_postclose — it never reaches
+        # the execute/commit path here.
 
         # ── Plan check ──
         if not has_plan and not has_skip:
