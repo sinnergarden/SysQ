@@ -313,3 +313,24 @@ def _make_fake_labels(label_id: str = "l1") -> pd.DataFrame:
     df = pd.DataFrame(rows)
     df["label_id"] = label_id
     return df
+
+
+class TestZeroWindowsGuard:
+    """F10: a config that yields zero rolling windows must fail loudly, not
+    silently write an empty rolling_windows.csv."""
+
+    def test_zero_windows_raises(self, tmp_path: Path) -> None:
+        from qsys.research.signal_pipeline import SignalResearchPipeline
+
+        # calendar span too short for step_days -> zero windows
+        cfg = RollingResearchConfig(
+            experiment_id="zero_windows",
+            calendar={"start_date": "2026-01-01", "end_date": "2026-01-05",
+                      "train_window_days": 504, "step_days": 100},
+            generators=[],
+            labels=[{"label_id": "fwd_ret_5d_raw"}],
+            signal={"signal_id": "s", "score_column": "score"},
+        )
+        pipe = SignalResearchPipeline(str(tmp_path))
+        with pytest.raises(ValueError, match="ZERO rolling windows"):
+            pipe.run(cfg, signal_generator=None)

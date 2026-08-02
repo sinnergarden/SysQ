@@ -135,6 +135,17 @@ class SignalResearchPipeline:
             step_days=config.calendar.get("step_days", 5),
             label_maturity_lag_trading_days=lag,
         )
+        # F10: zero rolling windows is a config error (e.g. step_days over-
+        # shooting the calendar, or a too-large maturity lag), not an empty run.
+        # Fail loudly instead of silently writing an empty rolling_windows.csv.
+        if not windows:
+            raise ValueError(
+                f"F10: config '{config.experiment_id}' produced ZERO rolling windows "
+                f"(calendar {config.calendar.get('start_date')}..{config.calendar.get('end_date')}, "
+                f"train_window_days={config.calendar.get('train_window_days', 252)}, "
+                f"step_days={config.calendar.get('step_days', 5)}, "
+                f"lag={lag}). Check calendar bounds / step_days / maturity lag."
+            )
         window_df = pd.DataFrame([{
             "window_id": w.window_id,
             "train_start": w.train_start,
