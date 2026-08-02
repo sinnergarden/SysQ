@@ -94,6 +94,17 @@ def test_reject_canonical_sot_path() -> None:
         TradeLedger("data/trade.db")
 
 
+def test_reject_absolute_sot_path() -> None:
+    """F05 (GPT P1): an ABSOLUTE path to the canonical SOT must also be
+    rejected — a literal string comparison only catches 'data/trade.db'."""
+    import pathlib
+
+    repo_root = pathlib.Path(__file__).resolve().parents[1]  # tests/.. == repo root
+    abs_sot = str(repo_root / "data" / "trade.db")
+    with pytest.raises(RuntimeError, match="data/trade.db"):
+        TradeLedger(abs_sot)
+
+
 def test_core_runner_cli_default_is_execution_db() -> None:
     """F05 (GPT P1): the minimal-kernel CLI --db-path default must be the
     isolated execution DB, not data/trade.db."""
@@ -135,3 +146,26 @@ def test_run_daily_output_dir_requires_debug() -> None:
         "--trade-date", "2026-01-05", "--output-dir", "/tmp/debug", "--debug-run",
     ])
     assert ns.output_dir == "/tmp/debug"
+
+
+def test_ledger_status_fail_closed() -> None:
+    """F04 (GPT P1): if the ledger status cannot be determined, a force-rerun
+    must FAIL-CLOSED (raise), not silently proceed."""
+    from unittest import mock
+
+    import pytest as _pt
+
+    from qsys.ops import daily_runner as dr
+    from qsys.ops.run_context import DailyRunContext
+
+    from pathlib import Path
+
+    ctx = DailyRunContext(
+        trade_date="2026-05-18", mode="postclose",
+        run_root=Path("/tmp/f04-failclosed-run"), project_root=Path("/tmp/f04-failclosed-proj"),
+        strategy_id="fake", account_id="shadow_fake", force_rerun=True, reason="x",
+    )
+    runner = dr.DailyRunner()
+    with mock.patch.object(dr, "_ledger_run_completed", side_effect=RuntimeError("boom")):
+        with _pt.raises(RuntimeError, match="boom"):
+            runner.run_postclose(ctx, None)

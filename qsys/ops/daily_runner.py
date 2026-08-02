@@ -48,14 +48,22 @@ def _ledger_run_completed(ctx: DailyRunContext) -> bool:
     if not ledger_db.exists():
         return False
     run_id = ctx.ledger_run_id or f"{ctx.trade_date}.{ctx.strategy_id}.shadow"
-    try:
-        from qsys.ledger.service import LedgerService
+    from qsys.ledger.service import LedgerService
 
-        svc = LedgerService(str(ledger_db))
+    svc = LedgerService(str(ledger_db))
+    try:
         run = svc.get_run(run_id)
         return bool(run and run.get("status") == "completed")
-    except Exception:
-        return False
+    except Exception as e:
+        # FAIL-CLOSED: if the ledger status cannot be determined, raise rather
+        # than returning False — a silent False would let force-rerun proceed
+        # and diverge from an already-completed ledger run.
+        raise RuntimeError(
+            f"F04: cannot verify ledger status for run '{run_id}' — fail-closed, "
+            f"refusing force-rerun. Ledger error: {e}"
+        ) from e
+    finally:
+        svc.close()
 
 
 class DailyRunner:
@@ -346,8 +354,9 @@ class DailyRunner:
         # COMMITTED marker AND the LedgerService status — a fresh --output-dir
         # bypasses the directory marker but still reuses the same ledger
         # run_id, which would silently skip an already-completed ledger run.
+        already_committed = is_execution_committed(run_root)
         ledger_completed = _ledger_run_completed(ctx)
-        if ctx.force_rerun and (is_execution_committed(run_root) or ledger_completed):
+        if ctx.force_rerun and (already_committed or ledger_completed):
             if not ctx.reason:
                 print("  ❌ --force-rerun 必须配合 --reason")
                 sys.exit(1)
@@ -360,11 +369,15 @@ class DailyRunner:
                 f"  （原因: {ctx.reason}）"
             )
 
-        save_run_meta(
-            run_root, ctx.trade_date, "postclose",
-            debug_run=ctx.debug_run, reason=ctx.reason,
-            extra={"force_rerun": ctx.force_rerun},
-        )
+        # P2: do NOT rewrite run_meta of an already-committed run (preserve the
+        # original audit evidence).  The idempotent-skip path records its own
+        # manifest below.
+        if not already_committed:
+            save_run_meta(
+                run_root, ctx.trade_date, "postclose",
+                debug_run=ctx.debug_run, reason=ctx.reason,
+                extra={"force_rerun": ctx.force_rerun},
+            )
 
         plan_dir = self.plan_dir(ctx)
 
@@ -380,7 +393,8 @@ class DailyRunner:
         has_plan = (plan_dir / "order_intents.csv").exists()
         has_skip_meta = (plan_dir / "plan_meta.json").exists()
         has_skip = has_skip_meta and not has_plan
-        already_committed = is_execution_committed(run_root)
+        # already_committed was computed at the top of run_postclose (used for
+        # the F04 gate and the run_meta guard).
 
         # Determine stage_status early for COMMITTED skip manifest write
         stage_status: dict[str, str] = {
