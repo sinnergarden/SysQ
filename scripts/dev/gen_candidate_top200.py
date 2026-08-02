@@ -42,8 +42,8 @@ MODEL_ROOT = Path("data/research/models")
 
 # Pin specific model hashes for reproducibility
 MODELS = [
-    {"tag": "60d",  "exp_id": "60d_v3a_growth_financial",  "hash": "7d05534663a389b7", "weight": W60},
-    {"tag": "180d", "exp_id": "180d_v3a_growth_financial", "hash": "a9d4d4435d8fa226", "weight": W180},
+    {"tag": "60d",  "exp_id": "60d_v3a_growth_financial",  "hash": "4da8cf460c855f4", "weight": W60},
+    {"tag": "180d", "exp_id": "180d_v3a_growth_financial", "hash": "27cd0cbb36688ee", "weight": W180},
 ]
 
 QlibAdapter().init_qlib()
