@@ -1,7 +1,7 @@
 experiment_id: v3a_sh
 calendar:
-  start_date: "2020-01-01"
-  end_date: "2025-12-31"
+  start_date: '2020-01-01'
+  end_date: '2025-12-31'
   train_window_days: 504
   step_days: 20
 signal:
@@ -9,16 +9,17 @@ signal:
   score_column: score
 feature_list_id: value_growth_v2_shareholder_features
 generators:
-  - generator_id: sh
-    type: multi_label_lightgbm
-    params:
-      universe: csi800
-      n_estimators: 300
-      feature_list_id: value_growth_v2_shareholder_features
-      labels:
-        - label_id: fwd_ret_180d_raw
+- generator_id: sh
+  type: multi_label_lightgbm
+  params:
+    universe: csi800
+    n_estimators: 300
+    feature_list_id: value_growth_v2_shareholder_features
+    labels:
+    - label_id: fwd_ret_180d_raw
 signal_transforms:
-  - transform_id: daily_zscore
-    type: daily_zscore
+- transform_id: daily_zscore
+  type: daily_zscore
 labels:
-  - label_id: fwd_ret_180d_raw
+- label_id: fwd_ret_180d_raw
+  label_maturity_lag_trading_days: 181

@@ -16,7 +16,7 @@ generators:
   type: multi_label_lightgbm
 labels:
 - label_id: fwd_ret_60d_raw
-  label_maturity_lag_trading_days: 60
+  label_maturity_lag_trading_days: 61
 signal:
   score_column: score
   signal_id: v3a_liq_growth_60d

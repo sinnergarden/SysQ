@@ -118,9 +118,16 @@ class SignalResearchPipeline:
         exp_dir = self._paths.experiment_dir(config.experiment_id)
 
         # ── 1. Build rolling windows ──
+        # F01/F16: use the MAX declared lag across all labels.  A config may
+        # list several horizons (e.g. 60/120/180d); reading only labels[0]
+        # would under-shift train_end for the longest-horizon label and let
+        # its training labels leak into the predict window.
         lag = 0
-        if config.labels and len(config.labels) > 0:
-            lag = config.labels[0].get("label_maturity_lag_trading_days", 0)
+        if config.labels:
+            lag = max(
+                (l.get("label_maturity_lag_trading_days") or 0)
+                for l in config.labels
+            )
         windows = build_rolling_windows(
             config.calendar.get("start_date", ""),
             config.calendar.get("end_date", ""),

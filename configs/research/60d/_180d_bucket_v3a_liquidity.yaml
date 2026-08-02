@@ -22,4 +22,4 @@ signal_transforms:
     type: daily_zscore
 labels:
   - label_id: fwd_ret_180d_bucket
-    label_maturity_lag_trading_days: 180
+    label_maturity_lag_trading_days: 181

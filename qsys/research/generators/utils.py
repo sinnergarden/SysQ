@@ -69,3 +69,96 @@ def build_prev_trading_date_lookup(
                 _dt -= timedelta(days=1)
             lookup[d] = _dt.strftime("%Y-%m-%d")
     return lookup
+
+
+def build_next_trading_date_lookup(
+    predict_start: str,
+    predict_end: str,
+) -> dict[str, str]:
+    """Build a lookup from trade_date to the NEXT actual trading day.
+
+    Mirror of ``build_prev_trading_date_lookup``: for each feature date we
+    return the trading day on which a signal generated after that close can be
+    executed at the open.  Used to align research signal date semantics with
+    the production preopen convention (t 日收盘特征 → t+1 早盘买入):
+    signal row = (trade_date=next_td(f), data_date=f), and no feature bar
+    exists at/after trade_date.
+    """
+    try:
+        from qsys.data.calendar import get_trading_calendar
+
+        extended_end = (
+            datetime.strptime(predict_end, "%Y-%m-%d") + timedelta(days=30)
+        ).strftime("%Y-%m-%d")
+        cal = get_trading_calendar(predict_start, extended_end)
+        if cal:
+            lookup: dict[str, str] = {}
+            for i, d in enumerate(cal):
+                if i + 1 < len(cal):
+                    lookup[d] = cal[i + 1]
+            return lookup
+    except Exception:
+        pass
+
+    # Fallback: business days
+    _start_dt = datetime.strptime(predict_start, "%Y-%m-%d")
+    _end_dt = datetime.strptime(predict_end, "%Y-%m-%d")
+    cur = _start_dt
+    bdays: list[str] = []
+    while cur <= _end_dt + timedelta(days=30):
+        if cur.weekday() < 5:
+            bdays.append(cur.strftime("%Y-%m-%d"))
+        cur += timedelta(days=1)
+    lookup = {}
+    for i, d in enumerate(bdays):
+        if i + 1 < len(bdays):
+            lookup[d] = bdays[i + 1]
+    return lookup
+
+
+def horizon_from_label_id(label_id: str) -> int:
+    """Extract the horizon integer from a label ID.
+
+    Handles forward-return labels (``fwd_ret_5d_xsz_clip3``) and max-drawdown
+    labels (``fwd_maxdd_5d_binary_5pct``).
+    """
+    parts = label_id.split("_")
+    for i, p in enumerate(parts):
+        if p in ("ret", "maxdd") and i + 1 < len(parts):
+            cand = parts[i + 1]
+            if cand.endswith("d") and cand[:-1].isdigit():
+                return int(cand[:-1])
+    raise ValueError(f"Cannot extract horizon from label_id: {label_id}")
+
+
+def check_training_label_maturity(
+    train_end: str, predict_start: str, horizon: int, *, shifted: bool = True,
+) -> int:
+    """F01/F16 maturity gate.
+
+    Enforces that no training label is realized inside the predict window.
+
+    - ``shifted=True`` (forward-return labels, F01 strict alignment): the last
+      training label ``fwd_ret[next_td(train_end)]`` is realized at
+      ``next_td(train_end) + horizon`` trading days -> requires
+      ``>= horizon + 2`` trading days in ``(train_end, predict_start]``.
+    - ``shifted=False`` (max-drawdown labels): ``fwd_maxdd[d]`` already spans
+      ``[d+1, d+horizon]``, so the last label ``fwd_maxdd[train_end]`` is
+      realized at ``train_end + horizon`` -> requires ``>= horizon + 1``.
+
+    Fails loudly when the declared ``label_maturity_lag_trading_days`` is too
+    small (a training-label lookahead into the predict window).
+    """
+    from qsys.data.calendar import get_trading_calendar
+
+    required = horizon + 2 if shifted else horizon + 1
+    cal = get_trading_calendar(train_end, predict_start)
+    gap = len([d for d in cal if d > train_end and d <= predict_start])
+    if gap < required:
+        raise ValueError(
+            f"F01/F16 label maturity violation: horizon={horizon}, "
+            f"shifted={shifted}, train_end={train_end}, predict_start={predict_start}; "
+            f"trading-day gap={gap} < {required}. "
+            f"Set label_maturity_lag_trading_days >= {required - 1}."
+        )
+    return gap
