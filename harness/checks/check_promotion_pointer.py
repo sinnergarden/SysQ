@@ -110,6 +110,8 @@ def main() -> int:
     cand_st = cand.get("strategy") or {}
     sr = raw.get("signal_ref") or {}
     mismatches = []
+    if cand.get("candidate_id") != raw.get("candidate_id"):
+        mismatches.append("candidate_id")
     if cand_sr.get("signal_id") != sr.get("signal_id"):
         mismatches.append("signal_ref.signal_id")
     if cand_sr.get("signal_run_id") != sr.get("signal_run_id"):
