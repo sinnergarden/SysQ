@@ -476,7 +476,8 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--from-step", dest="from_step", choices=STEP_SEQUENCE, help="Resume from a step")
     parser.add_argument("--force", action="store_true", help="Force re-run steps even if they already succeeded")
     parser.add_argument("--runs-root", default="runs", help="Root directory for run artifacts")
-    parser.add_argument("--db-path", default="data/trade.db", help="SQLite ledger path")
+    # F05: default to the dedicated execution DB (NOT the LedgerService SOT).
+    parser.add_argument("--db-path", default="data/execution/execution.db", help="Execution DB path (TradeLedger)")
     parser.add_argument("--recipe-version", default="minimal-production-kernel", help="Recipe version written into the manifest")
     parser.add_argument("--data-version-hash", default=None, help="Explicit data version hash")
     parser.add_argument("--broker-readback", default=None, help="Optional readback JSON for the broker gateway")

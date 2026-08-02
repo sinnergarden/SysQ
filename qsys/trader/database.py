@@ -28,30 +28,41 @@ class TradeLedger:
         connection.row_factory = sqlite3.Row
         return connection
 
-    # Expected columns of the orders/fills tables this system owns.  Used by
-    # the F05 schema-collision guard to detect a competing writer (LedgerService)
-    # that created the same table names with a different schema.
-    _EXPECTED_ORDERS_COLUMNS = {
-        "order_id", "run_id", "trading_date", "account_name", "symbol",
-        "side", "quantity", "price", "status", "created_at", "updated_at",
+    # Expected full schema of the orders/fills tables this system owns.
+    # Each tuple is (name, type, notnull, pk) from PRAGMA table_info.  Used by
+    # the F05 schema-collision guard to detect a competing writer
+    # (LedgerService) or an injected incompatible column: we require an EXACT
+    # signature match, not just the presence of expected column names.
+    _EXPECTED_ORDERS_SCHEMA = {
+        ("order_id", "TEXT", 0, 1), ("run_id", "TEXT", 1, 0),
+        ("trading_date", "TEXT", 1, 0), ("account_name", "TEXT", 1, 0),
+        ("symbol", "TEXT", 1, 0), ("side", "TEXT", 1, 0),
+        ("quantity", "INTEGER", 1, 0), ("price", "REAL", 1, 0),
+        ("status", "TEXT", 1, 0), ("created_at", "TEXT", 1, 0),
+        ("updated_at", "TEXT", 1, 0), ("note", "TEXT", 0, 0),
     }
-    _EXPECTED_FILLS_COLUMNS = {
-        "fill_id", "order_id", "run_id", "trading_date", "symbol",
-        "side", "quantity", "price", "fee", "tax", "filled_at",
+    _EXPECTED_FILLS_SCHEMA = {
+        ("fill_id", "TEXT", 0, 1), ("order_id", "TEXT", 1, 0),
+        ("run_id", "TEXT", 1, 0), ("trading_date", "TEXT", 1, 0),
+        ("symbol", "TEXT", 1, 0), ("side", "TEXT", 1, 0),
+        ("quantity", "INTEGER", 1, 0), ("price", "REAL", 1, 0),
+        ("fee", "REAL", 1, 0), ("tax", "REAL", 1, 0),
+        ("filled_at", "TEXT", 1, 0), ("note", "TEXT", 0, 0),
     }
 
     def _assert_no_schema_collision(self, connection: sqlite3.Connection) -> None:
         """F05: if orders/fills already exist with a DIFFERENT schema (e.g.
-        LedgerService's account_id/trade_date/... shape), refuse to write here.
+        LedgerService's account_id/trade_date/... shape, or any injected
+        extra column), refuse to write here.
 
         LedgerService and TradeLedger must not silently co-exist on the same
         SQLite file with conflicting orders/fills schemas (first-writer-wins +
-        swallowed OperationalError)."""
+        swallowed OperationalError / IntegrityError)."""
         expected = {
-            "orders": self._EXPECTED_ORDERS_COLUMNS,
-            "fills": self._EXPECTED_FILLS_COLUMNS,
+            "orders": self._EXPECTED_ORDERS_SCHEMA,
+            "fills": self._EXPECTED_FILLS_SCHEMA,
         }
-        for table, exp_cols in expected.items():
+        for table, exp_sig in expected.items():
             exists = connection.execute(
                 "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
                 (table,),
@@ -59,13 +70,14 @@ class TradeLedger:
             if not exists:
                 continue
             actual = {
-                r[1] for r in connection.execute(f"PRAGMA table_info({table})").fetchall()
+                (r[1], r[2].upper(), r[3], r[5])
+                for r in connection.execute(f"PRAGMA table_info({table})").fetchall()
             }
-            if not actual.issuperset(exp_cols):
+            if actual != exp_sig:
                 raise RuntimeError(
                     f"F05 schema collision: {self.db_path} already has a '{table}' table "
-                    f"with incompatible columns {sorted(actual)} "
-                    f"(expected TradeLedger columns {sorted(exp_cols)}). "
+                    f"with incompatible signature {sorted(actual)} "
+                    f"(expected TradeLedger signature {sorted(exp_sig)}). "
                     f"LedgerService and TradeLedger must not share the same SQLite file."
                 )
 

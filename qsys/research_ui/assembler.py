@@ -31,7 +31,7 @@ from qsys.research_ui.schema import (
     RunArtifactRef,
     RunManifest,
 )
-from qsys.trader.database import TradeLedger
+
 
 
 class ResearchCockpitRepository:
@@ -42,7 +42,9 @@ class ResearchCockpitRepository:
         self.daily_root = self.project_root / "daily"
         self.experiments_root = self.project_root / "experiments"
         self.reports_root = self.experiments_root / "reports"
-        self.trade_ledger = TradeLedger(self.project_root / "data" / "trade.db")
+        # F05: removed unused TradeLedger(self.project_root / "data" / "trade.db")
+        # — it pointed TradeLedger at the LedgerService SOT with a conflicting
+        # schema and was never read.
         self.real_account = RealAccount(db_path=self.project_root / "data" / "meta" / "real_account.db")
         self.store = StockDataStore()
         self.research_view = ResearchDataView(n_jobs=1)
