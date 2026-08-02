@@ -970,6 +970,10 @@ class BacktestRunner:
         signal_id_2: str | None = None,
         signal_run_id_2: str | None = None,
         blend_weight: float = 1.0,
+        maxdd_signal_id: str | None = None,
+        maxdd_signal_run_id: str | None = None,
+        maxdd_threshold: float | None = None,
+        maxdd_percentile: float | None = None,
     ) -> BacktestRunResult:
         """Backtest from a saved SignalRun (no model inference).
 
