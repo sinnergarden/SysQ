@@ -92,7 +92,40 @@ def main() -> int:
         print(f"❌ candidate_path does not exist: {raw.get('candidate_path')}")
         return 1
 
+    # ── Lineage cross-validation (promotion domain requires the signal /
+    #    backtest IDs to resolve to the candidate).  Reading the candidate
+    #    YAML and comparing key fields catches pointers whose IDs are fake
+    #    even though the candidate file itself exists. ──
+    try:
+        cand = yaml.safe_load(cand_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        print(f"❌ candidate unreadable at {cand_path}: {e}")
+        return 1
+    if not isinstance(cand, dict):
+        print(f"❌ candidate at {cand_path} is not a mapping")
+        return 1
+
+    cand_sr = cand.get("signal_ref") or {}
+    cand_br = cand.get("backtest_ref") or {}
+    cand_st = cand.get("strategy") or {}
     sr = raw.get("signal_ref") or {}
+    mismatches = []
+    if cand_sr.get("signal_id") != sr.get("signal_id"):
+        mismatches.append("signal_ref.signal_id")
+    if cand_sr.get("signal_run_id") != sr.get("signal_run_id"):
+        mismatches.append("signal_ref.signal_run_id")
+    if cand_br.get("backtest_id") != raw.get("backtest_id"):
+        mismatches.append("backtest_id")
+    if cand_br.get("strategy_run_id") != raw.get("strategy_run_id"):
+        mismatches.append("strategy_run_id")
+    if cand_st.get("strategy_config_id") != raw.get("strategy_config_id"):
+        mismatches.append("strategy_config_id")
+    if cand_st.get("strategy_template_id") != raw.get("strategy_template_id"):
+        mismatches.append("strategy_template_id")
+    if mismatches:
+        print(f"❌ Promotion lineage mismatch vs candidate {raw.get('candidate_path')}: {mismatches}")
+        return 1
+
     print(f"✅ Shadow promotion pointer valid: {POINTER_PATH}")
     print(f"   candidate_id = {raw.get('candidate_id')}")
     print(f"   signal_id    = {sr.get('signal_id')}")
