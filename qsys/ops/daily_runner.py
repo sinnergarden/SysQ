@@ -36,6 +36,28 @@ from qsys.ops.run_context import DailyRunContext
 from qsys.strategy.base import StrategyCandidate
 
 
+def _ledger_run_completed(ctx: DailyRunContext) -> bool:
+    """F04: is the ledger run for this day already ``completed``?
+
+    Checks LedgerService directly (data/trade.db), NOT the run-root COMMITTED
+    marker — a fresh ``--output-dir`` bypasses the directory marker but still
+    reuses the same ledger run_id, and write_execution_to_ledger silently
+    skips a ``completed`` run.
+    """
+    ledger_db = ctx.project_root / "data" / "trade.db"
+    if not ledger_db.exists():
+        return False
+    run_id = ctx.ledger_run_id or f"{ctx.trade_date}.{ctx.strategy_id}.shadow"
+    try:
+        from qsys.ledger.service import LedgerService
+
+        svc = LedgerService(str(ledger_db))
+        run = svc.get_run(run_id)
+        return bool(run and run.get("status") == "completed")
+    except Exception:
+        return False
+
+
 class DailyRunner:
     """Orchestration backbone for daily trading pipeline stages.
 
@@ -320,13 +342,18 @@ class DailyRunner:
 
         # F04: gate committed force-rerun BEFORE touching any state (run_meta /
         # execution / account).  A blocked rerun must not rewrite the audit
-        # evidence of the original committed run.
-        if is_execution_committed(run_root) and ctx.force_rerun:
+        # evidence of the original committed run.  We gate on BOTH the run-root
+        # COMMITTED marker AND the LedgerService status — a fresh --output-dir
+        # bypasses the directory marker but still reuses the same ledger
+        # run_id, which would silently skip an already-completed ledger run.
+        ledger_completed = _ledger_run_completed(ctx)
+        if ctx.force_rerun and (is_execution_committed(run_root) or ledger_completed):
             if not ctx.reason:
                 print("  ❌ --force-rerun 必须配合 --reason")
                 sys.exit(1)
             raise SystemExit(
-                f"⛔ --force-rerun 对一个已 COMMITTED 的 run 被阻断（F04）：{ctx.trade_date}\n"
+                f"⛔ --force-rerun 被阻断（F04）：{ctx.trade_date}\n"
+                f"  run 已 COMMITTED 或 ledger run '{ctx.ledger_run_id}' 已 completed；\n"
                 f"  ledger reversal/re-apply 尚未实现；直接重跑会让 data/trade.db 与\n"
                 f"  shadow/execution 发散（ledger 保留旧成交，shadow 反映重跑）。\n"
                 f"  请先实现 ledger reversal/supersede，或用新 run_id 重跑。\n"

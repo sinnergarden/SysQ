@@ -89,7 +89,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--force-rerun",
         action="store_true",
-        help="危险模式：覆盖已提交的执行产物（必须配合 --reason）",
+        help="危险模式：覆盖执行产物（必须配合 --reason）。注意 F04：已 COMMITTED 的 run "
+             "当前被阻断（ledger reversal 未实现），无法强制重跑。",
     )
     parser.add_argument("--reason", help="操作原因说明（--force-rerun 必填）")
     parser.add_argument(
@@ -121,6 +122,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         )
     if args.force_rerun and not args.reason:
         parser.error("--force-rerun 必须配合 --reason 提供原因")
+    # F04: --output-dir 只允许 debug，防止用新目录绕过 committed/ledger gate
+    # （新 run_root 无 COMMITTED marker，但 ledger run_id 相同且已 completed）。
+    if args.output_dir and not args.debug_run:
+        parser.error("--output-dir 只允许在 --debug-run 模式使用（F04：防止绕过 committed gate）")
     if args.mode == "train":
         if args.force_rerun:
             print("⚠ --force-rerun 对 train 模式无意义，忽略")

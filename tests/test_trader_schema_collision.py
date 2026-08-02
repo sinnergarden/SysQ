@@ -86,6 +86,14 @@ def test_extra_not_null_column_raises() -> None:
             os.unlink(tmp)
 
 
+def test_reject_canonical_sot_path() -> None:
+    """F05 (GPT P1): TradeLedger must reject the canonical SOT path outright —
+    an empty data/trade.db has no tables for the schema guard to inspect, so
+    the guard alone would let TradeLedger pollute the SOT."""
+    with pytest.raises(RuntimeError, match="data/trade.db"):
+        TradeLedger("data/trade.db")
+
+
 def test_core_runner_cli_default_is_execution_db() -> None:
     """F05 (GPT P1): the minimal-kernel CLI --db-path default must be the
     isolated execution DB, not data/trade.db."""
@@ -107,3 +115,23 @@ def test_research_ui_has_no_trade_ledger() -> None:
     src = inspect.getsource(assembler)
     assert "qsys.trader.database" not in src  # no TradeLedger import
     assert "self.trade_ledger" not in src     # no TradeLedger attribute
+
+
+def test_run_daily_output_dir_requires_debug() -> None:
+    """F04 (GPT P1): --output-dir outside debug mode is rejected, so a fresh
+    run_root cannot bypass the committed/ledger gate."""
+    import pytest as _pt
+
+    from scripts.run_daily import parse_args
+
+    with _pt.raises(SystemExit):
+        parse_args([
+            "--strategy", "alpha_v1", "--mode", "postclose",
+            "--trade-date", "2026-01-05", "--output-dir", "/tmp/bypass",
+        ])
+    # With --debug-run it is allowed.
+    ns = parse_args([
+        "--strategy", "alpha_v1", "--mode", "postclose",
+        "--trade-date", "2026-01-05", "--output-dir", "/tmp/debug", "--debug-run",
+    ])
+    assert ns.output_dir == "/tmp/debug"
