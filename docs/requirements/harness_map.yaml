@@ -218,6 +218,8 @@ usecases:
       - qsys/data/health.py
       - qsys/common/
       - .claude/skills/
+      - AGENTS.md
+      - docs/requirements/
     forbidden_paths:
       - qsys/ledger/
       - qsys/trader/

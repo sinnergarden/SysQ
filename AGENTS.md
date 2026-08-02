@@ -141,7 +141,7 @@ Loop Result:
 
 ## 12. 框架扩展规则
 
-超出已有 UC / skill / harness 覆盖时，先走 `UC_TEMPORARY`，结束时通过 LOOP_CHECK 判定如何扩展：
+超出已有 UC / skill / harness 覆盖时，先走 `UC_TEMPORARY_REQUESTS`，结束时通过 LOOP_CHECK 判定如何扩展：
 
 | 发现 | 产出 | 位置 |
 |------|------|------|
