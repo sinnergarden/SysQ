@@ -173,8 +173,8 @@ usecases:
       - data/research/promotions/shadow.yaml
       - artifacts/registry/models/{strategy_id}/prod.json
     checks:
+      - harness/checks/check_promotion_pointer.py
       - TBD: candidate artifact schema check
-      - TBD: promotion lineage check
     allowed_paths:
       - scripts/promote_candidate.py
       - qsys/research/candidate.py
