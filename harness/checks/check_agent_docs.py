@@ -56,9 +56,30 @@ AGENTS_REQUIRED_KEYWORDS = [
     "不可越界规则",
 ]
 
-SKILL_DIRS = [
-    "sysq-daily",
-]
+def _skill_dirs_from_harness_map() -> list[str]:
+    """Derive every skill referenced in harness_map.yaml so a missing
+    SKILL.md (e.g. sysq-dev / sysq-review / sysq-stock-research, audit F11)
+    fails this check instead of silently passing."""
+    try:
+        import yaml
+    except ImportError:
+        return ["sysq-daily"]
+    map_path = PROJECT_ROOT / "docs" / "requirements" / "harness_map.yaml"
+    try:
+        data = yaml.safe_load(map_path.read_text(encoding="utf-8"))
+    except Exception:
+        return ["sysq-daily"]
+    dirs: list[str] = []
+    for uc in (data or {}).get("usecases", {}).values():
+        skills = uc.get("skills") or {}
+        for role in ("primary", "review", "dev"):
+            s = skills.get(role)
+            if isinstance(s, str) and s and s not in dirs:
+                dirs.append(s)
+    return dirs or ["sysq-daily"]
+
+
+SKILL_DIRS = _skill_dirs_from_harness_map()
 
 
 def _find_role_sections(content: str) -> set[str]:
