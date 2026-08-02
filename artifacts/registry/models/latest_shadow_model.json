@@ -1,9 +1,0 @@
-{
-  "bundle_id": "rolling__alpha_v1_rolling_full_2024_2026__alpha_v1__raw__2024-01-01_2026-05-22",
-  "mainline_object_name": "alpha_v1",
-  "model_name": "alpha_v1_existing_score",
-  "model_path": "data/research/signals/alpha_v1_existing_score__alpha_v1__raw/rolling__alpha_v1_rolling_full_2024_2026__alpha_v1__raw__2024-01-01_2026-05-22",
-  "status": "shadow",
-  "train_run_id": "rank_weight_top20__alpha_v1_existing_score__alpha_v1__raw__rolling__alpha_v1_rolling_full_2024_2026__alpha_v1__raw__2024-01-01_2026-05-22__5b29903a",
-  "trained_at": "2026-08-02T06:31:41+00:00"
-}
