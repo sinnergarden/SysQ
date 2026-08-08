@@ -50,6 +50,11 @@ inference:
   min_eligible_size: 450
   min_feature_coverage: 0.75
   min_global_feature_coverage: 0.75
+  # Global coverage alone can hide a dead model input.  Any individual
+  # feature above this missing ratio blocks the run, and any feature used by
+  # a model split must have cross-sectional variation on the signal date.
+  max_feature_missing_ratio: 0.95
+  min_model_used_feature_unique_values: 2
   min_listed_days: 180
   min_amount: 0
   exclude_name_patterns: [ST, "退"]
@@ -58,6 +63,15 @@ inference:
   # Current CSI800 constituents are safe for live screening but not a PIT
   # historical universe.  The artifact carries this caveat explicitly.
   universe_snapshot_semantics: current_constituents_snapshot
+
+# Migration rationale (2026-08): legacy scripts encoded two incompatible
+# products. predict_financial_rc.py used 0.3/0.7 for a concentrated Top5
+# trailing-stop workflow, while gen_candidate_top200.py used 0.5/0.5 for a
+# broad human-review screen. This canonical use case is explicitly the latter,
+# as requested by the operator. Equal weighting is an operating contract that
+# avoids an unreviewed preference for either horizon; it is NOT evidence that
+# 0.5/0.5 outperforms 0.3/0.7. Promotion remains blocked until separate,
+# reproducible research compares blend weights and portfolio construction.
 
 lifecycle:
   created: 2026-06-28

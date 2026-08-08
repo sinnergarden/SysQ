@@ -5,13 +5,18 @@ import json
 from datetime import datetime
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
 from qsys.signal.model_blend_inference import (
     InferenceContractError,
     _atomic_write_json,
     compute_candidate_hash,
+    compute_feature_snapshot_hash,
+    compute_universe_hash,
     load_model_lineage,
+    load_universe_snapshot_members,
+    profile_feature_quality,
     resolve_inference_dates,
     validate_inference_config,
 )
@@ -109,6 +114,28 @@ def test_rejects_same_day_execution() -> None:
         )
 
 
+def test_rejects_historical_date_for_current_universe_snapshot() -> None:
+    with pytest.raises(InferenceContractError, match="cannot run historical"):
+        resolve_inference_dates(
+            "2026-08-06",
+            None,
+            OPEN_DATES,
+            now=datetime.fromisoformat("2026-08-08T12:00:00+08:00"),
+            universe_snapshot_semantics="current_constituents_snapshot",
+        )
+
+
+def test_pit_universe_semantics_allow_historical_date() -> None:
+    dates = resolve_inference_dates(
+        "2026-08-06",
+        None,
+        OPEN_DATES,
+        now=datetime.fromisoformat("2026-08-08T12:00:00+08:00"),
+        universe_snapshot_semantics="pit_constituents_snapshot",
+    )
+    assert dates.execution_date == "2026-08-07"
+
+
 def test_validates_pinned_bundle_and_maturity(tmp_path: Path) -> None:
     model_root = tmp_path / "data" / "research" / "models"
     config = _config(model_root)
@@ -149,6 +176,64 @@ def test_candidate_hash_ignores_attempt_id() -> None:
     left = [{"ts_code": "000001.SZ", "rank": 1, "run_id": "attempt-a"}]
     right = [{"ts_code": "000001.SZ", "rank": 1, "run_id": "attempt-b"}]
     assert compute_candidate_hash(left) == compute_candidate_hash(right)
+
+
+def test_universe_hash_is_order_independent_and_membership_sensitive() -> None:
+    assert compute_universe_hash(["B", "A"]) == compute_universe_hash(["A", "B"])
+    assert compute_universe_hash(["A", "B"]) != compute_universe_hash(["A", "C"])
+
+
+def test_feature_snapshot_hash_is_canonical_and_value_sensitive() -> None:
+    frame = pd.DataFrame(
+        {
+            "instrument": ["B", "A"],
+            "f1": [1.0, float("nan")],
+            "f2": [-0.0, 2.5],
+        }
+    )
+    reordered = frame.iloc[::-1].reset_index(drop=True)
+    assert compute_feature_snapshot_hash(frame, ["f1", "f2"]) == (
+        compute_feature_snapshot_hash(reordered, ["f1", "f2"])
+    )
+    changed = frame.copy()
+    changed.loc[0, "f1"] = 1.0000000000000002
+    assert compute_feature_snapshot_hash(frame, ["f1", "f2"]) != (
+        compute_feature_snapshot_hash(changed, ["f1", "f2"])
+    )
+
+
+def test_loads_exact_active_universe_membership(tmp_path: Path) -> None:
+    snapshot = tmp_path / "data" / "qlib_bin" / "instruments" / "csi800.txt"
+    snapshot.parent.mkdir(parents=True)
+    snapshot.write_text(
+        "A\t2026-01-01\t2026-08-07\n"
+        "B\t2026-08-07\t2026-12-31\n"
+        "C\t2025-01-01\t2026-08-06\n",
+        encoding="utf-8",
+    )
+    assert load_universe_snapshot_members(tmp_path, "csi800", "2026-08-07") == [
+        "A",
+        "B",
+    ]
+
+
+def test_feature_quality_fails_closed_on_dead_model_inputs() -> None:
+    frame = pd.DataFrame(
+        {
+            "live": [1.0, 2.0, 3.0],
+            "all_missing": [float("nan")] * 3,
+            "dead": [0.0, 0.0, 0.0],
+        }
+    )
+    quality = profile_feature_quality(
+        frame,
+        ["live", "all_missing", "dead"],
+        {"live", "dead"},
+        max_missing_ratio=0.95,
+        min_model_used_unique_values=2,
+    )
+    assert quality["excessive_missing_features"] == ["all_missing"]
+    assert quality["constant_model_used_features"] == ["dead"]
 
 
 def test_artifact_write_never_overwrites(tmp_path: Path) -> None:

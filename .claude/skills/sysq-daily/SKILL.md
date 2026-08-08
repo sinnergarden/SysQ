@@ -43,11 +43,16 @@ Daily operational workflow for SysQ: data readiness, label maturity, retrain eli
 8. train_start / train_end
 9. calibration artifact / calibration window（如适用）
 10. output artifact path
+11. universe_snapshot_semantics / universe_hash
+12. feature_list_hash / feature_snapshot_hash
 
 ### 规则
 - 禁止用 free-form 文本直接给候选股票。
 - 禁止只说"latest model"，必须解析到具体 model_id / model_path / model_hash。
 - 禁止输出无法追溯的 candidate（缺少 provenance 字段）。
+- current constituents snapshot 只允许最近已完成交易日；历史推理必须切 PIT universe。
+- artifact checker 必须从权威日历独立复核 next-open 和 label maturity，不能只信 artifact 声明。
+- 任一模型使用特征当日为常数或超过逐特征缺失阈值时，必须 fail closed。
 - 禁止写 broker / trader / ledger / production。
 - 如果缺 provenance 字段，结果只能标记为 exploratory，不能标记为 candidate artifact。
 

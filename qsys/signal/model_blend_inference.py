@@ -9,11 +9,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import sqlite3
 import subprocess
 import uuid
 from collections.abc import Iterable, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
@@ -81,6 +83,126 @@ def compute_candidate_hash(candidates: list[dict[str, Any]]) -> str:
     return _canonical_hash(material)
 
 
+def compute_universe_hash(instruments: Iterable[Any]) -> str:
+    """Hash an exact, order-independent universe membership snapshot."""
+
+    members = sorted(str(instrument) for instrument in instruments)
+    if len(members) != len(set(members)):
+        raise InferenceContractError("universe snapshot contains duplicate instruments")
+    return _canonical_hash({"serialization": "sorted-string-list-v1", "members": members})
+
+
+def load_universe_snapshot_members(
+    project_root: Path,
+    universe: str,
+    signal_date: str,
+) -> list[str]:
+    """Load the exact Qlib universe membership active on *signal_date*."""
+
+    snapshot_path = (
+        Path(project_root) / "data" / "qlib_bin" / "instruments" / f"{universe}.txt"
+    )
+    if not snapshot_path.is_file():
+        raise InferenceContractError(
+            f"universe snapshot file is missing: {snapshot_path}"
+        )
+    resolved_signal = _normalise_date(signal_date)
+    members: list[str] = []
+    for line_number, line in enumerate(
+        snapshot_path.read_text(encoding="utf-8").splitlines(), start=1
+    ):
+        if not line.strip():
+            continue
+        fields = line.split("\t")
+        if len(fields) != 3:
+            raise InferenceContractError(
+                f"invalid universe snapshot row at {snapshot_path}:{line_number}"
+            )
+        instrument, start_date, end_date = fields
+        try:
+            active = (
+                _normalise_date(start_date)
+                <= resolved_signal
+                <= _normalise_date(end_date)
+            )
+        except InferenceContractError as exc:
+            raise InferenceContractError(
+                f"invalid universe snapshot dates at {snapshot_path}:{line_number}"
+            ) from exc
+        if active:
+            members.append(instrument.strip())
+    if not members:
+        raise InferenceContractError(
+            f"universe snapshot has no active members for {resolved_signal}: {snapshot_path}"
+        )
+    compute_universe_hash(members)
+    return sorted(members)
+
+
+def _canonical_feature_value(value: Any) -> str | None:
+    """Canonicalise one numeric feature value without lossy decimal rounding."""
+
+    if value is None or type(value).__name__ == "NAType":
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError) as exc:
+        raise InferenceContractError(
+            f"feature snapshot contains non-numeric value: {value!r}"
+        ) from exc
+    if math.isnan(numeric):
+        return None
+    if not math.isfinite(numeric):
+        raise InferenceContractError(
+            f"feature snapshot contains non-finite value: {value!r}"
+        )
+    if numeric == 0.0:
+        numeric = 0.0
+    return numeric.hex()
+
+
+def compute_feature_snapshot_hash(frame: Any, features: Sequence[str]) -> str:
+    """Hash exact instrument/feature/value inputs using canonical JSON.
+
+    Values are encoded with ``float.hex`` so the digest does not depend on
+    display precision, locale, dataframe row order, or JSON float rendering.
+    Missing values are represented as JSON ``null``.
+    """
+
+    feature_names = [str(feature) for feature in features]
+    if not feature_names or len(feature_names) != len(set(feature_names)):
+        raise InferenceContractError(
+            "feature snapshot hash requires a unique, non-empty feature list"
+        )
+    required = {"instrument", *feature_names}
+    missing_columns = sorted(required - set(frame.columns))
+    if missing_columns:
+        raise InferenceContractError(
+            f"feature snapshot hash lacks columns: {missing_columns}"
+        )
+    ordered = frame[["instrument", *feature_names]].sort_values(
+        "instrument", kind="mergesort"
+    )
+    if ordered["instrument"].duplicated().any():
+        raise InferenceContractError(
+            "feature snapshot hash contains duplicate instruments"
+        )
+    rows = [
+        [
+            str(row[0]),
+            [_canonical_feature_value(value) for value in row[1:]],
+        ]
+        for row in ordered.itertuples(index=False, name=None)
+    ]
+    return _canonical_hash(
+        {
+            "serialization": "instrument-feature-floathex-v1",
+            "features": feature_names,
+            "rows": rows,
+        }
+    )
+
+
 def _normalise_date(value: Any) -> str:
     text = str(value).strip()
     if len(text) == 8 and text.isdigit():
@@ -136,6 +258,88 @@ def _parse_cutoff(value: str) -> time:
         ) from exc
 
 
+def resolve_expected_completed_session(
+    open_dates: Sequence[str],
+    *,
+    now: datetime | None = None,
+    market_close_cutoff: str = "18:00",
+) -> str:
+    """Return the most recent completed open session at *now* in China time."""
+
+    sessions = sorted({_normalise_date(value) for value in open_dates})
+    if not sessions:
+        raise InferenceContractError(
+            "cannot resolve a completed session without an open-session calendar"
+        )
+    now_cn = now or datetime.now(ZoneInfo("Asia/Shanghai"))
+    if now_cn.tzinfo is None:
+        now_cn = now_cn.replace(tzinfo=ZoneInfo("Asia/Shanghai"))
+    else:
+        now_cn = now_cn.astimezone(ZoneInfo("Asia/Shanghai"))
+    cutoff = _parse_cutoff(market_close_cutoff)
+    anchor = now_cn.date()
+    if now_cn.time().replace(tzinfo=None) < cutoff:
+        anchor -= timedelta(days=1)
+    anchor_text = anchor.isoformat()
+    completed = [value for value in sessions if value <= anchor_text]
+    if not completed:
+        raise InferenceContractError(
+            f"calendar has no completed session on or before {anchor_text}"
+        )
+    return completed[-1]
+
+
+def resolve_next_open_session(signal_date: str, open_dates: Sequence[str]) -> str:
+    """Return the first open session strictly after *signal_date*."""
+
+    resolved_signal = _normalise_date(signal_date)
+    sessions = sorted({_normalise_date(value) for value in open_dates})
+    if resolved_signal not in sessions:
+        raise InferenceContractError(
+            f"signal_date is not an open trading session: {resolved_signal}"
+        )
+    following = [value for value in sessions if value > resolved_signal]
+    if not following:
+        raise InferenceContractError(
+            f"calendar has no execution session after signal_date={resolved_signal}"
+        )
+    return following[0]
+
+
+def validate_label_maturity(
+    *,
+    train_end: str,
+    signal_date: str,
+    horizon: int,
+    open_dates: Sequence[str],
+) -> int:
+    """Validate trading-session label maturity and return observed sessions."""
+
+    sessions = sorted({_normalise_date(value) for value in open_dates})
+    resolved_train_end = _normalise_date(train_end)
+    resolved_signal = _normalise_date(signal_date)
+    if resolved_train_end not in sessions:
+        raise InferenceContractError(
+            f"train_end is not an open trading session: {resolved_train_end}"
+        )
+    if resolved_signal not in sessions:
+        raise InferenceContractError(
+            f"signal_date is not an open trading session: {resolved_signal}"
+        )
+    if not isinstance(horizon, int) or isinstance(horizon, bool) or horizon <= 0:
+        raise InferenceContractError(f"label horizon must be positive, got {horizon!r}")
+    matured_sessions = [
+        day for day in sessions if resolved_train_end < day <= resolved_signal
+    ]
+    observed = len(matured_sessions)
+    if observed < horizon:
+        raise InferenceContractError(
+            f"labels are not mature for {resolved_signal}: "
+            f"train_end={resolved_train_end}, need={horizon} sessions, observed={observed}"
+        )
+    return observed
+
+
 def resolve_inference_dates(
     signal_date: str | None,
     execution_date: str | None,
@@ -143,6 +347,7 @@ def resolve_inference_dates(
     *,
     now: datetime | None = None,
     market_close_cutoff: str = "18:00",
+    universe_snapshot_semantics: str = "current_constituents_snapshot",
 ) -> InferenceDates:
     """Resolve safe post-close signal and next-open execution dates.
 
@@ -158,23 +363,11 @@ def resolve_inference_dates(
             "cannot resolve inference dates without an open-session calendar"
         )
 
-    now_cn = now or datetime.now(ZoneInfo("Asia/Shanghai"))
-    if now_cn.tzinfo is None:
-        now_cn = now_cn.replace(tzinfo=ZoneInfo("Asia/Shanghai"))
-    else:
-        now_cn = now_cn.astimezone(ZoneInfo("Asia/Shanghai"))
-
-    cutoff = _parse_cutoff(market_close_cutoff)
-    anchor = now_cn.date()
-    if now_cn.time().replace(tzinfo=None) < cutoff:
-        anchor -= timedelta(days=1)
-    anchor_text = anchor.strftime("%Y-%m-%d")
-    completed = [value for value in sessions if value <= anchor_text]
-    if not completed:
-        raise InferenceContractError(
-            f"calendar has no completed session on or before {anchor_text}"
-        )
-    expected_completed = completed[-1]
+    expected_completed = resolve_expected_completed_session(
+        sessions,
+        now=now,
+        market_close_cutoff=market_close_cutoff,
+    )
 
     requested = (signal_date or "auto").strip().lower()
     resolved_signal = (
@@ -189,13 +382,24 @@ def resolve_inference_dates(
             "signal_date is not a completed close: "
             f"signal_date={resolved_signal}, latest_completed={expected_completed}"
         )
-
-    following = [value for value in sessions if value > resolved_signal]
-    if not following:
+    if (
+        universe_snapshot_semantics == "current_constituents_snapshot"
+        and resolved_signal != expected_completed
+    ):
         raise InferenceContractError(
-            f"calendar has no execution session after signal_date={resolved_signal}"
+            "current_constituents_snapshot cannot run historical signal dates: "
+            f"signal_date={resolved_signal}, expected_completed={expected_completed}; "
+            "historical inference requires a PIT universe snapshot"
         )
-    expected_execution = following[0]
+    if universe_snapshot_semantics not in {
+        "current_constituents_snapshot",
+        "pit_constituents_snapshot",
+    }:
+        raise InferenceContractError(
+            f"unsupported universe snapshot semantics: {universe_snapshot_semantics!r}"
+        )
+
+    expected_execution = resolve_next_open_session(resolved_signal, sessions)
     if execution_date:
         supplied_execution = _normalise_date(execution_date)
         if supplied_execution != expected_execution:
@@ -403,6 +607,12 @@ def validate_inference_config(
         "min_global_feature_coverage": float(
             inference.get("min_global_feature_coverage", 0.75)
         ),
+        "max_feature_missing_ratio": float(
+            inference.get("max_feature_missing_ratio", 0.95)
+        ),
+        "min_model_used_feature_unique_values": int(
+            inference.get("min_model_used_feature_unique_values", 2)
+        ),
         "min_listed_days": int(inference.get("min_listed_days", 180)),
         "min_amount": float(inference.get("min_amount", 0.0)),
         "exclude_name_patterns": [str(item) for item in exclude_name_patterns],
@@ -426,7 +636,11 @@ def validate_inference_config(
         raise InferenceContractError(
             "pinned_model_blend_v1 requires current_constituents_snapshot semantics"
         )
-    for key in ("min_universe_size", "min_eligible_size"):
+    for key in (
+        "min_universe_size",
+        "min_eligible_size",
+        "min_model_used_feature_unique_values",
+    ):
         if settings[key] <= 0:
             raise InferenceContractError(f"inference.{key} must be positive")
     for key in ("min_listed_days", "min_amount"):
@@ -435,6 +649,11 @@ def validate_inference_config(
     for key in ("min_feature_coverage", "min_global_feature_coverage"):
         if not 0.0 <= settings[key] <= 1.0:
             raise InferenceContractError(f"inference.{key} must be between 0 and 1")
+    if not 0.0 <= settings["max_feature_missing_ratio"] < 1.0:
+        raise InferenceContractError(
+            "inference.max_feature_missing_ratio must be between 0 (inclusive) "
+            "and 1 (exclusive)"
+        )
     settings["bundle_hash"] = _canonical_hash(
         {
             "bundle_id": bundle_id,
@@ -499,12 +718,17 @@ def load_model_lineage(
             ) from exc
         if meta_horizon != model["horizon"]:
             raise InferenceContractError(f"model {model['tag']} meta horizon mismatch")
-        matured_sessions = [day for day in sessions if train_end < day <= signal_date]
-        if len(matured_sessions) < model["horizon"]:
-            raise InferenceContractError(
-                f"model {model['tag']} labels are not mature for {signal_date}: "
-                f"need={model['horizon']} sessions, observed={len(matured_sessions)}"
+        try:
+            maturity_sessions = validate_label_maturity(
+                train_end=train_end,
+                signal_date=signal_date,
+                horizon=model["horizon"],
+                open_dates=sessions,
             )
+        except InferenceContractError as exc:
+            raise InferenceContractError(
+                f"model {model['tag']} {exc}"
+            ) from exc
         lineage.append(
             {
                 "tag": model["tag"],
@@ -517,7 +741,7 @@ def load_model_lineage(
                 "feature_list_id": settings["feature_list_id"],
                 "train_start": train_start,
                 "train_end": train_end,
-                "maturity_sessions": len(matured_sessions),
+                "maturity_sessions": maturity_sessions,
             }
         )
     return lineage
@@ -586,6 +810,24 @@ def _data_latest(project_root: Path) -> str | None:
         return None
 
 
+@contextmanager
+def _project_working_directory(project_root: Path):
+    """Resolve legacy relative feature resources against the project root.
+
+    The canonical CLI may be invoked from any directory, while a few existing
+    PIT sidecar loaders still accept project-relative paths.  Keep the scope
+    narrow and always restore the caller's working directory.
+    """
+
+    previous = Path.cwd()
+    target = Path(project_root).resolve()
+    os.chdir(target)
+    try:
+        yield
+    finally:
+        os.chdir(previous)
+
+
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
@@ -619,6 +861,78 @@ def _score_stats(values: Iterable[float]) -> dict[str, float]:
     }
 
 
+def _load_runtime_models(
+    model_specs: Sequence[dict[str, Any]], features: Sequence[str]
+) -> tuple[dict[str, Any], set[str]]:
+    """Load pinned LightGBM models and identify features used by any split."""
+
+    import lightgbm as lgb
+
+    loaded: dict[str, Any] = {}
+    used_features: set[str] = set()
+    for model_spec in model_specs:
+        model_dir = Path(model_spec["resolved_model_dir"])
+        model = lgb.Booster(model_file=str(model_dir / "model.txt"))
+        if model.num_feature() != len(features):
+            raise InferenceContractError(
+                f"model {model_spec['tag']} expects {model.num_feature()} features, "
+                f"configured list has {len(features)}"
+            )
+        split_importance = model.feature_importance(importance_type="split")
+        used_features.update(
+            feature
+            for feature, split_count in zip(features, split_importance, strict=True)
+            if int(split_count) > 0
+        )
+        loaded[model_spec["tag"]] = model
+    return loaded, used_features
+
+
+def profile_feature_quality(
+    frame: Any,
+    features: Sequence[str],
+    model_used_features: Iterable[str],
+    *,
+    max_missing_ratio: float,
+    min_model_used_unique_values: int,
+) -> dict[str, Any]:
+    """Profile feature health and return explicit fail-closed issue lists."""
+
+    import numpy as np
+    import pandas as pd
+
+    missing_ratio: dict[str, float] = {}
+    unique_non_null: dict[str, int] = {}
+    invalid_numeric: list[str] = []
+    for feature in features:
+        numeric = pd.to_numeric(frame[feature], errors="coerce")
+        non_numeric = frame[feature].notna() & numeric.isna()
+        non_finite = numeric.notna() & ~np.isfinite(numeric)
+        if bool(non_numeric.any() or non_finite.any()):
+            invalid_numeric.append(str(feature))
+        clean = numeric.mask(non_finite)
+        missing_ratio[str(feature)] = float(clean.isna().mean())
+        unique_non_null[str(feature)] = int(clean.nunique(dropna=True))
+
+    excessive_missing = sorted(
+        feature
+        for feature, ratio in missing_ratio.items()
+        if ratio > max_missing_ratio
+    )
+    constant_model_used = sorted(
+        str(feature)
+        for feature in model_used_features
+        if unique_non_null[str(feature)] < min_model_used_unique_values
+    )
+    return {
+        "feature_missing_ratio": missing_ratio,
+        "feature_unique_non_null": unique_non_null,
+        "invalid_numeric_features": sorted(invalid_numeric),
+        "excessive_missing_features": excessive_missing,
+        "constant_model_used_features": constant_model_used,
+    }
+
+
 def run_candidate_inference(
     *,
     strategy_id: str,
@@ -632,7 +946,6 @@ def run_candidate_inference(
 ) -> InferenceRunResult:
     """Run a pinned model blend and write one immutable CandidateRun JSON."""
 
-    import lightgbm as lgb
     import numpy as np
     import pandas as pd
 
@@ -649,10 +962,14 @@ def run_candidate_inference(
         open_dates,
         now=now,
         market_close_cutoff=settings["market_close_cutoff"],
+        universe_snapshot_semantics=settings["universe_snapshot_semantics"],
     )
     model_lineage = load_model_lineage(settings, dates.signal_date, open_dates)
 
-    adapter = QlibAdapter()
+    adapter = QlibAdapter(
+        qlib_dir=project_root / "data" / "qlib_bin",
+        raw_dir=project_root / "data" / "canonical" / "daily",
+    )
     adapter.init_qlib()
     qlib_latest_raw = adapter.get_last_qlib_date()
     qlib_latest = _normalise_optional_date(qlib_latest_raw)
@@ -673,12 +990,19 @@ def run_candidate_inference(
     requested_fields = features + [
         field for field in market_fields if field not in features
     ]
-    raw = adapter.get_features(
+    universe_members = load_universe_snapshot_members(
+        project_root,
         settings["universe"],
-        requested_fields,
-        start_time=dates.data_date,
-        end_time=dates.data_date,
+        dates.signal_date,
     )
+    universe_hash = compute_universe_hash(universe_members)
+    with _project_working_directory(project_root):
+        raw = adapter.get_features(
+            settings["universe"],
+            requested_fields,
+            start_time=dates.data_date,
+            end_time=dates.data_date,
+        )
     if raw is None or raw.empty:
         raise InferenceContractError(
             f"no features for universe={settings['universe']} data_date={dates.data_date}"
@@ -713,10 +1037,60 @@ def run_candidate_inference(
     frame["ts_code"] = frame["instrument"].astype(str)
     frame = frame.sort_values("ts_code").reset_index(drop=True)
     universe_size = len(frame)
+    observed_members = sorted(frame["instrument"].astype(str).tolist())
+    if observed_members != universe_members:
+        expected = set(universe_members)
+        observed = set(observed_members)
+        raise InferenceContractError(
+            "feature snapshot membership differs from universe snapshot: "
+            f"missing={sorted(expected - observed)[:20]}, "
+            f"unexpected={sorted(observed - expected)[:20]}, "
+            f"expected_count={len(expected)}, observed_count={len(observed)}"
+        )
     if universe_size < settings["min_universe_size"]:
         raise InferenceContractError(
             f"universe coverage too small: rows={universe_size}, "
             f"minimum={settings['min_universe_size']}"
+        )
+
+    feature_snapshot_hash = compute_feature_snapshot_hash(frame, features)
+    loaded_models, model_used_features = _load_runtime_models(
+        settings["models"], features
+    )
+
+    feature_quality = profile_feature_quality(
+        frame,
+        features,
+        model_used_features,
+        max_missing_ratio=settings["max_feature_missing_ratio"],
+        min_model_used_unique_values=settings[
+            "min_model_used_feature_unique_values"
+        ],
+    )
+    feature_missing_ratio = feature_quality["feature_missing_ratio"]
+    feature_unique_non_null = feature_quality["feature_unique_non_null"]
+    invalid_numeric_features = feature_quality["invalid_numeric_features"]
+    excessive_missing_features = feature_quality["excessive_missing_features"]
+    constant_model_used_features = feature_quality[
+        "constant_model_used_features"
+    ]
+    quality_violations: list[str] = []
+    if invalid_numeric_features:
+        quality_violations.append(
+            f"non-numeric/non-finite={sorted(invalid_numeric_features)}"
+        )
+    if excessive_missing_features:
+        quality_violations.append(
+            f"missing_ratio>{settings['max_feature_missing_ratio']:.2%}="
+            f"{excessive_missing_features}"
+        )
+    if constant_model_used_features:
+        quality_violations.append(
+            "model-used constant features=" f"{constant_model_used_features}"
+        )
+    if quality_violations:
+        raise InferenceContractError(
+            "feature-level readiness failed: " + "; ".join(quality_violations)
         )
 
     feature_coverage = frame[features].notna().mean(axis=1)
@@ -797,7 +1171,7 @@ def run_candidate_inference(
     X = eligible[features].fillna(0.0).astype(np.float32)
     for model_spec in settings["models"]:
         model_dir = Path(model_spec["resolved_model_dir"])
-        model = lgb.Booster(model_file=str(model_dir / "model.txt"))
+        model = loaded_models[model_spec["tag"]]
         center = pd.read_json(model_dir / "center.json", typ="series")
         scale = pd.read_json(model_dir / "scale.json", typ="series")
         if set(center.index) != set(features) or set(scale.index) != set(features):
@@ -919,12 +1293,14 @@ def run_candidate_inference(
         },
         "universe": settings["universe"],
         "universe_snapshot_semantics": settings["universe_snapshot_semantics"],
+        "universe_hash": universe_hash,
         "top_k": selected_top_k,
         "candidate_count": len(candidates),
         "candidate_hash": candidate_hash,
         "config_hash": config_hash,
         "feature_list_id": settings["feature_list_id"],
         "feature_list_hash": feature_list_hash,
+        "feature_snapshot_hash": feature_snapshot_hash,
         "source": {
             "engine": settings["engine"],
             "model_bundle_id": settings["bundle_id"],
@@ -951,6 +1327,18 @@ def run_candidate_inference(
             "global_feature_coverage": round(global_feature_coverage, 6),
             "min_feature_coverage": settings["min_feature_coverage"],
             "min_global_feature_coverage": settings["min_global_feature_coverage"],
+            "max_feature_missing_ratio": settings["max_feature_missing_ratio"],
+            "min_model_used_feature_unique_values": settings[
+                "min_model_used_feature_unique_values"
+            ],
+            "feature_missing_ratio": {
+                feature: round(ratio, 6)
+                for feature, ratio in feature_missing_ratio.items()
+            },
+            "feature_unique_non_null": feature_unique_non_null,
+            "model_used_features": sorted(model_used_features),
+            "excessive_missing_features": excessive_missing_features,
+            "constant_model_used_features": constant_model_used_features,
         },
         "candidates": candidates,
     }

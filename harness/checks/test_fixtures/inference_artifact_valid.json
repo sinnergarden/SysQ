@@ -1,30 +1,108 @@
 {
-  "run_id": "manual_infer_20260703",
+  "schema_version": 1,
+  "artifact_type": "candidate_run",
+  "usage": "human_research_only",
+  "run_id": "infer_financial_rc_20260807_fixture",
   "strategy_id": "financial_rc",
-  "signal_date": "2026-07-03",
-  "data_date": "2026-07-03",
-  "execution_date": "2026-07-06",
-  "feature_list_id": "v3a_plus_liquidity_financial_rc",
-  "created_at": "2026-07-03T22:00:00+08:00",
+  "created_at": "2026-08-08T07:27:04Z",
+  "signal_date": "2026-08-07",
+  "data_date": "2026-08-07",
+  "execution_date": "2026-08-10",
+  "date_contract": {
+    "mode": "postclose_for_next_open_session",
+    "market_close_cutoff": "18:00",
+    "expected_completed_date": "2026-08-07",
+    "execution_rule": "next_open_session",
+    "calendar_source": "data/meta.db:trade_cal"
+  },
+  "universe": "csi800",
+  "universe_snapshot_semantics": "current_constituents_snapshot",
+  "universe_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "config_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "feature_list_id": "features_v1",
+  "feature_list_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "feature_snapshot_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "candidate_hash": "40b62ec9670d7dbeb6ce919b8f3e4630a06da29672c475c02f251117389c363d",
+  "candidate_count": 1,
+  "top_k": 1,
   "source": {
+    "engine": "pinned_model_blend_v1",
+    "model_bundle_id": "bundle_v1",
+    "model_bundle_hash": "e9f2ef5c771e7f1955c28203af9d9e66704d57178e12374f024d7d45adbeee2e",
+    "feature_list_id": "features_v1",
     "models": [
       {
         "tag": "60d",
-        "model_hash": "7d05534663a389b7",
-        "model_dir": "data/research/models/60d/7d05534663a389b7",
-        "label_id": "fwd_ret_60d_raw",
-        "feature_list_id": "v3a_plus_liquidity_financial_rc",
-        "train_start": "2024-01-24",
-        "train_end": "2026-03-03",
+        "model_hash": "hash60",
+        "model_dir": "data/research/models/60/hash60",
+        "label_id": "ret60",
+        "feature_list_id": "features_v1",
+        "train_start": "2024-01-02",
+        "train_end": "2026-04-01",
         "horizon": 60,
-        "weight": 1.0
+        "maturity_sessions": 87,
+        "weight": 0.5,
+        "artifact_sha256": {
+          "model.txt": "1111111111111111111111111111111111111111111111111111111111111111",
+          "center.json": "2222222222222222222222222222222222222222222222222222222222222222",
+          "scale.json": "3333333333333333333333333333333333333333333333333333333333333333",
+          "meta.json": "4444444444444444444444444444444444444444444444444444444444444444"
+        }
+      },
+      {
+        "tag": "180d",
+        "model_hash": "hash180",
+        "model_dir": "data/research/models/180/hash180",
+        "label_id": "ret180",
+        "feature_list_id": "features_v1",
+        "train_start": "2023-01-03",
+        "train_end": "2025-09-30",
+        "horizon": 180,
+        "maturity_sessions": 204,
+        "weight": 0.5,
+        "artifact_sha256": {
+          "model.txt": "5555555555555555555555555555555555555555555555555555555555555555",
+          "center.json": "6666666666666666666666666666666666666666666666666666666666666666",
+          "scale.json": "7777777777777777777777777777777777777777777777777777777777777777",
+          "meta.json": "8888888888888888888888888888888888888888888888888888888888888888"
+        }
       }
     ]
   },
   "blend": {
-    "weights": {"60d": 1.0}
+    "score_transform": "daily_cs_zscore_unclipped_ddof0",
+    "model_tags": ["60d", "180d"],
+    "weights": {"60d": 0.5, "180d": 0.5}
+  },
+  "data_quality": {
+    "status": "pass",
+    "feature_snapshot_date": "2026-08-07",
+    "feature_missing_ratio": {"f1": 0.0},
+    "feature_unique_non_null": {"f1": 800},
+    "model_used_features": ["f1"],
+    "excessive_missing_features": [],
+    "constant_model_used_features": []
   },
   "candidates": [
-    {"ts_code": "300857.SZ", "ranking_score": 3.3986, "rank": 1}
+    {
+      "ts_code": "000001.SZ",
+      "name": "Example",
+      "industry": "Bank",
+      "rank": 1,
+      "ranking_score": 1.25,
+      "model_rank_gap": 2,
+      "feature_coverage": 1.0,
+      "listed_days": 1000,
+      "eligibility": {"passed": true, "reasons": []},
+      "models": [
+        {"tag": "60d", "weight": 0.5, "score": 1.0, "rank": 3},
+        {"tag": "180d", "weight": 0.5, "score": 1.5, "rank": 1}
+      ],
+      "data_date": "2026-08-07",
+      "signal_date": "2026-08-07",
+      "execution_date": "2026-08-10",
+      "strategy_id": "financial_rc",
+      "run_id": "infer_financial_rc_20260807_fixture"
+    }
   ]
 }

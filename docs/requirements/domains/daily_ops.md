@@ -114,9 +114,31 @@ stable
 CandidateRun 是不可覆盖的研究候选产物，至少包含：
 - data/signal/execution date 及 next-open-session 语义
 - model bundle、每个模型及 scaler/meta 文件的 SHA-256、训练区间、label horizon、权重
-- feature/config/candidate hash、Git 状态、数据新鲜度和覆盖率
+- universe/config/feature-list/feature-snapshot/candidate hash、Git 状态、数据新鲜度和覆盖率
 - 每只股票的分模型 score/rank、blend score/rank、模型排名分歧
-- universe snapshot 语义及剔除原因汇总
+- universe snapshot 语义、逐特征缺失率/有效唯一值及剔除原因汇总
+
+`current_constituents_snapshot` 只允许 `signal_date` 等于 artifact 创建时按
+权威交易日历和收盘 cutoff 推导出的最近已完成交易日。历史推理必须使用
+`pit_constituents_snapshot`，否则非零失败且不得生成 CandidateRun。生成器必须
+hash 实际成分集合，并验证 feature snapshot 的股票集合与成分快照完全一致。
+
+`feature_snapshot_hash` 使用稳定排序后的 instrument、固定顺序 feature 和原始
+数值计算；数值采用精确 float-hex 表示，缺失值统一为 null。它与
+`feature_list_hash` 分工：后者标识特征名称/顺序，前者标识当次实际输入值。
+任何模型实际使用的 feature 若当日截面无变化，或任一 feature 缺失率超过配置
+阈值，推理必须 fail closed，不能以总覆盖率通过来掩盖死因子。
+
+#### financial_rc 0.5/0.5 迁移说明
+
+迁移前两个脚本表达的是不同产品，而非同一个策略的等价实现：
+
+- `predict_financial_rc.py` 使用 0.3×60d + 0.7×180d，服务 Top5 + trailing-stop 流程；
+- `gen_candidate_top200.py` 使用 0.5×60d + 0.5×180d，服务 Top200 人工财报筛选。
+
+本 UC 按操作者确认选择第二种语义作为 canonical human-research workflow。
+0.5/0.5 是当前运行契约，**不是**优于 0.3/0.7 的量化证据；在独立、可复现的
+blend-weight 与组合构建对照研究完成前，不得据此晋级 shadow/production。
 
 ### Canonical Entrypoints
 `scripts/run_daily.py --strategy <id> --mode infer --signal-date <date|auto>`。
@@ -177,5 +199,6 @@ operator_agent
 - `infer` 是 artifact-only 分支，在创建 DailyRunner、promotion snapshot 或 account context 前返回。
 - 盘中不能使用当日未完成收盘；默认 18:00 后才允许当日成为 completed signal date。
 - post-close CandidateRun 必须满足 data_date = signal_date < execution_date，execution_date 必须是下一开市日。
+- current constituents snapshot 只允许最近已完成交易日；历史日期必须提供 PIT universe。
 - 缺模型文件、maturity、数据新鲜度、特征覆盖或可交易性门槛时非零失败，不输出候选。
 - 当前成分股 snapshot 可用于实时筛选，但不得伪称历史 PIT universe。

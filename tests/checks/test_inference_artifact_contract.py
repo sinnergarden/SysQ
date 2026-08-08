@@ -1,10 +1,33 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import date, timedelta
 
 from harness.checks.check_inference_artifact import _canonical_hash as contract_hash
 from harness.checks.check_inference_artifact import check_payload
 from qsys.signal.model_blend_inference import compute_candidate_hash
+
+
+def _weekdays(start: str, end: str) -> list[str]:
+    current = date.fromisoformat(start)
+    final = date.fromisoformat(end)
+    result: list[str] = []
+    while current <= final:
+        if current.weekday() < 5:
+            result.append(current.isoformat())
+        current += timedelta(days=1)
+    return result
+
+
+OPEN_DATES = _weekdays("2025-09-29", "2026-08-11")
+
+
+def _maturity_sessions(train_end: str, signal_date: str) -> int:
+    return sum(train_end < session <= signal_date for session in OPEN_DATES)
+
+
+def _check(payload: dict) -> list[str]:
+    return check_payload(payload, open_dates=OPEN_DATES)
 
 
 def _valid_payload() -> dict:
@@ -42,13 +65,18 @@ def _valid_payload() -> dict:
         "execution_date": "2026-08-10",
         "date_contract": {
             "mode": "postclose_for_next_open_session",
+            "market_close_cutoff": "18:00",
+            "expected_completed_date": "2026-08-07",
             "execution_rule": "next_open_session",
+            "calendar_source": "data/meta.db:trade_cal",
         },
         "universe": "csi800",
         "universe_snapshot_semantics": "current_constituents_snapshot",
+        "universe_hash": "c" * 64,
         "config_hash": "a" * 64,
         "feature_list_id": "features_v1",
         "feature_list_hash": "b" * 64,
+        "feature_snapshot_hash": "d" * 64,
         "candidate_hash": compute_candidate_hash(candidates),
         "candidate_count": 1,
         "source": {
@@ -65,6 +93,9 @@ def _valid_payload() -> dict:
                     "train_start": "2024-01-01",
                     "train_end": "2026-04-01",
                     "horizon": 60,
+                    "maturity_sessions": _maturity_sessions(
+                        "2026-04-01", "2026-08-07"
+                    ),
                     "weight": 0.5,
                     "artifact_sha256": {
                         "model.txt": "1" * 64,
@@ -82,6 +113,9 @@ def _valid_payload() -> dict:
                     "train_start": "2023-01-01",
                     "train_end": "2025-10-01",
                     "horizon": 180,
+                    "maturity_sessions": _maturity_sessions(
+                        "2025-10-01", "2026-08-07"
+                    ),
                     "weight": 0.5,
                     "artifact_sha256": {
                         "model.txt": "5" * 64,
@@ -100,6 +134,11 @@ def _valid_payload() -> dict:
         "data_quality": {
             "status": "pass",
             "feature_snapshot_date": "2026-08-07",
+            "feature_missing_ratio": {"f1": 0.0},
+            "feature_unique_non_null": {"f1": 800},
+            "model_used_features": ["f1"],
+            "excessive_missing_features": [],
+            "constant_model_used_features": [],
         },
         "candidates": candidates,
     }
@@ -129,7 +168,7 @@ def _valid_payload() -> dict:
 
 
 def test_valid_candidate_run_passes() -> None:
-    assert check_payload(_valid_payload()) == []
+    assert _check(_valid_payload()) == []
 
 
 def test_same_day_execution_is_rejected() -> None:
@@ -137,7 +176,7 @@ def test_same_day_execution_is_rejected() -> None:
     payload["execution_date"] = "2026-08-07"
     payload["candidates"][0]["execution_date"] = "2026-08-07"
     payload["candidate_hash"] = compute_candidate_hash(payload["candidates"])
-    violations = check_payload(payload)
+    violations = _check(payload)
     assert any(
         "signal_date must be before execution_date" in item for item in violations
     )
@@ -146,7 +185,7 @@ def test_same_day_execution_is_rejected() -> None:
 def test_blend_weight_drift_is_rejected() -> None:
     payload = _valid_payload()
     payload["blend"]["weights"] = {"60d": 0.3, "180d": 0.7}
-    violations = check_payload(payload)
+    violations = _check(payload)
     assert "blend.weights do not match source.models weights" in violations
 
 
@@ -156,15 +195,13 @@ def test_postclose_data_date_drift_is_rejected() -> None:
     payload["candidates"][0]["data_date"] = "2026-08-06"
     payload["data_quality"]["feature_snapshot_date"] = "2026-08-06"
     payload["candidate_hash"] = compute_candidate_hash(payload["candidates"])
-    assert "Post-close CandidateRun data_date must equal signal_date" in check_payload(
-        payload
-    )
+    assert "Post-close CandidateRun data_date must equal signal_date" in _check(payload)
 
 
 def test_naive_creation_timestamp_is_rejected() -> None:
     payload = _valid_payload()
     payload["created_at"] = "2026-08-08T07:27:04"
-    assert "created_at must include a UTC offset" in check_payload(payload)
+    assert "created_at must include a UTC offset" in _check(payload)
 
 
 def test_candidate_model_weight_drift_is_rejected() -> None:
@@ -173,7 +210,7 @@ def test_candidate_model_weight_drift_is_rejected() -> None:
     payload["candidate_hash"] = compute_candidate_hash(payload["candidates"])
     assert any(
         "weight does not match source.models" in violation
-        for violation in check_payload(payload)
+        for violation in _check(payload)
     )
 
 
@@ -182,7 +219,7 @@ def test_source_model_tampering_breaks_bundle_hash() -> None:
     payload["source"]["models"][0]["artifact_sha256"]["scale.json"] = "f" * 64
     assert (
         "source.model_bundle_hash does not match pinned model bundle"
-        in check_payload(payload)
+        in _check(payload)
     )
 
 
@@ -190,8 +227,16 @@ def test_candidate_contract_cannot_downgrade_to_legacy() -> None:
     payload = _valid_payload()
     del payload["artifact_type"]
     assert any(
-        "require artifact_type=candidate_run" in violation
-        for violation in check_payload(payload)
+        "artifact_type=candidate_run" in violation for violation in _check(payload)
+    )
+
+
+def test_legacy_payload_without_date_contract_reports_instead_of_crashing() -> None:
+    payload = _valid_payload()
+    del payload["artifact_type"]
+    del payload["date_contract"]
+    assert any(
+        "artifact_type=candidate_run" in violation for violation in _check(payload)
     )
 
 
@@ -199,4 +244,63 @@ def test_candidate_tampering_is_rejected() -> None:
     payload = _valid_payload()
     tampered = deepcopy(payload)
     tampered["candidates"][0]["ranking_score"] = 999.0
-    assert "candidate_hash does not match candidate content" in check_payload(tampered)
+    assert "candidate_hash does not match candidate content" in _check(tampered)
+
+
+def test_friday_to_tuesday_execution_is_rejected() -> None:
+    payload = _valid_payload()
+    payload["execution_date"] = "2026-08-11"
+    payload["candidates"][0]["execution_date"] = "2026-08-11"
+    payload["candidate_hash"] = compute_candidate_hash(payload["candidates"])
+    assert any(
+        "execution_date is not the next open session" in violation
+        for violation in _check(payload)
+    )
+
+
+def test_immature_model_label_is_rejected_independently() -> None:
+    payload = _valid_payload()
+    model = payload["source"]["models"][1]
+    model["train_end"] = "2026-07-31"
+    model["maturity_sessions"] = _maturity_sessions("2026-07-31", "2026-08-07")
+    assert any(
+        "label maturity violation" in violation for violation in _check(payload)
+    )
+
+
+def test_historical_current_snapshot_artifact_is_rejected() -> None:
+    payload = _valid_payload()
+    payload["signal_date"] = "2026-08-06"
+    payload["data_date"] = "2026-08-06"
+    payload["execution_date"] = "2026-08-07"
+    payload["data_quality"]["feature_snapshot_date"] = "2026-08-06"
+    candidate = payload["candidates"][0]
+    candidate["signal_date"] = "2026-08-06"
+    candidate["data_date"] = "2026-08-06"
+    candidate["execution_date"] = "2026-08-07"
+    payload["candidate_hash"] = compute_candidate_hash(payload["candidates"])
+    assert any(
+        "cannot represent a historical signal_date" in violation
+        for violation in _check(payload)
+    )
+
+
+def test_input_snapshot_hashes_are_required() -> None:
+    payload = _valid_payload()
+    del payload["universe_hash"]
+    del payload["feature_snapshot_hash"]
+    violations = _check(payload)
+    assert "CandidateRun universe_hash must be a SHA-256 hex digest" in violations
+    assert (
+        "CandidateRun feature_snapshot_hash must be a SHA-256 hex digest"
+        in violations
+    )
+
+
+def test_declared_feature_quality_issues_are_rejected() -> None:
+    payload = _valid_payload()
+    payload["data_quality"]["constant_model_used_features"] = ["dead_factor"]
+    assert (
+        "CandidateRun data_quality.constant_model_used_features must be empty"
+        in _check(payload)
+    )

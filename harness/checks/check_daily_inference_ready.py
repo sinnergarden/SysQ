@@ -113,6 +113,7 @@ def check_inference_ready(
             execution_date,
             open_dates,
             market_close_cutoff=settings["market_close_cutoff"],
+            universe_snapshot_semantics=settings["universe_snapshot_semantics"],
         )
         results.append(
             (
@@ -146,7 +147,10 @@ def check_inference_ready(
     try:
         from qsys.data.adapter import QlibAdapter
 
-        adapter = QlibAdapter()
+        adapter = QlibAdapter(
+            qlib_dir=project_root / "data" / "qlib_bin",
+            raw_dir=project_root / "data" / "canonical" / "daily",
+        )
         adapter.init_qlib()
         qlib_latest = _normalise_date(adapter.get_last_qlib_date())
         qlib_ok = bool(qlib_latest and qlib_latest >= dates.signal_date)

@@ -10,7 +10,19 @@ import math
 import sys
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from qsys.signal.model_blend_inference import (
+    InferenceContractError,
+    load_open_dates,
+    resolve_expected_completed_session,
+    resolve_next_open_session,
+    validate_label_maturity,
+)
 
 REQUIRED_TOP_LEVEL = {
     "run_id",
@@ -66,26 +78,24 @@ def _contains_latest(value: Any) -> bool:
     return isinstance(value, str) and "latest" in value.lower()
 
 
-def check_payload(payload: Any) -> list[str]:
+def check_payload(
+    payload: Any,
+    *,
+    open_dates: Sequence[str] | None = None,
+) -> list[str]:
     """Return all contract violations found in an inference payload."""
 
     violations: list[str] = []
     if not isinstance(payload, dict):
         return ["Top-level must be a JSON object (dict)"]
 
-    candidate_markers = {"config_hash", "candidate_hash", "date_contract"}
-    is_candidate_run = payload.get("artifact_type") == "candidate_run" or any(
-        marker in payload for marker in candidate_markers
-    )
-    if is_candidate_run:
-        if payload.get("artifact_type") != "candidate_run":
-            violations.append(
-                "Canonical candidate markers require artifact_type=candidate_run"
-            )
-        if payload.get("schema_version") != 1:
-            violations.append("CandidateRun schema_version must be 1")
-        if payload.get("usage") != "human_research_only":
-            violations.append("CandidateRun usage must be human_research_only")
+    is_candidate_run = payload.get("artifact_type") == "candidate_run"
+    if not is_candidate_run:
+        violations.append("Inference artifact must use artifact_type=candidate_run")
+    if payload.get("schema_version") != 1:
+        violations.append("CandidateRun schema_version must be 1")
+    if payload.get("usage") != "human_research_only":
+        violations.append("CandidateRun usage must be human_research_only")
 
     for field in sorted(REQUIRED_TOP_LEVEL):
         if payload.get(field) in (None, ""):
@@ -104,6 +114,7 @@ def check_payload(payload: Any) -> list[str]:
             f"({signal_date} >= {execution_date})"
         )
 
+    created_at: datetime | None = None
     try:
         created_at = datetime.fromisoformat(
             str(payload.get("created_at", "")).replace("Z", "+00:00")
@@ -115,6 +126,8 @@ def check_payload(payload: Any) -> list[str]:
             f"Invalid created_at timestamp: {payload.get('created_at')!r}"
         )
 
+    expected_completed_date: str | None = None
+    market_close_cutoff = ""
     date_contract = payload.get("date_contract")
     if isinstance(date_contract, dict):
         if date_contract.get("execution_rule") != "next_open_session":
@@ -122,6 +135,20 @@ def check_payload(payload: Any) -> list[str]:
         if date_contract.get("mode") != "postclose_for_next_open_session":
             violations.append(
                 "date_contract.mode must be postclose_for_next_open_session"
+            )
+        expected_completed_date = _date(
+            date_contract.get("expected_completed_date"),
+            "date_contract.expected_completed_date",
+            violations,
+        )
+        market_close_cutoff = str(
+            date_contract.get("market_close_cutoff") or ""
+        )
+        if not market_close_cutoff:
+            violations.append("date_contract.market_close_cutoff is required")
+        if date_contract.get("calendar_source") != "data/meta.db:trade_cal":
+            violations.append(
+                "date_contract.calendar_source must be data/meta.db:trade_cal"
             )
     elif is_candidate_run:
         violations.append("CandidateRun missing date_contract")
@@ -134,6 +161,47 @@ def check_payload(payload: Any) -> list[str]:
         and data_date != signal_date
     ):
         violations.append("Post-close CandidateRun data_date must equal signal_date")
+
+    sessions = sorted(set(open_dates or []))
+    if is_candidate_run and not sessions:
+        violations.append(
+            "Independent calendar validation requires authoritative open dates"
+        )
+    if sessions and signal_date and execution_date:
+        try:
+            expected_execution = resolve_next_open_session(signal_date, sessions)
+            if execution_date != expected_execution:
+                violations.append(
+                    "execution_date is not the next open session: "
+                    f"expected={expected_execution}, got={execution_date}"
+                )
+        except InferenceContractError as exc:
+            violations.append(f"Cannot validate next-open execution: {exc}")
+    if sessions and created_at and market_close_cutoff:
+        try:
+            independently_completed = resolve_expected_completed_session(
+                sessions,
+                now=created_at,
+                market_close_cutoff=market_close_cutoff,
+            )
+            if expected_completed_date != independently_completed:
+                violations.append(
+                    "date_contract.expected_completed_date does not match calendar: "
+                    f"expected={independently_completed}, got={expected_completed_date}"
+                )
+        except InferenceContractError as exc:
+            violations.append(f"Cannot validate completed-session boundary: {exc}")
+    if (
+        payload.get("universe_snapshot_semantics")
+        == "current_constituents_snapshot"
+        and signal_date
+        and expected_completed_date
+        and signal_date != expected_completed_date
+    ):
+        violations.append(
+            "current_constituents_snapshot cannot represent a historical signal_date: "
+            f"signal_date={signal_date}, expected_completed={expected_completed_date}"
+        )
 
     source = payload.get("source")
     if not isinstance(source, dict):
@@ -172,6 +240,7 @@ def check_payload(payload: Any) -> list[str]:
             "train_end",
             "horizon",
             "weight",
+            "maturity_sessions",
         ):
             if model.get(field) in (None, ""):
                 violations.append(f"{prefix} missing {field}")
@@ -217,6 +286,32 @@ def check_payload(payload: Any) -> list[str]:
             violations.append(f"{prefix} train_start is after train_end")
         if train_end and signal_date and train_end >= signal_date:
             violations.append(f"{prefix} train_end must be before signal_date")
+        try:
+            horizon = int(model.get("horizon"))
+            if horizon <= 0 or isinstance(model.get("horizon"), bool):
+                raise ValueError
+        except (TypeError, ValueError):
+            violations.append(f"{prefix}.horizon must be a positive integer")
+            horizon = None
+        if sessions and train_end and signal_date and horizon:
+            try:
+                observed_maturity = validate_label_maturity(
+                    train_end=train_end,
+                    signal_date=signal_date,
+                    horizon=horizon,
+                    open_dates=sessions,
+                )
+                try:
+                    declared_maturity = int(model.get("maturity_sessions"))
+                except (TypeError, ValueError):
+                    declared_maturity = -1
+                if declared_maturity != observed_maturity:
+                    violations.append(
+                        f"{prefix}.maturity_sessions does not match calendar: "
+                        f"expected={observed_maturity}, got={model.get('maturity_sessions')!r}"
+                    )
+            except InferenceContractError as exc:
+                violations.append(f"{prefix} label maturity violation: {exc}")
 
     if model_weights and abs(sum(model_weights.values()) - 1.0) > 1e-9:
         violations.append(
@@ -255,12 +350,23 @@ def check_payload(payload: Any) -> list[str]:
                 "source.model_bundle_hash does not match pinned model bundle"
             )
 
-    for field in ("config_hash", "feature_list_hash", "candidate_hash"):
+    for field in (
+        "config_hash",
+        "feature_list_hash",
+        "universe_hash",
+        "feature_snapshot_hash",
+        "candidate_hash",
+    ):
         if is_candidate_run and not _is_sha256(payload.get(field)):
             violations.append(f"CandidateRun {field} must be a SHA-256 hex digest")
     for field in ("feature_list_id", "universe", "universe_snapshot_semantics"):
         if is_candidate_run and not payload.get(field):
             violations.append(f"CandidateRun missing {field}")
+    if is_candidate_run and payload.get("universe_snapshot_semantics") not in {
+        "current_constituents_snapshot",
+        "pit_constituents_snapshot",
+    }:
+        violations.append("CandidateRun has unsupported universe_snapshot_semantics")
 
     blend = payload.get("blend")
     if not isinstance(blend, dict):
@@ -292,8 +398,28 @@ def check_payload(payload: Any) -> list[str]:
     if is_candidate_run:
         if not isinstance(data_quality, dict) or data_quality.get("status") != "pass":
             violations.append("CandidateRun data_quality.status must be pass")
-        elif data_quality.get("feature_snapshot_date") != data_date:
-            violations.append("data_quality.feature_snapshot_date must equal data_date")
+        else:
+            if data_quality.get("feature_snapshot_date") != data_date:
+                violations.append(
+                    "data_quality.feature_snapshot_date must equal data_date"
+                )
+            for field in (
+                "feature_missing_ratio",
+                "feature_unique_non_null",
+                "model_used_features",
+                "excessive_missing_features",
+                "constant_model_used_features",
+            ):
+                if field not in data_quality:
+                    violations.append(f"CandidateRun data_quality missing {field}")
+            for field in (
+                "excessive_missing_features",
+                "constant_model_used_features",
+            ):
+                if data_quality.get(field):
+                    violations.append(
+                        f"CandidateRun data_quality.{field} must be empty"
+                    )
 
     candidates = payload.get("candidates")
     if not isinstance(candidates, list) or not candidates:
@@ -392,7 +518,11 @@ def check_payload(payload: Any) -> list[str]:
     return violations
 
 
-def check_artifact(artifact_path: str) -> list[str]:
+def check_artifact(
+    artifact_path: str,
+    *,
+    project_root: Path = PROJECT_ROOT,
+) -> list[str]:
     """Load *artifact_path* and return all contract violations."""
 
     path = Path(artifact_path)
@@ -402,14 +532,26 @@ def check_artifact(artifact_path: str) -> list[str]:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, UnicodeDecodeError, OSError) as exc:
         return [f"Cannot parse JSON: {exc}"]
-    return check_payload(payload)
+    try:
+        open_dates = load_open_dates(Path(project_root))
+    except InferenceContractError as exc:
+        return [f"Cannot load authoritative calendar: {exc}"]
+    return check_payload(payload, open_dates=open_dates)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Check inference artifact contract")
     parser.add_argument("--artifact", required=True, help="Path to JSON artifact")
+    parser.add_argument(
+        "--project-root",
+        default=str(PROJECT_ROOT),
+        help="Project root containing data/meta.db (default: repository root)",
+    )
     args = parser.parse_args()
-    violations = check_artifact(args.artifact)
+    violations = check_artifact(
+        args.artifact,
+        project_root=Path(args.project_root).resolve(),
+    )
     if violations:
         print(f"❌ Inference artifact check FAILED ({len(violations)} issue(s)):\n")
         for violation in violations:
