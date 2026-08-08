@@ -82,7 +82,7 @@ operator_agent
 ## UC_DAILY_INFERENCE_RUN
 
 ### Status
-draft
+stable
 
 ### Source
 新增 use case，响应临时推理/手动 trigger prediction 场景。不在现有 UC 编号中。
@@ -103,31 +103,59 @@ draft
 - 正式 daily shadow
 
 ### Inputs
-- trade_date / execution_date
+- signal_date / execution_date（执行日必须是信号日后的下一开市日）
 - strategy_id / feature_list_id
-- model pointer（需要解析到具体 model_id）
+- 策略配置中的显式 model bundle（必须解析到具体 model hash/path，禁止 latest）
 - calibration artifact（如有）
 
 ### Outputs
-- `outputs/{trade_date}/candidates_top*.json`
-- `outputs/{trade_date}/stop_loss_prob*.json`
-- 或 `scripts/dev/` 下的临时推理结果
+- `outputs/{signal_date}/{strategy_id}/{run_id}/candidate_run.json`
+
+CandidateRun 是不可覆盖的研究候选产物，至少包含：
+- data/signal/execution date 及 next-open-session 语义
+- model bundle、每个模型及 scaler/meta 文件的 SHA-256、训练区间、label horizon、权重
+- feature/config/candidate hash、Git 状态、数据新鲜度和覆盖率
+- 每只股票的分模型 score/rank、blend score/rank、模型排名分歧
+- universe snapshot 语义及剔除原因汇总
 
 ### Canonical Entrypoints
-TBD — 当前没有 canonical inference entrypoint。`scripts/dev/financial_rc/adapter.py` 和 `scripts/dev/gen_candidate_top200.py` 是临时实现。
+`scripts/run_daily.py --strategy <id> --mode infer --signal-date <date|auto>`。
+
+`scripts/dev/predict_financial_rc.py` 与 `scripts/dev/gen_candidate_top200.py`
+仅保留为 deprecated compatibility wrapper，不再拥有模型选择、权重或产物语义。
 
 ### Key Artifacts
-- `outputs/{trade_date}/candidates_top*.json`
+- `outputs/{signal_date}/{strategy_id}/{run_id}/candidate_run.json`
 - `data/research/signals/{signal_id}/{signal_run_id}/`
 
 ### Required Checks
 - `harness/checks/check_daily_inference_ready.py`
 - `harness/checks/check_inference_artifact.py`
 
+### Operator Runbook
+
+```bash
+# 自动选择已完成的最近交易日，并输出供人工研究的 Top 200 候选。
+python scripts/run_daily.py \
+  --strategy financial_rc \
+  --mode infer \
+  --signal-date auto \
+  --top-k 200
+
+# 使用命令输出的 artifact 路径做独立契约复核。
+python harness/checks/check_inference_artifact.py \
+  --artifact outputs/<signal_date>/financial_rc/<run_id>/candidate_run.json
+```
+
+运行前 readiness check 必须通过；任何非零退出均视为阻断，不能沿用旧候选。
+该产物只进入人工财报/基本面复核，不直接生成订单或修改 ledger。
+
 ### Owner Agent
 operator_agent
 
 ### Allowed Paths
+- `scripts/run_daily.py`
+- `configs/strategies/`
 - `outputs/`
 - `data/research/signals/`
 - `data/research/models/`
@@ -136,6 +164,7 @@ operator_agent
 - `harness/checks/`
 - `docs/requirements/`
 - `.claude/skills/`
+- `tests/`
 
 ### Forbidden Paths
 - `qsys/broker/`
@@ -144,6 +173,9 @@ operator_agent
 - `deploy/`
 - `qsys/ops/daily_runner.py`
 
-### Open Questions
-- 需要一个稳定的 canonical inference entrypoint。
-
+### Safety Semantics
+- `infer` 是 artifact-only 分支，在创建 DailyRunner、promotion snapshot 或 account context 前返回。
+- 盘中不能使用当日未完成收盘；默认 18:00 后才允许当日成为 completed signal date。
+- post-close CandidateRun 必须满足 data_date = signal_date < execution_date，execution_date 必须是下一开市日。
+- 缺模型文件、maturity、数据新鲜度、特征覆盖或可交易性门槛时非零失败，不输出候选。
+- 当前成分股 snapshot 可用于实时筛选，但不得伪称历史 PIT universe。

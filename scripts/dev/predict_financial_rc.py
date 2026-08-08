@@ -1,40 +1,59 @@
 #!/usr/bin/env python3
-"""Daily predict for financial_rc — UC-10A standalone entry.
+"""Deprecated compatibility wrapper for canonical financial_rc inference."""
 
-Usage:
-    python scripts/dev/predict_financial_rc.py --trade-date 2026-06-26 --top-k 5
-    → outputs/2026-06-26/candidates.json
+from __future__ import annotations
 
-Training must be done via UC-4 / daily_retrain / weekly_retrain first.
-This script only serves. No training.
-"""
-import argparse, json, os, sys
+import argparse
+import sys
+import warnings
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from scripts.dev.financial_rc.adapter import FinancialRCAdapter
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(PROJECT_ROOT))
 
-parser = argparse.ArgumentParser(description="UC-10A: daily candidate export")
-parser.add_argument("--trade-date", required=True)
-parser.add_argument("--top-k", type=int, default=5)
-parser.add_argument("--weight-60d", type=float, default=0.3)
-parser.add_argument("--weight-180d", type=float, default=0.7)
-parser.add_argument("--output-root", default="outputs")
-parser.add_argument("--force", action="store_true")
-args = parser.parse_args()
+from scripts.run_daily import run_daily_main
 
-adapter = FinancialRCAdapter()
-adapter.load_model(args.trade_date)
-result = adapter.predict(args.trade_date, top_k=args.top_k,
-                          w60=args.weight_60d, w180=args.weight_180d)
 
-out = Path(args.output_root) / args.trade_date / "candidates.json"
-if out.exists() and not args.force:
-    raise FileExistsError(f"{out} exists. Use --force to overwrite.")
-out.parent.mkdir(parents=True, exist_ok=True)
-tmp = out.with_suffix(".tmp.json")
-tmp.write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
-os.replace(tmp, out)
-print(f"-> {out}")
-for c in result["candidates"][:5]:
-    print(f"  {c['rank']}. {c['ts_code']} {c.get('name','')[:8]:<8s} score={c['ranking_score']:.4f}")
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Deprecated financial_rc inference wrapper"
+    )
+    parser.add_argument("--trade-date", required=True)
+    parser.add_argument("--top-k", type=int, default=5)
+    parser.add_argument("--weight-60d", type=float, default=0.5)
+    parser.add_argument("--weight-180d", type=float, default=0.5)
+    parser.add_argument("--output-root", default="outputs")
+    parser.add_argument("--force", action="store_true")
+    args = parser.parse_args()
+
+    if (args.weight_60d, args.weight_180d) != (0.5, 0.5):
+        parser.error(
+            "weights are pinned in configs/strategies/financial_rc.yaml (0.5/0.5)"
+        )
+    if args.output_root != "outputs" or args.force:
+        parser.error(
+            "canonical inference artifacts are immutable under outputs/; override is forbidden"
+        )
+
+    warnings.warn(
+        "scripts/dev/predict_financial_rc.py is deprecated; use "
+        "scripts/run_daily.py --strategy financial_rc --mode infer",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    run_daily_main(
+        [
+            "--strategy",
+            "financial_rc",
+            "--mode",
+            "infer",
+            "--signal-date",
+            args.trade_date,
+            "--top-k",
+            str(args.top_k),
+        ]
+    )
+
+
+if __name__ == "__main__":
+    main()

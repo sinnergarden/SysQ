@@ -11,6 +11,9 @@ Usage::
 
     python scripts/run_daily.py --strategy alpha_v1 --mode train
 
+    python scripts/run_daily.py --strategy financial_rc --mode infer \
+        --signal-date auto --top-k 200
+
     python scripts/run_daily.py --strategy alpha_v1 --notify-only \\
         --trade-date 2026-05-22
 """
@@ -53,6 +56,7 @@ from qsys.ops.attempts import (
 )
 from qsys.ops.run_context import DailyRunContext, resolve_run_root
 from qsys.ops.promotion_resolver import resolve_shadow_promotion
+from qsys.signal.model_blend_inference import run_candidate_inference
 from qsys.strategy.registry import create_strategy
 
 
@@ -66,11 +70,24 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--strategy", required=True, help="策略 ID (如 alpha_v1)")
     parser.add_argument(
         "--mode",
-        choices=["preopen", "postclose", "train"],
+        choices=["preopen", "postclose", "train", "infer"],
         default="preopen",
         help="运行模式",
     )
     parser.add_argument("--trade-date", help="交易日期 YYYY-MM-DD 或 auto（默认 auto）")
+    parser.add_argument(
+        "--signal-date",
+        help="infer 信号/数据截止日 YYYY-MM-DD 或 auto（默认 auto）",
+    )
+    parser.add_argument(
+        "--execution-date",
+        help="infer 执行日；省略时严格解析为 signal_date 后下一开市日",
+    )
+    parser.add_argument(
+        "--top-k",
+        type=int,
+        help="infer 候选数量；省略时使用策略配置",
+    )
     parser.add_argument(
         "--debug-run",
         action="store_true",
@@ -126,7 +143,23 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     # （新 run_root 无 COMMITTED marker，但 ledger run_id 相同且已 completed）。
     if args.output_dir and not args.debug_run:
         parser.error("--output-dir 只允许在 --debug-run 模式使用（F04：防止绕过 committed gate）")
-    if args.mode == "train":
+    if args.mode == "infer":
+        if args.notify_only:
+            parser.error("--notify-only 不适用于 infer 模式")
+        if args.debug_run or args.output_dir or args.force_rerun:
+            parser.error(
+                "infer 只写不可覆盖的标准 CandidateRun；不支持 "
+                "--debug-run/--output-dir/--force-rerun"
+            )
+        if args.train_end_date or args.promotion_pointer:
+            parser.error("infer 不训练模型，也不读取 promotion pointer")
+        if args.trade_date and args.signal_date and args.trade_date != args.signal_date:
+            parser.error(
+                "infer 的 --trade-date 仅是 --signal-date 兼容别名，两者不得冲突"
+            )
+        args.signal_date = args.signal_date or args.trade_date or "auto"
+        args.trade_date = None
+    elif args.mode == "train":
         if args.force_rerun:
             print("⚠ --force-rerun 对 train 模式无意义，忽略")
     elif not args.trade_date or args.trade_date == "auto":
@@ -144,6 +177,29 @@ def run_daily_main(argv: list[str] | None = None) -> None:
 
     strategy_id = args.strategy
     config = load_strategy_config(strategy_id, PROJECT_ROOT)
+
+    # UC_DAILY_INFERENCE_RUN is artifact-only.  Dispatch before creating a
+    # strategy adapter, DailyRunner, promotion snapshot, or account context.
+    if args.mode == "infer":
+        result = run_candidate_inference(
+            strategy_id=strategy_id,
+            strategy_config=config,
+            project_root=PROJECT_ROOT,
+            signal_date=args.signal_date,
+            execution_date=args.execution_date,
+            top_k=args.top_k,
+        )
+        payload = result.payload
+        print(f"  ✅ CandidateRun: {result.artifact_path}")
+        print(
+            "  Dates: "
+            f"signal={payload['signal_date']} -> execution={payload['execution_date']}"
+        )
+        print(
+            f"  Candidates: {payload['candidate_count']}  "
+            f"hash={payload['candidate_hash'][:12]}"
+        )
+        return
 
     # Inject training end_date into config so it flows through to the trainer
     if args.train_end_date:

@@ -1,0 +1,159 @@
+from __future__ import annotations
+
+import hashlib
+import json
+from datetime import datetime
+from pathlib import Path
+
+import pytest
+
+from qsys.signal.model_blend_inference import (
+    InferenceContractError,
+    _atomic_write_json,
+    compute_candidate_hash,
+    load_model_lineage,
+    resolve_inference_dates,
+    validate_inference_config,
+)
+
+OPEN_DATES = [
+    "2026-04-27",
+    "2026-04-28",
+    "2026-04-29",
+    "2026-04-30",
+    "2026-05-06",
+    "2026-08-06",
+    "2026-08-07",
+    "2026-08-10",
+]
+
+
+def _config(model_root: Path) -> dict:
+    models = []
+    for tag, horizon, model_hash in (("60d", 2, "hash60"), ("180d", 3, "hash180")):
+        model_dir = model_root / tag / model_hash
+        model_dir.mkdir(parents=True)
+        for filename in ("model.txt", "center.json", "scale.json"):
+            (model_dir / filename).write_text("{}", encoding="utf-8")
+        (model_dir / "meta.json").write_text(
+            json.dumps(
+                {
+                    "model_hash": model_hash,
+                    "feature_list_id": "features_v1",
+                    "label_id": f"label_{tag}",
+                    "universe": "csi800",
+                    "horizon": horizon,
+                    "train_start": "2026-04-27",
+                    "train_end": "2026-04-27",
+                }
+            ),
+            encoding="utf-8",
+        )
+        artifact_sha256 = {
+            filename: hashlib.sha256((model_dir / filename).read_bytes()).hexdigest()
+            for filename in ("model.txt", "center.json", "scale.json", "meta.json")
+        }
+        models.append(
+            {
+                "tag": tag,
+                "model_hash": model_hash,
+                "model_dir": str(model_dir.relative_to(model_root.parents[2])),
+                "label_id": f"label_{tag}",
+                "horizon": horizon,
+                "weight": 0.5,
+                "artifact_sha256": artifact_sha256,
+            }
+        )
+    return {
+        "strategy_id": "financial_rc",
+        "universe": "csi800",
+        "feature_set": "features_v1",
+        "inference": {
+            "engine": "pinned_model_blend_v1",
+            "feature_list_id": "features_v1",
+            "model_bundle": {"bundle_id": "bundle_v1", "models": models},
+        },
+    }
+
+
+def test_resolves_friday_close_to_monday_execution() -> None:
+    dates = resolve_inference_dates(
+        "2026-08-07",
+        None,
+        OPEN_DATES,
+        now=datetime.fromisoformat("2026-08-08T12:00:00+08:00"),
+    )
+    assert dates.signal_date == "2026-08-07"
+    assert dates.data_date == "2026-08-07"
+    assert dates.execution_date == "2026-08-10"
+
+
+def test_auto_before_cutoff_uses_previous_completed_session() -> None:
+    dates = resolve_inference_dates(
+        "auto",
+        None,
+        OPEN_DATES,
+        now=datetime.fromisoformat("2026-08-07T10:00:00+08:00"),
+    )
+    assert dates.signal_date == "2026-08-06"
+    assert dates.execution_date == "2026-08-07"
+
+
+def test_rejects_same_day_execution() -> None:
+    with pytest.raises(InferenceContractError, match="next open session"):
+        resolve_inference_dates(
+            "2026-08-07",
+            "2026-08-07",
+            OPEN_DATES,
+            now=datetime.fromisoformat("2026-08-08T12:00:00+08:00"),
+        )
+
+
+def test_validates_pinned_bundle_and_maturity(tmp_path: Path) -> None:
+    model_root = tmp_path / "data" / "research" / "models"
+    config = _config(model_root)
+    settings = validate_inference_config("financial_rc", config, tmp_path)
+    lineage = load_model_lineage(settings, "2026-08-07", OPEN_DATES)
+    assert settings["bundle_id"] == "bundle_v1"
+    assert [item["tag"] for item in lineage] == ["60d", "180d"]
+
+
+def test_rejects_non_unit_model_weights(tmp_path: Path) -> None:
+    model_root = tmp_path / "data" / "research" / "models"
+    config = _config(model_root)
+    config["inference"]["model_bundle"]["models"][0]["weight"] = 0.7
+    with pytest.raises(InferenceContractError, match="sum to 1.0"):
+        validate_inference_config("financial_rc", config, tmp_path)
+
+
+def test_rejects_mutated_scaler_artifact(tmp_path: Path) -> None:
+    model_root = tmp_path / "data" / "research" / "models"
+    config = _config(model_root)
+    scaler = model_root / "60d" / "hash60" / "scale.json"
+    scaler.write_text('{"mutated": true}', encoding="utf-8")
+    with pytest.raises(InferenceContractError, match="artifact digest mismatch"):
+        validate_inference_config("financial_rc", config, tmp_path)
+
+
+def test_rejects_symlink_in_model_path(tmp_path: Path) -> None:
+    model_root = tmp_path / "data" / "research" / "models"
+    config = _config(model_root)
+    real_tag_dir = model_root / "60d_real"
+    (model_root / "60d").rename(real_tag_dir)
+    (model_root / "60d").symlink_to(real_tag_dir, target_is_directory=True)
+    with pytest.raises(InferenceContractError, match="must not contain symlinks"):
+        validate_inference_config("financial_rc", config, tmp_path)
+
+
+def test_candidate_hash_ignores_attempt_id() -> None:
+    left = [{"ts_code": "000001.SZ", "rank": 1, "run_id": "attempt-a"}]
+    right = [{"ts_code": "000001.SZ", "rank": 1, "run_id": "attempt-b"}]
+    assert compute_candidate_hash(left) == compute_candidate_hash(right)
+
+
+def test_artifact_write_never_overwrites(tmp_path: Path) -> None:
+    artifact = tmp_path / "candidate_run.json"
+    _atomic_write_json(artifact, {"attempt": 1})
+    with pytest.raises(FileExistsError, match="already exists"):
+        _atomic_write_json(artifact, {"attempt": 2})
+    assert json.loads(artifact.read_text(encoding="utf-8")) == {"attempt": 1}
