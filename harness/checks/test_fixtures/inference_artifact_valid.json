@@ -10,6 +10,7 @@
   "execution_date": "2026-08-10",
   "date_contract": {
     "mode": "postclose_for_next_open_session",
+    "run_anchor_at": "2026-08-08T07:27:04Z",
     "market_close_cutoff": "18:00",
     "expected_completed_date": "2026-08-07",
     "execution_rule": "next_open_session",
@@ -41,6 +42,7 @@
         "train_end": "2026-04-01",
         "horizon": 60,
         "maturity_sessions": 87,
+        "ordered_feature_list_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         "weight": 0.5,
         "artifact_sha256": {
           "model.txt": "1111111111111111111111111111111111111111111111111111111111111111",
@@ -59,6 +61,7 @@
         "train_end": "2025-09-30",
         "horizon": 180,
         "maturity_sessions": 204,
+        "ordered_feature_list_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         "weight": 0.5,
         "artifact_sha256": {
           "model.txt": "5555555555555555555555555555555555555555555555555555555555555555",

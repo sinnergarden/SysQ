@@ -115,19 +115,30 @@ CandidateRun 是不可覆盖的研究候选产物，至少包含：
 - data/signal/execution date 及 next-open-session 语义
 - model bundle、每个模型及 scaler/meta 文件的 SHA-256、训练区间、label horizon、权重
 - universe/config/feature-list/feature-snapshot/candidate hash、Git 状态、数据新鲜度和覆盖率
+- 每个模型的 ordered feature-list hash，并与 pinned center/scale index 顺序严格一致
 - 每只股票的分模型 score/rank、blend score/rank、模型排名分歧
 - universe snapshot 语义、逐特征缺失率/有效唯一值及剔除原因汇总
 
 `current_constituents_snapshot` 只允许 `signal_date` 等于 artifact 创建时按
-权威交易日历和收盘 cutoff 推导出的最近已完成交易日。历史推理必须使用
-`pit_constituents_snapshot`，否则非零失败且不得生成 CandidateRun。生成器必须
-hash 实际成分集合，并验证 feature snapshot 的股票集合与成分快照完全一致。
+权威交易日历和收盘 cutoff 推导出的最近已完成交易日。当前尚未实现 PIT
+constituent provider，因此历史推理不可用；传入 `pit_constituents_snapshot` 也必须
+非零失败且不得生成 CandidateRun。生成器必须 hash 实际成分集合，并验证
+feature snapshot 的股票集合与成分快照完全一致。
 
 `feature_snapshot_hash` 使用稳定排序后的 instrument、固定顺序 feature 和原始
 数值计算；数值采用精确 float-hex 表示，缺失值统一为 null。它与
 `feature_list_hash` 分工：后者标识特征名称/顺序，前者标识当次实际输入值。
 任何模型实际使用的 feature 若当日截面无变化，或任一 feature 缺失率超过配置
 阈值，推理必须 fail closed，不能以总覆盖率通过来掩盖死因子。
+
+LightGBM 使用 positional ndarray 预测。模型 artifact 中已由 SHA-256 pin 的
+`center.json` / `scale.json` index 是训练输入顺序的权威记录；生成器必须要求
+两者的完整有序列表都与 feature registry 完全相等，不能只比较集合或数量。
+CandidateRun 每个模型同时记录与顶层一致的 `ordered_feature_list_hash`。
+
+每次推理进入 `run_candidate_inference()` 时只采样一次 `run_anchor_at`。日期解析、
+`created_at`、run ID 和 artifact 的 completed-session 契约必须使用同一个 anchor，
+避免跨越 18:00 cutoff 后生成一个无法通过自身 checker 的 artifact。
 
 #### financial_rc 0.5/0.5 迁移说明
 
@@ -199,6 +210,6 @@ operator_agent
 - `infer` 是 artifact-only 分支，在创建 DailyRunner、promotion snapshot 或 account context 前返回。
 - 盘中不能使用当日未完成收盘；默认 18:00 后才允许当日成为 completed signal date。
 - post-close CandidateRun 必须满足 data_date = signal_date < execution_date，execution_date 必须是下一开市日。
-- current constituents snapshot 只允许最近已完成交易日；历史日期必须提供 PIT universe。
+- current constituents snapshot 只允许最近已完成交易日；PIT provider 未实现，因此历史推理暂不可用。
 - 缺模型文件、maturity、数据新鲜度、特征覆盖或可交易性门槛时非零失败，不输出候选。
 - 当前成分股 snapshot 可用于实时筛选，但不得伪称历史 PIT universe。

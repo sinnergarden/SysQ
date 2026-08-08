@@ -136,6 +136,10 @@ def check_payload(
             violations.append(
                 "date_contract.mode must be postclose_for_next_open_session"
             )
+        if date_contract.get("run_anchor_at") != payload.get("created_at"):
+            violations.append(
+                "date_contract.run_anchor_at must equal top-level created_at"
+            )
         expected_completed_date = _date(
             date_contract.get("expected_completed_date"),
             "date_contract.expected_completed_date",
@@ -241,6 +245,7 @@ def check_payload(
             "horizon",
             "weight",
             "maturity_sessions",
+            "ordered_feature_list_hash",
         ):
             if model.get(field) in (None, ""):
                 violations.append(f"{prefix} missing {field}")
@@ -266,6 +271,13 @@ def check_payload(
         ):
             violations.append(
                 f"{prefix}.feature_list_id must match top-level feature_list_id"
+            )
+        if is_candidate_run and model.get("ordered_feature_list_hash") != payload.get(
+            "feature_list_hash"
+        ):
+            violations.append(
+                f"{prefix}.ordered_feature_list_hash must match top-level "
+                "feature_list_hash"
             )
         if tag:
             if tag in model_tags:
@@ -362,11 +374,15 @@ def check_payload(
     for field in ("feature_list_id", "universe", "universe_snapshot_semantics"):
         if is_candidate_run and not payload.get(field):
             violations.append(f"CandidateRun missing {field}")
-    if is_candidate_run and payload.get("universe_snapshot_semantics") not in {
-        "current_constituents_snapshot",
-        "pit_constituents_snapshot",
-    }:
-        violations.append("CandidateRun has unsupported universe_snapshot_semantics")
+    if (
+        is_candidate_run
+        and payload.get("universe_snapshot_semantics")
+        != "current_constituents_snapshot"
+    ):
+        violations.append(
+            "CandidateRun only supports current_constituents_snapshot; "
+            "the PIT universe provider is not implemented"
+        )
 
     blend = payload.get("blend")
     if not isinstance(blend, dict):

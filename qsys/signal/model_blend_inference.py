@@ -389,14 +389,13 @@ def resolve_inference_dates(
         raise InferenceContractError(
             "current_constituents_snapshot cannot run historical signal dates: "
             f"signal_date={resolved_signal}, expected_completed={expected_completed}; "
-            "historical inference requires a PIT universe snapshot"
+            "historical inference is unavailable until a PIT universe provider "
+            "is implemented"
         )
-    if universe_snapshot_semantics not in {
-        "current_constituents_snapshot",
-        "pit_constituents_snapshot",
-    }:
+    if universe_snapshot_semantics != "current_constituents_snapshot":
         raise InferenceContractError(
-            f"unsupported universe snapshot semantics: {universe_snapshot_semantics!r}"
+            "historical PIT inference is unavailable: no "
+            "pit_constituents_snapshot provider is implemented"
         )
 
     expected_execution = resolve_next_open_session(resolved_signal, sessions)
@@ -634,7 +633,8 @@ def validate_inference_config(
         raise InferenceContractError("inference.output_root must be canonical outputs")
     if settings["universe_snapshot_semantics"] != "current_constituents_snapshot":
         raise InferenceContractError(
-            "pinned_model_blend_v1 requires current_constituents_snapshot semantics"
+            "pinned_model_blend_v1 only supports current_constituents_snapshot; "
+            "the PIT universe provider is not implemented"
         )
     for key in (
         "min_universe_size",
@@ -863,12 +863,14 @@ def _score_stats(values: Iterable[float]) -> dict[str, float]:
 
 def _load_runtime_models(
     model_specs: Sequence[dict[str, Any]], features: Sequence[str]
-) -> tuple[dict[str, Any], set[str]]:
+) -> tuple[dict[str, Any], dict[str, tuple[Any, Any]], set[str]]:
     """Load pinned LightGBM models and identify features used by any split."""
 
     import lightgbm as lgb
+    import pandas as pd
 
     loaded: dict[str, Any] = {}
+    scalers: dict[str, tuple[Any, Any]] = {}
     used_features: set[str] = set()
     for model_spec in model_specs:
         model_dir = Path(model_spec["resolved_model_dir"])
@@ -878,6 +880,14 @@ def _load_runtime_models(
                 f"model {model_spec['tag']} expects {model.num_feature()} features, "
                 f"configured list has {len(features)}"
             )
+        center = pd.read_json(model_dir / "center.json", typ="series")
+        scale = pd.read_json(model_dir / "scale.json", typ="series")
+        validate_ordered_model_features(
+            model_spec["tag"],
+            features,
+            center.index,
+            scale.index,
+        )
         split_importance = model.feature_importance(importance_type="split")
         used_features.update(
             feature
@@ -885,7 +895,41 @@ def _load_runtime_models(
             if int(split_count) > 0
         )
         loaded[model_spec["tag"]] = model
-    return loaded, used_features
+        scalers[model_spec["tag"]] = (center, scale)
+    return loaded, scalers, used_features
+
+
+def validate_ordered_model_features(
+    model_tag: str,
+    features: Sequence[str],
+    center_index: Iterable[Any],
+    scale_index: Iterable[Any],
+) -> None:
+    """Require pinned scaler indices to match the positional model input."""
+
+    expected = [str(feature) for feature in features]
+    for artifact_name, index in (
+        ("center.json", center_index),
+        ("scale.json", scale_index),
+    ):
+        observed = [str(feature) for feature in index]
+        if observed != expected:
+            mismatch = next(
+                (
+                    position,
+                    expected[position] if position < len(expected) else None,
+                    observed[position] if position < len(observed) else None,
+                )
+                for position in range(max(len(expected), len(observed)))
+                if position >= len(expected)
+                or position >= len(observed)
+                or expected[position] != observed[position]
+            )
+            raise InferenceContractError(
+                f"model {model_tag} ordered feature contract differs in "
+                f"{artifact_name}: position={mismatch[0]}, "
+                f"expected={mismatch[1]!r}, observed={mismatch[2]!r}"
+            )
 
 
 def profile_feature_quality(
@@ -946,6 +990,10 @@ def run_candidate_inference(
 ) -> InferenceRunResult:
     """Run a pinned model blend and write one immutable CandidateRun JSON."""
 
+    run_anchor_time = now if now is not None else datetime.now(timezone.utc)
+    if run_anchor_time.tzinfo is None or run_anchor_time.utcoffset() is None:
+        run_anchor_time = run_anchor_time.replace(tzinfo=ZoneInfo("Asia/Shanghai"))
+
     import numpy as np
     import pandas as pd
 
@@ -960,7 +1008,7 @@ def run_candidate_inference(
         signal_date,
         execution_date,
         open_dates,
-        now=now,
+        now=run_anchor_time,
         market_close_cutoff=settings["market_close_cutoff"],
         universe_snapshot_semantics=settings["universe_snapshot_semantics"],
     )
@@ -1054,9 +1102,11 @@ def run_candidate_inference(
         )
 
     feature_snapshot_hash = compute_feature_snapshot_hash(frame, features)
-    loaded_models, model_used_features = _load_runtime_models(
+    loaded_models, loaded_scalers, model_used_features = _load_runtime_models(
         settings["models"], features
     )
+    for model in model_lineage:
+        model["ordered_feature_list_hash"] = feature_list_hash
 
     feature_quality = profile_feature_quality(
         frame,
@@ -1170,17 +1220,9 @@ def run_candidate_inference(
     # incomplete rows.
     X = eligible[features].fillna(0.0).astype(np.float32)
     for model_spec in settings["models"]:
-        model_dir = Path(model_spec["resolved_model_dir"])
         model = loaded_models[model_spec["tag"]]
-        center = pd.read_json(model_dir / "center.json", typ="series")
-        scale = pd.read_json(model_dir / "scale.json", typ="series")
-        if set(center.index) != set(features) or set(scale.index) != set(features):
-            raise InferenceContractError(
-                f"model {model_spec['tag']} scaler feature set differs from configured feature list"
-            )
-        X_scaled = robust_zscore_transform(
-            X, center.reindex(features), scale.reindex(features)
-        )
+        center, scale = loaded_scalers[model_spec["tag"]]
+        X_scaled = robust_zscore_transform(X, center, scale)
         prediction = np.asarray(model.predict(X_scaled[features].values), dtype=float)
         if len(prediction) != len(eligible) or not np.isfinite(prediction).all():
             raise InferenceContractError(
@@ -1260,10 +1302,7 @@ def run_candidate_inference(
         )
 
     candidate_hash = compute_candidate_hash(candidates)
-    created = now or datetime.now(timezone.utc)
-    if created.tzinfo is None:
-        created = created.replace(tzinfo=timezone.utc)
-    created_utc = created.astimezone(timezone.utc).replace(microsecond=0)
+    created_utc = run_anchor_time.astimezone(timezone.utc).replace(microsecond=0)
     created_at = created_utc.isoformat().replace("+00:00", "Z")
     run_id = (
         f"infer_{strategy_id}_{dates.signal_date.replace('-', '')}_"
@@ -1286,6 +1325,7 @@ def run_candidate_inference(
         "execution_date": dates.execution_date,
         "date_contract": {
             "mode": "postclose_for_next_open_session",
+            "run_anchor_at": created_at,
             "market_close_cutoff": settings["market_close_cutoff"],
             "expected_completed_date": dates.expected_completed_date,
             "execution_rule": "next_open_session",

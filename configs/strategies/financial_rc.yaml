@@ -61,7 +61,8 @@ inference:
   market_close_cutoff: "18:00"
   output_root: outputs
   # Current CSI800 constituents are safe for live screening but not a PIT
-  # historical universe.  The artifact carries this caveat explicitly.
+  # historical universe. Historical inference remains unavailable until a
+  # dedicated PIT constituent provider is implemented.
   universe_snapshot_semantics: current_constituents_snapshot
 
 # Migration rationale (2026-08): legacy scripts encoded two incompatible

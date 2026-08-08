@@ -18,6 +18,7 @@ from qsys.signal.model_blend_inference import (
     load_universe_snapshot_members,
     profile_feature_quality,
     resolve_inference_dates,
+    validate_ordered_model_features,
     validate_inference_config,
 )
 
@@ -125,15 +126,15 @@ def test_rejects_historical_date_for_current_universe_snapshot() -> None:
         )
 
 
-def test_pit_universe_semantics_allow_historical_date() -> None:
-    dates = resolve_inference_dates(
-        "2026-08-06",
-        None,
-        OPEN_DATES,
-        now=datetime.fromisoformat("2026-08-08T12:00:00+08:00"),
-        universe_snapshot_semantics="pit_constituents_snapshot",
-    )
-    assert dates.execution_date == "2026-08-07"
+def test_pit_universe_semantics_are_rejected_until_provider_exists() -> None:
+    with pytest.raises(InferenceContractError, match="historical PIT inference"):
+        resolve_inference_dates(
+            "2026-08-06",
+            None,
+            OPEN_DATES,
+            now=datetime.fromisoformat("2026-08-08T12:00:00+08:00"),
+            universe_snapshot_semantics="pit_constituents_snapshot",
+        )
 
 
 def test_validates_pinned_bundle_and_maturity(tmp_path: Path) -> None:
@@ -150,6 +151,14 @@ def test_rejects_non_unit_model_weights(tmp_path: Path) -> None:
     config = _config(model_root)
     config["inference"]["model_bundle"]["models"][0]["weight"] = 0.7
     with pytest.raises(InferenceContractError, match="sum to 1.0"):
+        validate_inference_config("financial_rc", config, tmp_path)
+
+
+def test_rejects_pit_config_until_provider_exists(tmp_path: Path) -> None:
+    model_root = tmp_path / "data" / "research" / "models"
+    config = _config(model_root)
+    config["inference"]["universe_snapshot_semantics"] = "pit_constituents_snapshot"
+    with pytest.raises(InferenceContractError, match="provider is not implemented"):
         validate_inference_config("financial_rc", config, tmp_path)
 
 
@@ -234,6 +243,16 @@ def test_feature_quality_fails_closed_on_dead_model_inputs() -> None:
     )
     assert quality["excessive_missing_features"] == ["all_missing"]
     assert quality["constant_model_used_features"] == ["dead"]
+
+
+def test_same_feature_set_in_different_order_is_rejected() -> None:
+    with pytest.raises(InferenceContractError, match="ordered feature contract"):
+        validate_ordered_model_features(
+            "60d",
+            ["roe", "margin", "value"],
+            ["margin", "roe", "value"],
+            ["roe", "margin", "value"],
+        )
 
 
 def test_artifact_write_never_overwrites(tmp_path: Path) -> None:

@@ -65,6 +65,7 @@ def _valid_payload() -> dict:
         "execution_date": "2026-08-10",
         "date_contract": {
             "mode": "postclose_for_next_open_session",
+            "run_anchor_at": "2026-08-08T07:27:04Z",
             "market_close_cutoff": "18:00",
             "expected_completed_date": "2026-08-07",
             "execution_rule": "next_open_session",
@@ -96,6 +97,7 @@ def _valid_payload() -> dict:
                     "maturity_sessions": _maturity_sessions(
                         "2026-04-01", "2026-08-07"
                     ),
+                    "ordered_feature_list_hash": "b" * 64,
                     "weight": 0.5,
                     "artifact_sha256": {
                         "model.txt": "1" * 64,
@@ -116,6 +118,7 @@ def _valid_payload() -> dict:
                     "maturity_sessions": _maturity_sessions(
                         "2025-10-01", "2026-08-07"
                     ),
+                    "ordered_feature_list_hash": "b" * 64,
                     "weight": 0.5,
                     "artifact_sha256": {
                         "model.txt": "5" * 64,
@@ -202,6 +205,36 @@ def test_naive_creation_timestamp_is_rejected() -> None:
     payload = _valid_payload()
     payload["created_at"] = "2026-08-08T07:27:04"
     assert "created_at must include a UTC offset" in _check(payload)
+
+
+def test_run_anchor_must_equal_created_at() -> None:
+    payload = _valid_payload()
+    payload["date_contract"]["run_anchor_at"] = "2026-08-08T07:27:05Z"
+    assert (
+        "date_contract.run_anchor_at must equal top-level created_at"
+        in _check(payload)
+    )
+
+
+def test_pre_cutoff_run_anchor_is_self_consistent() -> None:
+    payload = _valid_payload()
+    payload["created_at"] = "2026-08-07T09:59:00Z"
+    payload["signal_date"] = "2026-08-06"
+    payload["data_date"] = "2026-08-06"
+    payload["execution_date"] = "2026-08-07"
+    payload["date_contract"]["run_anchor_at"] = payload["created_at"]
+    payload["date_contract"]["expected_completed_date"] = "2026-08-06"
+    payload["data_quality"]["feature_snapshot_date"] = "2026-08-06"
+    for model in payload["source"]["models"]:
+        model["maturity_sessions"] = _maturity_sessions(
+            model["train_end"], "2026-08-06"
+        )
+    candidate = payload["candidates"][0]
+    candidate["signal_date"] = "2026-08-06"
+    candidate["data_date"] = "2026-08-06"
+    candidate["execution_date"] = "2026-08-07"
+    payload["candidate_hash"] = compute_candidate_hash(payload["candidates"])
+    assert _check(payload) == []
 
 
 def test_candidate_model_weight_drift_is_rejected() -> None:
@@ -294,6 +327,24 @@ def test_input_snapshot_hashes_are_required() -> None:
     assert (
         "CandidateRun feature_snapshot_hash must be a SHA-256 hex digest"
         in violations
+    )
+
+
+def test_ordered_feature_hash_must_match_top_level_hash() -> None:
+    payload = _valid_payload()
+    payload["source"]["models"][0]["ordered_feature_list_hash"] = "f" * 64
+    assert any(
+        "ordered_feature_list_hash must match" in violation
+        for violation in _check(payload)
+    )
+
+
+def test_pit_artifact_is_rejected_until_provider_exists() -> None:
+    payload = _valid_payload()
+    payload["universe_snapshot_semantics"] = "pit_constituents_snapshot"
+    assert any(
+        "PIT universe provider is not implemented" in violation
+        for violation in _check(payload)
     )
 
 
