@@ -932,6 +932,40 @@ def validate_ordered_model_features(
             )
 
 
+def validate_training_feature_lineage(
+    model_specs: Sequence[dict[str, Any]], features: Sequence[str]
+) -> None:
+    """Validate schema-v2 training metadata against the live ordered list.
+
+    Legacy schema-v1 bundles predate this provenance field and remain readable
+    while explicitly pinned.  Every newly trained schema-v2 bundle must carry
+    both the ordered list and its canonical hash; changing YAML order with the
+    same set of names therefore fails before model prediction.
+    """
+
+    expected = [str(feature) for feature in features]
+    expected_hash = _canonical_hash(expected)
+    for model_spec in model_specs:
+        meta_path = Path(model_spec["resolved_model_dir"]) / "meta.json"
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            schema_version = int(meta.get("schema_version", 1))
+        except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
+            raise InferenceContractError(
+                f"cannot validate training feature lineage for "
+                f"{model_spec['tag']}: {exc}"
+            ) from exc
+        if schema_version < 2:
+            continue
+        observed = [str(feature) for feature in meta.get("ordered_features", [])]
+        observed_hash = str(meta.get("feature_list_hash") or "")
+        if observed != expected or observed_hash != expected_hash:
+            raise InferenceContractError(
+                f"model {model_spec['tag']} training ordered feature lineage "
+                "differs from configured feature list"
+            )
+
+
 def profile_feature_quality(
     frame: Any,
     features: Sequence[str],
@@ -1034,6 +1068,7 @@ def run_candidate_inference(
             "feature list must be non-empty and contain no duplicates"
         )
     feature_list_hash = _canonical_hash(features)
+    validate_training_feature_lineage(settings["models"], features)
     market_fields = ["$close", "$volume", "$amount"]
     requested_fields = features + [
         field for field in market_fields if field not in features

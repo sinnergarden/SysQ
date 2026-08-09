@@ -311,6 +311,28 @@ class TestDispatch(unittest.TestCase):
         passed_config = mock_create.call_args[0][1]
         assert passed_config["training"]["end_date"] == "2026-05-15"
 
+    def test_financial_rc_train_uses_dedicated_trainer_without_promotion(self):
+        """Research bundle training must not require a shadow promotion pointer."""
+        with patch("scripts.run_daily.load_strategy_config", return_value={}), \
+             patch("scripts.run_daily.has_model_trainer", return_value=True), \
+             patch("scripts.run_daily.create_model_trainer") as create_trainer, \
+             patch("scripts.run_daily.create_strategy") as create_strategy, \
+             patch("scripts.run_daily.resolve_shadow_promotion") as resolve_promotion, \
+             patch("scripts.run_daily.DailyRunner") as runner_cls:
+            trainer = create_trainer.return_value
+            trainer.strategy_id = "financial_rc"
+            trainer.account_id = "research_financial_rc"
+            trainer.display_name = "Financial RC"
+
+            run_daily_main([
+                "--strategy", "financial_rc", "--mode", "train",
+                "--trade-date", "2026-08-07", "--no-notify",
+            ])
+
+        create_strategy.assert_not_called()
+        resolve_promotion.assert_not_called()
+        runner_cls.return_value.run_train.assert_called_once()
+
 
 class TestAlphaV2Dispatch(unittest.TestCase):
     """Verify alpha_v2 dispatches through run_daily_main."""
