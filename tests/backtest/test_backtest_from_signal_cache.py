@@ -60,6 +60,43 @@ def _run_bt(tmp_path, runner_kwargs=None, **kwargs):
 
 
 class TestRunFromSignalCache:
+    def test_rejects_incomplete_secondary_reference(self, tmp_path: Path) -> None:
+        runner = BacktestRunner()
+        with pytest.raises(ValueError, match="must be provided together"):
+            runner.run_from_signal_cache(
+                signal_id="test_sig",
+                signal_run_id="test_run",
+                signal_id_2="secondary",
+                start_date="2026-06-15",
+                end_date="2026-06-17",
+                research_root=tmp_path,
+            )
+
+    def test_rejects_blend_weight_outside_unit_interval(self, tmp_path: Path) -> None:
+        runner = BacktestRunner()
+        with pytest.raises(ValueError, match=r"within \[0, 1\]"):
+            runner.run_from_signal_cache(
+                signal_id="test_sig",
+                signal_run_id="test_run",
+                start_date="2026-06-15",
+                end_date="2026-06-17",
+                blend_weight=1.01,
+                research_root=tmp_path,
+            )
+
+    def test_default_output_is_under_research_root(self, tmp_path: Path) -> None:
+        _run_bt(
+            tmp_path,
+            fixture_dates=1,
+            fixture_inst=5,
+            signal_id="test_sig",
+            signal_run_id="test_run",
+            start_date="2026-06-15",
+            end_date="2026-06-15",
+            output_dir=None,
+        )
+        assert any((tmp_path / "backtests").glob("*/*/manifest.json"))
+
     def test_returns_result(self, tmp_path: Path) -> None:
         result = _run_bt(tmp_path, signal_id="test_sig", signal_run_id="test_run",
                          start_date="2026-06-15", end_date="2026-06-17",

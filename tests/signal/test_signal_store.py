@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import patch
 
 import pandas as pd
 import pytest
@@ -44,6 +45,10 @@ class TestSignalStoreSave:
         assert mf["signal_run_id"] == "run_001"
         assert mf["row_count"] == 3
         assert "created_at" in mf
+        assert len(mf["predictions_sha256"]) == 64
+        assert mf["predictions_sha256"] == store.signal_data_sha256(
+            "alpha_v1", "run_001"
+        )
 
     def test_missing_required_column_fails(self, tmp_path: Path) -> None:
         store = SignalStore(str(tmp_path))
@@ -174,6 +179,22 @@ class TestSignalStoreNoLookahead:
             "score": [1.0],
         })
         store.save_signal_run("a", "r", frame)
+
+    def test_calendar_resolution_runs_once_per_distinct_trade_date(self) -> None:
+        from qsys.signal.store import _check_no_lookahead_on_frame
+
+        frame = pd.DataFrame(
+            {
+                "trade_date": ["2026-06-15"] * 10_000,
+                "data_date": ["2026-06-12"] * 10_000,
+            }
+        )
+        with patch(
+            "qsys.signal.store._resolve_prev_trading_day",
+            return_value="2026-06-12",
+        ) as resolver:
+            _check_no_lookahead_on_frame(frame)
+        assert resolver.call_count == 1
 
 
 class TestSignalStoreLoad:

@@ -8,6 +8,7 @@ docs/USE_CASES.md UC-4 : signal research lifecycle
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -24,6 +25,14 @@ _OPTIONAL_COLUMNS = {
     "is_valid", "invalid_reason",
 }
 PARQUET_AVAILABLE: bool | None = None
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _parquet_available() -> bool:
@@ -91,25 +100,46 @@ def _check_no_lookahead_on_frame(frame: pd.DataFrame) -> None:
     except Exception:
         pass
 
-    for idx, row in frame.iterrows():
-        td = row["trade_date"]
-        dd = row["data_date"]
-        if pd.isna(td) or pd.isna(dd):
-            continue
+    # Historical SignalRuns routinely contain millions of rows but only a few
+    # thousand distinct execution dates.  Resolve the calendar contract once
+    # per date, then compare whole columns.  The previous row-wise iterrows()
+    # implementation made cache materialization take minutes.
+    trade_raw = frame["trade_date"].reset_index(drop=True)
+    data_raw = frame["data_date"].reset_index(drop=True)
+    trade_dates = pd.to_datetime(trade_raw, errors="coerce")
+    data_dates = pd.to_datetime(data_raw, errors="coerce")
+    invalid_trade = trade_raw.notna() & trade_dates.isna()
+    invalid_data = data_raw.notna() & data_dates.isna()
+    if invalid_trade.any() or invalid_data.any():
+        position = int((invalid_trade | invalid_data).to_numpy().nonzero()[0][0])
+        idx = frame.index[position]
+        raise ValueError(
+            f"invalid signal date at row {idx}: "
+            f"trade_date={trade_raw.iloc[position]!r}, "
+            f"data_date={data_raw.iloc[position]!r}"
+        )
 
-        # Normalize to YYYY-MM-DD string (handles pd.Timestamp, datetime64, etc.)
-        td_str = str(pd.Timestamp(td).strftime("%Y-%m-%d")) if not isinstance(td, str) else td  # noqa: E501
-        dd_str = str(pd.Timestamp(dd).strftime("%Y-%m-%d")) if not isinstance(dd, str) else dd  # noqa: E501
-
-        prev = _resolve_prev_trading_day(td_str, cal_set)
-        if prev is None:
-            continue
-
-        if dd_str > prev:
-            raise ValueError(
-                f"lookahead violation at row {idx}: "
-                f"data_date={dd} > previous_trading_day({td})={prev}"
-            )
+    trade_text = trade_dates.dt.strftime("%Y-%m-%d")
+    data_text = data_dates.dt.strftime("%Y-%m-%d")
+    previous_by_trade_date = {
+        trade_date: _resolve_prev_trading_day(trade_date, cal_set)
+        for trade_date in trade_text.dropna().unique()
+    }
+    previous_text = trade_text.map(previous_by_trade_date)
+    comparable = data_text.notna() & previous_text.notna()
+    violations = pd.Series(False, index=frame.reset_index(drop=True).index)
+    violations.loc[comparable] = data_text.loc[comparable].gt(
+        previous_text.loc[comparable]
+    )
+    if violations.any():
+        position = int(violations.to_numpy().nonzero()[0][0])
+        idx = frame.index[position]
+        raise ValueError(
+            f"lookahead violation at row {idx}: "
+            f"data_date={data_raw.iloc[position]} > "
+            f"previous_trading_day({trade_raw.iloc[position]})="
+            f"{previous_text.iloc[position]}"
+        )
 
 
 def _resolve_prev_trading_day(
@@ -208,11 +238,17 @@ class SignalStore:
         sig_dir = self.paths.signal_dir(signal_id, signal_run_id)
         sig_dir.mkdir(parents=True, exist_ok=True)
         data_path = self.paths.signal_file(signal_id, signal_run_id, fmt=file_format)
+        alternate_format = "csv" if file_format == "parquet" else "parquet"
+        alternate_path = self.paths.signal_file(
+            signal_id, signal_run_id, fmt=alternate_format
+        )
 
-        if data_path.exists() and not overwrite:
+        if (data_path.exists() or alternate_path.exists()) and not overwrite:
             raise FileExistsError(
-                f"Signal file already exists: {data_path} (use overwrite=True)"
+                f"Signal file already exists under {sig_dir} (use overwrite=True)"
             )
+        if overwrite and alternate_path.exists():
+            alternate_path.unlink()
 
         if file_format == "parquet":
             predictions.to_parquet(data_path, index=False)
@@ -220,6 +256,8 @@ class SignalStore:
             predictions.to_csv(data_path, index=False)
 
         mf = _build_manifest(signal_id, signal_run_id, predictions, manifest)
+        mf["predictions_file"] = data_path.name
+        mf["predictions_sha256"] = _sha256_file(data_path)
         write_manifest(self.paths.signal_manifest(signal_id, signal_run_id), mf)
 
         return data_path
@@ -278,6 +316,10 @@ class SignalStore:
     def load_manifest(self, signal_id: str, signal_run_id: str) -> dict[str, Any]:
         """Load the manifest for a signal run."""
         return read_manifest(self.paths.signal_manifest(signal_id, signal_run_id))
+
+    def signal_data_sha256(self, signal_id: str, signal_run_id: str) -> str:
+        """Return the SHA-256 of the persisted predictions file."""
+        return _sha256_file(self._resolve_data_path(signal_id, signal_run_id))
 
     # ── List ────────────────────────────────────────────────────────────
 

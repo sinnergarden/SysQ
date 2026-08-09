@@ -594,17 +594,25 @@ class BacktestRunner:
         self._artifact_mode = artifact_mode
         if start_date > end_date:
             raise ValueError(f"start_date {start_date!r} is after end_date {end_date!r}")
+        if (signal_id_2 is None) != (signal_run_id_2 is None):
+            raise ValueError(
+                "signal_id_2 and signal_run_id_2 must be provided together"
+            )
+        if not 0.0 <= blend_weight <= 1.0:
+            raise ValueError(
+                f"blend_weight must be within [0, 1], got {blend_weight}"
+            )
 
         hash_input = (f"accumulate_{strategy_template_id}_{signal_id}_{signal_run_id}_"
                       f"{top_n}_{commission}_{slippage}_{rebalance_freq}_"
-                      f"{start_date}_{end_date}_{initial_capital}_{signal_id_2}_"
+                      f"{start_date}_{end_date}_{initial_capital}_{signal_id_2}_{signal_run_id_2}_"
                       f"{blend_weight}_{maxdd_signal_id}_{maxdd_signal_run_id}_{maxdd_threshold}_{maxdd_percentile}")
         short_hash = hashlib.sha256(hash_input.encode()).hexdigest()[:8]
         strategy_run_id = f"accumulate_{strategy_template_id}__{signal_id}__{short_hash}"
         backtest_id = f"acc_{start_date}_{end_date}_{short_hash}"
 
         if output_dir is None:
-            output_dir = Path("data/research/backtests") / strategy_run_id / backtest_id
+            output_dir = Path(research_root) / "backtests" / strategy_run_id / backtest_id
         output_dir = Path(output_dir)
         if output_dir.exists() and not overwrite:
             raise FileExistsError(f"Backtest output dir exists: {output_dir} (use overwrite=True)")
@@ -1022,20 +1030,28 @@ class BacktestRunner:
             raise ValueError(
                 f"start_date {start_date!r} is after end_date {end_date!r}"
             )
+        if (signal_id_2 is None) != (signal_run_id_2 is None):
+            raise ValueError(
+                "signal_id_2 and signal_run_id_2 must be provided together"
+            )
+        if not 0.0 <= blend_weight <= 1.0:
+            raise ValueError(
+                f"blend_weight must be within [0, 1], got {blend_weight}"
+            )
 
         # ── Build run/backtest IDs ────────────────────────────────────────
         # Cached signal semantics:
         # - signal.trade_date = intended_execution_date
         # - allocation before open, execution at open, MTM at close
         # - Preopen-equivalent, NOT BacktestEngine next-open convention
-        hash_input = f"{strategy_template_id}_{signal_id}_{signal_run_id}_{allocation_method}_{top_n}_{max_weight}_{commission}_{stamp_duty}_{min_commission}_{slippage}_{rebalance_freq}_{start_date}_{end_date}_{initial_capital}_{signal_id_2}_{blend_weight}"  # noqa: E501
+        hash_input = f"{strategy_template_id}_{signal_id}_{signal_run_id}_{allocation_method}_{top_n}_{max_weight}_{commission}_{stamp_duty}_{min_commission}_{slippage}_{rebalance_freq}_{start_date}_{end_date}_{initial_capital}_{signal_id_2}_{signal_run_id_2}_{blend_weight}"  # noqa: E501
         short_hash = hashlib.sha256(hash_input.encode()).hexdigest()[:8]
         strategy_run_id = f"{strategy_template_id}__{signal_id}__{signal_run_id}__{short_hash}"
         backtest_id = f"bt_{start_date}_{end_date}_{short_hash}"
 
         # ── Resolve output path ───────────────────────────────────────────
         if output_dir is None:
-            output_dir = Path("data/research/backtests") / strategy_run_id / backtest_id
+            output_dir = Path(research_root) / "backtests" / strategy_run_id / backtest_id
         output_dir = Path(output_dir)
         if output_dir.exists() and not overwrite:
             raise FileExistsError(
@@ -1301,10 +1317,6 @@ class BacktestRunner:
             "signal_id_2": signal_id_2,
             "signal_run_id_2": signal_run_id_2,
             "blend_weight": blend_weight,
-            "maxdd_signal_id": maxdd_signal_id,
-            "maxdd_signal_run_id": maxdd_signal_run_id,
-            "maxdd_threshold": maxdd_threshold,
-            "maxdd_percentile": maxdd_percentile,
             "strategy_run_id": strategy_run_id,
             "strategy_template_id": strategy_template_id,
             "signal_id": signal_id,

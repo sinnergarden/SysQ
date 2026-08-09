@@ -131,6 +131,7 @@ def combine_signals(
         )
 
     input_row_counts: list[int] = []
+    input_data_hashes: list[str] = []
     frames: list[pd.DataFrame] = []
     for idx, inp in enumerate(spec.inputs):
         df = signal_store.load_signal_run(
@@ -142,6 +143,11 @@ def combine_signals(
                 f"{inp.source_signal_run_id}"
             )
         input_row_counts.append(len(df))
+        input_data_hashes.append(
+            signal_store.signal_data_sha256(
+                inp.source_signal_id, inp.source_signal_run_id
+            )
+        )
         df = df.rename(columns={"score": f"score_{idx}"})
         frames.append(df)
 
@@ -210,8 +216,9 @@ def combine_signals(
             "signal_id": inp.source_signal_id,
             "signal_run_id": inp.source_signal_run_id,
             "weight": inp.weight,
+            "predictions_sha256": input_data_hashes[idx],
         }
-        for inp in spec.inputs
+        for idx, inp in enumerate(spec.inputs)
     ]
 
     signal_store.save_signal_run(
