@@ -38,6 +38,19 @@ def _clip_inf(s: pd.Series) -> pd.Series:
     return s.replace([np.inf, -np.inf], np.nan)
 
 
+def _parse_pit_date(values: pd.Series) -> pd.Series:
+    """Parse announcement dates without treating YYYYMMDD integers as ns."""
+
+    text = values.astype("string").str.strip().str.replace(r"\.0$", "", regex=True)
+    compact = text.str.fullmatch(r"\d{8}").fillna(False)
+    parsed = pd.Series(pd.NaT, index=values.index, dtype="datetime64[ns]")
+    parsed.loc[compact] = pd.to_datetime(
+        text.loc[compact], format="%Y%m%d", errors="coerce"
+    )
+    parsed.loc[~compact] = pd.to_datetime(values.loc[~compact], errors="coerce")
+    return parsed
+
+
 # ── Margin financing features ───────────────────────────────────────────
 
 
@@ -189,7 +202,8 @@ def load_shareholder_data(df: pd.DataFrame, holder_path: str = "data/canonical/h
     # ── holder_num + prev_ann values ──────────────────────────────────
     try:
         hdf = pd.read_parquet(holder_path)
-        hdf["_dt"] = pd.to_datetime(hdf["ann_date"])
+        hdf["_dt"] = _parse_pit_date(hdf["ann_date"])
+        hdf = hdf.dropna(subset=["inst", "_dt", "holder_num"])
         hdf["_real_ann_dt"] = hdf["_dt"]  # keep real ann_date before rename
         hdf["inst"] = hdf["inst"].str.upper()
         hdf = _add_prev_cols(hdf, "holder_num", "holder_num_prev_ann", "holder_num_prev2_ann")
@@ -216,7 +230,8 @@ def load_shareholder_data(df: pd.DataFrame, holder_path: str = "data/canonical/h
     top10_path = holder_path.replace("holder_num", "top10_holder_ratio")
     try:
         tdf = pd.read_parquet(top10_path)
-        tdf["_dt"] = pd.to_datetime(tdf["ann_date"])
+        tdf["_dt"] = _parse_pit_date(tdf["ann_date"])
+        tdf = tdf.dropna(subset=["inst", "_dt", "top10_ratio"])
         tdf["_real_ann_dt"] = tdf["_dt"]
         tdf["inst"] = tdf["inst"].str.upper()
         tdf = _add_prev_cols(tdf, "top10_ratio", "top10_holder_ratio_prev_ann", "__unused")
@@ -262,11 +277,18 @@ def build_shareholder_features(df: pd.DataFrame) -> pd.DataFrame:
         )
 
     # ── Avg shares per holder (announcement-level qoq) ─────────────
-    if {"holder_num", "total_share", "holder_num_prev_ann"}.issubset(out.columns):
+    if {"holder_num", "total_share"}.issubset(out.columns):
         _avg = out["total_share"] / out["holder_num"].replace(0, np.nan)
-        _avg_prev = out["total_share"] / out["holder_num_prev_ann"].replace(0, np.nan)
         out["avg_shares_per_holder"] = _avg
-        out["avg_shares_per_holder_chg_qoq"] = _clip_inf(_safe_div(_avg, _avg_prev) - 1)
+    if {"holder_num", "holder_num_prev_ann"}.issubset(out.columns):
+        # The historical implementation used the same current total_share in
+        # both averages, so it cancels algebraically.  Compute the equivalent
+        # ratio directly; this preserves training semantics and no longer
+        # turns the feature entirely NaN when total_share is not in the Qlib
+        # semantic support panel.
+        out["avg_shares_per_holder_chg_qoq"] = _clip_inf(
+            _safe_div(out["holder_num_prev_ann"], out["holder_num"]) - 1
+        )
 
     # ── Top10 holder ratio (announcement-level qoq) ────────────────
     if "top10_holder_ratio" in out.columns and "top10_holder_ratio_prev_ann" in out.columns:

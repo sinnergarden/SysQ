@@ -168,6 +168,12 @@ blend-weight 与组合构建对照研究完成前，不得据此晋级 shadow/pr
 ### Operator Runbook
 
 ```bash
+# 先同步 canonical/Qlib。对 CSI800 的 apply 会自动检查最近 120 个自然日
+# 的融资融券覆盖并只回补缺口，然后刷新受影响的 Qlib symbols。
+python scripts/data_sync.py \
+  --config configs/data/csi800_daily_sync.yaml \
+  --apply
+
 # 自动选择已完成的最近交易日，并输出供人工研究的 Top 200 候选。
 python scripts/run_daily.py \
   --strategy financial_rc \
@@ -180,7 +186,8 @@ python harness/checks/check_inference_artifact.py \
   --artifact outputs/<signal_date>/financial_rc/<run_id>/candidate_run.json
 ```
 
-运行前 readiness check 必须通过；任何非零退出均视为阻断，不能沿用旧候选。
+margin repair 或运行前 readiness check 任何非零退出均视为阻断，不能沿用旧候选。
+`--skip-margin-repair` 仅用于诊断，不属于 financial_rc 的标准日常运行路径。
 该产物只进入人工财报/基本面复核，不直接生成订单或修改 ledger。
 
 ### Owner Agent
@@ -193,6 +200,8 @@ operator_agent
 - `data/research/signals/`
 - `data/research/models/`
 - `qsys/signal/`
+- `qsys/data/adapter.py`
+- `qsys/feature/`
 - `scripts/dev/`
 - `harness/checks/`
 - `docs/requirements/`

@@ -57,6 +57,8 @@ usecases:
       - data/research/signals/
       - data/research/models/
       - qsys/signal/
+      - qsys/data/adapter.py
+      - qsys/feature/
       - scripts/dev/
       - harness/checks/
       - docs/requirements/
