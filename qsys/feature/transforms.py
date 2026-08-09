@@ -5,7 +5,12 @@ import pandas as pd
 
 
 def winsorize_series(series: pd.Series, lower: float = 0.01, upper: float = 0.99) -> pd.Series:
-    s = pd.to_numeric(series, errors="coerce")
+    # Pandas 2.3 may silently downcast ``float32`` values to integers when
+    # ``clip`` receives scalar bounds.  Small-valued features such as Amihud
+    # illiquidity (~1e-11 with amount denominated in yuan) then collapse to
+    # all zeros.  Promote to float64 before computing and applying bounds so
+    # cross-sectional variation survives inference and research alike.
+    s = pd.to_numeric(series, errors="coerce").astype("float64")
     valid = s.dropna()
     if valid.empty:
         return s

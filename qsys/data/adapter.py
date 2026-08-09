@@ -54,6 +54,13 @@ class QlibAdapter:
         "net_profit_margin",
     }
     _PERCENT_LIKE_THRESHOLD = 3.0
+    # The longest semantic transform currently uses a 756-session shift.
+    # 820 calendar days only contains roughly 585 A-share sessions and made
+    # the 3-year fundamental deltas entirely NaN at inference time.  Four
+    # years of calendar history leaves a conservative holiday/suspension
+    # buffer while the builder still trims the returned frame to the caller's
+    # requested dates.
+    _SEMANTIC_LOOKBACK_CALENDAR_DAYS = 1461
 
     def __init__(self, *, qlib_dir: str | Path | None = None, raw_dir: str | Path | None = None):
         self.qlib_dir = Path(qlib_dir).expanduser() if qlib_dir is not None else Path(str(cfg.get_path("qlib_bin")))
@@ -333,7 +340,9 @@ class QlibAdapter:
     @staticmethod
     def _semantic_lookback_start(start_time, end_time):
         anchor = pd.Timestamp(start_time or end_time)
-        return (anchor - pd.Timedelta(days=820)).strftime("%Y-%m-%d")
+        return (
+            anchor - pd.Timedelta(days=QlibAdapter._SEMANTIC_LOOKBACK_CALENDAR_DAYS)
+        ).strftime("%Y-%m-%d")
 
     @staticmethod
     def _to_semantic_builder_frame(df: pd.DataFrame) -> pd.DataFrame:
@@ -883,12 +892,12 @@ class QlibAdapter:
     def _run_dump_script(self, csv_dir, mode="dump_all", *, refresh_universes=None, cleanup_csv_dir=True):
         """Helper to run the dump_bin.py script"""
         # Use cfg.project_root to find the script reliably
-        dump_script = cfg.project_root / "scripts" / "dump_bin.py"
+        dump_script = cfg.project_root / "scripts" / "dev" / "dump_bin.py"
         
         if not dump_script.exists():
              # Fallback: check if we are in development mode and script is in relative path
              # e.g. if running from project root
-             fallback = Path("scripts/dump_bin.py").resolve()
+             fallback = Path("scripts/dev/dump_bin.py").resolve()
              if fallback.exists():
                  dump_script = fallback
         

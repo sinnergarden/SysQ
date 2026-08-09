@@ -59,8 +59,17 @@ class TestAdapterSemanticFeatures(unittest.TestCase):
         requested_fields = mock_dataset.dataset.call_args.args[1]
         self.assertIn("$amount", requested_fields)
         self.assertIn("$high_limit", requested_fields)
-        self.assertEqual(mock_dataset.dataset.call_args.kwargs["start_time"], "2025-02-27")
+        self.assertEqual(mock_dataset.dataset.call_args.kwargs["start_time"], "2022-04-03")
         self.assertEqual(mock_dataset.dataset.call_args.kwargs["end_time"], "2026-04-03")
+
+    def test_semantic_lookback_covers_756_trading_session_shift(self):
+        start = QlibAdapter._semantic_lookback_start("2026-08-07", "2026-08-07")
+
+        self.assertEqual(start, "2022-08-07")
+        self.assertGreaterEqual(
+            (pd.Timestamp("2026-08-07") - pd.Timestamp(start)).days,
+            1461,
+        )
 
     @patch("qsys.data.adapter.DatasetD")
     def test_get_features_keeps_unavailable_semantic_columns_as_nan(self, mock_dataset):

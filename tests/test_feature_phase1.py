@@ -1,4 +1,5 @@
 import unittest
+import numpy as np
 import pandas as pd
 
 from qsys.feature.builder import _repair_research_input_columns, build_phase1_features
@@ -86,6 +87,22 @@ class TestFeaturePhase1(unittest.TestCase):
         first_close = duplicated.loc[:, duplicated.columns == 'close'].iloc[:, 0]
         repaired_close = repaired['close']
         pd.testing.assert_series_equal(repaired_close.reset_index(drop=True), first_close.reset_index(drop=True), check_names=False)
+
+    def test_float32_small_values_survive_cross_sectional_winsorization(self):
+        frame = pd.DataFrame(
+            {
+                "trade_date": pd.to_datetime(["2026-08-07"] * 4),
+                "illiquidity": pd.Series(
+                    [1.0e-12, 2.0e-11, 5.0e-11, 9.0e-11], dtype="float32"
+                ),
+            }
+        )
+
+        out = apply_cross_sectional_standardization(frame, ["illiquidity"])
+
+        self.assertEqual(out["illiquidity"].dtype, np.dtype("float64"))
+        self.assertGreater(out["illiquidity"].nunique(), 1)
+        self.assertGreater(out["illiquidity"].max(), 0.0)
 
 
 if __name__ == "__main__":

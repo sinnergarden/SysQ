@@ -71,8 +71,10 @@ inference:
 # broad human-review screen. This canonical use case is explicitly the latter,
 # as requested by the operator. Equal weighting is an operating contract that
 # avoids an unreviewed preference for either horizon; it is NOT evidence that
-# 0.5/0.5 outperforms 0.3/0.7. Promotion remains blocked until separate,
-# reproducible research compares blend weights and portfolio construction.
+# 0.5/0.5 outperforms 0.3/0.7.  The operator has fixed this Top200 research
+# workflow at 0.5/0.5; comparing legacy 0.3/0.7 is not a prerequisite for this
+# screening artifact.  Automatic portfolio construction and promotion remain
+# outside this use case.
 
 lifecycle:
   created: 2026-06-28
