@@ -60,6 +60,39 @@ UC-5（Signal Analytics）、UC-6（Signal Combination）、UC-7（Signal Backte
 - `data/research/experiments/` — 实验索引
 - `data/research/backtests/` — 回测产物
 
+### Financial RC 60d/180d Cache-to-Backtest Runbook
+
+60d 与 180d 必须分别运行研究配置，使训练标签分别使用 61 与 181 个交易日的
+成熟期。不得为了组合方便把两个标签塞进同一个滚动配置；pipeline 会采用声明
+标签中的最大 maturity lag，从而把 60d 训练窗口也推迟到 181 日。
+
+```bash
+# 1. 分别产生滚动 OOS 信号并写入 SignalStore。
+python scripts/run_research.py \
+  --config configs/research/60d/_60d_v3a_growth_financial.yaml
+python scripts/run_research.py \
+  --config configs/research/60d/_180d_v3a_growth_financial.yaml
+
+# 2. 从两个明确的 SignalRun 物化 0.5/0.5 组合 cache，再回测组合产物。
+python scripts/research/backtest_from_signal.py \
+  --signal-id fwd_ret_60d_raw__daily_zscore \
+  --signal-run-id <60d_signal_run_id> \
+  --signal-id-2 fwd_ret_180d_raw__daily_zscore \
+  --signal-run-id-2 <180d_signal_run_id> \
+  --blend-weight 0.5 \
+  --materialize-blend \
+  --blend-output-signal-id financial_rc_60d180d_equal \
+  --blend-output-signal-run-id <reviewed_blend_run_id> \
+  --start-date <execution_start> \
+  --end-date <execution_end> \
+  --top-n 200
+```
+
+物化组合采用 `(trade_date, data_date, instrument)` inner join，组合 manifest 必须
+保留两个 source signal/run id 与权重。当前 csi800 历史研究仍使用 current
+constituents snapshot，存在幸存者偏差；在 PIT universe provider 接通前，这类
+回测只能用于流程烟测和探索，不能宣称无偏 OOS 或用于晋级。
+
 ### Required Checks
 - TBD: research artifact schema check
 - TBD: label maturity gate check
