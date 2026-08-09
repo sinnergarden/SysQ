@@ -5,12 +5,74 @@ family: ml_ensemble
 account_id: research_financial_rc
 universe: csi800
 feature_set: v3a_plus_liquidity_financial_rc
-model_version: financial_rc_202606
-signal_version: blend_0.3_60d_0.7_180d
+model_version: financial_rc_equal_weight_v1
+signal_version: blend_0.5_60d_0.5_180d
 
 hypothesis: >
-  Ensemble of 60d and 180d financial_rc models with trailing stop.
-  Top5 concentration. Research candidate — not production.
+  Equal-weight ensemble of pinned 60d and 180d financial_rc models for a
+  ranked screening list that receives human fundamental review. Research
+  candidate only — no automatic execution or portfolio construction.
+
+# Canonical artifact-only inference. Model/scaler/metadata files are pinned by
+# SHA-256; changing any artifact or blend weight requires a reviewed config diff.
+inference:
+  engine: pinned_model_blend_v1
+  universe: csi800
+  feature_list_id: v3a_plus_liquidity_financial_rc
+  model_bundle:
+    bundle_id: financial_rc_60d180d_equal_v1
+    models:
+      - tag: 60d
+        model_hash: 4da8cf460c855f4
+        model_dir: data/research/models/60d_v3a_growth_financial/4da8cf460c855f4
+        label_id: fwd_ret_60d_raw
+        horizon: 60
+        weight: 0.5
+        artifact_sha256:
+          model.txt: 4da8cf460c855f4f4a9442811df9c0d0bb0c805b09b5e66f3001a2ed839d9211
+          center.json: 4971954d8d181bf5feaf2689eaf2a64ebf4b6dd3910c7e87cfea1c06eb902bde
+          scale.json: be8cafea5937cf8247d90c000c58444418c2a127531da1f02040ab69f6b61bf1
+          meta.json: 88e1fbfc9c5423e482cce71c8bcbb11798ebbcd45aab19c2fc61b4caa36b1991
+      - tag: 180d
+        model_hash: 27cd0cbb36688ee
+        model_dir: data/research/models/180d_v3a_growth_financial/27cd0cbb36688ee
+        label_id: fwd_ret_180d_raw
+        horizon: 180
+        weight: 0.5
+        artifact_sha256:
+          model.txt: 27cd0cbb36688eecdff566c45f332c0349007d68f247150070c54facc98b7405
+          center.json: 96c50f521bee225c329a8e7c8e2cf9ab02f93b4cd0dd444ff28c11e885c305fa
+          scale.json: e445e2888170174550b967f730dd74d35c676f30f9b85521ad59285ca4d8efab
+          meta.json: bcff12aecb8494edc6177b7971e211df392f4276a237d7cbfaa9848a6c1ba6b9
+  score_transform: daily_cs_zscore_unclipped_ddof0
+  top_k: 200
+  min_universe_size: 500
+  min_eligible_size: 450
+  min_feature_coverage: 0.75
+  min_global_feature_coverage: 0.75
+  # Global coverage alone can hide a dead model input.  Any individual
+  # feature above this missing ratio blocks the run, and any feature used by
+  # a model split must have cross-sectional variation on the signal date.
+  max_feature_missing_ratio: 0.95
+  min_model_used_feature_unique_values: 2
+  min_listed_days: 180
+  min_amount: 0
+  exclude_name_patterns: [ST, "退"]
+  market_close_cutoff: "18:00"
+  output_root: outputs
+  # Current CSI800 constituents are safe for live screening but not a PIT
+  # historical universe. Historical inference remains unavailable until a
+  # dedicated PIT constituent provider is implemented.
+  universe_snapshot_semantics: current_constituents_snapshot
+
+# Migration rationale (2026-08): legacy scripts encoded two incompatible
+# products. predict_financial_rc.py used 0.3/0.7 for a concentrated Top5
+# trailing-stop workflow, while gen_candidate_top200.py used 0.5/0.5 for a
+# broad human-review screen. This canonical use case is explicitly the latter,
+# as requested by the operator. Equal weighting is an operating contract that
+# avoids an unreviewed preference for either horizon; it is NOT evidence that
+# 0.5/0.5 outperforms 0.3/0.7. Promotion remains blocked until separate,
+# reproducible research compares blend weights and portfolio construction.
 
 lifecycle:
   created: 2026-06-28

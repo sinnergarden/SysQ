@@ -10,7 +10,7 @@
 | Script | Use Case | Purpose |
 |--------|----------|---------|
 | `data_sync.py` | UC_DAILY_OPS | Data sync & validation |
-| `run_daily.py` | UC_DAILY_OPS | Daily ops: preopen / postclose / train |
+| `run_daily.py` | UC_DAILY_OPS, UC_DAILY_INFERENCE_RUN | Daily ops: preopen / postclose / train; artifact-only infer |
 | `run_research.py` | UC_RESEARCH_BACKTEST | Signal research pipeline |
 | `run_signal_analytics.py` | UC_RESEARCH_BACKTEST | Signal IC / RankIC analysis |
 | `promote_candidate.py` | UC_CANDIDATE_PROMOTION | Candidate create & promote |

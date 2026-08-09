@@ -29,6 +29,31 @@ class TestArgParsing(unittest.TestCase):
         ])
         self.assertEqual(args.mode, "postclose")
 
+    def test_basic_infer(self):
+        args = parse_args([
+            "--strategy", "financial_rc", "--mode", "infer",
+            "--signal-date", "2026-08-07", "--top-k", "200",
+        ])
+        self.assertEqual(args.mode, "infer")
+        self.assertEqual(args.signal_date, "2026-08-07")
+        self.assertEqual(args.top_k, 200)
+        self.assertIsNone(args.trade_date)
+
+    def test_infer_trade_date_is_compatibility_alias(self):
+        args = parse_args([
+            "--strategy", "financial_rc", "--mode", "infer",
+            "--trade-date", "2026-08-07",
+        ])
+        self.assertEqual(args.signal_date, "2026-08-07")
+
+    def test_infer_conflicting_dates_fail(self):
+        with self.assertRaises(SystemExit):
+            parse_args([
+                "--strategy", "financial_rc", "--mode", "infer",
+                "--trade-date", "2026-08-06",
+                "--signal-date", "2026-08-07",
+            ])
+
     def test_force_rerun_requires_reason(self):
         with self.assertRaises(SystemExit):
             parse_args([
@@ -96,6 +121,30 @@ class TestArgParsing(unittest.TestCase):
 
 class TestDispatch(unittest.TestCase):
     """Verify run_daily_main dispatches to the correct runner method."""
+
+    @patch("scripts.run_daily.DailyRunner")
+    @patch("scripts.run_daily.create_strategy")
+    @patch("scripts.run_daily.run_candidate_inference")
+    @patch("scripts.run_daily.load_strategy_config")
+    def test_dispatch_infer_is_artifact_only(
+        self, mock_load_cfg, mock_infer, mock_create, mock_runner_cls,
+    ):
+        mock_infer.return_value.artifact_path = "/tmp/candidate_run.json"
+        mock_infer.return_value.payload = {
+            "signal_date": "2026-08-07",
+            "execution_date": "2026-08-10",
+            "candidate_count": 20,
+            "candidate_hash": "a" * 64,
+        }
+
+        run_daily_main([
+            "--strategy", "financial_rc", "--mode", "infer",
+            "--signal-date", "2026-08-07", "--top-k", "20",
+        ])
+
+        mock_infer.assert_called_once()
+        mock_create.assert_not_called()
+        mock_runner_cls.assert_not_called()
 
     @patch("scripts.run_daily.DailyRunner")
     @patch("scripts.run_daily.create_strategy")
