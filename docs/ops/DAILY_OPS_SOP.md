@@ -43,6 +43,12 @@
 | Dry-run batch preopen | `python scripts/run_daily_batch.py --stage candidate --mode preopen --trade-date YYYY-MM-DD --dry-run --debug-run --no-notify` |
 | Dry-run postclose | `python scripts/run_daily.py --strategy alpha_v1 --mode postclose --trade-date YYYY-MM-DD --debug-run --no-notify` |
 | Notify only (from existing artifacts) | `python scripts/run_daily.py --strategy alpha_v1 --notify-only --trade-date YYYY-MM-DD` |
+| Retrain financial_rc research bundle | `python scripts/run_daily.py --strategy financial_rc --mode train --trade-date YYYY-MM-DD --no-notify` |
+
+`financial_rc` train 会从实际存在且已成熟的标签反推固定交易日窗口，写入
+content-addressed model bundle 和 exact training snapshot；它固定使用
+`pointer_write_mode=none`，不会自动晋级或改写 shadow/prod pointer。历史训练仍使用
+current CSI800 constituents snapshot，因此只能视为 research artifact，不能宣称 PIT OOS。
 
 `--trade-date auto` 取机器本地当天日期（`datetime.now().strftime("%Y-%m-%d")`），用于避免 systemd ExecStart 中的 shell 展开 `$(date ...)`。交易日历感知是后续改进。
 `--debug-run` 不修改 shadow/account.json / positions.csv / ledger.csv。`run_daily_batch.py` 另有 `--dry-run` 仅打印将要调度的策略而不执行。

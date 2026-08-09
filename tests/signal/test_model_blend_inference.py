@@ -19,6 +19,7 @@ from qsys.signal.model_blend_inference import (
     profile_feature_quality,
     resolve_inference_dates,
     validate_ordered_model_features,
+    validate_training_feature_lineage,
     validate_inference_config,
 )
 
@@ -252,6 +253,37 @@ def test_same_feature_set_in_different_order_is_rejected() -> None:
             ["roe", "margin", "value"],
             ["margin", "roe", "value"],
             ["roe", "margin", "value"],
+        )
+
+
+def test_schema_v2_training_feature_order_is_pinned(tmp_path: Path) -> None:
+    model_dir = tmp_path / "model"
+    model_dir.mkdir()
+    ordered = ["roe", "margin", "value"]
+    feature_hash = hashlib.sha256(
+        json.dumps(
+            ordered,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    (model_dir / "meta.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "ordered_features": ordered,
+                "feature_list_hash": feature_hash,
+            }
+        ),
+        encoding="utf-8",
+    )
+    spec = {"tag": "60d", "resolved_model_dir": model_dir}
+
+    validate_training_feature_lineage([spec], ordered)
+    with pytest.raises(InferenceContractError, match="training ordered feature"):
+        validate_training_feature_lineage(
+            [spec], ["margin", "roe", "value"]
         )
 
 

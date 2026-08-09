@@ -1,7 +1,7 @@
 # Domain: Model Training
 
 ## Domain Scope
-模型训练与 artifact 管理：定时全量训练、模型 artifact 持久化、shadow pointer 写入。
+模型训练与 artifact 管理：定时全量训练、模型 artifact 持久化、可选 pointer 写入。
 不包含：研究阶段的快速实验训练（research domain）、prod pointer 写入（promotion domain）。
 
 ## UC_MODEL_TRAINING
@@ -14,14 +14,16 @@ stable
 通过 `scripts/run_daily.py --mode train` 调度。本文档将其独立为 use case 便于分配 owner 和治理。
 
 ### User Goal
-系统按周（或按需）自动训练模型，产出模型 artifact 并写入 shadow pointer。
+系统按周（或按需）自动训练模型，产出可复现的模型 artifact；只有配置明确授权时才写 pointer。
 
 ### Scope
 包含：
 - 定时（每周）全量训练
 - 模型 artifact 持久化（model.pkl, meta.yaml, config_snapshot, features.json）
-- shadow pointer 写入（`artifacts/registry/models/{strategy}/shadow.json`）
+- 可选 shadow pointer 写入（`pointer_write_mode=shadow`）
+- `pointer_write_mode=none` 的 research bundle（不得隐式晋级）
 - 训练 metrics 记录
+- ordered feature list、实际有效训练窗口、universe/label/training snapshot hash
 
 不包含：
 - 研究阶段的快速实验训练
@@ -38,9 +40,10 @@ stable
 - `experiments/alpha_v1_models/{timestamp}/` — 模型 artifact 目录
 - `artifacts/registry/models/{strategy}/shadow.json` — shadow pointer
 - `runs/{date}/{run_id}/training_result.json` — 训练结果
+- `data/research/models/{experiment_id}/{model_hash}/` — immutable research model bundle
 
 ### Canonical Entrypoints
-- `scripts/run_daily.py --mode train` — 通过 DailyRunner 调度
+- `scripts/run_daily.py --strategy <id> --mode train --trade-date <as-of>` — 通过 DailyRunner 调度
 
 ### Key Artifacts
 - `artifacts/registry/models/{strategy}/shadow.json`
@@ -70,7 +73,7 @@ builder_agent
 - `deploy/`
 
 ### Open Questions
-- 无
+- 历史训练 universe 仍是 current constituents snapshot；PIT constituent provider 未实现。
 
 ### Future Work
 

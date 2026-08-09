@@ -39,11 +39,11 @@ _DEFAULT_BINARY_LGB_PARAMS = {
 
 
 def _resolve_train_data(X: pd.DataFrame, center: pd.Series, scale: pd.Series,
-                        y: pd.Series, tag: str, mode: str, n_estimators: int, lgb_params: dict) -> tuple[lgb.Booster, Any, Any]:
+                        y: pd.Series, tag: str, mode: str, n_estimators: int,
+                        lgb_params: dict, validation_size: int) -> tuple[lgb.Booster, Any, Any]:
     """Shared training logic for regression and binary modes."""
     Xz = robust_zscore_transform(X, center, scale)
-    N = len(Xz)
-    vs = min(20000, int(N * 0.15))
+    vs = validation_size
     train_data = lgb.Dataset(Xz.iloc[:-vs].values, label=y.iloc[:-vs].values)
     val_data = lgb.Dataset(Xz.iloc[-vs:].values, label=y.iloc[-vs:].values)
 
@@ -89,6 +89,7 @@ def train_model(
     n_estimators: int = 200,
     lgb_params: dict[str, Any] | None = None,
     mode: str = "regression",
+    validation_size: int | None = None,
 ):
     """Train a single LightGBM model.
 
@@ -109,6 +110,10 @@ def train_model(
         when left at 1.0.
     mode : str
         ``'regression'`` (default) or ``'binary'``.
+    validation_size : int or None
+        Number of trailing, time-ordered rows reserved for validation.  When
+        omitted, use the legacy 15% rule capped at 20,000 rows.  The robust
+        scaler is always fitted on the pre-validation rows only.
 
     Returns
     -------
@@ -117,8 +122,32 @@ def train_model(
     """
     if lgb_params is None:
         lgb_params = dict(_DEFAULT_BINARY_LGB_PARAMS if mode == "binary" else _DEFAULT_LGB_PARAMS)
-    center, scale = robust_zscore_fit(X_train)
-    return _resolve_train_data(X_train, center, scale, y_train, tag, mode, n_estimators, lgb_params)
+    if len(X_train) != len(y_train):
+        raise ValueError("X_train and y_train must have the same number of rows")
+    if len(X_train) < 2:
+        raise ValueError("training requires at least two rows")
+    if validation_size is None:
+        validation_size = max(1, min(20000, int(len(X_train) * 0.15)))
+    if not 0 < validation_size < len(X_train):
+        raise ValueError(
+            "validation_size must be positive and smaller than the training set"
+        )
+
+    # Fit preprocessing only on the earlier training partition.  Fitting the
+    # median/IQR on the trailing validation period leaks future distribution
+    # information into model selection.
+    center, scale = robust_zscore_fit(X_train.iloc[:-validation_size])
+    return _resolve_train_data(
+        X_train,
+        center,
+        scale,
+        y_train,
+        tag,
+        mode,
+        n_estimators,
+        lgb_params,
+        validation_size,
+    )
 
 
 def predict_model(

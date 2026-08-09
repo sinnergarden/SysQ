@@ -57,6 +57,7 @@ from qsys.ops.attempts import (
 from qsys.ops.run_context import DailyRunContext, resolve_run_root
 from qsys.ops.promotion_resolver import resolve_shadow_promotion
 from qsys.signal.model_blend_inference import run_candidate_inference
+from qsys.model.registry import create_model_trainer, has_model_trainer
 from qsys.strategy.registry import create_strategy
 
 
@@ -205,7 +206,15 @@ def run_daily_main(argv: list[str] | None = None) -> None:
     if args.train_end_date:
         config.setdefault("training", {})["end_date"] = args.train_end_date
 
-    strategy = create_strategy(strategy_id, config, project_root=PROJECT_ROOT)
+    dedicated_model_trainer = (
+        args.mode == "train" and has_model_trainer(strategy_id)
+    )
+    if dedicated_model_trainer:
+        strategy = create_model_trainer(
+            strategy_id, config, project_root=PROJECT_ROOT
+        )
+    else:
+        strategy = create_strategy(strategy_id, config, project_root=PROJECT_ROOT)
 
     runner = DailyRunner()
 
@@ -213,7 +222,10 @@ def run_daily_main(argv: list[str] | None = None) -> None:
     # preopen / train: reads args.promotion_pointer (global shadow.yaml).
     # postclose: reads only active_attempt.json + promotion_snapshot.yaml (below).
     promotion_lineage: dict[str, str | None] = {}
-    if args.run_mode == "shadow" and args.mode in ("preopen", "train"):
+    if args.run_mode == "shadow" and (
+        args.mode == "preopen"
+        or (args.mode == "train" and not dedicated_model_trainer)
+    ):
         raw_pointer = args.promotion_pointer or "data/research/promotions/shadow.yaml"
         pointer_path = Path(raw_pointer)
         if not pointer_path.is_absolute() and not pointer_path.exists():

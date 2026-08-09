@@ -76,6 +76,31 @@ inference:
 # screening artifact.  Automatic portfolio construction and promotion remain
 # outside this use case.
 
+# Canonical bundle training.  The operator supplies the research as-of session
+# with --trade-date (or --train-end-date); the trainer derives the freshest 504
+# feature sessions whose next-session labels both exist and are fully mature.
+# It writes immutable content-addressed artifacts only and never mutates a
+# shadow/prod promotion pointer.
+training:
+  engine: financial_rc_lightgbm_bundle_v1
+  universe: csi800
+  feature_list_id: v3a_plus_liquidity_financial_rc
+  pointer_write_mode: none
+  window_sessions: 504
+  validation_sessions: 40
+  n_estimators: 300
+  min_feature_coverage: 0.50
+  max_feature_missing_ratio: 0.995
+  models:
+    - tag: 60d
+      experiment_id: 60d_v3a_growth_financial
+      label_id: fwd_ret_60d_raw
+      horizon: 60
+    - tag: 180d
+      experiment_id: 180d_v3a_growth_financial
+      label_id: fwd_ret_180d_raw
+      horizon: 180
+
 lifecycle:
   created: 2026-06-28
   stage_history:
