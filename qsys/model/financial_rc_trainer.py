@@ -137,6 +137,27 @@ def derive_training_window(
     )
 
 
+def derive_purged_evaluation_train_end(
+    open_dates: Sequence[str], validation_start: str, horizon: int
+) -> str:
+    """Return the last feature date whose label ends before validation.
+
+    With next-session labels, ``horizon + 1`` sessions between the last
+    evaluation-training feature and validation start must be purged.
+    """
+
+    sessions = sorted({_normalise_date(value) for value in open_dates})
+    resolved_validation_start = _normalise_date(validation_start)
+    if resolved_validation_start not in sessions or horizon <= 0:
+        raise FinancialRCTrainingError(
+            "validation_start must be an open session and horizon positive"
+        )
+    train_end_index = sessions.index(resolved_validation_start) - horizon - 2
+    if train_end_index < 0:
+        raise FinancialRCTrainingError("insufficient purged evaluation history")
+    return sessions[train_end_index]
+
+
 @contextmanager
 def _project_working_directory(project_root: Path):
     previous = Path.cwd()
@@ -275,7 +296,11 @@ class FinancialRCTrainer:
         from qsys.data.adapter import QlibAdapter
         from qsys.feature.registry import FeatureListRegistry
         from qsys.label.store import LabelStore
-        from qsys.signal.alpha_v1.training import predict_model, train_model
+        from qsys.signal.alpha_v1.training import (
+            fit_model_fixed_rounds,
+            predict_model,
+            train_model,
+        )
         from qsys.signal.model_blend_inference import (
             compute_universe_hash,
             load_open_dates,
@@ -460,25 +485,81 @@ class FinancialRCTrainer:
                         f"not enough dates for {tag} validation holdout"
                     )
                 valid_start = valid_dates[-spec["validation_sessions"]]
-                validation_size = int((prepared["trade_date"] >= valid_start).sum())
-                model, center, scale = train_model(
-                    X,
-                    y,
+                evaluation_train_end = derive_purged_evaluation_train_end(
+                    open_dates, valid_start, spec["horizon"]
+                )
+                evaluation_mask = (
+                    (prepared["trade_date"] <= evaluation_train_end)
+                    | (prepared["trade_date"] >= valid_start)
+                )
+                evaluation = prepared[evaluation_mask].copy().reset_index(drop=True)
+                evaluation_X = (
+                    evaluation[features].fillna(0.0).astype(np.float32)
+                )
+                evaluation_y = evaluation["label_value"].astype(float)
+                validation_size = int(
+                    (evaluation["trade_date"] >= valid_start).sum()
+                )
+                evaluation_model, evaluation_center, evaluation_scale = train_model(
+                    evaluation_X,
+                    evaluation_y,
                     tag,
                     n_estimators=spec["n_estimators"],
                     lgb_params=spec["lgb_params"],
                     validation_size=validation_size,
                 )
+                selected_iterations = int(
+                    evaluation_model.best_iteration or spec["n_estimators"]
+                )
+                evaluation_predictions = predict_model(
+                    evaluation_model,
+                    evaluation_center,
+                    evaluation_scale,
+                    evaluation_X,
+                )
+                valid_pred = evaluation_predictions.iloc[-validation_size:]
+                valid_y = evaluation_y.iloc[-validation_size:]
+                valid_frame = evaluation.iloc[-validation_size:][
+                    ["trade_date"]
+                ].copy()
+                valid_frame["prediction"] = valid_pred.to_numpy()
+                valid_frame["label"] = valid_y.to_numpy()
+                daily_ic = pd.Series(
+                    {
+                        trade_date: group["prediction"].corr(
+                            group["label"], method="spearman"
+                        )
+                        for trade_date, group in valid_frame.groupby(
+                            "trade_date", sort=True
+                        )
+                    },
+                    dtype=float,
+                ).dropna()
+                if daily_ic.empty:
+                    raise FinancialRCTrainingError(
+                        f"validation daily RankIC is unavailable for {tag}"
+                    )
+                pooled_rank_ic = float(valid_pred.corr(valid_y, method="spearman"))
+                mse = float(
+                    np.mean(
+                        np.square(valid_pred.to_numpy() - valid_y.to_numpy())
+                    )
+                )
+
+                # The evaluation model is used only to select tree count and
+                # report an honest purged holdout.  Refit the serving model on
+                # every fully matured row with that fixed count.
+                model, center, scale = fit_model_fixed_rounds(
+                    X,
+                    y,
+                    tag,
+                    n_estimators=selected_iterations,
+                    lgb_params=spec["lgb_params"],
+                )
                 if list(center.index) != features or list(scale.index) != features:
                     raise FinancialRCTrainingError(
                         f"ordered scaler feature contract failed for {tag}"
                     )
-                predictions = predict_model(model, center, scale, X)
-                valid_pred = predictions.iloc[-validation_size:]
-                valid_y = y.iloc[-validation_size:]
-                rank_ic = float(valid_pred.corr(valid_y, method="spearman"))
-                mse = float(np.mean(np.square(valid_pred.to_numpy() - valid_y.to_numpy())))
-
                 model_stage = staging_root / tag
                 model_stage.mkdir(parents=True, exist_ok=False)
                 model.save_model(str(model_stage / "model.txt"))
@@ -507,15 +588,23 @@ class FinancialRCTrainer:
                     ),
                 }
                 model_metrics = {
-                    "validation_rank_ic": rank_ic,
+                    "validation_daily_rank_ic_mean": float(daily_ic.mean()),
+                    "validation_daily_rank_ic_std": float(daily_ic.std(ddof=1)),
+                    "validation_daily_rank_ic_positive_ratio": float(
+                        (daily_ic > 0).mean()
+                    ),
+                    "validation_pooled_rank_ic": pooled_rank_ic,
                     "validation_mse": mse,
                     "validation_start": valid_start,
                     "validation_end": valid_dates[-1],
                     "validation_rows": validation_size,
-                    "training_rows": len(prepared) - validation_size,
-                    "total_rows": len(prepared),
+                    "evaluation_train_end": evaluation_train_end,
+                    "evaluation_training_rows": len(evaluation) - validation_size,
+                    "purge_sessions": spec["horizon"] + 1,
+                    "purged_rows": int((~evaluation_mask).sum()),
+                    "final_training_rows": len(prepared),
                     "feature_coverage": feature_coverage,
-                    "best_iteration": int(model.best_iteration or spec["n_estimators"]),
+                    "selected_iterations": selected_iterations,
                 }
                 meta = {
                     "schema_version": 2,
@@ -549,7 +638,7 @@ class FinancialRCTrainer:
                     "library_versions": _package_versions(),
                     "research_limitations": [
                         "historical rows use the current CSI800 constituent snapshot; not PIT",
-                        "validation is a trailing time holdout, not a full rolling OOS backtest",
+                        "validation is a horizon-purged trailing holdout, not a full rolling OOS backtest",
                     ],
                 }
                 (model_stage / "meta.json").write_text(

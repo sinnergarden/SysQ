@@ -8,6 +8,7 @@ import pytest
 
 from qsys.model.financial_rc_trainer import (
     FinancialRCTrainingError,
+    derive_purged_evaluation_train_end,
     derive_training_window,
 )
 from qsys.model.registry import create_model_trainer, has_model_trainer
@@ -50,6 +51,15 @@ def test_window_rejects_label_without_strict_maturity_buffer() -> None:
         )
 
 
+def test_evaluation_split_purges_the_forward_label_span() -> None:
+    sessions = _dates(300)
+    # horizon=60 leaves sessions 139..199 (61 sessions) strictly between
+    # the final training feature at 138 and validation at 200.
+    assert derive_purged_evaluation_train_end(
+        sessions, sessions[200], 60
+    ) == sessions[138]
+
+
 def test_financial_rc_has_dedicated_training_candidate(tmp_path) -> None:
     config = {
         "strategy_id": "financial_rc",
@@ -86,3 +96,24 @@ def test_scaler_is_fit_on_pre_validation_rows_only() -> None:
 
     pd.testing.assert_frame_equal(fit.call_args.args[0], X.iloc[:-3])
     assert resolve.call_args.args[-1] == 3
+
+
+def test_fixed_round_refit_uses_all_rows() -> None:
+    X = pd.DataFrame({"a": range(10), "b": range(10, 20)}, dtype=float)
+    y = pd.Series(range(10), dtype=float)
+    center = pd.Series({"a": 1.0, "b": 2.0})
+    scale = pd.Series({"a": 3.0, "b": 4.0})
+
+    with patch.object(
+        lgb_training, "robust_zscore_fit", return_value=(center, scale)
+    ) as fit, patch.object(
+        lgb_training,
+        "robust_zscore_transform",
+        return_value=X,
+    ), patch.object(lgb_training.lgb, "train", return_value=object()) as train:
+        lgb_training.fit_model_fixed_rounds(
+            X, y, "test", n_estimators=17
+        )
+
+    pd.testing.assert_frame_equal(fit.call_args.args[0], X)
+    assert train.call_args.kwargs["num_boost_round"] == 17

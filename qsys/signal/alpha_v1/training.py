@@ -150,6 +150,57 @@ def train_model(
     )
 
 
+def fit_model_fixed_rounds(
+    X_train: pd.DataFrame,
+    y_train: pd.Series,
+    tag: str,
+    *,
+    n_estimators: int,
+    lgb_params: dict[str, Any] | None = None,
+    mode: str = "regression",
+):
+    """Fit a serving model on all rows using a preselected tree count.
+
+    This is the second stage after a purged time holdout has selected
+    ``n_estimators``.  There is deliberately no validation set or early
+    stopping here; preprocessing and the model are refit on the full matured
+    training window.
+    """
+
+    if len(X_train) != len(y_train) or X_train.empty:
+        raise ValueError("fixed-round training requires aligned, non-empty inputs")
+    if n_estimators <= 0:
+        raise ValueError("n_estimators must be positive")
+    if lgb_params is None:
+        lgb_params = dict(
+            _DEFAULT_BINARY_LGB_PARAMS
+            if mode == "binary"
+            else _DEFAULT_LGB_PARAMS
+        )
+    params = dict(lgb_params)
+    if mode == "binary":
+        params["objective"] = "binary"
+        params["metric"] = "auc"
+        pos = int((y_train == 1).sum())
+        neg = int((y_train == 0).sum())
+        if pos > 0 and neg > 0 and params.get("scale_pos_weight", 1.0) == 1.0:
+            params["scale_pos_weight"] = neg / pos
+    else:
+        params.setdefault("objective", "regression")
+        params.setdefault("metric", "mse")
+
+    center, scale = robust_zscore_fit(X_train)
+    Xz = robust_zscore_transform(X_train, center, scale)
+    model = lgb.train(
+        params,
+        lgb.Dataset(Xz.values, label=y_train.values),
+        num_boost_round=n_estimators,
+        callbacks=[lgb.log_evaluation(0)],
+    )
+    print(f"    [{tag}] Refit serving model on all rows, trees={n_estimators}")
+    return model, center, scale
+
+
 def predict_model(
     model: lgb.Booster,
     center: pd.Series,
