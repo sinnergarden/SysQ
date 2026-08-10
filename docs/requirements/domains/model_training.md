@@ -24,6 +24,7 @@ stable
 - `pointer_write_mode=none` 的 research bundle（不得隐式晋级）
 - 训练 metrics 记录
 - ordered feature list、实际有效训练窗口、universe/label/training snapshot hash
+- 股东侧车 source snapshot hash、announcement-date PIT freshness contract/profile
 
 不包含：
 - 研究阶段的快速实验训练
@@ -53,6 +54,12 @@ stable
 - `harness/checks/check_no_latest_model_resolution.py`
 - `harness/checks/check_model_resolution_boundary.py`
 - TBD: training artifact completeness check
+- `harness/checks/check_shareholder_data_freshness.py`
+
+financial_rc 训练前必须验证训练窗口末端的两份股东侧车均满足覆盖率与横截面
+stale-days 阈值；对训练期逐日横截面中位数取最大值，防止长窗口把一次源中断
+稀释掉。超过 row 阈值或缺少 stale-days 的样本行必须剔除并记录数量。任何来源
+回补都会改变训练输入，旧模型一律视为受影响而重新训练，不允许仅重跑 inference。
 
 ### Owner Agent
 builder_agent

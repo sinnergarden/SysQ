@@ -76,6 +76,38 @@
   - Other delayed sources until their publication SLA is measured and explicitly
     configured.
 
+### LM-004: Non-null stale-day features can encode a source outage as alpha
+
+- Status: accepted
+- Trigger: 2026-08-11 financial_rc ranking investigation found both shareholder
+  sidecars had stopped updating while their stale-day features remained numeric.
+- Failure type: data_source_outage + feature_semantics + artifact_invalidation_gap
+- Root cause: generic non-null coverage checks cannot distinguish an increasingly
+  stale PIT observation from a valid feature value; the model learned and scored
+  an out-of-distribution outage state.
+- Fix: paged catch-up sync by `ann_date`, global and per-row freshness contracts in
+  training/inference, source snapshot hashes, and an impact audit covering caches,
+  models, CandidateRuns, and research manifests.
+- Validation: an outage day must fail even inside a long training frame; a stale
+  row is ineligible; artifact checking independently requires source provenance.
+- Rule: source backfill invalidates all overlapping derived features, models, and
+  outputs. Replacing source parquet alone is never a completed repair.
+
+### LM-005: Index membership start is not feature-history availability start
+
+- Status: accepted
+- Trigger: the repaired 2026-08-07 run still excluded 45 current CSI800 members;
+  each canonical file began exactly on the 2026-06-05 rebalance date.
+- Failure type: universe_semantics + feature_lookback_truncation
+- Root cause: newly added live-universe symbols were fetched only from their index
+  inclusion date, so long-window price and financial features had no pre-inclusion
+  lookback even though the companies had traded for years.
+- Fix: inspect current members for 1461 calendar days of canonical history (bounded
+  by listing date), catch up deficient symbols, rebuild their Qlib bins, and emit
+  every ineligible symbol plus missing-feature reasons in CandidateRun.
+- Rule: universe membership controls which stocks are ranked on the signal date;
+  it must never truncate the historical observations used to build their features.
+
 ## Rejected Lessons
 
 None yet.

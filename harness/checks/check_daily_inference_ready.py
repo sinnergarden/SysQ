@@ -18,6 +18,7 @@ from qsys.signal.model_blend_inference import (
     InferenceContractError,
     load_model_lineage,
     load_open_dates,
+    load_universe_snapshot_members,
     resolve_inference_dates,
     validate_inference_config,
 )
@@ -138,6 +139,57 @@ def check_inference_ready(
         results.append(("model lineage and maturity", True, maturity))
     except InferenceContractError as exc:
         results.append(("model lineage and maturity", False, str(exc)))
+
+    try:
+        from qsys.ops.universe_history import inspect_universe_history
+
+        members = load_universe_snapshot_members(
+            project_root, settings["universe"], dates.decision_date
+        )
+        history = inspect_universe_history(
+            project_root=project_root,
+            symbols=members,
+            as_of_date=dates.signal_date,
+            lookback_calendar_days=1461,
+        )
+        results.append(
+            (
+                "universe feature lookback history",
+                history["status"] == "pass",
+                f"deficient={history['deficient_count']}, "
+                f"sample={history['deficient_symbols'][:10]}",
+            )
+        )
+    except (InferenceContractError, OSError, ValueError) as exc:
+        members = []
+        results.append(("universe feature lookback history", False, str(exc)))
+
+    if settings.get("shareholder_freshness") is not None:
+        try:
+            from qsys.ops.shareholder_sync import inspect_shareholder_sidecar_health
+
+            if not members:
+                members = load_universe_snapshot_members(
+                    project_root, settings["universe"], dates.decision_date
+                )
+            shareholder = inspect_shareholder_sidecar_health(
+                project_root=project_root,
+                symbols=members,
+                as_of_date=dates.signal_date,
+                contract=settings["shareholder_freshness"],
+            )
+            results.append(
+                (
+                    "shareholder PIT source freshness",
+                    shareholder["status"] == "pass",
+                    (
+                        f"snapshot={shareholder['snapshot_hash'][:12]}, "
+                        f"violations={shareholder['violations']}"
+                    ),
+                )
+            )
+        except (InferenceContractError, OSError, ValueError) as exc:
+            results.append(("shareholder PIT source freshness", False, str(exc)))
 
     raw_latest = _raw_latest(project_root)
     raw_ok = bool(raw_latest and raw_latest >= dates.signal_date)

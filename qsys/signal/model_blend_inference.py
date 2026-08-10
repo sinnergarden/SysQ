@@ -26,6 +26,11 @@ from qsys.feature.availability import (
     normalise_feature_availability,
     resolve_lagged_open_session,
 )
+from qsys.feature.freshness import (
+    normalise_shareholder_freshness,
+    profile_shareholder_feature_freshness,
+    shareholder_row_freshness_reasons,
+)
 
 
 class InferenceContractError(RuntimeError):
@@ -634,6 +639,22 @@ def validate_inference_config(
             "inference.feature_snapshot_lag_sessions must be a non-negative integer"
         )
 
+    raw_freshness = strategy_config.get("feature_freshness")
+    shareholder_freshness: dict[str, Any] | None = None
+    if raw_freshness is not None:
+        if not isinstance(raw_freshness, dict):
+            raise InferenceContractError("feature_freshness must be a mapping")
+        try:
+            shareholder_freshness = normalise_shareholder_freshness(
+                raw_freshness.get("shareholder")
+            )
+        except ValueError as exc:
+            raise InferenceContractError(str(exc)) from exc
+    elif feature_list_id == "v3a_plus_liquidity_financial_rc":
+        raise InferenceContractError(
+            "financial_rc requires feature_freshness.shareholder"
+        )
+
     settings = {
         "engine": "pinned_model_blend_v1",
         "bundle_id": bundle_id,
@@ -668,6 +689,7 @@ def validate_inference_config(
             )
         ),
         "feature_availability": feature_availability,
+        "shareholder_freshness": shareholder_freshness,
     }
     if settings["top_k"] <= 0:
         raise InferenceContractError("inference.top_k must be positive")
@@ -705,6 +727,7 @@ def validate_inference_config(
             "bundle_id": bundle_id,
             "feature_list_id": feature_list_id,
             "feature_availability": feature_availability,
+            "shareholder_freshness": shareholder_freshness,
             "models": [
                 {
                     key: value
@@ -781,6 +804,22 @@ def load_model_lineage(
             raise InferenceContractError(
                 f"model {model['tag']} feature availability differs from config"
             )
+        model_shareholder_freshness = meta.get("shareholder_freshness_contract")
+        if settings["shareholder_freshness"] is not None:
+            try:
+                model_shareholder_freshness = normalise_shareholder_freshness(
+                    model_shareholder_freshness
+                )
+            except ValueError as exc:
+                raise InferenceContractError(
+                    f"model {model['tag']} lacks valid shareholder freshness "
+                    f"lineage: {exc}"
+                ) from exc
+            if model_shareholder_freshness != settings["shareholder_freshness"]:
+                raise InferenceContractError(
+                    f"model {model['tag']} shareholder freshness contract "
+                    "differs from config"
+                )
         try:
             maturity_sessions = validate_label_maturity(
                 train_end=train_end,
@@ -807,6 +846,10 @@ def load_model_lineage(
                 "train_end": train_end,
                 "maturity_sessions": maturity_sessions,
                 "feature_availability": model_feature_availability,
+                "shareholder_freshness_contract": model_shareholder_freshness,
+                "shareholder_source_lineage": meta.get(
+                    "shareholder_source_lineage"
+                ),
             }
         )
     return lineage
@@ -1153,6 +1196,21 @@ def run_candidate_inference(
         dates.decision_date,
     )
     universe_hash = compute_universe_hash(universe_members)
+    shareholder_source_health: dict[str, Any] | None = None
+    if settings["shareholder_freshness"] is not None:
+        from qsys.ops.shareholder_sync import inspect_shareholder_sidecar_health
+
+        shareholder_source_health = inspect_shareholder_sidecar_health(
+            project_root=project_root,
+            symbols=universe_members,
+            as_of_date=dates.data_date,
+            contract=settings["shareholder_freshness"],
+        )
+        if shareholder_source_health["status"] != "pass":
+            raise InferenceContractError(
+                "shareholder source freshness failed: "
+                + "; ".join(shareholder_source_health["violations"])
+            )
     with _project_working_directory(project_root):
         raw = adapter.get_features(
             settings["universe"],
@@ -1212,6 +1270,16 @@ def run_candidate_inference(
         )
 
     feature_snapshot_hash = compute_feature_snapshot_hash(frame, features)
+    shareholder_feature_health: dict[str, Any] | None = None
+    if settings["shareholder_freshness"] is not None:
+        shareholder_feature_health = profile_shareholder_feature_freshness(
+            frame, settings["shareholder_freshness"]
+        )
+        if shareholder_feature_health["status"] != "pass":
+            raise InferenceContractError(
+                "shareholder feature freshness failed: "
+                + "; ".join(shareholder_feature_health["violations"])
+            )
     loaded_models, loaded_scalers, model_used_features = _load_runtime_models(
         settings["models"], features
     )
@@ -1301,6 +1369,12 @@ def run_candidate_inference(
             for pattern in settings["exclude_name_patterns"]
         ):
             reasons.append("risk_designation")
+        if settings["shareholder_freshness"] is not None:
+            reasons.extend(
+                shareholder_row_freshness_reasons(
+                    row, settings["shareholder_freshness"]
+                )
+            )
 
         for reason in set(reasons):
             drop_reasons[reason] = drop_reasons.get(reason, 0) + 1
@@ -1315,6 +1389,18 @@ def run_candidate_inference(
     frame["name"] = names
     frame["industry"] = industries
     frame["listed_days"] = listed_days_values
+    ineligible_instruments = [
+        {
+            "ts_code": str(row["ts_code"]),
+            "feature_coverage": round(float(row["feature_coverage"]), 6),
+            "reasons": list(row["eligibility_reasons"]),
+            "missing_features": [
+                feature for feature in features if pd.isna(row[feature])
+            ],
+        }
+        for _, row in frame.iterrows()
+        if row["eligibility_reasons"]
+    ]
     eligible = frame.loc[eligibility].copy().reset_index(drop=True)
     if len(eligible) < settings["min_eligible_size"]:
         raise InferenceContractError(
@@ -1462,6 +1548,9 @@ def run_candidate_inference(
                 "as_of_date": margin_asof_date,
             }
         },
+        "feature_sources": {
+            "shareholder": shareholder_source_health,
+        },
         "source": {
             "engine": settings["engine"],
             "model_bundle_id": settings["bundle_id"],
@@ -1485,6 +1574,7 @@ def run_candidate_inference(
             "eligible_rows": len(eligible),
             "dropped_rows": universe_size - len(eligible),
             "drop_reasons": dict(sorted(drop_reasons.items())),
+            "ineligible_instruments": ineligible_instruments,
             "global_feature_coverage": round(global_feature_coverage, 6),
             "min_feature_coverage": settings["min_feature_coverage"],
             "min_global_feature_coverage": settings["min_global_feature_coverage"],
@@ -1500,6 +1590,7 @@ def run_candidate_inference(
             "model_used_features": sorted(model_used_features),
             "excessive_missing_features": excessive_missing_features,
             "constant_model_used_features": constant_model_used_features,
+            "shareholder_feature_freshness": shareholder_feature_health,
         },
         "candidates": candidates,
     }

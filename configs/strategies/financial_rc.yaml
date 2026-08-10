@@ -5,8 +5,8 @@ family: ml_ensemble
 account_id: research_financial_rc
 universe: csi800
 feature_set: v3a_plus_liquidity_financial_rc
-model_version: financial_rc_equal_weight_bbfb2993cf6919e3
-signal_version: blend_0.5_60d_0.5_180d_aligned_tminus1_snapshot_v4
+model_version: financial_rc_equal_weight_8f9f3fc18f422ebb
+signal_version: blend_0.5_60d_0.5_180d_shareholder_pit_v5
 
 # The model sees a single-date feature snapshot: margin and ordinary inputs
 # are both from signal_date. Tushare margin_detail is only treated as complete
@@ -16,6 +16,22 @@ feature_availability:
   margin:
     source: tushare.margin_detail
     lag_sessions: 0
+
+# Shareholder sidecars are announcement-driven PIT inputs.  Non-null values
+# are not sufficient: a stopped updater leaves every row populated while the
+# stale-day features drift far outside the training distribution.
+feature_freshness:
+  shareholder:
+    source: tushare.stk_holdernumber+tushare.top10_holders
+    availability_rule: announcement_date_asof
+    min_coverage: 0.95
+    features:
+      holder_num_stale_days:
+        max_median_days: 200
+        max_row_days: 365
+      top10_holder_stale_days:
+        max_median_days: 250
+        max_row_days: 365
 
 hypothesis: >
   Equal-weight ensemble of pinned 60d and 180d financial_rc models for a
@@ -29,32 +45,32 @@ inference:
   universe: csi800
   feature_list_id: v3a_plus_liquidity_financial_rc
   model_bundle:
-    bundle_id: financial_rc_60d180d_equal_20260810_aligned_snapshot_v4
+    bundle_id: financial_rc_60d180d_equal_20260810_shareholder_pit_v5
     models:
       - tag: 60d
-        model_hash: 5335377cb24397a4
-        artifact_id: 4a57063b85900c36
-        model_dir: data/research/models/60d_v3a_growth_financial/4a57063b85900c36
+        model_hash: d239c448ba17e8ab
+        artifact_id: e607edd00a7d6067
+        model_dir: data/research/models/60d_v3a_growth_financial/e607edd00a7d6067
         label_id: fwd_ret_60d_raw
         horizon: 60
         weight: 0.5
         artifact_sha256:
-          model.txt: 5335377cb24397a41454ad83020e976a0fd01099eca8a933a8bb448677d54614
-          center.json: f8236aa9ff5b4cefc3a8f53b18048c520f5d30ca5bbac8823a07896ebc3f687b
-          scale.json: 11adcf0f7a4da9123e77fa8a81c43fb9267f8e81e19ad8c771981f44cc3c40bb
-          meta.json: a4ec67c5b29b67e3d60a88dfb3968590be4cdde7c0234b5ad201938430915e81
+          model.txt: d239c448ba17e8ab421729c1e3651190cf93e1ff497c3d07afaa176626af9b27
+          center.json: a7a8082eb21408e2bb384e17cdc92d23e676ce1130c5f2c74f5924edad58b452
+          scale.json: 35775296b5ddd8a3435c4238cbe228d34aec323675ae06a9f1c728eb358d3bd7
+          meta.json: d358b6b53fdebe26c108a3f533f3baf07012dd426944dd3b3d3fc3c096479e71
       - tag: 180d
-        model_hash: 62cba3aece304bf1
-        artifact_id: f6097621217d3425
-        model_dir: data/research/models/180d_v3a_growth_financial/f6097621217d3425
+        model_hash: 429b3d9b93311e76
+        artifact_id: eb8c0423e1ad7e8d
+        model_dir: data/research/models/180d_v3a_growth_financial/eb8c0423e1ad7e8d
         label_id: fwd_ret_180d_raw
         horizon: 180
         weight: 0.5
         artifact_sha256:
-          model.txt: 62cba3aece304bf149d9db9d53adde18714bf993a41f86d6d0004e7ecd84eb3d
-          center.json: 7d9526d2e0a5aeb9ff3f92198d58171718b4cc5f3efb65b22dd5cfe0ff66dc9c
-          scale.json: 35078ab4ac9a52adcf13ce8b9227943ade6df5960125812340b7592c8bbb2d8a
-          meta.json: aaa1ecd5ee99c5a423e2554617a5a9538dbec134e21ded884aa9849c9c0ac6cb
+          model.txt: 429b3d9b93311e76de91353d8cbf2ee32a9299905a9174463cfd273ed91791ff
+          center.json: f8c2f68f89ef53365176d1441e9fe796d544da7de8ca34f21abaa1be8e3f2bda
+          scale.json: 0ac505f53a7a3289d53301c47cf06959182f261c64b85fc8692dffb90eadcf34
+          meta.json: 045ff5d58119aa85eea9150623c2f51abc76ae7d82303e7658fe469f8e862b3a
   score_transform: daily_cs_zscore_unclipped_ddof0
   top_k: 200
   min_universe_size: 500

@@ -166,13 +166,13 @@ blend-weight 与组合构建对照研究完成前，不得据此晋级 shadow/pr
 ### Required Checks
 - `harness/checks/check_daily_inference_ready.py`
 - `harness/checks/check_inference_artifact.py`
+- `harness/checks/check_shareholder_data_freshness.py`
 
 ### Operator Runbook
 
 ```bash
-# 先同步 signal_date=T 的 canonical/Qlib。对 CSI800 的 apply 会解析最近
-# 一个已发布交易日 T-1，只检查并回补截至 T-1 的两融缺口，再刷新受影响
-# 的 Qlib symbols；不会等待次日 08:30 的 T 日 margin_detail。
+# 先同步 canonical/Qlib。对 CSI800 的 apply 会补齐 T-1 两融，同时逐日
+# catch-up 股东人数/前十大股东公告并以 ann_date 做 PIT；任一来源不新鲜即阻断。
 python scripts/data_sync.py \
   --config configs/data/csi800_daily_sync.yaml \
   --apply
@@ -188,6 +188,11 @@ python scripts/run_daily.py \
 # 使用命令输出的 artifact 路径做独立契约复核。
 python harness/checks/check_inference_artifact.py \
   --artifact outputs/<signal_date>/financial_rc/<run_id>/candidate_run.json
+
+# 排查历史中断并列出必须重建的缓存、模型、候选与研究产物。
+python harness/checks/check_shareholder_data_freshness.py \
+  --as-of-date <signal_date> \
+  --output runs/data_audit/shareholder_impact.json
 ```
 
 margin repair 或运行前 readiness check 任何非零退出均视为阻断，不能沿用旧候选。
@@ -197,6 +202,18 @@ financial_rc 的训练与推理都必须使用同一 `feature_availability` 契�
 决策日 T 使用完整的 T-1 aligned snapshot，并为 T+1 生成候选；CandidateRun
 必须记录 `decision_date`、snapshot lag 和同日 `margin.as_of_date`，artifact
 checker 从交易日历独立复核。
+股东人数与前十大股东侧车采用 `ann_date <= data_date` 的 backward as-of 规则；
+`end_date` 只表示报告期，禁止用作可得性日期。日常同步维护 checked-through state，
+但空响应也必须被审计；全市场覆盖率、横截面 stale-days 中位数任一超阈值则全局
+fail-closed，单只股票 stale-days 超阈值则从 eligible universe 排除。CandidateRun
+必须 pin 两份源文件 SHA、截至 data_date 的 canonical snapshot hash，以及派生特征
+freshness profile。修复历史缺口后必须重建相关 feature cache、重训模型并重跑候选，
+不能只替换 parquet 后继续使用旧模型。
+当前指数成分的 membership start 不能充当特征历史起点。日常同步会检查每个当前
+成分股是否具备 1461 个日历日的 canonical lookback（上市不足者从上市日算起）；
+新纳入成分若只有纳入日之后的数据，必须先回补历史、对这些 symbols 执行 Qlib
+`dump_fix`，否则 readiness fail。CandidateRun 必须逐只列出所有 ineligible 股票、
+原因和缺失特征，artifact checker 复算 drop-reason 汇总，禁止只报告一个总数。
 该产物只进入人工财报/基本面复核，不直接生成订单或修改 ledger。
 
 ### Owner Agent
