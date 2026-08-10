@@ -5,7 +5,7 @@ family: ml_ensemble
 account_id: research_financial_rc
 universe: csi800
 feature_set: v3a_plus_liquidity_financial_rc
-model_version: financial_rc_equal_weight_aligned_snapshot_pending
+model_version: financial_rc_equal_weight_0bc3293ba11d42ff
 signal_version: blend_0.5_60d_0.5_180d_aligned_tminus1_snapshot_v4
 
 # The model sees a single-date feature snapshot: margin and ordinary inputs
@@ -29,30 +29,30 @@ inference:
   universe: csi800
   feature_list_id: v3a_plus_liquidity_financial_rc
   model_bundle:
-    bundle_id: financial_rc_60d180d_equal_20260810_margin_tminus1_v3
+    bundle_id: financial_rc_60d180d_equal_20260810_aligned_snapshot_v4
     models:
       - tag: 60d
-        model_hash: 1e7e97dc76d6d25d
-        model_dir: data/research/models/60d_v3a_growth_financial/1e7e97dc76d6d25d
+        model_hash: b47caec345dffb96
+        model_dir: data/research/models/60d_v3a_growth_financial/b47caec345dffb96
         label_id: fwd_ret_60d_raw
         horizon: 60
         weight: 0.5
         artifact_sha256:
-          model.txt: 1e7e97dc76d6d25da8ba0ae4cd5386a51de57b9a47d709b2e80f86581f9b8949
-          center.json: 8346926ec35d3a60d7e72e8dd7c0c66386b75c9ba7311d8d50993c8ac4126b11
-          scale.json: c1be78ee5452bd7475cfbf0c590d121285ba340c841f76b452393b56f0bc2b15
-          meta.json: 283123bedb951078a892aac44c7491e69e3e0e43b10107488e2178bf85b9c435
+          model.txt: b47caec345dffb9655e32f00b00b44f00ea6a4dd5e66172088bfda48293692d6
+          center.json: f8236aa9ff5b4cefc3a8f53b18048c520f5d30ca5bbac8823a07896ebc3f687b
+          scale.json: 11adcf0f7a4da9123e77fa8a81c43fb9267f8e81e19ad8c771981f44cc3c40bb
+          meta.json: 3ada26c7061ec6e42ede5f9f7d6d221fe6d38c78dcf3b8160c9161b2a35dd2e6
       - tag: 180d
-        model_hash: 559aa3a3cef50984
-        model_dir: data/research/models/180d_v3a_growth_financial/559aa3a3cef50984
+        model_hash: b66b177abbbd77dc
+        model_dir: data/research/models/180d_v3a_growth_financial/b66b177abbbd77dc
         label_id: fwd_ret_180d_raw
         horizon: 180
         weight: 0.5
         artifact_sha256:
-          model.txt: 559aa3a3cef509848dfbb8f0420d31ee55310f40ec4bffce0f0b4bf14e05e4aa
-          center.json: 3d45d6d189f400026bde138f1802599a31143878337906a1030919f6152997f6
-          scale.json: edafbfd479e76b4bf09d70bc4a3f270b86d64d25f0f5481edf701c408a199ad1
-          meta.json: cf420d46332b57cd39ffa0ce1ebe0c313802b1b4888c9850577efba0cdba05cb
+          model.txt: b66b177abbbd77dc21a5d3ef38c1fe6fdef9fcc7e37580b4de982e195b7e0727
+          center.json: 7d9526d2e0a5aeb9ff3f92198d58171718b4cc5f3efb65b22dd5cfe0ff66dc9c
+          scale.json: 35078ab4ac9a52adcf13ce8b9227943ade6df5960125812340b7592c8bbb2d8a
+          meta.json: 092c942a88a9093f100a81806a164e84d75755fbeb1d554c30de803ff4f5c26b
   score_transform: daily_cs_zscore_unclipped_ddof0
   top_k: 200
   min_universe_size: 500
