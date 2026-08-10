@@ -99,6 +99,7 @@ def _valid_payload() -> dict:
                 {
                     "tag": "60d",
                     "model_hash": "hash60",
+                    "artifact_id": "artifact60",
                     "model_dir": "data/research/models/60/hash60",
                     "label_id": "ret60",
                     "feature_list_id": "features_v1",
@@ -127,6 +128,7 @@ def _valid_payload() -> dict:
                 {
                     "tag": "180d",
                     "model_hash": "hash180",
+                    "artifact_id": "artifact180",
                     "model_dir": "data/research/models/180/hash180",
                     "label_id": "ret180",
                     "feature_list_id": "features_v1",
@@ -191,6 +193,7 @@ def _valid_payload() -> dict:
                         "horizon",
                         "label_id",
                         "model_hash",
+                        "artifact_id",
                         "model_dir",
                         "artifact_sha256",
                     )

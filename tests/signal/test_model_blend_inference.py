@@ -65,6 +65,7 @@ def _config(model_root: Path) -> dict:
             {
                 "tag": tag,
                 "model_hash": model_hash,
+                "artifact_id": model_hash,
                 "model_dir": str(model_dir.relative_to(model_root.parents[2])),
                 "label_id": f"label_{tag}",
                 "horizon": horizon,

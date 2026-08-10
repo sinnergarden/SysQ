@@ -340,6 +340,7 @@ def check_payload(
         for field in (
             "tag",
             "model_hash",
+            "artifact_id",
             "model_dir",
             "label_id",
             "feature_list_id",
@@ -451,6 +452,7 @@ def check_payload(
                     "horizon",
                     "label_id",
                     "model_hash",
+                    "artifact_id",
                     "model_dir",
                     "artifact_sha256",
                 )

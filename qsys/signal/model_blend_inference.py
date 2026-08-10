@@ -500,6 +500,7 @@ def validate_inference_config(
         model = _require_mapping(raw, f"inference.model_bundle.models[{index}]")
         tag = str(model.get("tag") or "").strip()
         model_hash = str(model.get("model_hash") or "").strip()
+        artifact_id = str(model.get("artifact_id") or model_hash).strip()
         relative_dir = str(model.get("model_dir") or "").strip()
         label_id = str(model.get("label_id") or "").strip()
         artifact_sha256 = _require_mapping(
@@ -517,7 +518,7 @@ def validate_inference_config(
             raise InferenceContractError(
                 f"model tags must be non-empty and unique: {tag!r}"
             )
-        if not model_hash or not relative_dir or not label_id:
+        if not model_hash or not artifact_id or not relative_dir or not label_id:
             raise InferenceContractError(
                 f"model {tag} lacks model_hash, model_dir, or label_id"
             )
@@ -550,9 +551,10 @@ def validate_inference_config(
             raise InferenceContractError(
                 f"model {tag} resolves outside {allowed_root}: {model_dir}"
             )
-        if model_dir.name != model_hash:
+        if model_dir.name != artifact_id:
             raise InferenceContractError(
-                f"model {tag} path/hash mismatch: dir={model_dir.name}, hash={model_hash}"
+                f"model {tag} path/artifact mismatch: "
+                f"dir={model_dir.name}, artifact_id={artifact_id}"
             )
         required_files = ["model.txt", "center.json", "scale.json", "meta.json"]
         if set(artifact_sha256) != set(required_files):
@@ -597,6 +599,7 @@ def validate_inference_config(
                 "horizon": horizon,
                 "label_id": label_id,
                 "model_hash": model_hash,
+                "artifact_id": artifact_id,
                 "model_dir": relative_dir,
                 "artifact_sha256": normalised_artifact_sha256,
                 "resolved_model_dir": model_dir,
@@ -743,12 +746,16 @@ def load_model_lineage(
             )
         expected = {
             "model_hash": model["model_hash"],
+            "artifact_id": model["artifact_id"],
             "feature_list_id": settings["feature_list_id"],
             "label_id": model["label_id"],
             "universe": settings["universe"],
         }
         for field, expected_value in expected.items():
-            meta_value = str(meta.get(field) or "")
+            meta_value = str(
+                meta.get(field)
+                or (meta.get("model_hash") if field == "artifact_id" else "")
+            )
             if meta_value != expected_value:
                 raise InferenceContractError(
                     f"model {model['tag']} meta mismatch for {field}: "
@@ -791,6 +798,7 @@ def load_model_lineage(
                 "weight": model["weight"],
                 "horizon": model["horizon"],
                 "model_hash": model["model_hash"],
+                "artifact_id": model["artifact_id"],
                 "model_dir": model["model_dir"],
                 "artifact_sha256": model["artifact_sha256"],
                 "label_id": model["label_id"],

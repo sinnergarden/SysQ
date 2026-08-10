@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 from qsys.model.financial_rc_trainer import (
+    compute_model_artifact_identity,
     FinancialRCTrainingError,
     derive_purged_evaluation_train_end,
     derive_training_window,
@@ -18,6 +19,26 @@ from qsys.signal.alpha_v1 import training as lgb_training
 def _dates(count: int) -> list[str]:
     start = date(2022, 1, 1)
     return [(start + timedelta(days=index)).isoformat() for index in range(count)]
+
+
+def test_artifact_identity_distinguishes_same_model_with_different_snapshot() -> None:
+    base = {
+        "model.txt": "model",
+        "center.json": "center",
+        "scale.json": "scale",
+        "training_snapshot.parquet": "snapshot-a",
+    }
+    kwargs = {
+        "feature_list_hash": "features",
+        "label_lineage": {"label_sha256": "labels"},
+        "training_config_hash": "config",
+        "feature_availability": {"margin": {"lag_sessions": 0}},
+    }
+    first = compute_model_artifact_identity(artifact_hashes=base, **kwargs)
+    changed = {**base, "training_snapshot.parquet": "snapshot-b"}
+    second = compute_model_artifact_identity(artifact_hashes=changed, **kwargs)
+
+    assert first != second
 
 
 def test_window_uses_latest_available_fully_mature_label() -> None:
