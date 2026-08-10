@@ -5,7 +5,7 @@ family: ml_ensemble
 account_id: research_financial_rc
 universe: csi800
 feature_set: v3a_plus_liquidity_financial_rc
-model_version: financial_rc_equal_weight_0bc3293ba11d42ff
+model_version: financial_rc_equal_weight_bbfb2993cf6919e3
 signal_version: blend_0.5_60d_0.5_180d_aligned_tminus1_snapshot_v4
 
 # The model sees a single-date feature snapshot: margin and ordinary inputs
@@ -32,27 +32,29 @@ inference:
     bundle_id: financial_rc_60d180d_equal_20260810_aligned_snapshot_v4
     models:
       - tag: 60d
-        model_hash: b47caec345dffb96
-        model_dir: data/research/models/60d_v3a_growth_financial/b47caec345dffb96
+        model_hash: 5335377cb24397a4
+        artifact_id: 4a57063b85900c36
+        model_dir: data/research/models/60d_v3a_growth_financial/4a57063b85900c36
         label_id: fwd_ret_60d_raw
         horizon: 60
         weight: 0.5
         artifact_sha256:
-          model.txt: b47caec345dffb9655e32f00b00b44f00ea6a4dd5e66172088bfda48293692d6
+          model.txt: 5335377cb24397a41454ad83020e976a0fd01099eca8a933a8bb448677d54614
           center.json: f8236aa9ff5b4cefc3a8f53b18048c520f5d30ca5bbac8823a07896ebc3f687b
           scale.json: 11adcf0f7a4da9123e77fa8a81c43fb9267f8e81e19ad8c771981f44cc3c40bb
-          meta.json: 3ada26c7061ec6e42ede5f9f7d6d221fe6d38c78dcf3b8160c9161b2a35dd2e6
+          meta.json: a4ec67c5b29b67e3d60a88dfb3968590be4cdde7c0234b5ad201938430915e81
       - tag: 180d
-        model_hash: b66b177abbbd77dc
-        model_dir: data/research/models/180d_v3a_growth_financial/b66b177abbbd77dc
+        model_hash: 62cba3aece304bf1
+        artifact_id: f6097621217d3425
+        model_dir: data/research/models/180d_v3a_growth_financial/f6097621217d3425
         label_id: fwd_ret_180d_raw
         horizon: 180
         weight: 0.5
         artifact_sha256:
-          model.txt: b66b177abbbd77dc21a5d3ef38c1fe6fdef9fcc7e37580b4de982e195b7e0727
+          model.txt: 62cba3aece304bf149d9db9d53adde18714bf993a41f86d6d0004e7ecd84eb3d
           center.json: 7d9526d2e0a5aeb9ff3f92198d58171718b4cc5f3efb65b22dd5cfe0ff66dc9c
           scale.json: 35078ab4ac9a52adcf13ce8b9227943ade6df5960125812340b7592c8bbb2d8a
-          meta.json: 092c942a88a9093f100a81806a164e84d75755fbeb1d554c30de803ff4f5c26b
+          meta.json: aaa1ecd5ee99c5a423e2554617a5a9538dbec134e21ded884aa9849c9c0ac6cb
   score_transform: daily_cs_zscore_unclipped_ddof0
   top_k: 200
   min_universe_size: 500
