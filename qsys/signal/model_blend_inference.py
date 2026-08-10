@@ -619,6 +619,18 @@ def validate_inference_config(
             "inference.exclude_name_patterns must be a non-empty list"
         )
 
+    raw_snapshot_lag = inference.get("feature_snapshot_lag_sessions", 0)
+    try:
+        feature_snapshot_lag_sessions = int(raw_snapshot_lag)
+    except (TypeError, ValueError) as exc:
+        raise InferenceContractError(
+            "inference.feature_snapshot_lag_sessions must be a non-negative integer"
+        ) from exc
+    if isinstance(raw_snapshot_lag, bool) or feature_snapshot_lag_sessions < 0:
+        raise InferenceContractError(
+            "inference.feature_snapshot_lag_sessions must be a non-negative integer"
+        )
+
     settings = {
         "engine": "pinned_model_blend_v1",
         "bundle_id": bundle_id,
@@ -645,9 +657,7 @@ def validate_inference_config(
         "min_amount": float(inference.get("min_amount", 0.0)),
         "exclude_name_patterns": [str(item) for item in exclude_name_patterns],
         "market_close_cutoff": str(inference.get("market_close_cutoff", "18:00")),
-        "feature_snapshot_lag_sessions": int(
-            inference.get("feature_snapshot_lag_sessions", 0)
-        ),
+        "feature_snapshot_lag_sessions": feature_snapshot_lag_sessions,
         "output_root": str(inference.get("output_root", "outputs")),
         "universe_snapshot_semantics": str(
             inference.get(
@@ -658,10 +668,6 @@ def validate_inference_config(
     }
     if settings["top_k"] <= 0:
         raise InferenceContractError("inference.top_k must be positive")
-    if settings["feature_snapshot_lag_sessions"] < 0:
-        raise InferenceContractError(
-            "inference.feature_snapshot_lag_sessions must be non-negative"
-        )
     if settings["score_transform"] != "daily_cs_zscore_unclipped_ddof0":
         raise InferenceContractError(
             "inference.score_transform must be daily_cs_zscore_unclipped_ddof0"

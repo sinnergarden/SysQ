@@ -171,6 +171,15 @@ def test_rejects_non_unit_model_weights(tmp_path: Path) -> None:
         validate_inference_config("financial_rc", config, tmp_path)
 
 
+@pytest.mark.parametrize("value", [True, -1, "invalid"])
+def test_rejects_invalid_feature_snapshot_lag(tmp_path: Path, value: object) -> None:
+    model_root = tmp_path / "data" / "research" / "models"
+    config = _config(model_root)
+    config["inference"]["feature_snapshot_lag_sessions"] = value
+    with pytest.raises(InferenceContractError, match="non-negative integer"):
+        validate_inference_config("financial_rc", config, tmp_path)
+
+
 def test_rejects_pit_config_until_provider_exists(tmp_path: Path) -> None:
     model_root = tmp_path / "data" / "research" / "models"
     config = _config(model_root)
