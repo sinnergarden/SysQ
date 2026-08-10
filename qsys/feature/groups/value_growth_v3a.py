@@ -2,7 +2,8 @@
 
 PIT note
 --------
-Margin fields (from qlib bin) are daily snapshots — no PIT concern.
+Margin fields are daily snapshots whose serving availability is controlled by
+the strategy's explicit session-lag contract before this builder is called.
 Shareholder fields require ``ann_date``-based ``merge_asof`` (see
 ``_load_holder_data``).  Using ``end_date`` instead of ``ann_date``
 introduces lookahead — handled by the loader.

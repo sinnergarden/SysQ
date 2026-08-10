@@ -78,6 +78,14 @@ def _valid_payload() -> dict:
         "feature_list_id": "features_v1",
         "feature_list_hash": "b" * 64,
         "feature_snapshot_hash": "d" * 64,
+        "feature_availability": {
+            "margin": {
+                "source": "tushare.margin_detail",
+                "lag_sessions": 1,
+                "availability_rule": "previous_open_session",
+                "as_of_date": "2026-08-06",
+            }
+        },
         "candidate_hash": compute_candidate_hash(candidates),
         "candidate_count": 1,
         "source": {
@@ -98,6 +106,13 @@ def _valid_payload() -> dict:
                         "2026-04-01", "2026-08-07"
                     ),
                     "ordered_feature_list_hash": "b" * 64,
+                    "feature_availability": {
+                        "margin": {
+                            "source": "tushare.margin_detail",
+                            "lag_sessions": 1,
+                            "availability_rule": "previous_open_session",
+                        }
+                    },
                     "weight": 0.5,
                     "artifact_sha256": {
                         "model.txt": "1" * 64,
@@ -119,6 +134,13 @@ def _valid_payload() -> dict:
                         "2025-10-01", "2026-08-07"
                     ),
                     "ordered_feature_list_hash": "b" * 64,
+                    "feature_availability": {
+                        "margin": {
+                            "source": "tushare.margin_detail",
+                            "lag_sessions": 1,
+                            "availability_rule": "previous_open_session",
+                        }
+                    },
                     "weight": 0.5,
                     "artifact_sha256": {
                         "model.txt": "5" * 64,
@@ -150,6 +172,13 @@ def _valid_payload() -> dict:
         {
             "bundle_id": payload["source"]["model_bundle_id"],
             "feature_list_id": payload["source"]["feature_list_id"],
+            "feature_availability": {
+                "margin": {
+                    key: value
+                    for key, value in payload["feature_availability"]["margin"].items()
+                    if key != "as_of_date"
+                }
+            },
             "models": [
                 {
                     key: model[key]
@@ -224,6 +253,7 @@ def test_pre_cutoff_run_anchor_is_self_consistent() -> None:
     payload["execution_date"] = "2026-08-07"
     payload["date_contract"]["run_anchor_at"] = payload["created_at"]
     payload["date_contract"]["expected_completed_date"] = "2026-08-06"
+    payload["feature_availability"]["margin"]["as_of_date"] = "2026-08-05"
     payload["data_quality"]["feature_snapshot_date"] = "2026-08-06"
     for model in payload["source"]["models"]:
         model["maturity_sessions"] = _maturity_sessions(
@@ -354,4 +384,24 @@ def test_declared_feature_quality_issues_are_rejected() -> None:
     assert (
         "CandidateRun data_quality.constant_model_used_features must be empty"
         in _check(payload)
+    )
+
+
+def test_margin_asof_must_be_exact_previous_open_session() -> None:
+    payload = _valid_payload()
+    payload["feature_availability"]["margin"]["as_of_date"] = "2026-08-05"
+    assert any(
+        "margin.as_of_date does not match calendar" in violation
+        for violation in _check(payload)
+    )
+
+
+def test_model_margin_availability_must_match_run_contract() -> None:
+    payload = _valid_payload()
+    payload["source"]["models"][0]["feature_availability"]["margin"][
+        "lag_sessions"
+    ] = 2
+    assert any(
+        "feature_availability must match top-level contract" in violation
+        for violation in _check(payload)
     )

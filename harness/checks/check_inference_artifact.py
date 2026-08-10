@@ -23,6 +23,11 @@ from qsys.signal.model_blend_inference import (
     resolve_next_open_session,
     validate_label_maturity,
 )
+from qsys.feature.availability import (
+    MARGIN_SOURCE,
+    normalise_feature_availability,
+    resolve_lagged_open_session,
+)
 
 REQUIRED_TOP_LEVEL = {
     "run_id",
@@ -207,6 +212,51 @@ def check_payload(
             f"signal_date={signal_date}, expected_completed={expected_completed_date}"
         )
 
+    declared_feature_availability = payload.get("feature_availability")
+    feature_availability_contract: dict[str, Any] | None = None
+    margin_asof_date: str | None = None
+    if not isinstance(declared_feature_availability, dict):
+        violations.append("CandidateRun missing feature_availability")
+    else:
+        margin = declared_feature_availability.get("margin")
+        if not isinstance(margin, dict):
+            violations.append("feature_availability.margin must be an object")
+        else:
+            try:
+                feature_availability_contract = normalise_feature_availability(
+                    {"margin": margin}
+                )
+            except ValueError as exc:
+                violations.append(f"Invalid feature availability: {exc}")
+            margin_asof_date = _date(
+                margin.get("as_of_date"),
+                "feature_availability.margin.as_of_date",
+                violations,
+            )
+            if margin.get("source") != MARGIN_SOURCE:
+                violations.append(
+                    f"feature_availability.margin.source must be {MARGIN_SOURCE}"
+                )
+    if (
+        sessions
+        and signal_date
+        and feature_availability_contract is not None
+        and margin_asof_date
+    ):
+        try:
+            expected_margin_asof = resolve_lagged_open_session(
+                signal_date,
+                sessions,
+                feature_availability_contract["margin"]["lag_sessions"],
+            )
+            if margin_asof_date != expected_margin_asof:
+                violations.append(
+                    "feature_availability.margin.as_of_date does not match calendar: "
+                    f"expected={expected_margin_asof}, got={margin_asof_date}"
+                )
+        except ValueError as exc:
+            violations.append(f"Cannot validate margin availability: {exc}")
+
     source = payload.get("source")
     if not isinstance(source, dict):
         violations.append("Missing source provenance object")
@@ -279,6 +329,11 @@ def check_payload(
                 f"{prefix}.ordered_feature_list_hash must match top-level "
                 "feature_list_hash"
             )
+        if is_candidate_run and feature_availability_contract is not None:
+            if model.get("feature_availability") != feature_availability_contract:
+                violations.append(
+                    f"{prefix}.feature_availability must match top-level contract"
+                )
         if tag:
             if tag in model_tags:
                 violations.append(f"Duplicate model tag: {tag}")
@@ -354,6 +409,7 @@ def check_payload(
             {
                 "bundle_id": source.get("model_bundle_id"),
                 "feature_list_id": source.get("feature_list_id"),
+                "feature_availability": feature_availability_contract,
                 "models": bundle_models,
             }
         )

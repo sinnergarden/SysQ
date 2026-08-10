@@ -26,7 +26,7 @@
 
 | 阶段 | Service | Timer | 调用链 |
 |------|---------|-------|--------|
-| Data sync | `qsys-csi800-daily-sync.service` | Mon-Fri 19:00 | `scripts/ops/sync_csi800_daily.py --apply` |
+| Data sync + financial_rc | `qsys-csi800-daily-sync.service` | Mon-Fri 19:00 | `data_sync.py` 同步 T、补 T-1 两融，随后生成 Top200 |
 | Preopen | `qsys-candidate-preopen.service` | Mon-Fri 08:00 | `run_daily_batch.py --stage candidate --mode preopen --trade-date auto` |
 | Postclose | `qsys-candidate-postclose.service` | Mon-Fri 21:00 | `run_daily_batch.py --stage candidate --mode postclose --trade-date auto` |
 | Weekly train | `qsys-candidate-train.service` | Mon 07:00 | `run_daily_batch.py --stage candidate --mode train` |
@@ -121,7 +121,7 @@ flowchart TD
 
 ### 文本版（Mermaid 后备）
 
-1. **Data Sync** (T-1 21:30) → **Readiness Check**
+1. **Data Sync** (T 日 19:00) → 同步 T 日常规数据、补齐 T-1 两融 → **Readiness Check**
 2. **Ready/Degraded** → continue；**Blocked** → stop + notify operator
 3. **Approved Manifest + Model Freshness** → Signal Generation
 4. **Plan / Order Intents** → 检查是否空 plan
@@ -316,7 +316,8 @@ cat daily/YYYY-MM-DD/post_close/daily_ops_digest_*.json | python -m json.tool
 
 ```bash
 # 手动触发数据同步
-python scripts/ops/sync_csi800_daily.py --apply
+python scripts/data_sync.py --universe csi800 --apply
+python scripts/run_daily.py --strategy financial_rc --mode infer --signal-date auto --top-k 200
 
 # 数据健康检查（已实现）
 python -c "from qsys.data.health import inspect_qlib_data_health; r = inspect_qlib_data_health('$(date +%Y-%m-%d)', ['\$open', '\$high', '\$low', '\$close', '\$volume', '\$factor'], universe='csi800'); print(r.to_markdown())"
@@ -439,7 +440,7 @@ python scripts/ops/audit_state_paths.py
 
 | 场景 | 处理步骤 |
 |------|---------|
-| **Data blocked** | `journalctl --user -u qsys-csi800-daily-sync.service` 检查 sync 失败原因 → 修复（网络、quota、数据源）→ 手动重跑 `sync_csi800_daily.py --apply` → 仍失败则跳过当天 preopen |
+| **Data blocked** | `journalctl --user -u qsys-csi800-daily-sync.service` 检查 sync 失败原因 → 修复（网络、quota、数据源）→ 手动重跑 `data_sync.py --universe csi800 --apply` → 仍失败则跳过当天候选 |
 | **No approved manifest** | 检查 weekly train 是否成功 → 如未训练，手动触发：`python scripts/run_alpha_v1_weekly_train.py` 或 `python scripts/run_daily.py --strategy alpha_v1 --mode train` → 确认 manifest 生成 |
 | **Stale model** | 若有 approved fallback model（通过 manifest / strategy config），通知 operator 确认是否使用 fallback；当前 `run_daily.py` 不提供 CLI fallback 参数，fallback 需通过配置或 manifest 选择 |
 | **Empty plan** | 检查 plan 日志中的 reason → expected no-trade → 无需操作；abnormal → 检查 signal / readiness / manifest |

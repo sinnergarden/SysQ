@@ -8,7 +8,7 @@
 
 | Timer | 时间(CST) | ExecStart | 说明 |
 |-------|----------|-----------|------|
-| `qsys-csi800-daily-sync.timer` | 交易日 19:00 | `scripts/ops/sync_csi800_daily.py --apply` | 数据同步 |
+| `qsys-csi800-daily-sync.timer` | 交易日 19:00 | `scripts/data_sync.py --universe csi800 --apply`，随后 `financial_rc infer` | T 日同步 + T-1 两融回补 + Top200 |
 | `qsys-candidate-preopen.timer` | 交易日 08:00 | `run_daily_batch.py --stage candidate --mode preopen --trade-date auto` | 盘前：信号→计划→shadow |
 | `qsys-candidate-postclose.timer` | 交易日 21:00 | `run_daily_batch.py --stage candidate --mode postclose --trade-date auto` | 盘后：对账→归档→摘要 |
 | `qsys-candidate-train.timer` | 周一 07:00 | `run_daily_batch.py --stage candidate --mode train` | 周模型训练 |
@@ -74,7 +74,8 @@ systemctl --user list-timers --all | grep qsys
 
 ```bash
 # 数据同步
-python scripts/ops/sync_csi800_daily.py --apply
+python scripts/data_sync.py --universe csi800 --apply
+python scripts/run_daily.py --strategy financial_rc --mode infer --signal-date auto --top-k 200
 
 # 盘前（dry-run）
 python scripts/run_daily.py --strategy alpha_v1 --mode preopen --trade-date auto --debug-run --no-notify

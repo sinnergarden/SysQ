@@ -37,7 +37,18 @@ def main():
         default=450,
         help="Minimum CSI800 symbols with margin balance on every open session",
     )
+    p.add_argument(
+        "--margin-lag-sessions",
+        type=int,
+        default=1,
+        help=(
+            "Margin publication lag in open sessions. Daily post-close sync "
+            "defaults to repairing through the previous open session."
+        ),
+    )
     args = p.parse_args()
+    if args.margin_lag_sessions < 1:
+        p.error("--margin-lag-sessions must be at least 1 for post-close sync")
     universe = args.universe
     target_date = args.target_date
     do_apply = args.apply
@@ -69,7 +80,11 @@ def main():
 
     from qsys.data.adapter import QlibAdapter
     from qsys.ops.instrument_coverage import read_instrument_file
-    from qsys.ops.raw_sync import run_margin_history_repair
+    from qsys.data.storage import StockDataStore
+    from qsys.ops.raw_sync import (
+        resolve_margin_availability_date,
+        run_margin_history_repair,
+    )
     from qsys.ops.trade_date import resolve_daily_trade_date
 
     resolved = resolve_daily_trade_date(target_date, universe="csi800")
@@ -86,19 +101,43 @@ def main():
         & (instruments["end_date"] >= target_ts)
     ]
     symbols = sorted(active["instrument"].astype(str).unique().tolist())
+    store = StockDataStore()
+    margin_asof_date = resolve_margin_availability_date(
+        store,
+        signal_date=resolved_target,
+        lag_sessions=args.margin_lag_sessions,
+    )
+    margin_asof_ts = datetime.strptime(margin_asof_date, "%Y-%m-%d")
     repair_start = (
-        target_ts - timedelta(days=max(args.margin_lookback_days, 90))
+        margin_asof_ts - timedelta(days=max(args.margin_lookback_days, 90))
     ).strftime("%Y-%m-%d")
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
     result = run_margin_history_repair(
         symbols=symbols,
         start_date=repair_start,
-        end_date=resolved_target,
+        end_date=margin_asof_date,
         min_active=args.margin_min_active,
         apply=True,
         output_dir=PROJ / "runs" / "data_sync" / run_id / "margin_repair",
+        store=store,
+        signal_date=resolved_target,
+        availability_lag_sessions=args.margin_lag_sessions,
     )
-    print(json.dumps({"margin_repair": result}, indent=2, sort_keys=True))
+    print(
+        json.dumps(
+            {
+                "margin_availability": {
+                    "signal_date": resolved_target,
+                    "as_of_date": margin_asof_date,
+                    "lag_sessions": args.margin_lag_sessions,
+                    "source": "tushare.margin_detail",
+                },
+                "margin_repair": result,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
     if result["status"] not in {"healthy", "success"}:
         raise RuntimeError(
             f"csi800 margin history repair failed: {result['summary_path']}"

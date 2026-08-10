@@ -7,6 +7,8 @@ from typing import Any, Callable
 
 import pandas as pd
 
+from qsys.feature.availability import MARGIN_SOURCE, resolve_lagged_open_session
+
 from qsys.config import cfg
 from qsys.utils.json_io import write_csv, write_json
 
@@ -305,6 +307,26 @@ def inspect_margin_history_coverage(
     }
 
 
+def resolve_margin_availability_date(
+    store: StockDataStore,
+    *,
+    signal_date: str,
+    lag_sessions: int = 1,
+) -> str:
+    """Resolve the latest margin session available to a post-close run."""
+
+    calendar = store.get_calendar()
+    if calendar is None or calendar.empty or "cal_date" not in calendar.columns:
+        raise ValueError("cannot resolve margin availability without trade calendar")
+    if "is_open" in calendar.columns:
+        calendar = calendar[pd.to_numeric(calendar["is_open"], errors="coerce").eq(1)]
+    return resolve_lagged_open_session(
+        signal_date,
+        calendar["cal_date"].tolist(),
+        lag_sessions,
+    )
+
+
 def run_margin_history_repair(
     *,
     symbols: list[str],
@@ -316,6 +338,8 @@ def run_margin_history_repair(
     store: StockDataStore | None = None,
     collector: TushareCollector | None = None,
     qlib_refresh_fn: Callable[..., dict[str, Any]] | None = None,
+    signal_date: str | None = None,
+    availability_lag_sessions: int | None = None,
 ) -> dict[str, Any]:
     """Repair missing daily margin history and refresh affected Qlib symbols.
 
@@ -328,6 +352,29 @@ def run_margin_history_repair(
     resolved_start = pd.Timestamp(start_date).strftime("%Y-%m-%d")
     resolved_end = pd.Timestamp(end_date).strftime("%Y-%m-%d")
     store = store or StockDataStore()
+    availability: dict[str, Any] | None = None
+    if (signal_date is None) != (availability_lag_sessions is None):
+        raise ValueError(
+            "signal_date and availability_lag_sessions must be provided together"
+        )
+    if signal_date is not None and availability_lag_sessions is not None:
+        resolved_signal = pd.Timestamp(signal_date).strftime("%Y-%m-%d")
+        expected_end = resolve_margin_availability_date(
+            store,
+            signal_date=resolved_signal,
+            lag_sessions=availability_lag_sessions,
+        )
+        if resolved_end != expected_end:
+            raise ValueError(
+                "margin repair end_date violates availability contract: "
+                f"expected={expected_end}, got={resolved_end}"
+            )
+        availability = {
+            "signal_date": resolved_signal,
+            "as_of_date": expected_end,
+            "lag_sessions": availability_lag_sessions,
+            "source": MARGIN_SOURCE,
+        }
     open_dates = _open_dates_for_margin_repair(
         store, start_date=resolved_start, end_date=resolved_end
     )
@@ -358,6 +405,7 @@ def run_margin_history_repair(
         "patched_value_count": 0,
         "qlib_refresh": {"status": "skipped"},
         "status": "healthy" if not gap_dates else "planned",
+        "availability": availability,
     }
     if not gap_dates or not apply:
         summary_path = write_json(output_dir / "margin_repair_summary.json", summary)
