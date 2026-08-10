@@ -286,6 +286,15 @@ def inspect_margin_history_coverage(
     open_dates: list[str],
 ) -> dict[str, Any]:
     counts = {trade_date: 0 for trade_date in open_dates}
+    exchanges = sorted({_symbol_exchange(symbol) for symbol in symbols})
+    expected_by_exchange = {
+        exchange: sum(_symbol_exchange(symbol) == exchange for symbol in symbols)
+        for exchange in exchanges
+    }
+    exchange_counts = {
+        trade_date: {exchange: 0 for exchange in exchanges}
+        for trade_date in open_dates
+    }
     for symbol in symbols:
         frame = store.load_daily(symbol)
         if (
@@ -300,11 +309,52 @@ def inspect_margin_history_coverage(
         for trade_date in dates.loc[valid].dropna().unique().tolist():
             if trade_date in counts:
                 counts[trade_date] += 1
+                exchange_counts[trade_date][_symbol_exchange(symbol)] += 1
+    exchange_coverage = {
+        trade_date: {
+            exchange: (
+                exchange_counts[trade_date][exchange] / expected
+                if expected
+                else 1.0
+            )
+            for exchange, expected in expected_by_exchange.items()
+        }
+        for trade_date in open_dates
+    }
     return {
         "date_counts": counts,
+        "expected_symbols_by_exchange": expected_by_exchange,
+        "date_exchange_counts": exchange_counts,
+        "date_exchange_coverage": exchange_coverage,
         "minimum_active": min(counts.values()) if counts else 0,
         "latest_active": counts.get(open_dates[-1], 0) if open_dates else 0,
     }
+
+
+def _symbol_exchange(symbol: str) -> str:
+    text = str(symbol).strip().upper()
+    if text.endswith(".SH"):
+        return "SH"
+    if text.endswith(".SZ"):
+        return "SZ"
+    return "UNKNOWN"
+
+
+def _margin_gap_dates(
+    coverage: dict[str, Any],
+    *,
+    min_active: int,
+    min_exchange_coverage: float,
+) -> list[str]:
+    return [
+        trade_date
+        for trade_date, count in coverage["date_counts"].items()
+        if count < min_active
+        or any(
+            ratio < min_exchange_coverage
+            for ratio in coverage["date_exchange_coverage"][trade_date].values()
+        )
+    ]
 
 
 def resolve_margin_availability_date(
@@ -333,6 +383,7 @@ def run_margin_history_repair(
     start_date: str,
     end_date: str,
     min_active: int,
+    min_exchange_coverage: float = 0.90,
     apply: bool,
     output_dir: Path,
     store: StockDataStore | None = None,
@@ -383,20 +434,23 @@ def run_margin_history_repair(
             f"no open dates for margin repair: {resolved_start}..{resolved_end}"
         )
 
+    if not 0.0 <= min_exchange_coverage <= 1.0:
+        raise ValueError("min_exchange_coverage must be between 0 and 1")
     before = inspect_margin_history_coverage(
         store, symbols=symbols, open_dates=open_dates
     )
-    gap_dates = [
-        trade_date
-        for trade_date, count in before["date_counts"].items()
-        if count < min_active
-    ]
+    gap_dates = _margin_gap_dates(
+        before,
+        min_active=min_active,
+        min_exchange_coverage=min_exchange_coverage,
+    )
     summary: dict[str, Any] = {
         "start_date": resolved_start,
         "end_date": resolved_end,
         "open_date_count": len(open_dates),
         "symbol_count": len(symbols),
         "min_active": min_active,
+        "min_exchange_coverage": min_exchange_coverage,
         "apply": apply,
         "before": before,
         "gap_dates_before": gap_dates,
@@ -471,11 +525,11 @@ def run_margin_history_repair(
     after = inspect_margin_history_coverage(
         store, symbols=symbols, open_dates=open_dates
     )
-    gap_dates_after = [
-        trade_date
-        for trade_date, count in after["date_counts"].items()
-        if count < min_active
-    ]
+    gap_dates_after = _margin_gap_dates(
+        after,
+        min_active=min_active,
+        min_exchange_coverage=min_exchange_coverage,
+    )
     summary["after"] = after
     summary["gap_dates_after"] = gap_dates_after
     qlib_status = str(summary["qlib_refresh"].get("qlib_update_status", "skipped"))

@@ -32,6 +32,7 @@ OPEN_DATES = [
     "2026-08-06",
     "2026-08-07",
     "2026-08-10",
+    "2026-08-11",
 ]
 
 
@@ -92,7 +93,22 @@ def test_resolves_friday_close_to_monday_execution() -> None:
     )
     assert dates.signal_date == "2026-08-07"
     assert dates.data_date == "2026-08-07"
+    assert dates.decision_date == "2026-08-07"
     assert dates.execution_date == "2026-08-10"
+
+
+def test_monday_decision_uses_aligned_friday_snapshot_and_tuesday_execution() -> None:
+    dates = resolve_inference_dates(
+        "2026-08-07",
+        None,
+        OPEN_DATES,
+        now=datetime.fromisoformat("2026-08-10T19:00:00+08:00"),
+        feature_snapshot_lag_sessions=1,
+    )
+    assert dates.signal_date == "2026-08-07"
+    assert dates.data_date == "2026-08-07"
+    assert dates.decision_date == "2026-08-10"
+    assert dates.execution_date == "2026-08-11"
 
 
 def test_auto_before_cutoff_uses_previous_completed_session() -> None:
@@ -116,8 +132,8 @@ def test_rejects_same_day_execution() -> None:
         )
 
 
-def test_rejects_historical_date_for_current_universe_snapshot() -> None:
-    with pytest.raises(InferenceContractError, match="cannot run historical"):
+def test_rejects_date_outside_configured_aligned_snapshot_boundary() -> None:
+    with pytest.raises(InferenceContractError, match="aligned feature session"):
         resolve_inference_dates(
             "2026-08-06",
             None,
@@ -130,7 +146,7 @@ def test_rejects_historical_date_for_current_universe_snapshot() -> None:
 def test_pit_universe_semantics_are_rejected_until_provider_exists() -> None:
     with pytest.raises(InferenceContractError, match="historical PIT inference"):
         resolve_inference_dates(
-            "2026-08-06",
+            "2026-08-07",
             None,
             OPEN_DATES,
             now=datetime.fromisoformat("2026-08-08T12:00:00+08:00"),

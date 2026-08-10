@@ -5,17 +5,17 @@ family: ml_ensemble
 account_id: research_financial_rc
 universe: csi800
 feature_set: v3a_plus_liquidity_financial_rc
-model_version: financial_rc_equal_weight_5c5014f1a73c8cff
-signal_version: blend_0.5_60d_0.5_180d_margin_tminus1_v3
+model_version: financial_rc_equal_weight_aligned_snapshot_pending
+signal_version: blend_0.5_60d_0.5_180d_aligned_tminus1_snapshot_v4
 
-# Tushare publishes margin_detail after the trading session and it is not
-# reliably available during the same night's run.  Both training and serving
-# therefore use the exact previous open session's raw margin inputs while all
-# other feature inputs remain on signal_date.
+# The model sees a single-date feature snapshot: margin and ordinary inputs
+# are both from signal_date. Tushare margin_detail is only treated as complete
+# on the following open session, so daily inference delays the entire snapshot
+# by one open session instead of mixing T prices with T-1 margin data.
 feature_availability:
   margin:
     source: tushare.margin_detail
-    lag_sessions: 1
+    lag_sessions: 0
 
 hypothesis: >
   Equal-weight ensemble of pinned 60d and 180d financial_rc models for a
@@ -68,6 +68,10 @@ inference:
   min_amount: 0
   exclude_name_patterns: [ST, "退"]
   market_close_cutoff: "18:00"
+  # Decision session T uses the fully aligned T-1 feature snapshot and emits
+  # candidates for T+1. Explicit signal dates must match this exact boundary;
+  # arbitrary historical inference remains forbidden with a current snapshot.
+  feature_snapshot_lag_sessions: 1
   output_root: outputs
   # Current CSI800 constituents are safe for live screening but not a PIT
   # historical universe. Historical inference remains unavailable until a

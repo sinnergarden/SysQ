@@ -34,10 +34,11 @@ class InferenceContractError(RuntimeError):
 
 @dataclass(frozen=True)
 class InferenceDates:
-    """Resolved dates for post-close inference and next-session use."""
+    """Resolved aligned feature, decision, and next-session execution dates."""
 
     signal_date: str
     data_date: str
+    decision_date: str
     execution_date: str
     expected_completed_date: str
 
@@ -353,13 +354,15 @@ def resolve_inference_dates(
     now: datetime | None = None,
     market_close_cutoff: str = "18:00",
     universe_snapshot_semantics: str = "current_constituents_snapshot",
+    feature_snapshot_lag_sessions: int = 0,
 ) -> InferenceDates:
-    """Resolve safe post-close signal and next-open execution dates.
+    """Resolve a bounded, aligned feature snapshot for the next decision open.
 
-    ``auto`` never assumes an unfinished same-day close.  Before the configured
-    cutoff it resolves to the previous open session; after the cutoff it may
-    use today only when today is an open session.  Explicit dates are held to
-    the same completed-close boundary.
+    ``expected_completed`` is the decision session known at the captured run
+    anchor.  ``feature_snapshot_lag_sessions`` moves *all* model inputs back by
+    an exact number of open sessions.  This is intentionally distinct from a
+    source-specific feature lag: the returned ``signal_date`` and ``data_date``
+    always describe one aligned snapshot.
     """
 
     sessions = sorted({_normalise_date(value) for value in open_dates})
@@ -374,9 +377,26 @@ def resolve_inference_dates(
         market_close_cutoff=market_close_cutoff,
     )
 
+    if (
+        not isinstance(feature_snapshot_lag_sessions, int)
+        or isinstance(feature_snapshot_lag_sessions, bool)
+        or feature_snapshot_lag_sessions < 0
+    ):
+        raise InferenceContractError(
+            "feature_snapshot_lag_sessions must be a non-negative integer"
+        )
+    try:
+        expected_signal = resolve_lagged_open_session(
+            expected_completed,
+            sessions,
+            feature_snapshot_lag_sessions,
+        )
+    except ValueError as exc:
+        raise InferenceContractError(str(exc)) from exc
+
     requested = (signal_date or "auto").strip().lower()
     resolved_signal = (
-        expected_completed if requested == "auto" else _normalise_date(requested)
+        expected_signal if requested == "auto" else _normalise_date(requested)
     )
     if resolved_signal not in sessions:
         raise InferenceContractError(
@@ -387,15 +407,12 @@ def resolve_inference_dates(
             "signal_date is not a completed close: "
             f"signal_date={resolved_signal}, latest_completed={expected_completed}"
         )
-    if (
-        universe_snapshot_semantics == "current_constituents_snapshot"
-        and resolved_signal != expected_completed
-    ):
+    if resolved_signal != expected_signal:
         raise InferenceContractError(
-            "current_constituents_snapshot cannot run historical signal dates: "
-            f"signal_date={resolved_signal}, expected_completed={expected_completed}; "
-            "historical inference is unavailable until a PIT universe provider "
-            "is implemented"
+            "signal_date must equal the configured aligned feature session: "
+            f"expected={expected_signal}, got={resolved_signal}, "
+            f"decision_date={expected_completed}, "
+            f"feature_snapshot_lag_sessions={feature_snapshot_lag_sessions}"
         )
     if universe_snapshot_semantics != "current_constituents_snapshot":
         raise InferenceContractError(
@@ -403,7 +420,7 @@ def resolve_inference_dates(
             "pit_constituents_snapshot provider is implemented"
         )
 
-    expected_execution = resolve_next_open_session(resolved_signal, sessions)
+    expected_execution = resolve_next_open_session(expected_completed, sessions)
     if execution_date:
         supplied_execution = _normalise_date(execution_date)
         if supplied_execution != expected_execution:
@@ -417,6 +434,7 @@ def resolve_inference_dates(
     return InferenceDates(
         signal_date=resolved_signal,
         data_date=resolved_signal,
+        decision_date=expected_completed,
         execution_date=supplied_execution,
         expected_completed_date=expected_completed,
     )
@@ -627,6 +645,9 @@ def validate_inference_config(
         "min_amount": float(inference.get("min_amount", 0.0)),
         "exclude_name_patterns": [str(item) for item in exclude_name_patterns],
         "market_close_cutoff": str(inference.get("market_close_cutoff", "18:00")),
+        "feature_snapshot_lag_sessions": int(
+            inference.get("feature_snapshot_lag_sessions", 0)
+        ),
         "output_root": str(inference.get("output_root", "outputs")),
         "universe_snapshot_semantics": str(
             inference.get(
@@ -637,6 +658,10 @@ def validate_inference_config(
     }
     if settings["top_k"] <= 0:
         raise InferenceContractError("inference.top_k must be positive")
+    if settings["feature_snapshot_lag_sessions"] < 0:
+        raise InferenceContractError(
+            "inference.feature_snapshot_lag_sessions must be non-negative"
+        )
     if settings["score_transform"] != "daily_cs_zscore_unclipped_ddof0":
         raise InferenceContractError(
             "inference.score_transform must be daily_cs_zscore_unclipped_ddof0"
@@ -1071,6 +1096,7 @@ def run_candidate_inference(
         now=run_anchor_time,
         market_close_cutoff=settings["market_close_cutoff"],
         universe_snapshot_semantics=settings["universe_snapshot_semantics"],
+        feature_snapshot_lag_sessions=settings["feature_snapshot_lag_sessions"],
     )
     model_lineage = load_model_lineage(settings, dates.signal_date, open_dates)
     margin_lag_sessions = settings["feature_availability"]["margin"][
@@ -1110,7 +1136,7 @@ def run_candidate_inference(
     universe_members = load_universe_snapshot_members(
         project_root,
         settings["universe"],
-        dates.signal_date,
+        dates.decision_date,
     )
     universe_hash = compute_universe_hash(universe_members)
     with _project_working_directory(project_root):
@@ -1366,6 +1392,7 @@ def run_candidate_inference(
                 "models": model_rows,
                 "data_date": dates.data_date,
                 "signal_date": dates.signal_date,
+                "decision_date": dates.decision_date,
                 "execution_date": dates.execution_date,
                 "strategy_id": strategy_id,
             }
@@ -1392,12 +1419,16 @@ def run_candidate_inference(
         "created_at": created_at,
         "signal_date": dates.signal_date,
         "data_date": dates.data_date,
+        "decision_date": dates.decision_date,
         "execution_date": dates.execution_date,
         "date_contract": {
-            "mode": "postclose_for_next_open_session",
+            "mode": "aligned_feature_snapshot_for_next_open_session",
             "run_anchor_at": created_at,
             "market_close_cutoff": settings["market_close_cutoff"],
             "expected_completed_date": dates.expected_completed_date,
+            "feature_snapshot_lag_sessions": settings[
+                "feature_snapshot_lag_sessions"
+            ],
             "execution_rule": "next_open_session",
             "calendar_source": "data/meta.db:trade_cal",
         },

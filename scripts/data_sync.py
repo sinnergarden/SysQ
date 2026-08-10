@@ -38,6 +38,15 @@ def main():
         help="Minimum CSI800 symbols with margin balance on every open session",
     )
     p.add_argument(
+        "--margin-min-exchange-coverage",
+        type=float,
+        default=0.90,
+        help=(
+            "Minimum per-exchange share of CSI800 symbols with margin balance "
+            "on every repaired open session"
+        ),
+    )
+    p.add_argument(
         "--margin-lag-sessions",
         type=int,
         default=1,
@@ -117,6 +126,7 @@ def main():
         start_date=repair_start,
         end_date=margin_asof_date,
         min_active=args.margin_min_active,
+        min_exchange_coverage=args.margin_min_exchange_coverage,
         apply=True,
         output_dir=PROJ / "runs" / "data_sync" / run_id / "margin_repair",
         store=store,
