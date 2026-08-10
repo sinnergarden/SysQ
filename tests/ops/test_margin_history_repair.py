@@ -134,3 +134,39 @@ def test_margin_availability_uses_previous_open_session_across_weekend():
         signal_date="2026-08-10",
         lag_sessions=1,
     ) == "2026-08-07"
+
+
+def test_exchange_coverage_detects_sh_only_false_healthy_day(tmp_path: Path):
+    frames = {
+        "600001.SH": pd.DataFrame(
+            {"trade_date": ["2026-08-07"], "margin_balance": [10.0]}
+        ),
+        "000001.SZ": pd.DataFrame(
+            {"trade_date": ["2026-08-07"], "margin_balance": [pd.NA]}
+        ),
+    }
+    store = _Store(frames)
+    coverage = inspect_margin_history_coverage(
+        store,
+        symbols=list(frames),
+        open_dates=["2026-08-07"],
+    )
+
+    assert coverage["date_counts"]["2026-08-07"] == 1
+    assert coverage["date_exchange_coverage"]["2026-08-07"] == {
+        "SH": 1.0,
+        "SZ": 0.0,
+    }
+
+    result = run_margin_history_repair(
+        symbols=list(frames),
+        start_date="2026-08-07",
+        end_date="2026-08-07",
+        min_active=1,
+        min_exchange_coverage=0.90,
+        apply=False,
+        output_dir=tmp_path,
+        store=store,
+    )
+    assert result["status"] == "planned"
+    assert result["gap_dates_before"] == ["2026-08-07"]

@@ -34,6 +34,7 @@ REQUIRED_TOP_LEVEL = {
     "strategy_id",
     "signal_date",
     "data_date",
+    "decision_date",
     "execution_date",
     "created_at",
 }
@@ -108,6 +109,7 @@ def check_payload(
 
     signal_date = _date(payload.get("signal_date"), "signal_date", violations)
     data_date = _date(payload.get("data_date"), "data_date", violations)
+    decision_date = _date(payload.get("decision_date"), "decision_date", violations)
     execution_date = _date(payload.get("execution_date"), "execution_date", violations)
     if data_date and signal_date and data_date > signal_date:
         violations.append(
@@ -117,6 +119,16 @@ def check_payload(
         violations.append(
             "Date semantic violation: signal_date must be before execution_date "
             f"({signal_date} >= {execution_date})"
+        )
+    if signal_date and decision_date and signal_date > decision_date:
+        violations.append(
+            "Date semantic violation: signal_date must not be after decision_date "
+            f"({signal_date} > {decision_date})"
+        )
+    if decision_date and execution_date and decision_date >= execution_date:
+        violations.append(
+            "Date semantic violation: decision_date must be before execution_date "
+            f"({decision_date} >= {execution_date})"
         )
 
     created_at: datetime | None = None
@@ -133,13 +145,15 @@ def check_payload(
 
     expected_completed_date: str | None = None
     market_close_cutoff = ""
+    feature_snapshot_lag_sessions: int | None = None
     date_contract = payload.get("date_contract")
     if isinstance(date_contract, dict):
         if date_contract.get("execution_rule") != "next_open_session":
             violations.append("date_contract.execution_rule must be next_open_session")
-        if date_contract.get("mode") != "postclose_for_next_open_session":
+        if date_contract.get("mode") != "aligned_feature_snapshot_for_next_open_session":
             violations.append(
-                "date_contract.mode must be postclose_for_next_open_session"
+                "date_contract.mode must be "
+                "aligned_feature_snapshot_for_next_open_session"
             )
         if date_contract.get("run_anchor_at") != payload.get("created_at"):
             violations.append(
@@ -153,6 +167,20 @@ def check_payload(
         market_close_cutoff = str(
             date_contract.get("market_close_cutoff") or ""
         )
+        try:
+            feature_snapshot_lag_sessions = int(
+                date_contract.get("feature_snapshot_lag_sessions")
+            )
+            if feature_snapshot_lag_sessions < 0 or isinstance(
+                date_contract.get("feature_snapshot_lag_sessions"), bool
+            ):
+                raise ValueError
+        except (TypeError, ValueError):
+            feature_snapshot_lag_sessions = None
+            violations.append(
+                "date_contract.feature_snapshot_lag_sessions must be a "
+                "non-negative integer"
+            )
         if not market_close_cutoff:
             violations.append("date_contract.market_close_cutoff is required")
         if date_contract.get("calendar_source") != "data/meta.db:trade_cal":
@@ -164,21 +192,22 @@ def check_payload(
     if (
         is_candidate_run
         and isinstance(date_contract, dict)
-        and date_contract.get("mode") == "postclose_for_next_open_session"
+        and date_contract.get("mode")
+        == "aligned_feature_snapshot_for_next_open_session"
         and data_date
         and signal_date
         and data_date != signal_date
     ):
-        violations.append("Post-close CandidateRun data_date must equal signal_date")
+        violations.append("Aligned CandidateRun data_date must equal signal_date")
 
     sessions = sorted(set(open_dates or []))
     if is_candidate_run and not sessions:
         violations.append(
             "Independent calendar validation requires authoritative open dates"
         )
-    if sessions and signal_date and execution_date:
+    if sessions and decision_date and execution_date:
         try:
-            expected_execution = resolve_next_open_session(signal_date, sessions)
+            expected_execution = resolve_next_open_session(decision_date, sessions)
             if execution_date != expected_execution:
                 violations.append(
                     "execution_date is not the next open session: "
@@ -200,16 +229,40 @@ def check_payload(
                 )
         except InferenceContractError as exc:
             violations.append(f"Cannot validate completed-session boundary: {exc}")
+    if decision_date and expected_completed_date and decision_date != expected_completed_date:
+        violations.append(
+            "decision_date must equal date_contract.expected_completed_date: "
+            f"decision_date={decision_date}, expected_completed={expected_completed_date}"
+        )
+    if (
+        sessions
+        and decision_date
+        and signal_date
+        and feature_snapshot_lag_sessions is not None
+    ):
+        try:
+            expected_signal = resolve_lagged_open_session(
+                decision_date,
+                sessions,
+                feature_snapshot_lag_sessions,
+            )
+            if signal_date != expected_signal:
+                violations.append(
+                    "signal_date does not match aligned feature snapshot lag: "
+                    f"expected={expected_signal}, got={signal_date}"
+                )
+        except ValueError as exc:
+            violations.append(f"Cannot validate aligned feature session: {exc}")
     if (
         payload.get("universe_snapshot_semantics")
         == "current_constituents_snapshot"
-        and signal_date
+        and decision_date
         and expected_completed_date
-        and signal_date != expected_completed_date
+        and decision_date != expected_completed_date
     ):
         violations.append(
-            "current_constituents_snapshot cannot represent a historical signal_date: "
-            f"signal_date={signal_date}, expected_completed={expected_completed_date}"
+            "current_constituents_snapshot must be anchored to decision_date: "
+            f"decision_date={decision_date}, expected_completed={expected_completed_date}"
         )
 
     declared_feature_availability = payload.get("feature_availability")
@@ -287,6 +340,7 @@ def check_payload(
         for field in (
             "tag",
             "model_hash",
+            "artifact_id",
             "model_dir",
             "label_id",
             "feature_list_id",
@@ -398,6 +452,7 @@ def check_payload(
                     "horizon",
                     "label_id",
                     "model_hash",
+                    "artifact_id",
                     "model_dir",
                     "artifact_sha256",
                 )
@@ -522,6 +577,7 @@ def check_payload(
             ("strategy_id", payload.get("strategy_id")),
             ("signal_date", signal_date),
             ("data_date", data_date),
+            ("decision_date", decision_date),
             ("execution_date", execution_date),
         ):
             if is_candidate_run and row.get(field) != expected:

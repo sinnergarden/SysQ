@@ -32,6 +32,7 @@ OPEN_DATES = [
     "2026-08-06",
     "2026-08-07",
     "2026-08-10",
+    "2026-08-11",
 ]
 
 
@@ -64,6 +65,7 @@ def _config(model_root: Path) -> dict:
             {
                 "tag": tag,
                 "model_hash": model_hash,
+                "artifact_id": model_hash,
                 "model_dir": str(model_dir.relative_to(model_root.parents[2])),
                 "label_id": f"label_{tag}",
                 "horizon": horizon,
@@ -92,7 +94,22 @@ def test_resolves_friday_close_to_monday_execution() -> None:
     )
     assert dates.signal_date == "2026-08-07"
     assert dates.data_date == "2026-08-07"
+    assert dates.decision_date == "2026-08-07"
     assert dates.execution_date == "2026-08-10"
+
+
+def test_monday_decision_uses_aligned_friday_snapshot_and_tuesday_execution() -> None:
+    dates = resolve_inference_dates(
+        "2026-08-07",
+        None,
+        OPEN_DATES,
+        now=datetime.fromisoformat("2026-08-10T19:00:00+08:00"),
+        feature_snapshot_lag_sessions=1,
+    )
+    assert dates.signal_date == "2026-08-07"
+    assert dates.data_date == "2026-08-07"
+    assert dates.decision_date == "2026-08-10"
+    assert dates.execution_date == "2026-08-11"
 
 
 def test_auto_before_cutoff_uses_previous_completed_session() -> None:
@@ -116,8 +133,8 @@ def test_rejects_same_day_execution() -> None:
         )
 
 
-def test_rejects_historical_date_for_current_universe_snapshot() -> None:
-    with pytest.raises(InferenceContractError, match="cannot run historical"):
+def test_rejects_date_outside_configured_aligned_snapshot_boundary() -> None:
+    with pytest.raises(InferenceContractError, match="aligned feature session"):
         resolve_inference_dates(
             "2026-08-06",
             None,
@@ -130,7 +147,7 @@ def test_rejects_historical_date_for_current_universe_snapshot() -> None:
 def test_pit_universe_semantics_are_rejected_until_provider_exists() -> None:
     with pytest.raises(InferenceContractError, match="historical PIT inference"):
         resolve_inference_dates(
-            "2026-08-06",
+            "2026-08-07",
             None,
             OPEN_DATES,
             now=datetime.fromisoformat("2026-08-08T12:00:00+08:00"),
@@ -152,6 +169,15 @@ def test_rejects_non_unit_model_weights(tmp_path: Path) -> None:
     config = _config(model_root)
     config["inference"]["model_bundle"]["models"][0]["weight"] = 0.7
     with pytest.raises(InferenceContractError, match="sum to 1.0"):
+        validate_inference_config("financial_rc", config, tmp_path)
+
+
+@pytest.mark.parametrize("value", [True, -1, "invalid"])
+def test_rejects_invalid_feature_snapshot_lag(tmp_path: Path, value: object) -> None:
+    model_root = tmp_path / "data" / "research" / "models"
+    config = _config(model_root)
+    config["inference"]["feature_snapshot_lag_sessions"] = value
+    with pytest.raises(InferenceContractError, match="non-negative integer"):
         validate_inference_config("financial_rc", config, tmp_path)
 
 

@@ -57,13 +57,15 @@
 - Root cause: The pipeline treated all daily sources as if they shared one T-day
   publication time. The sync precheck also skipped existing T rows, so later margin
   publication could remain unpatched.
-- Fix: Declare margin availability as exact previous-open-session, apply the lag
-  before semantic feature derivation in both training and inference, pin it in model
-  and CandidateRun provenance, and make nightly sync repair margin through T-1.
+- Fix: Nightly sync repairs margin through T-1, while training and inference use
+  one fully aligned feature snapshot: decision session T consumes T-1 ordinary and
+  margin inputs together. CandidateRun pins signal/data, decision and execution
+  dates instead of mixing T ordinary inputs with T-1 margin.
 - Validation:
-  - Friday-to-Monday resolution maps Monday signal_date to Friday margin as-of.
+  - Monday decision resolves signal/data/margin as-of to Friday and execution to Tuesday.
   - Missing instrument/session rows fail closed instead of jumping to older margin.
-  - Artifact checker independently rejects a non-T-1 margin as-of date.
+  - Artifact checker independently rejects a signal date outside the configured
+    snapshot lag or a margin as-of date different from signal/data date.
 - Applies to:
   - `qsys/feature/availability.py`
   - `qsys/data/adapter.py`

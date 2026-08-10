@@ -103,7 +103,7 @@ stable
 - 正式 daily shadow
 
 ### Inputs
-- signal_date / execution_date（执行日必须是信号日后的下一开市日）
+- signal_date / decision_date / execution_date（执行日必须是决策日后的下一开市日）
 - strategy_id / feature_list_id
 - 策略配置中的显式 model bundle（必须解析到具体 model hash/path，禁止 latest）
 - calibration artifact（如有）
@@ -112,18 +112,20 @@ stable
 - `outputs/{signal_date}/{strategy_id}/{run_id}/candidate_run.json`
 
 CandidateRun 是不可覆盖的研究候选产物，至少包含：
-- data/signal/execution date 及 next-open-session 语义
+- data/signal/decision/execution date 及 aligned-snapshot/next-open-session 语义
 - model bundle、每个模型及 scaler/meta 文件的 SHA-256、训练区间、label horizon、权重
 - universe/config/feature-list/feature-snapshot/candidate hash、Git 状态、数据新鲜度和覆盖率
 - 每个模型的 ordered feature-list hash，并与 pinned center/scale index 顺序严格一致
 - 每只股票的分模型 score/rank、blend score/rank、模型排名分歧
 - universe snapshot 语义、逐特征缺失率/有效唯一值及剔除原因汇总
 
-`current_constituents_snapshot` 只允许 `signal_date` 等于 artifact 创建时按
-权威交易日历和收盘 cutoff 推导出的最近已完成交易日。当前尚未实现 PIT
-constituent provider，因此历史推理不可用；传入 `pit_constituents_snapshot` 也必须
-非零失败且不得生成 CandidateRun。生成器必须 hash 实际成分集合，并验证
-feature snapshot 的股票集合与成分快照完全一致。
+`current_constituents_snapshot` 必须锚定 artifact 创建时按权威交易日历和收盘
+cutoff 推导出的 `decision_date`。financial_rc 配置固定
+`feature_snapshot_lag_sessions=1`，因此整套 data/signal snapshot 是决策日的上一
+开市日；显式日期也只能等于这一边界，不能借此回跑任意历史日期。当前尚未实现
+PIT constituent provider；传入 `pit_constituents_snapshot` 必须非零失败且不得
+生成 CandidateRun。生成器必须 hash 决策日成分集合，并验证 feature snapshot
+的股票集合与成分快照完全一致。
 
 `feature_snapshot_hash` 使用稳定排序后的 instrument、固定顺序 feature 和原始
 数值计算；数值采用精确 float-hex 表示，缺失值统一为 null。它与
@@ -175,7 +177,8 @@ python scripts/data_sync.py \
   --config configs/data/csi800_daily_sync.yaml \
   --apply
 
-# 自动选择已完成的最近交易日，并输出供人工研究的 Top 200 候选。
+# 自动选择最近已完成决策日的上一开市日作为整套 feature snapshot，
+# 并输出供人工研究的 Top 200 候选。
 python scripts/run_daily.py \
   --strategy financial_rc \
   --mode infer \
@@ -190,8 +193,10 @@ python harness/checks/check_inference_artifact.py \
 margin repair 或运行前 readiness check 任何非零退出均视为阻断，不能沿用旧候选。
 `--skip-margin-repair` 仅用于诊断，不属于 financial_rc 的标准日常运行路径。
 financial_rc 的训练与推理都必须使用同一 `feature_availability` 契约：普通特征
-取 T 日收盘快照，两融原始输入严格取 T-1 开市日；CandidateRun 必须记录实际
-`margin.as_of_date`，artifact checker 从交易日历独立复核。
+与两融原始输入严格取同一个 signal/data date。由于两融次一开市日才视为完整，
+决策日 T 使用完整的 T-1 aligned snapshot，并为 T+1 生成候选；CandidateRun
+必须记录 `decision_date`、snapshot lag 和同日 `margin.as_of_date`，artifact
+checker 从交易日历独立复核。
 该产物只进入人工财报/基本面复核，不直接生成订单或修改 ledger。
 
 ### Owner Agent
@@ -222,7 +227,7 @@ operator_agent
 ### Safety Semantics
 - `infer` 是 artifact-only 分支，在创建 DailyRunner、promotion snapshot 或 account context 前返回。
 - 盘中不能使用当日未完成收盘；默认 18:00 后才允许当日成为 completed signal date。
-- post-close CandidateRun 必须满足 data_date = signal_date < execution_date，execution_date 必须是下一开市日。
-- current constituents snapshot 只允许最近已完成交易日；PIT provider 未实现，因此历史推理暂不可用。
+- CandidateRun 必须满足 data_date = signal_date <= decision_date < execution_date；execution_date 必须是 decision_date 的下一开市日。
+- current constituents snapshot 只锚定最近已完成的 decision_date；signal_date 必须匹配配置的 bounded snapshot lag，PIT provider 未实现，因此任意历史推理仍不可用。
 - 缺模型文件、maturity、数据新鲜度、特征覆盖或可交易性门槛时非零失败，不输出候选。
 - 当前成分股 snapshot 可用于实时筛选，但不得伪称历史 PIT universe。

@@ -24,8 +24,9 @@ def normalise_feature_availability(value: Any) -> dict[str, dict[str, Any]]:
     """Return the canonical feature-availability contract.
 
     Missing configuration preserves the historical zero-lag behaviour for
-    strategies that do not opt in.  ``financial_rc`` explicitly configures a
-    one-session lag and pins the resulting contract in every model/artifact.
+    strategies that do not opt in. ``financial_rc`` uses zero source lag inside
+    a separately delayed, fully aligned snapshot and pins the resulting
+    contract in every model/artifact.
     """
 
     if value is None:
@@ -57,7 +58,9 @@ def normalise_feature_availability(value: Any) -> dict[str, dict[str, Any]]:
         "margin": {
             "source": source,
             "lag_sessions": lag_sessions,
-            "availability_rule": "previous_open_session",
+            "availability_rule": (
+                "same_session" if lag_sessions == 0 else "previous_open_session"
+            ),
         }
     }
 

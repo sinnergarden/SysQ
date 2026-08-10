@@ -26,7 +26,7 @@
 
 | 阶段 | Service | Timer | 调用链 |
 |------|---------|-------|--------|
-| Data sync + financial_rc | `qsys-csi800-daily-sync.service` | Mon-Fri 19:00 | `data_sync.py` 同步 T、补 T-1 两融，随后生成 Top200 |
+| Data sync + financial_rc | `qsys-csi800-daily-sync.service` | Mon-Fri 19:00 | `data_sync.py` 同步 T、补 T-1 两融，随后用完整 T-1 快照生成供 T+1 使用的 Top200 |
 | Preopen | `qsys-candidate-preopen.service` | Mon-Fri 08:00 | `run_daily_batch.py --stage candidate --mode preopen --trade-date auto` |
 | Postclose | `qsys-candidate-postclose.service` | Mon-Fri 21:00 | `run_daily_batch.py --stage candidate --mode postclose --trade-date auto` |
 | Weekly train | `qsys-candidate-train.service` | Mon 07:00 | `run_daily_batch.py --stage candidate --mode train` |
@@ -121,7 +121,7 @@ flowchart TD
 
 ### 文本版（Mermaid 后备）
 
-1. **Data Sync** (T 日 19:00) → 同步 T 日常规数据、补齐 T-1 两融 → **Readiness Check**
+1. **Data Sync** (T 日 19:00) → 同步 T 日常规数据、补齐 T-1 两融 → 用完整 T-1 feature snapshot 生成供 T+1 使用的 Top200 → **Readiness Check**
 2. **Ready/Degraded** → continue；**Blocked** → stop + notify operator
 3. **Approved Manifest + Model Freshness** → Signal Generation
 4. **Plan / Order Intents** → 检查是否空 plan

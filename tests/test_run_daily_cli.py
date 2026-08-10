@@ -132,7 +132,8 @@ class TestDispatch(unittest.TestCase):
         mock_infer.return_value.artifact_path = "/tmp/candidate_run.json"
         mock_infer.return_value.payload = {
             "signal_date": "2026-08-07",
-            "execution_date": "2026-08-10",
+            "decision_date": "2026-08-10",
+            "execution_date": "2026-08-11",
             "candidate_count": 20,
             "candidate_hash": "a" * 64,
         }

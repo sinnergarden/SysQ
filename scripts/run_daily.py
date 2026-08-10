@@ -194,7 +194,8 @@ def run_daily_main(argv: list[str] | None = None) -> None:
         print(f"  ✅ CandidateRun: {result.artifact_path}")
         print(
             "  Dates: "
-            f"signal={payload['signal_date']} -> execution={payload['execution_date']}"
+            f"signal={payload['signal_date']} -> decision={payload['decision_date']} "
+            f"-> execution={payload['execution_date']}"
         )
         print(
             f"  Candidates: {payload['candidate_count']}  "

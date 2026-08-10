@@ -48,7 +48,8 @@ def _valid_payload() -> dict:
             ],
             "data_date": "2026-08-07",
             "signal_date": "2026-08-07",
-            "execution_date": "2026-08-10",
+            "decision_date": "2026-08-10",
+            "execution_date": "2026-08-11",
             "strategy_id": "financial_rc",
             "run_id": "infer_financial_rc_20260807_test",
         }
@@ -59,15 +60,17 @@ def _valid_payload() -> dict:
         "usage": "human_research_only",
         "run_id": "infer_financial_rc_20260807_test",
         "strategy_id": "financial_rc",
-        "created_at": "2026-08-08T07:27:04Z",
+        "created_at": "2026-08-10T11:27:04Z",
         "signal_date": "2026-08-07",
         "data_date": "2026-08-07",
-        "execution_date": "2026-08-10",
+        "decision_date": "2026-08-10",
+        "execution_date": "2026-08-11",
         "date_contract": {
-            "mode": "postclose_for_next_open_session",
-            "run_anchor_at": "2026-08-08T07:27:04Z",
+            "mode": "aligned_feature_snapshot_for_next_open_session",
+            "run_anchor_at": "2026-08-10T11:27:04Z",
             "market_close_cutoff": "18:00",
-            "expected_completed_date": "2026-08-07",
+            "expected_completed_date": "2026-08-10",
+            "feature_snapshot_lag_sessions": 1,
             "execution_rule": "next_open_session",
             "calendar_source": "data/meta.db:trade_cal",
         },
@@ -81,9 +84,9 @@ def _valid_payload() -> dict:
         "feature_availability": {
             "margin": {
                 "source": "tushare.margin_detail",
-                "lag_sessions": 1,
-                "availability_rule": "previous_open_session",
-                "as_of_date": "2026-08-06",
+                "lag_sessions": 0,
+                "availability_rule": "same_session",
+                "as_of_date": "2026-08-07",
             }
         },
         "candidate_hash": compute_candidate_hash(candidates),
@@ -96,6 +99,7 @@ def _valid_payload() -> dict:
                 {
                     "tag": "60d",
                     "model_hash": "hash60",
+                    "artifact_id": "artifact60",
                     "model_dir": "data/research/models/60/hash60",
                     "label_id": "ret60",
                     "feature_list_id": "features_v1",
@@ -109,8 +113,8 @@ def _valid_payload() -> dict:
                     "feature_availability": {
                         "margin": {
                             "source": "tushare.margin_detail",
-                            "lag_sessions": 1,
-                            "availability_rule": "previous_open_session",
+                            "lag_sessions": 0,
+                            "availability_rule": "same_session",
                         }
                     },
                     "weight": 0.5,
@@ -124,6 +128,7 @@ def _valid_payload() -> dict:
                 {
                     "tag": "180d",
                     "model_hash": "hash180",
+                    "artifact_id": "artifact180",
                     "model_dir": "data/research/models/180/hash180",
                     "label_id": "ret180",
                     "feature_list_id": "features_v1",
@@ -137,8 +142,8 @@ def _valid_payload() -> dict:
                     "feature_availability": {
                         "margin": {
                             "source": "tushare.margin_detail",
-                            "lag_sessions": 1,
-                            "availability_rule": "previous_open_session",
+                            "lag_sessions": 0,
+                            "availability_rule": "same_session",
                         }
                     },
                     "weight": 0.5,
@@ -188,6 +193,7 @@ def _valid_payload() -> dict:
                         "horizon",
                         "label_id",
                         "model_hash",
+                        "artifact_id",
                         "model_dir",
                         "artifact_sha256",
                     )
@@ -205,12 +211,12 @@ def test_valid_candidate_run_passes() -> None:
 
 def test_same_day_execution_is_rejected() -> None:
     payload = _valid_payload()
-    payload["execution_date"] = "2026-08-07"
-    payload["candidates"][0]["execution_date"] = "2026-08-07"
+    payload["execution_date"] = "2026-08-10"
+    payload["candidates"][0]["execution_date"] = "2026-08-10"
     payload["candidate_hash"] = compute_candidate_hash(payload["candidates"])
     violations = _check(payload)
     assert any(
-        "signal_date must be before execution_date" in item for item in violations
+        "decision_date must be before execution_date" in item for item in violations
     )
 
 
@@ -227,7 +233,7 @@ def test_postclose_data_date_drift_is_rejected() -> None:
     payload["candidates"][0]["data_date"] = "2026-08-06"
     payload["data_quality"]["feature_snapshot_date"] = "2026-08-06"
     payload["candidate_hash"] = compute_candidate_hash(payload["candidates"])
-    assert "Post-close CandidateRun data_date must equal signal_date" in _check(payload)
+    assert "Aligned CandidateRun data_date must equal signal_date" in _check(payload)
 
 
 def test_naive_creation_timestamp_is_rejected() -> None:
@@ -250,10 +256,12 @@ def test_pre_cutoff_run_anchor_is_self_consistent() -> None:
     payload["created_at"] = "2026-08-07T09:59:00Z"
     payload["signal_date"] = "2026-08-06"
     payload["data_date"] = "2026-08-06"
+    payload["decision_date"] = "2026-08-06"
     payload["execution_date"] = "2026-08-07"
     payload["date_contract"]["run_anchor_at"] = payload["created_at"]
     payload["date_contract"]["expected_completed_date"] = "2026-08-06"
-    payload["feature_availability"]["margin"]["as_of_date"] = "2026-08-05"
+    payload["date_contract"]["feature_snapshot_lag_sessions"] = 0
+    payload["feature_availability"]["margin"]["as_of_date"] = "2026-08-06"
     payload["data_quality"]["feature_snapshot_date"] = "2026-08-06"
     for model in payload["source"]["models"]:
         model["maturity_sessions"] = _maturity_sessions(
@@ -262,6 +270,7 @@ def test_pre_cutoff_run_anchor_is_self_consistent() -> None:
     candidate = payload["candidates"][0]
     candidate["signal_date"] = "2026-08-06"
     candidate["data_date"] = "2026-08-06"
+    candidate["decision_date"] = "2026-08-06"
     candidate["execution_date"] = "2026-08-07"
     payload["candidate_hash"] = compute_candidate_hash(payload["candidates"])
     assert _check(payload) == []
@@ -310,10 +319,10 @@ def test_candidate_tampering_is_rejected() -> None:
     assert "candidate_hash does not match candidate content" in _check(tampered)
 
 
-def test_friday_to_tuesday_execution_is_rejected() -> None:
+def test_decision_to_non_next_open_execution_is_rejected() -> None:
     payload = _valid_payload()
-    payload["execution_date"] = "2026-08-11"
-    payload["candidates"][0]["execution_date"] = "2026-08-11"
+    payload["execution_date"] = "2026-08-12"
+    payload["candidates"][0]["execution_date"] = "2026-08-12"
     payload["candidate_hash"] = compute_candidate_hash(payload["candidates"])
     assert any(
         "execution_date is not the next open session" in violation
@@ -331,19 +340,17 @@ def test_immature_model_label_is_rejected_independently() -> None:
     )
 
 
-def test_historical_current_snapshot_artifact_is_rejected() -> None:
+def test_signal_outside_aligned_snapshot_lag_is_rejected() -> None:
     payload = _valid_payload()
     payload["signal_date"] = "2026-08-06"
     payload["data_date"] = "2026-08-06"
-    payload["execution_date"] = "2026-08-07"
     payload["data_quality"]["feature_snapshot_date"] = "2026-08-06"
     candidate = payload["candidates"][0]
     candidate["signal_date"] = "2026-08-06"
     candidate["data_date"] = "2026-08-06"
-    candidate["execution_date"] = "2026-08-07"
     payload["candidate_hash"] = compute_candidate_hash(payload["candidates"])
     assert any(
-        "cannot represent a historical signal_date" in violation
+        "signal_date does not match aligned feature snapshot lag" in violation
         for violation in _check(payload)
     )
 
@@ -387,7 +394,7 @@ def test_declared_feature_quality_issues_are_rejected() -> None:
     )
 
 
-def test_margin_asof_must_be_exact_previous_open_session() -> None:
+def test_margin_asof_must_match_same_aligned_session() -> None:
     payload = _valid_payload()
     payload["feature_availability"]["margin"]["as_of_date"] = "2026-08-05"
     assert any(

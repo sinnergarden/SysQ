@@ -68,6 +68,33 @@ def _file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def compute_model_artifact_identity(
+    *,
+    artifact_hashes: dict[str, str],
+    feature_list_hash: str,
+    label_lineage: dict[str, Any],
+    training_config_hash: str,
+    feature_availability: dict[str, Any],
+) -> str:
+    """Identify the complete immutable training artifact, not just model.txt."""
+
+    return _canonical_hash(
+        {
+            "serialization": "financial-rc-model-artifact-v1",
+            "model_sha256": artifact_hashes["model.txt"],
+            "center_sha256": artifact_hashes["center.json"],
+            "scale_sha256": artifact_hashes["scale.json"],
+            "training_snapshot_sha256": artifact_hashes[
+                "training_snapshot.parquet"
+            ],
+            "feature_list_hash": feature_list_hash,
+            "label_lineage": label_lineage,
+            "training_config_hash": training_config_hash,
+            "feature_availability": feature_availability,
+        }
+    )
+
+
 def derive_training_window(
     open_dates: Sequence[str],
     label_dates: Sequence[str],
@@ -631,6 +658,14 @@ class FinancialRCTrainer:
                         model_stage / "training_snapshot.parquet"
                     ),
                 }
+                artifact_identity_hash = compute_model_artifact_identity(
+                    artifact_hashes=artifact_hashes,
+                    feature_list_hash=feature_list_hash,
+                    label_lineage=label_lineage[tag],
+                    training_config_hash=settings["config_hash"],
+                    feature_availability=settings["feature_availability"],
+                )
+                artifact_id = artifact_identity_hash[:16]
                 model_metrics = {
                     "validation_daily_rank_ic_mean": float(daily_ic.mean()),
                     "validation_daily_rank_ic_std": float(daily_ic.std(ddof=1)),
@@ -656,6 +691,8 @@ class FinancialRCTrainer:
                     "tag": tag,
                     "model_hash": model_hash,
                     "model_sha256": model_hash_full,
+                    "artifact_id": artifact_id,
+                    "artifact_identity_hash": artifact_identity_hash,
                     "feature_list_id": settings["feature_list_id"],
                     "feature_list_hash": feature_list_hash,
                     "ordered_features": features,
@@ -697,7 +734,7 @@ class FinancialRCTrainer:
                     / "research"
                     / "models"
                     / spec["experiment_id"]
-                    / model_hash
+                    / artifact_id
                 )
                 target = self.project_root / relative_dir
                 if target.exists():
@@ -725,6 +762,7 @@ class FinancialRCTrainer:
                     {
                         "tag": tag,
                         "model_hash": model_hash,
+                        "artifact_id": artifact_id,
                         "model_dir": str(relative_dir),
                         "label_id": spec["label_id"],
                         "horizon": spec["horizon"],
