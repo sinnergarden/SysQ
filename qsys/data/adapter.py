@@ -8,6 +8,7 @@ from qsys.config import cfg
 from qsys.utils.logger import log
 from qsys.data.storage import StockDataStore
 from qsys.data.collector import TushareCollector
+from qsys.feature.availability import apply_margin_source_lag
 from qsys.feature.builder import build_phase1_features
 from qsys.feature.config import RESEARCH_FEATURE_FLAGS
 from qsys.feature.registry import list_feature_groups
@@ -412,10 +413,29 @@ class QlibAdapter:
             flags["enable_industry_context_features"] = True
         return flags
 
-    def _build_semantic_features(self, base_df: pd.DataFrame, derived_fields, start_time=None, end_time=None) -> pd.DataFrame:
+    def _build_semantic_features(
+        self,
+        base_df: pd.DataFrame,
+        derived_fields,
+        start_time=None,
+        end_time=None,
+        *,
+        margin_lag_sessions: int = 0,
+    ) -> pd.DataFrame:
         semantic_input = self._to_semantic_builder_frame(base_df)
         if semantic_input.empty:
             return pd.DataFrame()
+        open_dates = None
+        if margin_lag_sessions:
+            calendar_path = self.qlib_dir / "calendars" / "day.txt"
+            if calendar_path.is_file():
+                calendar = pd.read_csv(calendar_path, header=None)
+                open_dates = calendar.iloc[:, 0].dropna().astype(str).tolist()
+        semantic_input = apply_margin_source_lag(
+            semantic_input,
+            lag_sessions=margin_lag_sessions,
+            open_dates=open_dates,
+        )
 
         try:
             feat = build_phase1_features(semantic_input, flags=self._semantic_feature_flags(derived_fields))
@@ -439,7 +459,17 @@ class QlibAdapter:
         feat.index = feat.index.rename(["datetime", "instrument"])
         return feat[list(derived_fields)]
 
-    def get_features(self, instruments, fields, start_time=None, end_time=None, freq="day", inst_processors=None):
+    def get_features(
+        self,
+        instruments,
+        fields,
+        start_time=None,
+        end_time=None,
+        freq="day",
+        inst_processors=None,
+        *,
+        margin_lag_sessions: int = 0,
+    ):
         inst = self.normalize_instruments(instruments)
         field_list = self._normalize_field_list(fields)
         requested_fields, native_fields, derived_fields = self._split_feature_fields(field_list)
@@ -464,7 +494,13 @@ class QlibAdapter:
             freq=freq,
             inst_processors=inst_processors or []
         )
-        semantic_df = self._build_semantic_features(native_df, derived_fields, start_time=start_time, end_time=end_time)
+        semantic_df = self._build_semantic_features(
+            native_df,
+            derived_fields,
+            start_time=start_time,
+            end_time=end_time,
+            margin_lag_sessions=margin_lag_sessions,
+        )
 
         native_current = native_df
         if start_time is not None or end_time is not None:

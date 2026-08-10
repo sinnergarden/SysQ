@@ -46,6 +46,34 @@
   - harness/checks/check_inference_artifact.py
   - docs/agents/SYSQ_LOOP_ENGINEERING.md (post-task trigger)
 
+### LM-003: Source publication lag belongs in the feature contract
+
+- Status: accepted
+- Trigger: 2026-08-10 nightly inference found T-day margin fields empty even though
+  price and other canonical/Qlib inputs were complete. Tushare `margin_detail` is
+  only reliably published the next morning, which made same-night margin features
+  fail closed and made a next-morning full sync operationally too slow.
+- Failure type: data_availability_semantics + daily_ops_gap
+- Root cause: The pipeline treated all daily sources as if they shared one T-day
+  publication time. The sync precheck also skipped existing T rows, so later margin
+  publication could remain unpatched.
+- Fix: Declare margin availability as exact previous-open-session, apply the lag
+  before semantic feature derivation in both training and inference, pin it in model
+  and CandidateRun provenance, and make nightly sync repair margin through T-1.
+- Validation:
+  - Friday-to-Monday resolution maps Monday signal_date to Friday margin as-of.
+  - Missing instrument/session rows fail closed instead of jumping to older margin.
+  - Artifact checker independently rejects a non-T-1 margin as-of date.
+- Applies to:
+  - `qsys/feature/availability.py`
+  - `qsys/data/adapter.py`
+  - `qsys/model/financial_rc_trainer.py`
+  - `qsys/signal/model_blend_inference.py`
+  - `scripts/data_sync.py`
+- Do not generalize to:
+  - Other delayed sources until their publication SLA is measured and explicitly
+    configured.
+
 ## Rejected Lessons
 
 None yet.

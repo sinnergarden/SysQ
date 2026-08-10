@@ -22,6 +22,11 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from qsys.feature.availability import (
+    normalise_feature_availability,
+    resolve_lagged_open_session,
+)
+
 
 class InferenceContractError(RuntimeError):
     """Raised when inference inputs fail a safety or provenance contract."""
@@ -458,6 +463,12 @@ def validate_inference_config(
     ).strip()
     if not feature_list_id or not universe:
         raise InferenceContractError("inference requires feature_list_id and universe")
+    try:
+        feature_availability = normalise_feature_availability(
+            strategy_config.get("feature_availability")
+        )
+    except ValueError as exc:
+        raise InferenceContractError(str(exc)) from exc
 
     raw_models = bundle.get("models")
     if not isinstance(raw_models, list) or len(raw_models) < 2:
@@ -622,6 +633,7 @@ def validate_inference_config(
                 "universe_snapshot_semantics", "current_constituents_snapshot"
             )
         ),
+        "feature_availability": feature_availability,
     }
     if settings["top_k"] <= 0:
         raise InferenceContractError("inference.top_k must be positive")
@@ -658,6 +670,7 @@ def validate_inference_config(
         {
             "bundle_id": bundle_id,
             "feature_list_id": feature_list_id,
+            "feature_availability": feature_availability,
             "models": [
                 {
                     key: value
@@ -719,6 +732,18 @@ def load_model_lineage(
         if meta_horizon != model["horizon"]:
             raise InferenceContractError(f"model {model['tag']} meta horizon mismatch")
         try:
+            model_feature_availability = normalise_feature_availability(
+                meta.get("feature_availability")
+            )
+        except ValueError as exc:
+            raise InferenceContractError(
+                f"model {model['tag']} has invalid feature availability: {exc}"
+            ) from exc
+        if model_feature_availability != settings["feature_availability"]:
+            raise InferenceContractError(
+                f"model {model['tag']} feature availability differs from config"
+            )
+        try:
             maturity_sessions = validate_label_maturity(
                 train_end=train_end,
                 signal_date=signal_date,
@@ -742,6 +767,7 @@ def load_model_lineage(
                 "train_start": train_start,
                 "train_end": train_end,
                 "maturity_sessions": maturity_sessions,
+                "feature_availability": model_feature_availability,
             }
         )
     return lineage
@@ -1047,6 +1073,14 @@ def run_candidate_inference(
         universe_snapshot_semantics=settings["universe_snapshot_semantics"],
     )
     model_lineage = load_model_lineage(settings, dates.signal_date, open_dates)
+    margin_lag_sessions = settings["feature_availability"]["margin"][
+        "lag_sessions"
+    ]
+    margin_asof_date = resolve_lagged_open_session(
+        dates.signal_date,
+        open_dates,
+        margin_lag_sessions,
+    )
 
     adapter = QlibAdapter(
         qlib_dir=project_root / "data" / "qlib_bin",
@@ -1085,6 +1119,7 @@ def run_candidate_inference(
             requested_fields,
             start_time=dates.data_date,
             end_time=dates.data_date,
+            margin_lag_sessions=margin_lag_sessions,
         )
     if raw is None or raw.empty:
         raise InferenceContractError(
@@ -1376,6 +1411,12 @@ def run_candidate_inference(
         "feature_list_id": settings["feature_list_id"],
         "feature_list_hash": feature_list_hash,
         "feature_snapshot_hash": feature_snapshot_hash,
+        "feature_availability": {
+            "margin": {
+                **settings["feature_availability"]["margin"],
+                "as_of_date": margin_asof_date,
+            }
+        },
         "source": {
             "engine": settings["engine"],
             "model_bundle_id": settings["bundle_id"],

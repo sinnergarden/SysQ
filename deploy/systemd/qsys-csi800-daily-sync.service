@@ -13,7 +13,10 @@ Environment=HTTP_PROXY=http://172.31.144.1:12334
 Environment=HTTPS_PROXY=http://172.31.144.1:12334
 EnvironmentFile=/home/liuming/.openclaw/.env
 ExecStart=/home/liuming/.openclaw/workspace/.mamba/envs/dl/bin/python \
-    /home/liuming/.openclaw/workspace/SysQ/scripts/ops/sync_csi800_daily.py --apply
+    /home/liuming/.openclaw/workspace/SysQ/scripts/data_sync.py --universe csi800 --apply
+ExecStart=/home/liuming/.openclaw/workspace/.mamba/envs/dl/bin/python \
+    /home/liuming/.openclaw/workspace/SysQ/scripts/run_daily.py \
+    --strategy financial_rc --mode infer --signal-date auto --top-k 200
 StandardOutput=append:/home/liuming/.openclaw/logs/sync_csi800_daily.log
 StandardError=append:/home/liuming/.openclaw/logs/sync_csi800_daily.log
 

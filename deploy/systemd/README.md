@@ -22,7 +22,8 @@ Copy the service and timer files into your systemd unit directory, then replace 
 
 ```bash
 # CSI800 daily data sync
-PYTHONPATH=QSYS_ROOT QSYS_PYTHON QSYS_ROOT/scripts/ops/sync_csi800_daily.py --apply
+PYTHONPATH=QSYS_ROOT QSYS_PYTHON QSYS_ROOT/scripts/data_sync.py --universe csi800 --apply
+PYTHONPATH=QSYS_ROOT QSYS_PYTHON QSYS_ROOT/scripts/run_daily.py --strategy financial_rc --mode infer --signal-date auto --top-k 200
 
 # Daily shadow run
 PYTHONPATH=QSYS_ROOT QSYS_PYTHON QSYS_ROOT/scripts/ops/run_shadow_daily.py --base-dir QSYS_ROOT --triggered-by manual
@@ -38,11 +39,11 @@ Flow:
 1. Resolve the last completed trading day
 2. Fetch latest CSI800 constituents via `index_weight` API
 3. Pre-check: skip stocks that already have the target date (read feather `trade_date` column)
-4. Batch fetch missing data (daily, daily_basic, adj_factor, moneyflow, margin, stk_limit)
-5. Convert to Qlib bin (incremental, fallback to fix)
-6. Refresh csi300 + csi800 instrument files
-7. Run readiness check (6 core field null rates, active count >= 750)
-8. Write structured audit JSON to `data/audit/`
+4. Batch fetch missing T-day data (daily, daily_basic, adj_factor, moneyflow, stk_limit)
+5. Resolve the exact previous open session and repair margin history through T-1
+6. Convert/refresh affected Qlib symbols
+7. Refresh csi300 + csi800 instrument files
+8. Run readiness checks, write structured audit JSON, then generate financial_rc Top200
 
 Audit records are per-day JSON files: `data/audit/sync_csi800_{YYYYMMDD}.json`. Contents include step timing, constituent count, and readiness check results.
 

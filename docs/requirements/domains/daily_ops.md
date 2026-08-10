@@ -168,8 +168,9 @@ blend-weight 与组合构建对照研究完成前，不得据此晋级 shadow/pr
 ### Operator Runbook
 
 ```bash
-# 先同步 canonical/Qlib。对 CSI800 的 apply 会自动检查最近 120 个自然日
-# 的融资融券覆盖并只回补缺口，然后刷新受影响的 Qlib symbols。
+# 先同步 signal_date=T 的 canonical/Qlib。对 CSI800 的 apply 会解析最近
+# 一个已发布交易日 T-1，只检查并回补截至 T-1 的两融缺口，再刷新受影响
+# 的 Qlib symbols；不会等待次日 08:30 的 T 日 margin_detail。
 python scripts/data_sync.py \
   --config configs/data/csi800_daily_sync.yaml \
   --apply
@@ -188,6 +189,9 @@ python harness/checks/check_inference_artifact.py \
 
 margin repair 或运行前 readiness check 任何非零退出均视为阻断，不能沿用旧候选。
 `--skip-margin-repair` 仅用于诊断，不属于 financial_rc 的标准日常运行路径。
+financial_rc 的训练与推理都必须使用同一 `feature_availability` 契约：普通特征
+取 T 日收盘快照，两融原始输入严格取 T-1 开市日；CandidateRun 必须记录实际
+`margin.as_of_date`，artifact checker 从交易日历独立复核。
 该产物只进入人工财报/基本面复核，不直接生成订单或修改 ledger。
 
 ### Owner Agent

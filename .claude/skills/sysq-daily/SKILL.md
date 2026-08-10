@@ -45,6 +45,7 @@ Daily operational workflow for SysQ: data readiness, label maturity, retrain eli
 10. output artifact path
 11. universe_snapshot_semantics / universe_hash
 12. feature_list_hash / feature_snapshot_hash
+13. feature_availability / margin as_of_date
 
 ### 规则
 - 禁止用 free-form 文本直接给候选股票。
@@ -55,6 +56,10 @@ Daily operational workflow for SysQ: data readiness, label maturity, retrain eli
 - 日期解析与 CandidateRun `created_at` 必须共享进入 inference 时捕获的单一 run anchor。
 - artifact checker 必须从权威日历独立复核 next-open 和 label maturity，不能只信 artifact 声明。
 - 任一模型使用特征当日为常数或超过逐特征缺失阈值时，必须 fail closed。
+- financial_rc 的 T 日夜间运行使用 T 日普通特征和精确 T-1 开市日两融输入；
+  训练、推理、模型 meta 和 CandidateRun 必须共享同一 availability contract。
+- 每日 CSI800 apply 同步必须回补至 T-1 margin as-of 并记录 audit；不得因为
+  T 日 margin_detail 尚未发布而等待次日盘前，也不得把 T 日空值当成功。
 - 禁止写 broker / trader / ledger / production。
 - 如果缺 provenance 字段，结果只能标记为 exploratory，不能标记为 candidate artifact。
 

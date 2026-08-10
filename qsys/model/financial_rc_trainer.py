@@ -14,6 +14,10 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any, Sequence
 
+from qsys.feature.availability import (
+    normalise_feature_availability,
+    resolve_lagged_open_session,
+)
 from qsys.model.training import TrainingResult
 
 
@@ -231,6 +235,12 @@ class FinancialRCTrainer:
 
     def _settings(self) -> dict[str, Any]:
         training = _require_mapping(self.config.get("training"), "training")
+        try:
+            feature_availability = normalise_feature_availability(
+                self.config.get("feature_availability")
+            )
+        except ValueError as exc:
+            raise FinancialRCTrainingError(str(exc)) from exc
         if training.get("engine") != "financial_rc_lightgbm_bundle_v1":
             raise FinancialRCTrainingError(
                 "training.engine must be financial_rc_lightgbm_bundle_v1"
@@ -286,7 +296,13 @@ class FinancialRCTrainer:
             ),
             "pointer_write_mode": str(training.get("pointer_write_mode", "none")),
             "models": parsed_models,
-            "config_hash": _canonical_hash(training),
+            "feature_availability": feature_availability,
+            "config_hash": _canonical_hash(
+                {
+                    "training": training,
+                    "feature_availability": feature_availability,
+                }
+            ),
         }
 
     def train(self, ctx: Any) -> TrainingResult:
@@ -384,6 +400,9 @@ class FinancialRCTrainer:
                 features,
                 start_time=union_start,
                 end_time=union_end,
+                margin_lag_sessions=settings["feature_availability"]["margin"][
+                    "lag_sessions"
+                ],
             )
         if raw is None or raw.empty:
             raise FinancialRCTrainingError(
@@ -398,6 +417,18 @@ class FinancialRCTrainer:
             raise FinancialRCTrainingError(f"feature frame lacks columns: {missing}")
         frame["trade_date"] = frame["trade_date"].map(_normalise_date)
         frame["instrument"] = frame["instrument"].astype(str)
+        margin_lag_sessions = settings["feature_availability"]["margin"][
+            "lag_sessions"
+        ]
+        margin_asof_by_date = {
+            trade_date: resolve_lagged_open_session(
+                trade_date,
+                open_dates,
+                margin_lag_sessions,
+            )
+            for trade_date in frame["trade_date"].unique().tolist()
+        }
+        frame["margin_asof_date"] = frame["trade_date"].map(margin_asof_by_date)
         if frame.duplicated(["trade_date", "instrument"]).any():
             raise FinancialRCTrainingError("feature frame contains duplicate rows")
         frame = frame.sort_values(["trade_date", "instrument"]).reset_index(drop=True)
@@ -566,11 +597,24 @@ class FinancialRCTrainer:
                 center.to_json(model_stage / "center.json")
                 scale.to_json(model_stage / "scale.json")
                 snapshot = prepared[
-                    ["trade_date", "instrument", "label_date", "label_value"]
+                    [
+                        "trade_date",
+                        "instrument",
+                        "margin_asof_date",
+                        "label_date",
+                        "label_value",
+                    ]
                 ].copy()
                 snapshot[features] = X
                 snapshot = snapshot[
-                    ["trade_date", "instrument", "label_date", "label_value", *features]
+                    [
+                        "trade_date",
+                        "instrument",
+                        "margin_asof_date",
+                        "label_date",
+                        "label_value",
+                        *features,
+                    ]
                 ]
                 snapshot.to_parquet(
                     model_stage / "training_snapshot.parquet",
@@ -607,7 +651,7 @@ class FinancialRCTrainer:
                     "selected_iterations": selected_iterations,
                 }
                 meta = {
-                    "schema_version": 2,
+                    "schema_version": 3,
                     "strategy_id": self.strategy_id,
                     "tag": tag,
                     "model_hash": model_hash,
@@ -631,6 +675,7 @@ class FinancialRCTrainer:
                     "artifact_sha256": artifact_hashes,
                     "label_lineage": label_lineage[tag],
                     "training_config_hash": settings["config_hash"],
+                    "feature_availability": settings["feature_availability"],
                     "metrics": model_metrics,
                     "created_at": created_at,
                     "git": git_state,
@@ -701,6 +746,7 @@ class FinancialRCTrainer:
                 "feature_list_hash": feature_list_hash,
                 "universe": settings["universe"],
                 "universe_hash": universe_hash,
+                "feature_availability": settings["feature_availability"],
                 "models": bundle_models,
                 "created_at": created_at,
                 "git": git_state,

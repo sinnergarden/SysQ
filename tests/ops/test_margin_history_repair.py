@@ -7,6 +7,7 @@ import pandas as pd
 from qsys.ops.raw_sync import (
     inspect_margin_history_coverage,
     patch_margin_history_frame,
+    resolve_margin_availability_date,
     run_margin_history_repair,
 )
 
@@ -18,8 +19,8 @@ class _Store:
     def get_calendar(self) -> pd.DataFrame:
         return pd.DataFrame(
             {
-                "cal_date": ["20260806", "20260807", "20260808"],
-                "is_open": [1, 1, 0],
+                "cal_date": ["20260806", "20260807", "20260808", "20260810"],
+                "is_open": [1, 1, 0, 1],
             }
         )
 
@@ -102,11 +103,19 @@ def test_margin_history_repair_fetches_gaps_and_refreshes_qlib(tmp_path: Path):
         store=store,
         collector=_Collector(),
         qlib_refresh_fn=_refresh,
+        signal_date="2026-08-10",
+        availability_lag_sessions=1,
     )
 
     assert result["status"] == "success"
     assert result["gap_dates_after"] == []
     assert result["affected_symbol_count"] == 2
+    assert result["availability"] == {
+        "signal_date": "2026-08-10",
+        "as_of_date": "2026-08-07",
+        "lag_sessions": 1,
+        "source": "tushare.margin_detail",
+    }
     assert len(refresh_calls) == 1
     assert store.frames["AAA"]["close"].tolist() == [100.0, 101.0]
     coverage = inspect_margin_history_coverage(
@@ -115,3 +124,13 @@ def test_margin_history_repair_fetches_gaps_and_refreshes_qlib(tmp_path: Path):
         open_dates=["2026-08-06", "2026-08-07"],
     )
     assert coverage["minimum_active"] == 2
+
+
+def test_margin_availability_uses_previous_open_session_across_weekend():
+    store = _Store({})
+
+    assert resolve_margin_availability_date(
+        store,
+        signal_date="2026-08-10",
+        lag_sessions=1,
+    ) == "2026-08-07"

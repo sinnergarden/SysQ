@@ -8,6 +8,15 @@ feature_set: v3a_plus_liquidity_financial_rc
 model_version: financial_rc_equal_weight_v2
 signal_version: blend_0.5_60d_0.5_180d_v2
 
+# Tushare publishes margin_detail after the trading session and it is not
+# reliably available during the same night's run.  Both training and serving
+# therefore use the exact previous open session's raw margin inputs while all
+# other feature inputs remain on signal_date.
+feature_availability:
+  margin:
+    source: tushare.margin_detail
+    lag_sessions: 1
+
 hypothesis: >
   Equal-weight ensemble of pinned 60d and 180d financial_rc models for a
   ranked screening list that receives human fundamental review. Research
