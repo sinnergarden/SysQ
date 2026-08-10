@@ -114,12 +114,16 @@ def check_inference_ready(
             open_dates,
             market_close_cutoff=settings["market_close_cutoff"],
             universe_snapshot_semantics=settings["universe_snapshot_semantics"],
+            feature_snapshot_lag_sessions=settings[
+                "feature_snapshot_lag_sessions"
+            ],
         )
         results.append(
             (
                 "date contract",
                 True,
-                f"signal={dates.signal_date}, execution={dates.execution_date}",
+                f"signal={dates.signal_date}, decision={dates.decision_date}, "
+                f"execution={dates.execution_date}",
             )
         )
     except InferenceContractError as exc:
