@@ -5,8 +5,8 @@ family: ml_ensemble
 account_id: research_financial_rc
 universe: csi800
 feature_set: v3a_plus_liquidity_financial_rc
-model_version: financial_rc_equal_weight_8f9f3fc18f422ebb
-signal_version: blend_0.5_60d_0.5_180d_shareholder_pit_v5
+model_version: financial_rc_equal_weight_2cd1dcea783f54dc
+signal_version: blend_0.5_60d_0.5_180d_shareholder_pit_history_v6
 
 # The model sees a single-date feature snapshot: margin and ordinary inputs
 # are both from signal_date. Tushare margin_detail is only treated as complete
@@ -45,32 +45,32 @@ inference:
   universe: csi800
   feature_list_id: v3a_plus_liquidity_financial_rc
   model_bundle:
-    bundle_id: financial_rc_60d180d_equal_20260810_shareholder_pit_v5
+    bundle_id: financial_rc_60d180d_equal_20260810_shareholder_pit_history_v6
     models:
       - tag: 60d
-        model_hash: d239c448ba17e8ab
-        artifact_id: e607edd00a7d6067
-        model_dir: data/research/models/60d_v3a_growth_financial/e607edd00a7d6067
+        model_hash: cc6f4febcb7d2e2f
+        artifact_id: e75f67aee783d789
+        model_dir: data/research/models/60d_v3a_growth_financial/e75f67aee783d789
         label_id: fwd_ret_60d_raw
         horizon: 60
         weight: 0.5
         artifact_sha256:
-          model.txt: d239c448ba17e8ab421729c1e3651190cf93e1ff497c3d07afaa176626af9b27
-          center.json: a7a8082eb21408e2bb384e17cdc92d23e676ce1130c5f2c74f5924edad58b452
-          scale.json: 35775296b5ddd8a3435c4238cbe228d34aec323675ae06a9f1c728eb358d3bd7
-          meta.json: d358b6b53fdebe26c108a3f533f3baf07012dd426944dd3b3d3fc3c096479e71
+          model.txt: cc6f4febcb7d2e2f67339322f5ac05eb1c70d03540a09aa8eba94e3ddc30313c
+          center.json: 880bb3213de7e3dea5609f7fce27f30bc7f4f76da29ce6bb84847f6faf83791f
+          scale.json: 52736ed756909c514150673c2303dff30b070a7075508381b82c6a1e22fb6b83
+          meta.json: f5cc5eb6f79586307ca6883d292aaac24eca656478af7b8fc32f29922a4b1def
       - tag: 180d
-        model_hash: 429b3d9b93311e76
-        artifact_id: eb8c0423e1ad7e8d
-        model_dir: data/research/models/180d_v3a_growth_financial/eb8c0423e1ad7e8d
+        model_hash: 7e0450168ecd7d90
+        artifact_id: b918966fd9fab47b
+        model_dir: data/research/models/180d_v3a_growth_financial/b918966fd9fab47b
         label_id: fwd_ret_180d_raw
         horizon: 180
         weight: 0.5
         artifact_sha256:
-          model.txt: 429b3d9b93311e76de91353d8cbf2ee32a9299905a9174463cfd273ed91791ff
-          center.json: f8c2f68f89ef53365176d1441e9fe796d544da7de8ca34f21abaa1be8e3f2bda
-          scale.json: 0ac505f53a7a3289d53301c47cf06959182f261c64b85fc8692dffb90eadcf34
-          meta.json: 045ff5d58119aa85eea9150623c2f51abc76ae7d82303e7658fe469f8e862b3a
+          model.txt: 7e0450168ecd7d908dd75ffd54bfec971be9d24dc0969b80a7acdf0fb2d66fef
+          center.json: 3286d57b53ce71e483ad534379ac689145d6c215e18965734325dbeb13d28e3a
+          scale.json: 2c55ff2bbd9a1f7b4a75d0ae524311d9d2f53555e485c8167409265694ed1f2b
+          meta.json: 3854e970744e2e9750aa462194cb2eb3dc69be136ab050714cc23e51cc50fe7b
   score_transform: daily_cs_zscore_unclipped_ddof0
   top_k: 200
   min_universe_size: 500
