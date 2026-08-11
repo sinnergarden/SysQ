@@ -26,6 +26,27 @@ def main():
         help="Skip financial_rc margin-history coverage repair after csi800 sync",
     )
     p.add_argument(
+        "--skip-shareholder-repair",
+        action="store_true",
+        help="Skip PIT shareholder sidecar catch-up and freshness validation",
+    )
+    p.add_argument(
+        "--skip-universe-history-catchup",
+        action="store_true",
+        help="Skip feature-lookback backfill for newly added universe members",
+    )
+    p.add_argument(
+        "--universe-history-lookback-days",
+        type=int,
+        default=1461,
+        help="Canonical history required for long-window semantic features",
+    )
+    p.add_argument(
+        "--shareholder-start-date",
+        default=None,
+        help="Force a bounded shareholder announcement-date backfill start",
+    )
+    p.add_argument(
         "--margin-lookback-days",
         type=int,
         default=120,
@@ -84,7 +105,7 @@ def main():
     else:
         print("Specify --config or --universe csi800", file=sys.stderr); sys.exit(1)
 
-    if not do_apply or universe != "csi800" or args.skip_margin_repair:
+    if not do_apply or universe != "csi800":
         return
 
     from qsys.data.adapter import QlibAdapter
@@ -110,48 +131,97 @@ def main():
         & (instruments["end_date"] >= target_ts)
     ]
     symbols = sorted(active["instrument"].astype(str).unique().tolist())
-    store = StockDataStore()
-    margin_asof_date = resolve_margin_availability_date(
-        store,
-        signal_date=resolved_target,
-        lag_sessions=args.margin_lag_sessions,
-    )
-    margin_asof_ts = datetime.strptime(margin_asof_date, "%Y-%m-%d")
-    repair_start = (
-        margin_asof_ts - timedelta(days=max(args.margin_lookback_days, 90))
-    ).strftime("%Y-%m-%d")
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-    result = run_margin_history_repair(
-        symbols=symbols,
-        start_date=repair_start,
-        end_date=margin_asof_date,
-        min_active=args.margin_min_active,
-        min_exchange_coverage=args.margin_min_exchange_coverage,
-        apply=True,
-        output_dir=PROJ / "runs" / "data_sync" / run_id / "margin_repair",
-        store=store,
-        signal_date=resolved_target,
-        availability_lag_sessions=args.margin_lag_sessions,
-    )
+    report = {}
+    if not args.skip_universe_history_catchup:
+        from qsys.ops.universe_history import run_universe_history_catchup
+
+        history_result = run_universe_history_catchup(
+            project_root=PROJ,
+            symbols=symbols,
+            as_of_date=resolved_target,
+            lookback_calendar_days=args.universe_history_lookback_days,
+            output_dir=(
+                PROJ / "runs" / "data_sync" / run_id / "universe_history"
+            ),
+            apply=True,
+        )
+        report["universe_history"] = history_result
+        if history_result["status"] not in {"healthy", "success"}:
+            raise RuntimeError(
+                "csi800 universe feature-history catch-up failed: "
+                f"{history_result['summary_path']}"
+            )
+    if not args.skip_margin_repair:
+        store = StockDataStore()
+        margin_asof_date = resolve_margin_availability_date(
+            store,
+            signal_date=resolved_target,
+            lag_sessions=args.margin_lag_sessions,
+        )
+        margin_asof_ts = datetime.strptime(margin_asof_date, "%Y-%m-%d")
+        repair_start = (
+            margin_asof_ts - timedelta(days=max(args.margin_lookback_days, 90))
+        ).strftime("%Y-%m-%d")
+        margin_result = run_margin_history_repair(
+            symbols=symbols,
+            start_date=repair_start,
+            end_date=margin_asof_date,
+            min_active=args.margin_min_active,
+            min_exchange_coverage=args.margin_min_exchange_coverage,
+            apply=True,
+            output_dir=PROJ / "runs" / "data_sync" / run_id / "margin_repair",
+            store=store,
+            signal_date=resolved_target,
+            availability_lag_sessions=args.margin_lag_sessions,
+        )
+        report["margin_availability"] = {
+            "signal_date": resolved_target,
+            "as_of_date": margin_asof_date,
+            "lag_sessions": args.margin_lag_sessions,
+            "source": "tushare.margin_detail",
+        }
+        report["margin_repair"] = margin_result
+        if margin_result["status"] not in {"healthy", "success"}:
+            raise RuntimeError(
+                "csi800 margin history repair failed: "
+                f"{margin_result['summary_path']}"
+            )
+
+    if not args.skip_shareholder_repair:
+        from qsys.common.config import load_strategy_config
+        from qsys.feature.freshness import normalise_shareholder_freshness
+        from qsys.ops.shareholder_sync import run_shareholder_history_repair
+
+        financial_config = load_strategy_config("financial_rc", PROJ)
+        freshness = normalise_shareholder_freshness(
+            financial_config.get("feature_freshness", {}).get("shareholder")
+        )
+        shareholder_result = run_shareholder_history_repair(
+            project_root=PROJ,
+            symbols=symbols,
+            end_date=resolved_target,
+            contract=freshness,
+            apply=True,
+            output_dir=(
+                PROJ / "runs" / "data_sync" / run_id / "shareholder_repair"
+            ),
+            start_date=args.shareholder_start_date,
+        )
+        report["shareholder_repair"] = shareholder_result
+        if shareholder_result["status"] not in {"healthy", "success"}:
+            raise RuntimeError(
+                "csi800 shareholder history repair failed: "
+                f"{shareholder_result['summary_path']}"
+            )
+
     print(
         json.dumps(
-            {
-                "margin_availability": {
-                    "signal_date": resolved_target,
-                    "as_of_date": margin_asof_date,
-                    "lag_sessions": args.margin_lag_sessions,
-                    "source": "tushare.margin_detail",
-                },
-                "margin_repair": result,
-            },
+            report,
             indent=2,
             sort_keys=True,
         )
     )
-    if result["status"] not in {"healthy", "success"}:
-        raise RuntimeError(
-            f"csi800 margin history repair failed: {result['summary_path']}"
-        )
 
 if __name__ == "__main__":
     main()

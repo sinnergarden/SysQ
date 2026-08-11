@@ -28,6 +28,7 @@ from qsys.feature.availability import (
     normalise_feature_availability,
     resolve_lagged_open_session,
 )
+from qsys.feature.freshness import normalise_shareholder_freshness
 
 REQUIRED_TOP_LEVEL = {
     "run_id",
@@ -332,6 +333,54 @@ def check_payload(
 
     model_tags: list[str] = []
     model_weights: dict[str, float] = {}
+    shareholder_contract: dict[str, Any] | None = None
+    if payload.get("strategy_id") == "financial_rc":
+        feature_sources = payload.get("feature_sources")
+        shareholder_source = (
+            feature_sources.get("shareholder")
+            if isinstance(feature_sources, dict)
+            else None
+        )
+        if not isinstance(shareholder_source, dict):
+            violations.append("financial_rc missing feature_sources.shareholder")
+        else:
+            if shareholder_source.get("status") != "pass":
+                violations.append("feature_sources.shareholder.status must be pass")
+            if shareholder_source.get("as_of_date") != data_date:
+                violations.append(
+                    "feature_sources.shareholder.as_of_date must equal data_date"
+                )
+            if shareholder_source.get("availability_rule") != "announcement_date_asof":
+                violations.append(
+                    "feature_sources.shareholder availability_rule must be "
+                    "announcement_date_asof"
+                )
+            if not _is_sha256(shareholder_source.get("snapshot_hash")):
+                violations.append(
+                    "feature_sources.shareholder.snapshot_hash must be SHA-256"
+                )
+            if shareholder_source.get("violations"):
+                violations.append("feature_sources.shareholder.violations must be empty")
+            shareholder_sources = shareholder_source.get("sources")
+            if not isinstance(shareholder_sources, dict) or set(shareholder_sources) != {
+                "holder_num", "top10_holder_ratio"
+            }:
+                violations.append(
+                    "feature_sources.shareholder.sources must pin both sidecars"
+                )
+            else:
+                for name, item in shareholder_sources.items():
+                    if not isinstance(item, dict):
+                        violations.append(
+                            f"feature_sources.shareholder.sources.{name} must be an object"
+                        )
+                        continue
+                    for field in ("file_sha256", "asof_snapshot_hash"):
+                        if not _is_sha256(item.get(field)):
+                            violations.append(
+                                f"feature_sources.shareholder.sources.{name}.{field} "
+                                "must be SHA-256"
+                            )
     for index, model in enumerate(models):
         if not isinstance(model, dict):
             violations.append(f"source.models[{index}] must be an object")
@@ -388,6 +437,20 @@ def check_payload(
                 violations.append(
                     f"{prefix}.feature_availability must match top-level contract"
                 )
+        if is_candidate_run and payload.get("strategy_id") == "financial_rc":
+            try:
+                observed_contract = normalise_shareholder_freshness(
+                    model.get("shareholder_freshness_contract")
+                )
+            except ValueError as exc:
+                violations.append(f"{prefix} invalid shareholder freshness: {exc}")
+            else:
+                if shareholder_contract is None:
+                    shareholder_contract = observed_contract
+                elif observed_contract != shareholder_contract:
+                    violations.append(
+                        f"{prefix}.shareholder_freshness_contract differs across models"
+                    )
         if tag:
             if tag in model_tags:
                 violations.append(f"Duplicate model tag: {tag}")
@@ -465,6 +528,7 @@ def check_payload(
                 "bundle_id": source.get("model_bundle_id"),
                 "feature_list_id": source.get("feature_list_id"),
                 "feature_availability": feature_availability_contract,
+                "shareholder_freshness": shareholder_contract,
                 "models": bundle_models,
             }
         )
@@ -547,6 +611,61 @@ def check_payload(
                     violations.append(
                         f"CandidateRun data_quality.{field} must be empty"
                     )
+            if payload.get("strategy_id") == "financial_rc":
+                shareholder_quality = data_quality.get(
+                    "shareholder_feature_freshness"
+                )
+                if (
+                    not isinstance(shareholder_quality, dict)
+                    or shareholder_quality.get("status") != "pass"
+                    or shareholder_quality.get("violations")
+                ):
+                    violations.append(
+                        "data_quality.shareholder_feature_freshness must pass"
+                    )
+                ineligible = data_quality.get("ineligible_instruments")
+                try:
+                    dropped_rows = int(data_quality.get("dropped_rows"))
+                except (TypeError, ValueError):
+                    dropped_rows = -1
+                    violations.append("data_quality.dropped_rows must be an integer")
+                if not isinstance(ineligible, list):
+                    violations.append(
+                        "data_quality.ineligible_instruments must be a list"
+                    )
+                elif len(ineligible) != dropped_rows:
+                    violations.append(
+                        "data_quality.ineligible_instruments must enumerate every dropped row"
+                    )
+                else:
+                    observed_drop_reasons: dict[str, int] = {}
+                    instruments: list[str] = []
+                    for index, item in enumerate(ineligible):
+                        if not isinstance(item, dict) or not item.get("ts_code"):
+                            violations.append(
+                                f"data_quality.ineligible_instruments[{index}] is invalid"
+                            )
+                            continue
+                        instruments.append(str(item["ts_code"]))
+                        reasons = item.get("reasons")
+                        if not isinstance(reasons, list) or not reasons:
+                            violations.append(
+                                f"data_quality.ineligible_instruments[{index}].reasons "
+                                "must be non-empty"
+                            )
+                            continue
+                        for reason in set(map(str, reasons)):
+                            observed_drop_reasons[reason] = (
+                                observed_drop_reasons.get(reason, 0) + 1
+                            )
+                    if len(instruments) != len(set(instruments)):
+                        violations.append(
+                            "data_quality.ineligible_instruments contains duplicates"
+                        )
+                    if observed_drop_reasons != data_quality.get("drop_reasons"):
+                        violations.append(
+                            "data_quality.drop_reasons does not match enumerated rows"
+                        )
 
     candidates = payload.get("candidates")
     if not isinstance(candidates, list) or not candidates:

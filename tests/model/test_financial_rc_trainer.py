@@ -11,6 +11,7 @@ from qsys.model.financial_rc_trainer import (
     FinancialRCTrainingError,
     derive_purged_evaluation_train_end,
     derive_training_window,
+    profile_label_universe_coverage,
 )
 from qsys.model.registry import create_model_trainer, has_model_trainer
 from qsys.signal.alpha_v1 import training as lgb_training
@@ -79,6 +80,33 @@ def test_evaluation_split_purges_the_forward_label_span() -> None:
     assert derive_purged_evaluation_train_end(
         sessions, sessions[200], 60
     ) == sessions[138]
+
+
+def test_label_universe_gate_rejects_stale_membership_artifact() -> None:
+    current = [f"S{index:03d}" for index in range(100)]
+    stale_labels = current[:94] + [f"OLD{index:03d}" for index in range(6)]
+
+    with pytest.raises(
+        FinancialRCTrainingError,
+        match="label artifact does not cover the current training universe",
+    ):
+        profile_label_universe_coverage(
+            stale_labels,
+            current,
+            min_coverage=0.95,
+        )
+
+
+def test_label_universe_gate_allows_small_recent_listing_gap() -> None:
+    current = [f"S{index:03d}" for index in range(100)]
+    result = profile_label_universe_coverage(
+        current[:99],
+        current,
+        min_coverage=0.99,
+    )
+
+    assert result["coverage"] == 0.99
+    assert result["missing_members"] == ["S099"]
 
 
 def test_financial_rc_has_dedicated_training_candidate(tmp_path) -> None:

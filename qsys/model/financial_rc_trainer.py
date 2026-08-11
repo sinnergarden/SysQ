@@ -18,6 +18,11 @@ from qsys.feature.availability import (
     normalise_feature_availability,
     resolve_lagged_open_session,
 )
+from qsys.feature.freshness import (
+    normalise_shareholder_freshness,
+    profile_shareholder_feature_freshness,
+    shareholder_row_freshness_reasons,
+)
 from qsys.model.training import TrainingResult
 
 
@@ -189,6 +194,40 @@ def derive_purged_evaluation_train_end(
     return sessions[train_end_index]
 
 
+def profile_label_universe_coverage(
+    label_instruments: Sequence[Any],
+    universe_members: Sequence[Any],
+    *,
+    min_coverage: float,
+) -> dict[str, Any]:
+    """Fail when a current-snapshot label artifact belongs to an older universe."""
+
+    members = {str(value) for value in universe_members}
+    observed = {str(value) for value in label_instruments}
+    if not members:
+        raise FinancialRCTrainingError("label coverage requires a non-empty universe")
+    if not 0 < min_coverage <= 1:
+        raise FinancialRCTrainingError(
+            "training.min_label_universe_coverage must be in (0, 1]"
+        )
+    missing = sorted(members - observed)
+    coverage = (len(members) - len(missing)) / len(members)
+    result = {
+        "universe_size": len(members),
+        "covered_members": len(members) - len(missing),
+        "coverage": float(coverage),
+        "min_coverage": float(min_coverage),
+        "missing_members": missing,
+    }
+    if coverage < min_coverage:
+        raise FinancialRCTrainingError(
+            "label artifact does not cover the current training universe: "
+            f"coverage={coverage:.4f}, required={min_coverage:.4f}, "
+            f"missing_sample={missing[:20]}"
+        )
+    return result
+
+
 @contextmanager
 def _project_working_directory(project_root: Path):
     previous = Path.cwd()
@@ -268,6 +307,15 @@ class FinancialRCTrainer:
             )
         except ValueError as exc:
             raise FinancialRCTrainingError(str(exc)) from exc
+        raw_freshness = _require_mapping(
+            self.config.get("feature_freshness"), "feature_freshness"
+        )
+        try:
+            shareholder_freshness = normalise_shareholder_freshness(
+                raw_freshness.get("shareholder")
+            )
+        except ValueError as exc:
+            raise FinancialRCTrainingError(str(exc)) from exc
         if training.get("engine") != "financial_rc_lightgbm_bundle_v1":
             raise FinancialRCTrainingError(
                 "training.engine must be financial_rc_lightgbm_bundle_v1"
@@ -321,13 +369,18 @@ class FinancialRCTrainer:
             "max_feature_missing_ratio": float(
                 training.get("max_feature_missing_ratio", 0.995)
             ),
+            "min_label_universe_coverage": float(
+                training.get("min_label_universe_coverage", 0.95)
+            ),
             "pointer_write_mode": str(training.get("pointer_write_mode", "none")),
             "models": parsed_models,
             "feature_availability": feature_availability,
+            "shareholder_freshness": shareholder_freshness,
             "config_hash": _canonical_hash(
                 {
                     "training": training,
                     "feature_availability": feature_availability,
+                    "shareholder_freshness": shareholder_freshness,
                 }
             ),
         }
@@ -373,6 +426,11 @@ class FinancialRCTrainer:
                 "feature list must be non-empty and contain no duplicates"
             )
 
+        universe_members = load_universe_snapshot_members(
+            self.project_root, settings["universe"], as_of_date
+        )
+        universe_hash = compute_universe_hash(universe_members)
+
         label_store = LabelStore(self.project_root / "data" / "research")
         windows: dict[str, TrainingWindow] = {}
         labels_by_tag: dict[str, pd.DataFrame] = {}
@@ -387,6 +445,11 @@ class FinancialRCTrainer:
                 raise FinancialRCTrainingError(
                     f"duplicate label rows: {spec['label_id']}"
                 )
+            label_coverage = profile_label_universe_coverage(
+                labels["instrument"].unique().tolist(),
+                universe_members,
+                min_coverage=settings["min_label_universe_coverage"],
+            )
             window = derive_training_window(
                 open_dates,
                 labels["trade_date"].unique().tolist(),
@@ -412,6 +475,7 @@ class FinancialRCTrainer:
                 "label_file": str(label_path.relative_to(self.project_root)),
                 "label_sha256": _file_sha256(label_path),
                 "manifest_sha256": _file_sha256(manifest_path),
+                "universe_coverage": label_coverage,
             }
 
         union_start = min(window.train_start for window in windows.values())
@@ -460,10 +524,32 @@ class FinancialRCTrainer:
             raise FinancialRCTrainingError("feature frame contains duplicate rows")
         frame = frame.sort_values(["trade_date", "instrument"]).reset_index(drop=True)
 
-        universe_members = load_universe_snapshot_members(
-            self.project_root, settings["universe"], as_of_date
-        )
-        universe_hash = compute_universe_hash(universe_members)
+        from qsys.ops.shareholder_sync import inspect_shareholder_sidecar_health
+
+        shareholder_source_lineage: dict[str, dict[str, Any]] = {}
+        for spec in settings["models"]:
+            tag = spec["tag"]
+            source_symbols = sorted(
+                frame.loc[
+                    frame["trade_date"] == windows[tag].train_end, "instrument"
+                ].astype(str).unique().tolist()
+            )
+            if not source_symbols:
+                raise FinancialRCTrainingError(
+                    f"no active training-universe rows at train_end for {tag}"
+                )
+            source_health = inspect_shareholder_sidecar_health(
+                project_root=self.project_root,
+                symbols=source_symbols,
+                as_of_date=windows[tag].train_end,
+                contract=settings["shareholder_freshness"],
+            )
+            if source_health["status"] != "pass":
+                raise FinancialRCTrainingError(
+                    f"shareholder source freshness failed for {tag}: "
+                    + "; ".join(source_health["violations"])
+                )
+            shareholder_source_lineage[tag] = source_health
         feature_list_hash = _canonical_hash(features)
         git_state = _git_state(self.project_root)
         qlib_latest = adapter.get_last_qlib_date()
@@ -512,6 +598,36 @@ class FinancialRCTrainer:
                 ).reset_index(drop=True)
                 if prepared.empty:
                     raise FinancialRCTrainingError(f"no training rows for {tag}")
+
+                shareholder_feature_freshness = (
+                    profile_shareholder_feature_freshness(
+                        prepared,
+                        settings["shareholder_freshness"],
+                        date_column="trade_date",
+                    )
+                )
+                if shareholder_feature_freshness["status"] != "pass":
+                    raise FinancialRCTrainingError(
+                        f"shareholder feature freshness failed for {tag}: "
+                        + "; ".join(
+                            shareholder_feature_freshness["violations"]
+                        )
+                    )
+
+                shareholder_rows_before = len(prepared)
+                shareholder_row_reasons = prepared.apply(
+                    lambda row: shareholder_row_freshness_reasons(
+                        row, settings["shareholder_freshness"]
+                    ),
+                    axis=1,
+                )
+                prepared = prepared[shareholder_row_reasons.map(lambda value: not value)]
+                prepared = prepared.reset_index(drop=True)
+                shareholder_rows_dropped = shareholder_rows_before - len(prepared)
+                if prepared.empty:
+                    raise FinancialRCTrainingError(
+                        f"all training rows failed shareholder row freshness for {tag}"
+                    )
 
                 missing_ratio = prepared[features].isna().mean()
                 feature_coverage = float(1.0 - prepared[features].isna().mean().mean())
@@ -682,6 +798,7 @@ class FinancialRCTrainer:
                     "purge_sessions": spec["horizon"] + 1,
                     "purged_rows": int((~evaluation_mask).sum()),
                     "final_training_rows": len(prepared),
+                    "shareholder_rows_dropped": shareholder_rows_dropped,
                     "feature_coverage": feature_coverage,
                     "selected_iterations": selected_iterations,
                 }
@@ -713,6 +830,11 @@ class FinancialRCTrainer:
                     "label_lineage": label_lineage[tag],
                     "training_config_hash": settings["config_hash"],
                     "feature_availability": settings["feature_availability"],
+                    "shareholder_freshness_contract": settings[
+                        "shareholder_freshness"
+                    ],
+                    "shareholder_source_lineage": shareholder_source_lineage[tag],
+                    "shareholder_feature_freshness": shareholder_feature_freshness,
                     "metrics": model_metrics,
                     "created_at": created_at,
                     "git": git_state,
@@ -785,6 +907,7 @@ class FinancialRCTrainer:
                 "universe": settings["universe"],
                 "universe_hash": universe_hash,
                 "feature_availability": settings["feature_availability"],
+                "shareholder_freshness": settings["shareholder_freshness"],
                 "models": bundle_models,
                 "created_at": created_at,
                 "git": git_state,

@@ -5,8 +5,8 @@ family: ml_ensemble
 account_id: research_financial_rc
 universe: csi800
 feature_set: v3a_plus_liquidity_financial_rc
-model_version: financial_rc_equal_weight_bbfb2993cf6919e3
-signal_version: blend_0.5_60d_0.5_180d_aligned_tminus1_snapshot_v4
+model_version: financial_rc_equal_weight_2cd1dcea783f54dc
+signal_version: blend_0.5_60d_0.5_180d_shareholder_pit_history_v6
 
 # The model sees a single-date feature snapshot: margin and ordinary inputs
 # are both from signal_date. Tushare margin_detail is only treated as complete
@@ -16,6 +16,22 @@ feature_availability:
   margin:
     source: tushare.margin_detail
     lag_sessions: 0
+
+# Shareholder sidecars are announcement-driven PIT inputs.  Non-null values
+# are not sufficient: a stopped updater leaves every row populated while the
+# stale-day features drift far outside the training distribution.
+feature_freshness:
+  shareholder:
+    source: tushare.stk_holdernumber+tushare.top10_holders
+    availability_rule: announcement_date_asof
+    min_coverage: 0.95
+    features:
+      holder_num_stale_days:
+        max_median_days: 200
+        max_row_days: 365
+      top10_holder_stale_days:
+        max_median_days: 250
+        max_row_days: 365
 
 hypothesis: >
   Equal-weight ensemble of pinned 60d and 180d financial_rc models for a
@@ -29,32 +45,32 @@ inference:
   universe: csi800
   feature_list_id: v3a_plus_liquidity_financial_rc
   model_bundle:
-    bundle_id: financial_rc_60d180d_equal_20260810_aligned_snapshot_v4
+    bundle_id: financial_rc_60d180d_equal_20260810_shareholder_pit_history_v6
     models:
       - tag: 60d
-        model_hash: 5335377cb24397a4
-        artifact_id: 4a57063b85900c36
-        model_dir: data/research/models/60d_v3a_growth_financial/4a57063b85900c36
+        model_hash: cc6f4febcb7d2e2f
+        artifact_id: e75f67aee783d789
+        model_dir: data/research/models/60d_v3a_growth_financial/e75f67aee783d789
         label_id: fwd_ret_60d_raw
         horizon: 60
         weight: 0.5
         artifact_sha256:
-          model.txt: 5335377cb24397a41454ad83020e976a0fd01099eca8a933a8bb448677d54614
-          center.json: f8236aa9ff5b4cefc3a8f53b18048c520f5d30ca5bbac8823a07896ebc3f687b
-          scale.json: 11adcf0f7a4da9123e77fa8a81c43fb9267f8e81e19ad8c771981f44cc3c40bb
-          meta.json: a4ec67c5b29b67e3d60a88dfb3968590be4cdde7c0234b5ad201938430915e81
+          model.txt: cc6f4febcb7d2e2f67339322f5ac05eb1c70d03540a09aa8eba94e3ddc30313c
+          center.json: 880bb3213de7e3dea5609f7fce27f30bc7f4f76da29ce6bb84847f6faf83791f
+          scale.json: 52736ed756909c514150673c2303dff30b070a7075508381b82c6a1e22fb6b83
+          meta.json: f5cc5eb6f79586307ca6883d292aaac24eca656478af7b8fc32f29922a4b1def
       - tag: 180d
-        model_hash: 62cba3aece304bf1
-        artifact_id: f6097621217d3425
-        model_dir: data/research/models/180d_v3a_growth_financial/f6097621217d3425
+        model_hash: 7e0450168ecd7d90
+        artifact_id: b918966fd9fab47b
+        model_dir: data/research/models/180d_v3a_growth_financial/b918966fd9fab47b
         label_id: fwd_ret_180d_raw
         horizon: 180
         weight: 0.5
         artifact_sha256:
-          model.txt: 62cba3aece304bf149d9db9d53adde18714bf993a41f86d6d0004e7ecd84eb3d
-          center.json: 7d9526d2e0a5aeb9ff3f92198d58171718b4cc5f3efb65b22dd5cfe0ff66dc9c
-          scale.json: 35078ab4ac9a52adcf13ce8b9227943ade6df5960125812340b7592c8bbb2d8a
-          meta.json: aaa1ecd5ee99c5a423e2554617a5a9538dbec134e21ded884aa9849c9c0ac6cb
+          model.txt: 7e0450168ecd7d908dd75ffd54bfec971be9d24dc0969b80a7acdf0fb2d66fef
+          center.json: 3286d57b53ce71e483ad534379ac689145d6c215e18965734325dbeb13d28e3a
+          scale.json: 2c55ff2bbd9a1f7b4a75d0ae524311d9d2f53555e485c8167409265694ed1f2b
+          meta.json: 3854e970744e2e9750aa462194cb2eb3dc69be136ab050714cc23e51cc50fe7b
   score_transform: daily_cs_zscore_unclipped_ddof0
   top_k: 200
   min_universe_size: 500
@@ -106,6 +122,9 @@ training:
   n_estimators: 300
   min_feature_coverage: 0.50
   max_feature_missing_ratio: 0.995
+  # Labels are also current-snapshot artifacts. A stale label store can still
+  # contain 800 names while silently omitting newly added current members.
+  min_label_universe_coverage: 0.99
   models:
     - tag: 60d
       experiment_id: 60d_v3a_growth_financial

@@ -29,13 +29,23 @@ def build_liquidity_features(df: pd.DataFrame) -> pd.DataFrame:
     # systematically over-predicted vs low-amount ones (e.g. 纺织, 钢铁)
     if "industry" in out.columns:
         ind_mean = out.groupby(["trade_date", "industry"])["amount_log"].transform("mean")
-        ind_std = out.groupby(["trade_date", "industry"])["amount_log"].transform("std").replace(0, np.nan)
-        out["amount_log_ind_zscore"] = (out["amount_log"] - ind_mean) / ind_std
+        ind_std = out.groupby(["trade_date", "industry"])["amount_log"].transform("std")
+        amount_zscore = (out["amount_log"] - ind_mean) / ind_std.replace(0, np.nan)
+        # A one-member industry has a defined cross-sectional deviation of zero.
+        # Treating its sample std as missing silently excludes that instrument.
+        out["amount_log_ind_zscore"] = amount_zscore.mask(
+            (ind_std.isna() | ind_std.eq(0)) & out["amount_log"].notna(), 0.0
+        )
 
         if "turnover_rate" in out.columns:
             tr_mean = out.groupby(["trade_date", "industry"])["turnover_rate"].transform("mean")
-            tr_std = out.groupby(["trade_date", "industry"])["turnover_rate"].transform("std").replace(0, np.nan)
-            out["turnover_rate_ind_zscore"] = (out["turnover_rate"] - tr_mean) / tr_std
+            tr_std = out.groupby(["trade_date", "industry"])["turnover_rate"].transform("std")
+            turnover_zscore = (
+                out["turnover_rate"] - tr_mean
+            ) / tr_std.replace(0, np.nan)
+            out["turnover_rate_ind_zscore"] = turnover_zscore.mask(
+                (tr_std.isna() | tr_std.eq(0)) & out["turnover_rate"].notna(), 0.0
+            )
     else:
         out["amount_log_ind_zscore"] = np.nan
         out["turnover_rate_ind_zscore"] = np.nan

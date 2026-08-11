@@ -20,6 +20,15 @@ def _weekdays(start: str, end: str) -> list[str]:
 
 
 OPEN_DATES = _weekdays("2025-09-29", "2026-08-11")
+SHAREHOLDER_CONTRACT = {
+    "source": "tushare.stk_holdernumber+tushare.top10_holders",
+    "availability_rule": "announcement_date_asof",
+    "min_coverage": 0.95,
+    "features": {
+        "holder_num_stale_days": {"max_median_days": 200, "max_row_days": 365},
+        "top10_holder_stale_days": {"max_median_days": 250, "max_row_days": 365},
+    },
+}
 
 
 def _maturity_sessions(train_end: str, signal_date: str) -> int:
@@ -89,6 +98,25 @@ def _valid_payload() -> dict:
                 "as_of_date": "2026-08-07",
             }
         },
+        "feature_sources": {
+            "shareholder": {
+                "status": "pass",
+                "as_of_date": "2026-08-07",
+                "availability_rule": "announcement_date_asof",
+                "snapshot_hash": "9" * 64,
+                "violations": [],
+                "sources": {
+                    "holder_num": {
+                        "file_sha256": "a" * 64,
+                        "asof_snapshot_hash": "b" * 64,
+                    },
+                    "top10_holder_ratio": {
+                        "file_sha256": "c" * 64,
+                        "asof_snapshot_hash": "d" * 64,
+                    },
+                },
+            }
+        },
         "candidate_hash": compute_candidate_hash(candidates),
         "candidate_count": 1,
         "source": {
@@ -117,6 +145,7 @@ def _valid_payload() -> dict:
                             "availability_rule": "same_session",
                         }
                     },
+                    "shareholder_freshness_contract": SHAREHOLDER_CONTRACT,
                     "weight": 0.5,
                     "artifact_sha256": {
                         "model.txt": "1" * 64,
@@ -146,6 +175,7 @@ def _valid_payload() -> dict:
                             "availability_rule": "same_session",
                         }
                     },
+                    "shareholder_freshness_contract": SHAREHOLDER_CONTRACT,
                     "weight": 0.5,
                     "artifact_sha256": {
                         "model.txt": "5" * 64,
@@ -169,6 +199,15 @@ def _valid_payload() -> dict:
             "model_used_features": ["f1"],
             "excessive_missing_features": [],
             "constant_model_used_features": [],
+            "universe_rows": 1,
+            "eligible_rows": 1,
+            "dropped_rows": 0,
+            "drop_reasons": {},
+            "ineligible_instruments": [],
+            "shareholder_feature_freshness": {
+                "status": "pass",
+                "violations": [],
+            },
         },
         "candidates": candidates,
     }
@@ -184,6 +223,7 @@ def _valid_payload() -> dict:
                     if key != "as_of_date"
                 }
             },
+            "shareholder_freshness": SHAREHOLDER_CONTRACT,
             "models": [
                 {
                     key: model[key]
@@ -207,6 +247,17 @@ def _valid_payload() -> dict:
 
 def test_valid_candidate_run_passes() -> None:
     assert _check(_valid_payload()) == []
+
+
+def test_dropped_rows_must_be_fully_enumerated() -> None:
+    payload = _valid_payload()
+    payload["data_quality"]["dropped_rows"] = 1
+    payload["data_quality"]["drop_reasons"] = {
+        "insufficient_feature_coverage": 1
+    }
+    assert any(
+        "must enumerate every dropped row" in item for item in _check(payload)
+    )
 
 
 def test_same_day_execution_is_rejected() -> None:
@@ -262,6 +313,7 @@ def test_pre_cutoff_run_anchor_is_self_consistent() -> None:
     payload["date_contract"]["expected_completed_date"] = "2026-08-06"
     payload["date_contract"]["feature_snapshot_lag_sessions"] = 0
     payload["feature_availability"]["margin"]["as_of_date"] = "2026-08-06"
+    payload["feature_sources"]["shareholder"]["as_of_date"] = "2026-08-06"
     payload["data_quality"]["feature_snapshot_date"] = "2026-08-06"
     for model in payload["source"]["models"]:
         model["maturity_sessions"] = _maturity_sessions(

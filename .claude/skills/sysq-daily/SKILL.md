@@ -109,4 +109,16 @@ If any answer indicates a gap, output Loop Finding and propose the smallest fix.
 python harness/checks/check_label_maturity.py --trade-date <date> --horizon <h> --train-end <date>
 python harness/checks/check_daily_inference_ready.py --trade-date <date> --strategy-id <strategy>
 python harness/checks/check_inference_artifact.py --artifact <path>
+python harness/checks/check_shareholder_data_freshness.py --as-of-date <date>
 ```
+
+For `financial_rc`, daily sync must catch up both shareholder sidecars before
+readiness/inference. Availability is `ann_date <= data_date`; never substitute
+report `end_date`. A failed global source-freshness check blocks the whole run,
+while a row beyond the configured stale limit is ineligible. After a historical
+repair, invalidate/rebuild derived caches, models, and CandidateRuns listed by
+the impact audit.
+For a current-snapshot universe, also verify that every member has the configured
+feature lookback before its index inclusion date. Membership windows select the
+live cross-section; they do not bound feature history. A canonical CandidateRun
+must enumerate all excluded instruments and their missing features.

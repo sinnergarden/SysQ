@@ -23,6 +23,7 @@ usecases:
       - harness/checks/check_model_resolution_boundary.py
       - harness/checks/check_no_latest_model_resolution.py
       - harness/checks/check_daily_inference_ready.py
+      - harness/checks/check_shareholder_data_freshness.py
     allowed_paths:
       - scripts/data_sync.py
       - scripts/run_daily.py
@@ -50,6 +51,7 @@ usecases:
     checks:
       - harness/checks/check_daily_inference_ready.py
       - harness/checks/check_inference_artifact.py
+      - harness/checks/check_shareholder_data_freshness.py
     allowed_paths:
       - scripts/run_daily.py
       - configs/strategies/
@@ -59,6 +61,7 @@ usecases:
       - qsys/signal/
       - qsys/data/adapter.py
       - qsys/feature/
+      - qsys/ops/shareholder_sync.py
       - scripts/dev/
       - harness/checks/
       - docs/requirements/
@@ -132,10 +135,13 @@ usecases:
       - harness/checks/check_no_latest_model_resolution.py
       - harness/checks/check_model_resolution_boundary.py
       - harness/checks/check_label_maturity.py
+      - harness/checks/check_shareholder_data_freshness.py
     allowed_paths:
       - qsys/model/
       - qsys/ops/model_registry.py
       - qsys/ops/model_resolver.py
+      - qsys/ops/shareholder_sync.py
+      - qsys/feature/freshness.py
       - configs/strategies/
       - harness/checks/
       - tests/
