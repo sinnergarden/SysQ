@@ -883,7 +883,12 @@ class QlibAdapter:
         log.info(f"Found {count} stocks with repaired data. Running dump_fix...")
         self._run_dump_script(csv_dir, mode="dump_fix")
 
-    def convert_fix_symbols(self, symbols: list[str]) -> dict:
+    def convert_fix_symbols(
+        self,
+        symbols: list[str],
+        *,
+        refresh_universes: list[str] | None = None,
+    ) -> dict:
         """Replace per-symbol qlib bins from canonical data using ``dump_fix``.
 
         Unlike ``convert_fix`` which scans canonical dir by date threshold,
@@ -903,7 +908,11 @@ class QlibAdapter:
             return {"status": "skipped", "reason": "no_csv_generated"}
 
         log.info(f"convert_fix_symbols: {count} symbols, running dump_fix...")
-        self._run_dump_script(csv_dir, mode="dump_fix")
+        self._run_dump_script(
+            csv_dir,
+            mode="dump_fix",
+            refresh_universes=refresh_universes,
+        )
         return {"status": "success", "symbols_count": len(symbols), "csv_count": count}
 
     def convert_all(self, *, output_qlib_dir=None, selected_symbols=None, until_date=None, csv_output_dir=None, refresh_universes=None):

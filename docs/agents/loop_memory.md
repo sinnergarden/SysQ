@@ -108,6 +108,22 @@
 - Rule: universe membership controls which stocks are ranked on the signal date;
   it must never truncate the historical observations used to build their features.
 
+### LM-006: Label membership must be rebuilt with the feature universe
+
+- Status: accepted
+- Trigger: after the 45-symbol feature-history repair, retraining still used only
+  753–755 instruments; the old label files contained 800 names but zero rows for
+  the newly added current members.
+- Failure type: label_universe_drift + false_retrain
+- Root cause: feature and Qlib repairs did not invalidate a label artifact built
+  from an older current-constituent snapshot. A row-count check could not detect
+  that departed names had been exchanged for missing current names.
+- Fix: rebuild horizon labels after current-snapshot membership/history changes,
+  pin their universe hash, and gate training on intersection with the exact
+  current training universe.
+- Rule: a retrain is not aligned merely because it reads new feature bins. Its
+  label artifact must cover the same universe snapshot or training must fail.
+
 ## Rejected Lessons
 
 None yet.

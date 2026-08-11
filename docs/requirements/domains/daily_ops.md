@@ -212,7 +212,9 @@ freshness profile。修复历史缺口后必须重建相关 feature cache、重�
 当前指数成分的 membership start 不能充当特征历史起点。日常同步会检查每个当前
 成分股是否具备 1461 个日历日的 canonical lookback（上市不足者从上市日算起）；
 新纳入成分若只有纳入日之后的数据，必须先回补历史、对这些 symbols 执行 Qlib
-`dump_fix`，否则 readiness fail。CandidateRun 必须逐只列出所有 ineligible 股票、
+`dump_fix`，并把 Qlib instrument registry 的数据可见起点对齐到 canonical；否则
+bin 文件虽已写入，Qlib 仍会隐藏纳入日前的历史，readiness 必须 fail。CandidateRun
+必须逐只列出所有 ineligible 股票、
 原因和缺失特征，artifact checker 复算 drop-reason 汇总，禁止只报告一个总数。
 该产物只进入人工财报/基本面复核，不直接生成订单或修改 ledger。
 

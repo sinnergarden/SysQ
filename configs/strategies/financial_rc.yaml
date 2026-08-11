@@ -122,6 +122,9 @@ training:
   n_estimators: 300
   min_feature_coverage: 0.50
   max_feature_missing_ratio: 0.995
+  # Labels are also current-snapshot artifacts. A stale label store can still
+  # contain 800 names while silently omitting newly added current members.
+  min_label_universe_coverage: 0.99
   models:
     - tag: 60d
       experiment_id: 60d_v3a_growth_financial

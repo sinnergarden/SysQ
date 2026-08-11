@@ -194,6 +194,40 @@ def derive_purged_evaluation_train_end(
     return sessions[train_end_index]
 
 
+def profile_label_universe_coverage(
+    label_instruments: Sequence[Any],
+    universe_members: Sequence[Any],
+    *,
+    min_coverage: float,
+) -> dict[str, Any]:
+    """Fail when a current-snapshot label artifact belongs to an older universe."""
+
+    members = {str(value) for value in universe_members}
+    observed = {str(value) for value in label_instruments}
+    if not members:
+        raise FinancialRCTrainingError("label coverage requires a non-empty universe")
+    if not 0 < min_coverage <= 1:
+        raise FinancialRCTrainingError(
+            "training.min_label_universe_coverage must be in (0, 1]"
+        )
+    missing = sorted(members - observed)
+    coverage = (len(members) - len(missing)) / len(members)
+    result = {
+        "universe_size": len(members),
+        "covered_members": len(members) - len(missing),
+        "coverage": float(coverage),
+        "min_coverage": float(min_coverage),
+        "missing_members": missing,
+    }
+    if coverage < min_coverage:
+        raise FinancialRCTrainingError(
+            "label artifact does not cover the current training universe: "
+            f"coverage={coverage:.4f}, required={min_coverage:.4f}, "
+            f"missing_sample={missing[:20]}"
+        )
+    return result
+
+
 @contextmanager
 def _project_working_directory(project_root: Path):
     previous = Path.cwd()
@@ -335,6 +369,9 @@ class FinancialRCTrainer:
             "max_feature_missing_ratio": float(
                 training.get("max_feature_missing_ratio", 0.995)
             ),
+            "min_label_universe_coverage": float(
+                training.get("min_label_universe_coverage", 0.95)
+            ),
             "pointer_write_mode": str(training.get("pointer_write_mode", "none")),
             "models": parsed_models,
             "feature_availability": feature_availability,
@@ -389,6 +426,11 @@ class FinancialRCTrainer:
                 "feature list must be non-empty and contain no duplicates"
             )
 
+        universe_members = load_universe_snapshot_members(
+            self.project_root, settings["universe"], as_of_date
+        )
+        universe_hash = compute_universe_hash(universe_members)
+
         label_store = LabelStore(self.project_root / "data" / "research")
         windows: dict[str, TrainingWindow] = {}
         labels_by_tag: dict[str, pd.DataFrame] = {}
@@ -403,6 +445,11 @@ class FinancialRCTrainer:
                 raise FinancialRCTrainingError(
                     f"duplicate label rows: {spec['label_id']}"
                 )
+            label_coverage = profile_label_universe_coverage(
+                labels["instrument"].unique().tolist(),
+                universe_members,
+                min_coverage=settings["min_label_universe_coverage"],
+            )
             window = derive_training_window(
                 open_dates,
                 labels["trade_date"].unique().tolist(),
@@ -428,6 +475,7 @@ class FinancialRCTrainer:
                 "label_file": str(label_path.relative_to(self.project_root)),
                 "label_sha256": _file_sha256(label_path),
                 "manifest_sha256": _file_sha256(manifest_path),
+                "universe_coverage": label_coverage,
             }
 
         union_start = min(window.train_start for window in windows.values())
@@ -476,10 +524,6 @@ class FinancialRCTrainer:
             raise FinancialRCTrainingError("feature frame contains duplicate rows")
         frame = frame.sort_values(["trade_date", "instrument"]).reset_index(drop=True)
 
-        universe_members = load_universe_snapshot_members(
-            self.project_root, settings["universe"], as_of_date
-        )
-        universe_hash = compute_universe_hash(universe_members)
         from qsys.ops.shareholder_sync import inspect_shareholder_sidecar_health
 
         shareholder_source_lineage: dict[str, dict[str, Any]] = {}
