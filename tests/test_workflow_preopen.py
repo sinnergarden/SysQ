@@ -68,7 +68,7 @@ class TestPreopenWorkflowAdapter(unittest.TestCase):
 
     @patch("scripts.run_daily_trading.run_preopen_workflow")
     def test_cli_default_top_k_is_5(self, mock_workflow):
-        import scripts.run_daily_trading as run_daily_trading
+        import scripts.deprecated.run_daily_trading as run_daily_trading
 
         mock_workflow.return_value = {
             "signal_date": "2026-04-03",

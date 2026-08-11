@@ -31,7 +31,7 @@ from qsys.research.rolling import (
 )
 from qsys.research.spec import V1_IMPL1_FIXED_LABEL_HORIZON
 from qsys.strategy.engine import DEFAULT_TOP_K
-from scripts.run_backtest import build_backtest_lineage, load_training_snapshot
+from scripts.research.run_backtest import build_backtest_lineage, load_training_snapshot
 
 
 @click.command(name="run_mainline_rolling_eval")

@@ -9,8 +9,8 @@ from unittest.mock import patch
 import pandas as pd
 from click.testing import CliRunner
 
-from scripts.run_backtest import main as run_backtest_main
-from scripts.run_strict_eval import build_lineage_payload, load_training_snapshot, main as run_strict_eval_main
+from scripts.research.run_backtest import main as run_backtest_main
+from scripts.checks.run_strict_eval import build_lineage_payload, load_training_snapshot, main as run_strict_eval_main
 
 
 class TestSnapshotLineageIntegration(unittest.TestCase):
@@ -96,10 +96,10 @@ class TestSnapshotLineageIntegration(unittest.TestCase):
             }), encoding="utf-8")
             experiments_dir = root / "experiments"
             experiments_dir.mkdir(parents=True)
-            with patch("scripts.run_backtest.cfg.get_path", return_value=root), \
-                 patch("scripts.run_backtest.BacktestEngine", FakeEngine), \
-                 patch("scripts.run_backtest.BacktestReport.from_backtest_result", return_value=FakeReport()), \
-                 patch("scripts.run_backtest.BacktestReport.save", return_value=str(root / "experiments" / "reports" / "backtest.json")):
+            with patch("scripts.research.run_backtest.cfg.get_path", return_value=root), \
+                 patch("scripts.research.run_backtest.BacktestEngine", FakeEngine), \
+                 patch("scripts.research.run_backtest.BacktestReport.from_backtest_result", return_value=FakeReport()), \
+                 patch("scripts.research.run_backtest.BacktestReport.save", return_value=str(root / "experiments" / "reports" / "backtest.json")):
                 result = runner.invoke(
                     run_backtest_main,
                     [
@@ -161,10 +161,10 @@ class TestSnapshotLineageIntegration(unittest.TestCase):
             (model_dir / "meta.yaml").write_text("feature_set: extended\n", encoding="utf-8")
             experiments_dir = root / "experiments"
             experiments_dir.mkdir(parents=True)
-            with patch("scripts.run_backtest.cfg.get_path", return_value=root), \
-                 patch("scripts.run_backtest.BacktestEngine", FakeEngine), \
-                 patch("scripts.run_backtest.BacktestReport.from_backtest_result", return_value=FakeReport()), \
-                 patch("scripts.run_backtest.BacktestReport.save", return_value=str(root / "experiments" / "reports" / "backtest.json")):
+            with patch("scripts.research.run_backtest.cfg.get_path", return_value=root), \
+                 patch("scripts.research.run_backtest.BacktestEngine", FakeEngine), \
+                 patch("scripts.research.run_backtest.BacktestReport.from_backtest_result", return_value=FakeReport()), \
+                 patch("scripts.research.run_backtest.BacktestReport.save", return_value=str(root / "experiments" / "reports" / "backtest.json")):
                 result = runner.invoke(
                     run_backtest_main,
                     [
@@ -247,9 +247,9 @@ class TestSnapshotLineageIntegration(unittest.TestCase):
                 "cost_spec": {"min_trade_buffer_ratio": 0.0},
             }), encoding="utf-8")
             output = root / "experiments" / "strict_eval_results.csv"
-            with patch("scripts.run_strict_eval.StrictEvaluator", FakeEvaluator), \
-                 patch("scripts.run_strict_eval.StrictEvalReport.from_evaluation_report", return_value=FakeJsonReport()), \
-                 patch("scripts.run_strict_eval.StrictEvalReport.save", return_value=str(root / "experiments" / "reports" / "strict_eval.json")):
+            with patch("scripts.checks.run_strict_eval.StrictEvaluator", FakeEvaluator), \
+                 patch("scripts.checks.run_strict_eval.StrictEvalReport.from_evaluation_report", return_value=FakeJsonReport()), \
+                 patch("scripts.checks.run_strict_eval.StrictEvalReport.save", return_value=str(root / "experiments" / "reports" / "strict_eval.json")):
                 import sys
                 argv = sys.argv
                 sys.argv = [

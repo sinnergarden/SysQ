@@ -59,6 +59,79 @@ ALLOW_PRODUCTION_WARNING = (
 )
 
 
+def _run_gate_check(script: str, args: list[str], *, label: str) -> tuple[bool, str]:
+    """F09: run a decision check as a subprocess; return (passed, tail-summary).
+
+    The batch treats these as MECHANICAL gates (AGENTS.md: harness checks must
+    not rely on agent memory) — a failed check blocks the strategy.
+    """
+    try:
+        result = subprocess.run(
+            [sys.executable, script, *args],
+            cwd=str(PROJECT_ROOT), capture_output=True, text=True, timeout=300,
+        )
+        out = (result.stdout or result.stderr).strip()
+        tail = out.splitlines()[-1] if out else ""
+        return result.returncode == 0, tail
+    except Exception as e:  # check crashed → treat as blocked (fail-closed)
+        return False, f"{label} gate error: {e}"
+
+
+def _run_preopen_gate(spec: Any, trade_date: str) -> tuple[bool, str]:
+    """F09: run the preopen decision checks for one strategy.
+
+    - check_daily_inference_ready (data readiness + model resolution) — always.
+    - check_label_maturity — best-effort: needs a train_end, which the batch
+      only has when the strategy config exposes one; otherwise it is skipped
+      with a loud warning rather than fabricated.
+    """
+    ok, summary = _run_gate_check(
+        "harness/checks/check_daily_inference_ready.py",
+        ["--trade-date", trade_date, "--strategy-id", spec.strategy_id],
+        label=f"inference-ready:{spec.strategy_id}",
+    )
+    if not ok:
+        return False, f"inference-ready FAILED: {summary}"
+
+    horizons = (spec.label or {}).get("horizons") or []
+    train_end = None
+    model_cfg = spec.model or {}
+    if isinstance(model_cfg, dict):
+        train_end = model_cfg.get("end_date") or (spec.raw_config or {}).get("training", {}).get("end_date")
+    if horizons and train_end:
+        h = max(horizons) if isinstance(horizons, list) else horizons
+        ok_lag, lag_sum = _run_gate_check(
+            "harness/checks/check_label_maturity.py",
+            ["--trade-date", trade_date, "--horizon", str(h), "--train-end", str(train_end)],
+            label=f"label-maturity:{spec.strategy_id}",
+        )
+        if not ok_lag:
+            return False, f"label-maturity FAILED: {lag_sum}"
+    elif horizons:
+        print(f"  ⚠ F09: {spec.strategy_id} label-maturity not gated (no train_end in spec); "
+              f"horizons={horizons}")
+
+    return True, "ready"
+
+
+def _candidate_candidates(output_root: str | None, trade_date: str, strategy_id: str) -> list[Path]:
+    """F09: candidate artifacts produced by preopen for one strategy.
+
+    Candidate locations are not uniform across strategies; check the
+    strategy run-root and the shared ``outputs/{trade_date}/`` convention.
+    """
+    roots: list[Path] = []
+    if output_root:
+        roots.append(Path(output_root) / trade_date / strategy_id)
+    roots.append(PROJECT_ROOT / "outputs" / trade_date)
+    found: list[Path] = []
+    for root in roots:
+        if root.exists():
+            for pat in ("candidates*.json", "candidates.json"):
+                found.extend(sorted(root.glob(pat)))
+    return found
+
+
 def _summary_filename(stage: str, mode: str) -> str:
     """Return a stage/mode-specific summary filename so preopen/postclose/etc.
     summaries on the same trade_date do not overwrite each other."""
@@ -296,9 +369,40 @@ def run_batch(
             output_root=output_root, triggered_by=triggered_by,
         )
 
+    # ── F09 decision gate (preopen) ──────────────────────────────────
+    # Mechanical gate: data-readiness / inference-ready (and best-effort label
+    # maturity) must pass BEFORE a strategy is dispatched.  A failed gate
+    # blocks the strategy — correctness must not depend on agent memory.
+    gate_results: dict[str, dict[str, Any]] = {}
+    if mode == "preopen" and not debug_run:
+        print("\n  F09 decision gate (preopen):")
+        for spec in specs:
+            ok, summary = _run_preopen_gate(spec, trade_date_resolved)
+            gate_results[spec.strategy_id] = {"ok": ok, "summary": summary}
+            print(f"    {'✅' if ok else '⛔'} {spec.strategy_id}: {summary}")
+        print()
+
     # ── Dispatch ─────────────────────────────────────────────────────
     failed = 0
     for spec in specs:
+        # F09: skip strategies blocked by the preopen gate
+        g = gate_results.get(spec.strategy_id)
+        if g and not g["ok"]:
+            strat_result = {
+                "strategy_id": spec.strategy_id,
+                "stage": spec.stage,
+                "status": "blocked",
+                "run_root": None,
+                "duration_sec": 0.0,
+                "command": "",
+                "error": f"F09 preopen gate blocked: {g['summary']}",
+            }
+            strategy_results.append(strat_result)
+            failed += 1
+            if fail_fast:
+                break
+            continue
+
         cmd = _build_command(
             spec.strategy_id, mode, trade_date_resolved,
             debug_run=debug_run, no_notify=no_notify,
@@ -400,6 +504,23 @@ def run_batch(
         if failed > 0 and fail_fast:
             print(f"\n  ⛔ fail-fast: stopping after {spec.strategy_id} failure.")
             break
+
+    # ── F09 post-preopen gate: validate produced inference artifacts ──
+    if mode == "preopen" and not debug_run:
+        print("\n  F09 inference-artifact gate:")
+        for spec in specs:
+            if gate_results.get(spec.strategy_id, {}).get("ok") is False:
+                continue  # already blocked pre-dispatch
+            for cand in _candidate_candidates(output_root, trade_date_resolved, spec.strategy_id):
+                ok, summary = _run_gate_check(
+                    "harness/checks/check_inference_artifact.py",
+                    ["--artifact", str(cand)],
+                    label=f"inference-artifact:{spec.strategy_id}",
+                )
+                print(f"    {'✅' if ok else '⛔'} {spec.strategy_id}: {cand.name} {summary}")
+                if not ok:
+                    failed += 1
+        print()
 
     # ── Summary ──────────────────────────────────────────────────────
     finished_at = datetime.now()

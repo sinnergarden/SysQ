@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-import scripts.run_signal_quality as run_signal_quality
+import scripts.checks.run_signal_quality as run_signal_quality
 from qsys.live.signal_monitoring import SignalQualitySnapshot
 
 
@@ -19,11 +19,11 @@ class TestSignalQualityCli(unittest.TestCase):
         )
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            with patch("scripts.run_signal_quality.QlibAdapter"), patch(
-                "scripts.run_signal_quality.collect_signal_quality_snapshot",
+            with patch("scripts.checks.run_signal_quality.QlibAdapter"), patch(
+                "scripts.checks.run_signal_quality.collect_signal_quality_snapshot",
                 return_value=snapshot,
             ), patch(
-                "scripts.run_signal_quality.write_signal_quality_outputs",
+                "scripts.checks.run_signal_quality.write_signal_quality_outputs",
                 return_value={"signal_quality_summary": str(Path(tmpdir) / "summary.json")},
             ), patch(
                 "sys.argv",
@@ -53,11 +53,11 @@ class TestSignalQualityCli(unittest.TestCase):
         )
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            with patch("scripts.run_signal_quality.QlibAdapter"), patch(
-                "scripts.run_signal_quality.collect_signal_quality_snapshot",
+            with patch("scripts.checks.run_signal_quality.QlibAdapter"), patch(
+                "scripts.checks.run_signal_quality.collect_signal_quality_snapshot",
                 return_value=snapshot,
             ), patch(
-                "scripts.run_signal_quality.write_signal_quality_outputs",
+                "scripts.checks.run_signal_quality.write_signal_quality_outputs",
                 return_value={"signal_quality_summary": str(Path(tmpdir) / "summary.json")},
             ), patch(
                 "sys.argv",

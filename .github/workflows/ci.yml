@@ -1,0 +1,44 @@
+name: CI
+
+# F07: mechanical gate — harness checks + pytest collection must pass on every
+# PR.  Full pytest execution needs the local data stack (qlib_bin / tushare),
+# so CI enforces: (1) static harness checks, (2) the test suite COLLECTS
+# without error (no module-level sys.exit / dangling imports / ImportError),
+# and (3) a lightweight pure-logic subset that does not need market data.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install minimal deps (no heavy data stack)
+        run: |
+          pip install --quiet pyyaml pytest pandas numpy
+
+      - name: Harness checks
+        run: |
+          python harness/checks/check_scripts_entrypoints.py
+          python harness/checks/check_usecase_registry.py
+          python harness/checks/check_agent_docs.py
+          python harness/checks/check_no_latest_model_resolution.py
+          python harness/checks/check_promotion_pointer.py
+
+      - name: Test collection (must not abort)
+        run: python -m pytest tests/ --collect-only -q
+
+      - name: Lightweight tests (no market data required)
+        run: |
+          python -m pytest tests/test_trader_schema_collision.py \
+            tests/signal/test_calibrate.py \
+            tests/research/test_lightgbm_single_label.py \
+            -q

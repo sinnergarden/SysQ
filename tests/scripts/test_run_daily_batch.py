@@ -227,7 +227,7 @@ class TestDryRun:
 class TestDispatch:
     def test_successful_dispatch(self, fake_config_dir: Path):
         """A successful subprocess call returns success."""
-        with patch.object(subprocess, "run") as mock_run:
+        with patch.object(subprocess, "run") as mock_run, patch.object(batch_module, "_run_preopen_gate", return_value=(True, "ready")):
             mock_run.return_value.returncode = 0
             mock_run.return_value.stdout = "done"
             mock_run.return_value.stderr = ""
@@ -256,7 +256,7 @@ class TestDispatch:
                 result.stderr = "mock failure"
             return result
 
-        with patch.object(subprocess, "run", side_effect=_mock_run):
+        with patch.object(subprocess, "run", side_effect=_mock_run), patch.object(batch_module, "_run_preopen_gate", return_value=(True, "ready")):
             summary = run_batch(
                 stage="candidate",
                 mode="preopen",
@@ -284,7 +284,7 @@ class TestDispatch:
                 result.stderr = "mock failure"
             return result
 
-        with patch.object(subprocess, "run", side_effect=_mock_run):
+        with patch.object(subprocess, "run", side_effect=_mock_run), patch.object(batch_module, "_run_preopen_gate", return_value=(True, "ready")):
             summary = run_batch(
                 stage="candidate",
                 mode="preopen",
@@ -298,7 +298,7 @@ class TestDispatch:
 
     def test_exit_code_non_zero_on_failure(self, fake_config_dir: Path):
         """Batch summary status reflects failures."""
-        with patch.object(subprocess, "run") as mock_run:
+        with patch.object(subprocess, "run") as mock_run, patch.object(batch_module, "_run_preopen_gate", return_value=(True, "ready")):
             mock_run.return_value.returncode = 1
             mock_run.return_value.stderr = "mock failure"
 
@@ -318,7 +318,7 @@ class TestSummaryOutput:
     @patch.object(batch_module, "write_summary")  # prevent actual file IO during dispatch test
     def test_summary_has_expected_fields(self, mock_write, fake_config_dir: Path):
         """Batch summary dict contains all expected fields."""
-        with patch.object(subprocess, "run") as mock_run:
+        with patch.object(subprocess, "run") as mock_run, patch.object(batch_module, "_run_preopen_gate", return_value=(True, "ready")):
             mock_run.return_value.returncode = 0
             mock_run.return_value.stdout = "done"
             mock_run.return_value.stderr = ""
@@ -346,7 +346,7 @@ class TestSummaryOutput:
 
     def test_summary_json_written(self, fake_config_dir: Path, tmp_path: Path):
         """Summary JSON is written to output_root/trade_date/."""
-        with patch.object(subprocess, "run") as mock_run:
+        with patch.object(subprocess, "run") as mock_run, patch.object(batch_module, "_run_preopen_gate", return_value=(True, "ready")):
             mock_run.return_value.returncode = 0
             mock_run.return_value.stdout = "done"
             mock_run.return_value.stderr = ""
@@ -520,3 +520,36 @@ class TestProductionGate:
         )
         assert summary["status"] == "dry_run"
         assert summary["selected_count"] > 0
+
+
+def test_preopen_gate_blocks_unready_strategy(monkeypatch) -> None:
+    """F09: a strategy that fails the preopen decision gate is skipped (blocked),
+    not dispatched."""
+    from unittest import mock
+
+    import scripts.run_daily_batch as rdb
+
+    # Fake specs: one strategy that fails the gate.
+    class FakeSpec:
+        strategy_id = "unready"
+        stage = "candidate"
+        display_name = "Unready"
+        label = {"horizons": [5]}
+        model = {}
+        raw_config = {}
+
+    monkeypatch.setattr(rdb, "load_strategy_specs_for_stage", lambda *a, **k: [FakeSpec()])
+    monkeypatch.setattr(rdb, "_run_preopen_gate", lambda spec, td: (False, "inference-ready FAILED: no model"))
+    monkeypatch.setattr(rdb, "_build_command", lambda *a, **k: ["echo", "should-not-run"])
+    monkeypatch.setattr(rdb, "subprocess", mock.MagicMock())  # dispatch must not run
+
+    summary = rdb.run_batch(
+        stage="candidate", mode="preopen", trade_date="2026-07-24",
+        dry_run=False, no_notify=True,
+    )
+    results = summary["strategies"]
+    assert len(results) == 1
+    assert results[0]["status"] == "blocked"
+    assert "gate blocked" in results[0]["error"]
+    # subprocess.run must NOT have been called (strategy skipped pre-dispatch)
+    rdb.subprocess.run.assert_not_called()

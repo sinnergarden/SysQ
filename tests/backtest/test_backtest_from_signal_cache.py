@@ -185,7 +185,10 @@ class TestRunFromSignalCache:
         store.save_signal_run("s", "r", pd.concat([good, bad], ignore_index=True),
                               check_no_lookahead=False, overwrite=True)
         runner = BacktestRunner()
-        with pytest.raises(ValueError, match="Signal lookahead violation"):
+        from unittest import mock
+        with mock.patch("qsys.backtest.strategy_runner.fetch_market_snapshot", _mock_prices), \
+             mock.patch("qsys.backtest.strategy_runner._resolve_trading_dates", _mock_calendar), \
+             pytest.raises(ValueError, match="Signal lookahead violation"):
             runner.run_from_signal_cache(
                 signal_id="s", signal_run_id="r",
                 start_date="2026-06-15", end_date="2026-06-16",
