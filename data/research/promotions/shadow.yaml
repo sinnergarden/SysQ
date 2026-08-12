@@ -2,6 +2,17 @@ artifact_type: shadow_promotion_pointer
 promotion_target: shadow
 candidate_id: cand_alpha_v1_existing_score_20260522
 candidate_path: data/research/candidates/cand_alpha_v1_existing_score_20260522/candidate.yaml
+runtime_binding:
+  strategy_id: alpha_v1
+  strategy_config_path: configs/strategies/alpha_v1.yaml
+  strategy_config_sha256: 8bb946c294a7974868c3fefe995bd00f109e5234b5203e534d93e2a97c54d229
+  model_ref:
+    mode: shadow
+    model_id: alpha_v1_candidate_20260320
+    model_path: experiments/alpha_v1_models/20260320
+    artifact_hash: 6dc845caeaf5b6eaba76c0fa1f559188d31ab8947353c7f96a01a341b73789a4
+    pointer_path: artifacts/registry/models/alpha_v1/shadow.json
+    pointer_sha256: 8d52ac30b1aa5d13070e1b1b49b82941469bf0c5a64de144ca73cad331a1eb85
 signal_ref:
   signal_id: alpha_v1_existing_score__alpha_v1__raw
   signal_run_id: rolling__alpha_v1_rolling_full_2024_2026__alpha_v1__raw__2024-01-01_2026-05-22

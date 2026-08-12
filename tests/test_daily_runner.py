@@ -6,8 +6,9 @@ import tempfile
 import unittest
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
-from qsys.ops.daily_runner import DailyRunner
+from qsys.ops.daily_runner import DailyRunner, PreopenStageError
 from qsys.ops.run_context import DailyRunContext
 from qsys.strategy.alpha_v1.adapter import AlphaV1StrategyAdapter
 
@@ -238,6 +239,10 @@ class TestDailyRunner(unittest.TestCase):
         self.run_root = Path(self.tmpdir.name) / "run"
         self.project_root = Path(self.tmpdir.name) / "proj"
         self.runner = DailyRunner()
+        self.model_path_patch = patch.object(
+            DailyRunner, "_resolve_model_path", return_value=self.project_root / "model"
+        )
+        self.model_path_patch.start()
 
         self.ctx_preopen = DailyRunContext(
             trade_date="2026-05-18",
@@ -274,6 +279,7 @@ class TestDailyRunner(unittest.TestCase):
         )
 
     def tearDown(self):
+        self.model_path_patch.stop()
         self.tmpdir.cleanup()
 
     def test_run_preopen_creates_run_root(self):
@@ -331,7 +337,7 @@ class TestDailyRunner(unittest.TestCase):
         self.assertTrue(self.run_root.exists())
 
     def test_with_strategy_candidate(self):
-        self.runner.run_preopen(self.ctx_preopen, strategy=self.strategy)
+        self.runner.run_preopen(self.ctx_preopen, strategy=FakeStrategy())
         self.assertTrue(self.run_root.exists())
 
 
@@ -343,8 +349,13 @@ class TestDailyRunnerOrchestration(unittest.TestCase):
         self.run_root = Path(self.tmpdir.name) / "run"
         self.project_root = Path(self.tmpdir.name) / "proj"
         self.runner = DailyRunner()
+        self.model_path_patch = patch.object(
+            DailyRunner, "_resolve_model_path", return_value=self.project_root / "model"
+        )
+        self.model_path_patch.start()
 
     def tearDown(self):
+        self.model_path_patch.stop()
         self.tmpdir.cleanup()
 
     def test_preopen_calls_strategy_in_order(self):
@@ -373,6 +384,65 @@ class TestDailyRunnerOrchestration(unittest.TestCase):
             # build_preopen_message/send_notification skipped because no_notify=True
         ]
         self.assertEqual(strategy.calls, expected_order)
+
+    def test_preopen_fetch_failure_is_fatal(self):
+        ctx = DailyRunContext(
+            trade_date="2026-05-18", mode="preopen", run_root=self.run_root,
+            project_root=self.project_root, strategy_id="fake_strat",
+            account_id="shadow_fake", no_notify=True,
+        )
+        strategy = FakeStrategy()
+        with patch.object(strategy, "fetch_data", side_effect=RuntimeError("fetch failed")):
+            with self.assertRaisesRegex(PreopenStageError, "fetch_data"):
+                self.runner.run_preopen(ctx, strategy)
+
+    def test_preopen_prediction_failure_is_fatal(self):
+        ctx = DailyRunContext(
+            trade_date="2026-05-18", mode="preopen", run_root=self.run_root,
+            project_root=self.project_root, strategy_id="fake_strat",
+            account_id="shadow_fake", no_notify=True,
+        )
+        strategy = FakeStrategy()
+        with patch.object(
+            strategy, "generate_predictions", side_effect=RuntimeError("predict failed")
+        ):
+            with self.assertRaisesRegex(PreopenStageError, "generate_predictions"):
+                self.runner.run_preopen(ctx, strategy)
+
+    def test_preopen_persistence_failure_is_fatal(self):
+        ctx = DailyRunContext(
+            trade_date="2026-05-18", mode="preopen", run_root=self.run_root,
+            project_root=self.project_root, strategy_id="fake_strat",
+            account_id="shadow_fake", no_notify=True,
+        )
+        strategy = FakeStrategy()
+        with patch.object(
+            strategy, "save_predictions", side_effect=RuntimeError("save failed")
+        ):
+            with self.assertRaisesRegex(PreopenStageError, "save_predictions"):
+                self.runner.run_preopen(ctx, strategy)
+
+    def test_preopen_plan_failure_is_fatal(self):
+        ctx = DailyRunContext(
+            trade_date="2026-05-18", mode="preopen", run_root=self.run_root,
+            project_root=self.project_root, strategy_id="fake_strat",
+            account_id="shadow_fake", no_notify=True,
+        )
+        strategy = FakeStrategy()
+        with patch.object(strategy, "build_plan", side_effect=RuntimeError("plan failed")):
+            with self.assertRaisesRegex(PreopenStageError, "build_plan"):
+                self.runner.run_preopen(ctx, strategy)
+
+    def test_preopen_false_plan_result_is_fatal(self):
+        ctx = DailyRunContext(
+            trade_date="2026-05-18", mode="preopen", run_root=self.run_root,
+            project_root=self.project_root, strategy_id="fake_strat",
+            account_id="shadow_fake", no_notify=True,
+        )
+        strategy = FakeStrategy()
+        with patch.object(strategy, "build_plan", return_value=False):
+            with self.assertRaisesRegex(PreopenStageError, "build_plan"):
+                self.runner.run_preopen(ctx, strategy)
 
     def test_preopen_creates_run_meta(self):
         """Preopen writes run_meta.json."""

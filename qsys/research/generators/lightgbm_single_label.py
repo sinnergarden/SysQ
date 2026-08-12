@@ -8,9 +8,10 @@ First run (write_through=True):
 
 Second run (use_feature_cache=True):
   Window N: read cache/{feature_list_id}/{window_key}.parquet -> LightGBM training
-    Builder COMPLETELY skipped. No merging, no sub-setting — frame is bit-for-bit identical.
+    Builder COMPLETELY skipped. The cache identity binds the source snapshot,
+    universe, ordered feature list, date window, schema and builder version.
 
-Guarantee: cache == original because cache IS the original.
+Guarantee: a cache hit is accepted only for the exact declared input identity.
 """
 from __future__ import annotations
 
@@ -33,6 +34,10 @@ from qsys.research.generators.utils import (
 from qsys.utils.logger import log
 
 
+_WINDOW_CACHE_SCHEMA_VERSION = 2
+_WINDOW_CACHE_BUILDER_ID = "lightgbm_single_label_qlib_frame_v2"
+
+
 @dataclass
 class LightGBMSingleLabelGenerator:
     """Rolling signal generator — trains one LightGBM per label."""
@@ -53,29 +58,54 @@ class LightGBMSingleLabelGenerator:
     _call_count: int = field(default=0, repr=False)
 
     # ═══════════════════════════════════════════════════════════════
-    # Per-window cache: key = hash(feature_list_id + start + end)
+    # Per-window cache: content identity, not date range alone.
     # ═══════════════════════════════════════════════════════════════
 
-    def _window_key(self, start: str, end: str) -> str:
-        """Cache key uses only (start, end), NOT feature_list_id.
-        This allows any feature subset YAML to re-use the superset cache.
-        """
-        raw = f"__window__::{start}::{end}"
-        return hashlib.sha256(raw.encode()).hexdigest()[:16]
+    def _cache_identity(
+        self,
+        start: str,
+        end: str,
+        features: list[str],
+    ) -> dict[str, object]:
+        return {
+            "schema_version": _WINDOW_CACHE_SCHEMA_VERSION,
+            "builder_id": _WINDOW_CACHE_BUILDER_ID,
+            "source_manifest_hash": self.source_manifest_hash,
+            "universe": self.universe,
+            "feature_list_id": self.feature_list_id,
+            "features": features,
+            "start": start,
+            "end": end,
+        }
+
+    def _window_key(self, start: str, end: str, features: list[str]) -> str:
+        raw = json.dumps(
+            self._cache_identity(start, end, features),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        )
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
 
     def _window_cache_dir(self) -> Path:
         """All windows share one directory."""
         return Path(self.feature_cache_root) / "per_window"
 
-    def _window_cache_path(self, start: str, end: str) -> Path:
-        return self._window_cache_dir() / f"{self._window_key(start, end)}.parquet"
+    def _window_cache_path(
+        self, start: str, end: str, features: list[str]
+    ) -> Path:
+        return self._window_cache_dir() / f"{self._window_key(start, end, features)}.parquet"
 
-    def _window_meta_path(self, start: str, end: str) -> Path:
-        return Path(str(self._window_cache_path(start, end)) + ".meta.json")
+    def _window_meta_path(
+        self, start: str, end: str, features: list[str]
+    ) -> Path:
+        return Path(str(self._window_cache_path(start, end, features)) + ".meta.json")
 
-    def _window_has_cache(self, start: str, end: str) -> bool:
-        path = self._window_cache_path(start, end)
-        return path.exists() and self._window_meta_path(start, end).exists()
+    def _window_has_cache(
+        self, start: str, end: str, features: list[str]
+    ) -> bool:
+        path = self._window_cache_path(start, end, features)
+        return path.exists() and self._window_meta_path(start, end, features).exists()
 
     # ═══════════════════════════════════════════════════════════════
     # Data loader
@@ -99,37 +129,43 @@ class LightGBMSingleLabelGenerator:
             clean = get_clean_features(all_feats)
         self._clean_features = clean
 
-        # ── Cache hit: read per-window parquet → return directly ──
-        if self.use_feature_cache and self.feature_list_id and self._window_has_cache(start, end):
-            path = self._window_cache_path(start, end)
-            meta_path = self._window_meta_path(start, end)
+        if self.use_feature_cache:
+            if not self.feature_list_id:
+                raise ValueError("Feature cache requires an explicit feature_list_id")
+            if not self.source_manifest_hash.strip():
+                raise ValueError(
+                    "Feature cache requires a non-empty source_manifest_hash; "
+                    "date-only cache reuse is forbidden"
+                )
 
-            # Verify source hash match
-            if self.source_manifest_hash and meta_path.exists():
-                meta = json.loads(meta_path.read_text(encoding="utf-8"))
-                cached_hash = meta.get("source_manifest_hash", "")
-                if cached_hash and cached_hash != self.source_manifest_hash:
-                    raise ValueError(
-                        f"Window cache source_manifest_hash mismatch: "
-                        f"cached={cached_hash}, expected={self.source_manifest_hash}. "
-                        f"Re-run with write_through=True."
-                    )
+        # ── Cache hit: read per-window parquet → return directly ──
+        if self.use_feature_cache and self._window_has_cache(start, end, clean):
+            path = self._window_cache_path(start, end, clean)
+            meta_path = self._window_meta_path(start, end, clean)
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            expected_identity = self._cache_identity(start, end, clean)
+            identity_mismatches = [
+                key for key, value in expected_identity.items()
+                if meta.get(key) != value
+            ]
+            if identity_mismatches:
+                raise ValueError(
+                    "Window cache identity mismatch: "
+                    + ", ".join(identity_mismatches)
+                )
 
             df = pd.read_parquet(path)
             # trade_date was saved as str; ensure it stays str
             df["trade_date"] = df["trade_date"].astype(str).str[:10]
 
-            # Subset columns: keep only features this YAML needs (+ trade_date, instrument)
-            # This allows a 9-feature YAML to re-use superset cache (135 features).
             needed = {"trade_date", "instrument"} | set(clean)
             missing = needed - set(df.columns)
             if missing:
                 raise ValueError(
                     f"Cache missing features needed by '{self.feature_list_id}': {missing}. "
-                    f"Re-run with write_through=True using the superset YAML."
+                    "Re-run with write_through=True for this exact feature list."
                 )
-            present = [c for c in df.columns if c in needed]
-            df = df[present]
+            df = df[["trade_date", "instrument", *clean]]
 
             log.info("Cache HIT: %s (%d rows x %d cols, subset=%d feats)",
                      path.name, len(df), len(df.columns), len(clean))
@@ -151,9 +187,9 @@ class LightGBMSingleLabelGenerator:
             frame = frame.rename(columns={"ts_code": "instrument"})
 
         # ── Write-through: save this window's frame to per-window cache ──
-        if self.use_feature_cache and self.feature_list_id and self.write_through:
-            path = self._window_cache_path(start, end)
-            meta_path = self._window_meta_path(start, end)
+        if self.use_feature_cache and self.write_through:
+            path = self._window_cache_path(start, end, clean)
+            meta_path = self._window_meta_path(start, end, clean)
             path.parent.mkdir(parents=True, exist_ok=True)
 
             # Save parquet
@@ -162,14 +198,10 @@ class LightGBMSingleLabelGenerator:
 
             # Save meta
             meta = {
-                "feature_list_id": self.feature_list_id,
-                "features": clean,
-                "window_key": self._window_key(start, end),
-                "start": start,
-                "end": end,
+                **self._cache_identity(start, end, clean),
+                "window_key": self._window_key(start, end, clean),
                 "rows": len(frame),
                 "cols": len(frame.columns),
-                "source_manifest_hash": self.source_manifest_hash,
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
             meta_path.write_text(json.dumps(meta, indent=2, ensure_ascii=False, default=str), encoding="utf-8")

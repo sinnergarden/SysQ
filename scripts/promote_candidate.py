@@ -69,6 +69,12 @@ def build_parser() -> argparse.ArgumentParser:
     create_p.add_argument("--signal-id", required=True)
     create_p.add_argument("--signal-run-id", required=True)
     create_p.add_argument("--strategy-config-id", required=True)
+    create_p.add_argument("--strategy-id", required=True)
+    create_p.add_argument(
+        "--strategy-config-path",
+        default=None,
+        help="Runtime strategy YAML (default: configs/strategies/<strategy-id>.yaml)",
+    )
     create_p.add_argument("--strategy-template-id", required=True)
     create_p.add_argument("--strategy-run-id", required=True)
     create_p.add_argument("--backtest-id", required=True)
@@ -114,6 +120,7 @@ def _validate_create_args(args: argparse.Namespace) -> None:
         "signal_id": args.signal_id,
         "signal_run_id": args.signal_run_id,
         "strategy_config_id": args.strategy_config_id,
+        "strategy_id": args.strategy_id,
         "strategy_template_id": args.strategy_template_id,
         "strategy_run_id": args.strategy_run_id,
         "backtest_id": args.backtest_id,
@@ -184,7 +191,9 @@ def _handle_create(args: argparse.Namespace) -> None:
 
     signal_ref = {"signal_id": args.signal_id, "signal_run_id": args.signal_run_id}
     strategy: dict[str, Any] = {
+        "strategy_id": args.strategy_id,
         "strategy_config_id": args.strategy_config_id,
+        "strategy_config_path": args.strategy_config_path,
         "strategy_template_id": args.strategy_template_id,
         "top_n": args.top_n,
         "rebalance_freq": args.rebalance_freq,
@@ -237,6 +246,7 @@ def _handle_create(args: argparse.Namespace) -> None:
             research_root=research_root,
             promoted_by=args.promoted_by or "manual",
             overwrite_pointer=args.overwrite_pointer,
+            project_root=Path.cwd(),
         )
         result["status"] = "promoted_shadow"
         result["pointer_path"] = str(
@@ -255,6 +265,7 @@ def _handle_promote(args: argparse.Namespace) -> None:
         research_root=args.research_root,
         promoted_by=args.promoted_by,
         overwrite_pointer=args.overwrite_pointer,
+        project_root=Path.cwd(),
     )
 
     result = {

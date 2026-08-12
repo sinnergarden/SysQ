@@ -106,15 +106,19 @@ class TestAlphaV2FromConfig(unittest.TestCase):
     def test_path_overrides(self):
         config = {
             "paths": {
-                "model_dir": "/custom/models",
                 "predictions_dir": "/custom/preds",
                 "ledger_db": "/custom/db.sqlite",
             }
         }
         adapter = AlphaV2StrategyAdapter.from_config(config)
-        self.assertEqual(str(adapter._model_dir), "/custom/models")
         self.assertEqual(str(adapter._predictions_dir), "/custom/preds")
         self.assertEqual(adapter._ledger_db_path, "/custom/db.sqlite")
+
+    def test_model_path_override_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "model_dir"):
+            AlphaV2StrategyAdapter.from_config(
+                {"paths": {"model_dir": "/custom/models"}}
+            )
 
     def test_portfolio_overrides(self):
         config = {
@@ -158,7 +162,7 @@ class TestAlphaV2LoadModel(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             adapter = AlphaV2StrategyAdapter(project_root=Path(tmp))
             adapter.load_model()
-            expected = Path(tmp) / "experiments/alpha_v2_models/latest"
+            expected = Path(tmp) / "experiments/alpha_v2_models/rule_based_smoke_v1"
             self.assertTrue(expected.exists())
 
 

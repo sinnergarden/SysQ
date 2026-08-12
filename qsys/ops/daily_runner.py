@@ -41,6 +41,15 @@ from qsys.ops.run_context import DailyRunContext
 from qsys.strategy.base import StrategyCandidate
 
 
+class PreopenStageError(RuntimeError):
+    """A required preopen stage failed before a complete manifest was written."""
+
+    def __init__(self, stage: str, cause: Exception) -> None:
+        self.stage = stage
+        self.cause = cause
+        super().__init__(f"preopen stage {stage!r} failed: {cause}")
+
+
 def _ledger_run_completed(ctx: DailyRunContext) -> bool:
     """F04: is the ledger run for this day already ``completed``?
 
@@ -78,6 +87,26 @@ class DailyRunner:
     The runner controls the stage sequence; strategy-specific logic
     is delegated to the adapter.
     """
+
+    @staticmethod
+    def _raise_preopen_failure(
+        ctx: DailyRunContext,
+        strategy: StrategyCandidate,
+        *,
+        stage: str,
+        user_message: str,
+        error: Exception,
+    ) -> None:
+        print(f"  ❌ {error}")
+        if not ctx.no_notify:
+            try:
+                strategy.send_notification(
+                    f"❌ {strategy.display_name} Pre-open {ctx.trade_date}\n"
+                    f"{user_message}: {error}"
+                )
+            except Exception as notify_error:
+                print(f"  ⚠ failure notification also failed: {notify_error}")
+        raise PreopenStageError(stage, error) from error
 
     # ── Path helpers ────────────────────────────────────────────────────
 
@@ -181,12 +210,9 @@ class DailyRunner:
             sig_dir.mkdir(parents=True, exist_ok=True)
             save_signal_basket(basket, output_dir=sig_dir.parent, signal_date=data_date)
         else:
-            try:
-                sig_dir = self._daily_signal_dir(ctx)
-                sig_dir.mkdir(parents=True, exist_ok=True)
-                save_signal_basket(basket, output_dir=sig_dir.parent, signal_date=data_date)
-            except PermissionError:
-                print(f"  ⚠ 无法写入 signal_basket 到 daily/（权限），跳过")
+            sig_dir = self._daily_signal_dir(ctx)
+            sig_dir.mkdir(parents=True, exist_ok=True)
+            save_signal_basket(basket, output_dir=sig_dir.parent, signal_date=data_date)
 
     # ── Preopen ─────────────────────────────────────────────────────────
 
@@ -218,24 +244,26 @@ class DailyRunner:
         try:
             raw_data = strategy.fetch_data(data_date)  # prints row count internally
         except Exception as e:
-            print(f"  ❌ {e}")
-            if not ctx.no_notify:
-                strategy.send_notification(
-                    f"❌ {strategy.display_name} Pre-open {ctx.trade_date}\n数据获取失败: {e}"
-                )
-            return
+            self._raise_preopen_failure(
+                ctx,
+                strategy,
+                stage="fetch_data",
+                user_message="数据获取失败",
+                error=e,
+            )
 
         # [3/4] Generate predictions
         print(f"\n[3/4] Generating predictions...")
         try:
             predictions = strategy.generate_predictions(raw_data)
         except Exception as e:
-            print(f"  ❌ {e}")
-            if not ctx.no_notify:
-                strategy.send_notification(
-                    f"❌ {strategy.display_name} Pre-open {ctx.trade_date}\n预测生成失败: {e}"
-                )
-            return
+            self._raise_preopen_failure(
+                ctx,
+                strategy,
+                stage="generate_predictions",
+                user_message="预测生成失败",
+                error=e,
+            )
 
         # Save predictions
         pred_path = run_root / "predictions" / f"predictions_{ctx.trade_date}.csv"
@@ -243,13 +271,28 @@ class DailyRunner:
         predictions.to_csv(pred_path, index=False)
 
         # Save signal_basket to daily artifact path (contract: daily/<date>/pre_open/signals/)
-        self._save_signal_basket(predictions, ctx, data_date)
+        try:
+            self._save_signal_basket(predictions, ctx, data_date)
+        except Exception as e:
+            self._raise_preopen_failure(
+                ctx,
+                strategy,
+                stage="signal_basket",
+                user_message="信号篮子持久化失败",
+                error=e,
+            )
 
         # Strategy-specific prediction persistence (e.g. shared predictions dir)
         try:
             strategy.save_predictions(predictions, run_root, ctx.trade_date)
         except Exception as e:
-            print(f"  ⚠ save_predictions failed: {e}")
+            self._raise_preopen_failure(
+                ctx,
+                strategy,
+                stage="save_predictions",
+                user_message="预测产物持久化失败",
+                error=e,
+            )
 
         # ADR-7 signal sidecar
         try:
@@ -265,7 +308,13 @@ class DailyRunner:
                 write_artifacts(arts, sidecar_path(pred_path))
                 print(f"  → ADR-7 signal sidecar written ({len(arts)} rows)")
         except Exception as e:
-            print(f"  ⚠ ADR-7 signal sidecar failed: {e}")
+            self._raise_preopen_failure(
+                ctx,
+                strategy,
+                stage="signal_sidecar",
+                user_message="信号 sidecar 写入失败",
+                error=e,
+            )
 
         # Top picks for display
         strategy.print_predictions_summary(predictions)
@@ -286,16 +335,21 @@ class DailyRunner:
             })
         else:
             try:
-                strategy.build_plan(predictions, self.plan_dir(ctx))
+                plan_built = strategy.build_plan(predictions, self.plan_dir(ctx))
+                if plan_built is not True:
+                    raise RuntimeError(
+                        f"strategy.build_plan returned {plan_built!r}; expected True"
+                    )
                 # ADR-7 order intent sidecar
                 self._write_order_intent_sidecar(ctx)
             except Exception as e:
-                print(f"  ❌ 建仓计划失败: {e}")
-                if not ctx.no_notify:
-                    strategy.send_notification(
-                        f"❌ {strategy.display_name} Pre-open {ctx.trade_date}\n建仓计划失败: {e}"
-                    )
-                return
+                self._raise_preopen_failure(
+                    ctx,
+                    strategy,
+                    stage="build_plan",
+                    user_message="建仓计划失败",
+                    error=e,
+                )
 
         # Notify
         if not ctx.no_notify:
@@ -316,6 +370,13 @@ class DailyRunner:
             signal_id=ctx.signal_id,
             signal_run_id=ctx.signal_run_id,
             strategy_config_id=ctx.strategy_config_id,
+            strategy_config_path=ctx.strategy_config_path,
+            strategy_config_sha256=ctx.strategy_config_sha256,
+            model_id=ctx.model_id,
+            model_path=ctx.model_path,
+            model_artifact_hash=ctx.model_artifact_hash,
+            model_pointer_path=ctx.model_pointer_path,
+            model_pointer_sha256=ctx.model_pointer_sha256,
             strategy_template_id=ctx.strategy_template_id,
             strategy_run_id=ctx.strategy_run_id,
             backtest_id=ctx.backtest_id,
@@ -556,6 +617,13 @@ class DailyRunner:
             signal_id=ctx.signal_id,
             signal_run_id=ctx.signal_run_id,
             strategy_config_id=ctx.strategy_config_id,
+            strategy_config_path=ctx.strategy_config_path,
+            strategy_config_sha256=ctx.strategy_config_sha256,
+            model_id=ctx.model_id,
+            model_path=ctx.model_path,
+            model_artifact_hash=ctx.model_artifact_hash,
+            model_pointer_path=ctx.model_pointer_path,
+            model_pointer_sha256=ctx.model_pointer_sha256,
             strategy_template_id=ctx.strategy_template_id,
             strategy_run_id=ctx.strategy_run_id,
             backtest_id=ctx.backtest_id,

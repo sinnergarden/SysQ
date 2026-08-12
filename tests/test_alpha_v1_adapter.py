@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from qsys.strategy.base import StrategyCandidate
 from qsys.strategy.alpha_v1.adapter import AlphaV1StrategyAdapter
@@ -93,6 +94,33 @@ class TestAlphaV1StrategyAdapter(unittest.TestCase):
         adapter = AlphaV1StrategyAdapter(project_root=Path("/nonexistent"))
         with self.assertRaises(FileNotFoundError):
             adapter.load_model()
+
+    def test_fetch_data_uses_approved_ordered_model_features(self):
+        import pandas as pd
+
+        adapter = AlphaV1StrategyAdapter()
+        adapter._clean_features = ["$open", "Ref($close, 5)/$close"]
+        raw = pd.DataFrame(
+            {
+                "$open": [10.0],
+                "Ref($close, 5)/$close": [0.9],
+                "$close": [10.2],
+            },
+            index=pd.MultiIndex.from_tuples(
+                [("600000", pd.Timestamp("2026-08-11"))],
+                names=["instrument", "datetime"],
+            ),
+        )
+        with patch("qsys.data.adapter.QlibAdapter") as adapter_cls:
+            qlib_adapter = adapter_cls.return_value
+            qlib_adapter.get_features.return_value = raw
+            result = adapter.fetch_data("2026-08-11")
+
+        requested = qlib_adapter.get_features.call_args.args[1]
+        self.assertEqual(
+            requested, ["$open", "Ref($close, 5)/$close", "$close"]
+        )
+        self.assertEqual(len(result), 1)
 
     def test_load_plan_instruments_empty_dir(self):
         """No plan → empty list."""
@@ -189,21 +217,20 @@ class TestAlphaV1StrategyAdapter(unittest.TestCase):
         adapter = AlphaV1StrategyAdapter.from_config({"display_name": "Custom Alpha"})
         self.assertEqual(adapter.display_name, "Custom Alpha")
 
-    def test_from_config_overrides_paths(self):
-        """Relative paths are resolved against project_root."""
+    def test_from_config_rejects_relative_model_path(self):
+        """Runtime model selection must come from the approved pointer."""
         pr = Path("/tmp/test_from_config_pr")
-        adapter = AlphaV1StrategyAdapter.from_config(
-            {"paths": {"model_dir": "custom_models/latest"}},
-            project_root=pr,
-        )
-        expected = pr / "custom_models/latest"
-        self.assertEqual(adapter._model_dir, expected)
+        with self.assertRaisesRegex(ValueError, "model_dir"):
+            AlphaV1StrategyAdapter.from_config(
+                {"paths": {"model_dir": "custom_models/model_v1"}},
+                project_root=pr,
+            )
 
-    def test_from_config_overrides_absolute_paths(self):
-        adapter = AlphaV1StrategyAdapter.from_config(
-            {"paths": {"model_dir": "/absolute/path"}},
-        )
-        self.assertEqual(adapter._model_dir, Path("/absolute/path"))
+    def test_from_config_rejects_absolute_model_path(self):
+        with self.assertRaisesRegex(ValueError, "model_dir"):
+            AlphaV1StrategyAdapter.from_config(
+                {"paths": {"model_dir": "/absolute/path"}},
+            )
 
     def test_from_config_overrides_predictions_dir(self):
         pr = Path("/tmp/test_pr")
@@ -256,7 +283,7 @@ class TestAlphaV1StrategyAdapter(unittest.TestCase):
 
     def test_from_config_stores_config(self):
         """from_config stores the config dict for downstream use (e.g. training)."""
-        cfg = {"display_name": "Test", "paths": {"model_dir": "custom"}}
+        cfg = {"display_name": "Test", "paths": {"predictions_dir": "custom"}}
         adapter = AlphaV1StrategyAdapter.from_config(cfg, project_root=Path("/tmp"))
         self.assertIsNotNone(adapter._config)
         self.assertEqual(adapter._config["display_name"], "Test")

@@ -84,7 +84,13 @@ def _discover_model_dir(project_root: Path) -> str:
     if not base.exists():
         return ""
     candidates = sorted(
-        [d for d in base.iterdir() if d.is_dir() and not d.name.startswith(".")],
+        [
+            d for d in base.iterdir()
+            if d.is_dir()
+            and not d.is_symlink()
+            and not d.name.startswith(".")
+            and d.name.lower() != "latest"
+        ],
         reverse=True,
     )
     if not candidates:
@@ -180,23 +186,13 @@ class AlphaV1Trainer:
                 message="No model dir found after training",
             )
 
-        model_id = f"{strategy_id}_{model_version}"
-
-        # Write shadow pointer — this is the canonical way to publish a model
-        from qsys.ops.model_resolver import write_model_pointer  # noqa: PLC0415
-
-        write_model_pointer(
-            project_root=self._project_root,
-            strategy_id=strategy_id,
-            mode="shadow",
-            model_id=model_id,
-            model_path=model_dir_str,
-            created_at=datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
-            status="approved",
-            source_run_id=getattr(ctx, "run_id", ""),
-            approved_by="system",
+        # Training publishes an immutable artifact only.  Repointing shadow
+        # here would invalidate the promotion pointer's pinned model hash and
+        # implicitly promote an unreviewed model.  Model-pointer publication
+        # belongs to the explicit candidate promotion workflow.
+        print(
+            f"  ✓ Model artifact ready for promotion review: {model_dir_str}"
         )
-        print(f"  ✓ Shadow pointer written: artifacts/registry/models/{strategy_id}/shadow.json → {model_dir_str}")
 
         artifacts = _discover_artifacts(self._project_root, model_dir_str)
         metrics = _try_discover_metrics(self._project_root, model_dir_str)

@@ -15,6 +15,12 @@ from qsys.common.io import write_json
 from qsys.research.manifest import with_standard_metadata
 
 
+_COMPLETED_STAGE_STATUSES = {
+    "preopen": {"completed", "skipped"},
+    "postclose": {"completed", "skipped_no_execution", "skipped_idempotent"},
+}
+
+
 def save_run_meta(
     run_root: Path,
     trade_date: str,
@@ -52,6 +58,13 @@ def write_daily_manifest(
     signal_id: str | None = None,
     signal_run_id: str | None = None,
     strategy_config_id: str | None = None,
+    strategy_config_path: str | None = None,
+    strategy_config_sha256: str | None = None,
+    model_id: str | None = None,
+    model_path: str | None = None,
+    model_artifact_hash: str | None = None,
+    model_pointer_path: str | None = None,
+    model_pointer_sha256: str | None = None,
     strategy_template_id: str | None = None,
     strategy_run_id: str | None = None,
     backtest_id: str | None = None,
@@ -107,6 +120,20 @@ def write_daily_manifest(
         manifest["signal_run_id"] = signal_run_id
     if strategy_config_id:
         manifest["strategy_config_id"] = strategy_config_id
+    if strategy_config_path:
+        manifest["strategy_config_path"] = strategy_config_path
+    if strategy_config_sha256:
+        manifest["strategy_config_sha256"] = strategy_config_sha256
+    if model_id:
+        manifest["model_id"] = model_id
+    if model_path:
+        manifest["model_path"] = model_path
+    if model_artifact_hash:
+        manifest["model_artifact_hash"] = model_artifact_hash
+    if model_pointer_path:
+        manifest["model_pointer_path"] = model_pointer_path
+    if model_pointer_sha256:
+        manifest["model_pointer_sha256"] = model_pointer_sha256
     if strategy_template_id:
         manifest["strategy_template_id"] = strategy_template_id
     if strategy_run_id:
@@ -152,6 +179,57 @@ def write_daily_manifest(
     manifest = with_standard_metadata(manifest)
     run_root.mkdir(parents=True, exist_ok=True)
     write_json(run_root / "daily_manifest.json", manifest)
+
+
+def validate_daily_stage_manifest(
+    run_root: Path,
+    *,
+    trade_date: str,
+    strategy_id: str,
+    stage: str,
+) -> dict[str, Any]:
+    """Independently verify that a daily stage produced complete evidence.
+
+    A zero process exit code is not sufficient: orchestration bugs can return
+    early without a manifest.  The canonical runner and the batch wrapper both
+    call this check so a missing, stale, or cross-strategy manifest fails the
+    invocation.
+    """
+    allowed = _COMPLETED_STAGE_STATUSES.get(stage)
+    if allowed is None:
+        raise ValueError(f"unsupported daily manifest stage: {stage!r}")
+
+    path = run_root / "daily_manifest.json"
+    if not path.is_file():
+        raise RuntimeError(f"{stage} completed without daily manifest: {path}")
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise RuntimeError(f"daily manifest is unreadable: {path}: {exc}") from exc
+
+    expected = {
+        "artifact_type": "daily_run",
+        "trade_date": trade_date,
+        "strategy_id": strategy_id,
+        "stage": stage,
+    }
+    mismatches = [
+        f"{key}={payload.get(key)!r} (expected {value!r})"
+        for key, value in expected.items()
+        if payload.get(key) != value
+    ]
+    if mismatches:
+        raise RuntimeError(
+            f"daily manifest identity mismatch at {path}: {', '.join(mismatches)}"
+        )
+
+    status = (payload.get("stage_status") or {}).get(stage)
+    if status not in allowed:
+        raise RuntimeError(
+            f"daily manifest does not prove {stage} completion at {path}: "
+            f"status={status!r}, allowed={sorted(allowed)}"
+        )
+    return payload
 
 
 def append_skip_attempt(

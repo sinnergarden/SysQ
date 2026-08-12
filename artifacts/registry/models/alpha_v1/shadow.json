@@ -1,0 +1,12 @@
+{
+  "schema_version": 2,
+  "strategy_id": "alpha_v1",
+  "mode": "shadow",
+  "model_id": "alpha_v1_candidate_20260320",
+  "model_path": "experiments/alpha_v1_models/20260320",
+  "created_at": "2026-06-13T02:12:00.810541",
+  "status": "approved",
+  "source_run_id": "legacy_alpha_v1_candidate_20260320",
+  "artifact_hash": "6dc845caeaf5b6eaba76c0fa1f559188d31ab8947353c7f96a01a341b73789a4",
+  "approved_by": "operator_agent"
+}

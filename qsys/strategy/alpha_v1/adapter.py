@@ -53,7 +53,6 @@ class AlphaV1StrategyAdapter(BaseStrategyAdapter):
         # Optional overrides set by ``from_config``
         self._config: dict | None = None
         self._config_display_name: str | None = None
-        self._config_model_dir: Path | None = None
         self._config_predictions_dir: Path | None = None
         self._config_ledger_db_path: str | None = None
 
@@ -73,7 +72,6 @@ class AlphaV1StrategyAdapter(BaseStrategyAdapter):
             Parsed YAML content.  Fields that may be overridden:
 
             - ``display_name`` — cosmetic only
-            - ``paths.model_dir`` — overrides ``_model_dir``
             - ``paths.predictions_dir`` — overrides ``_predictions_dir``
             - ``paths.ledger_db`` — overrides ``_ledger_db_path``
 
@@ -98,8 +96,10 @@ class AlphaV1StrategyAdapter(BaseStrategyAdapter):
 
         raw_model_dir = paths.get("model_dir")
         if raw_model_dir:
-            p = Path(raw_model_dir)
-            self._config_model_dir = p if p.is_absolute() else pr / raw_model_dir
+            raise ValueError(
+                "paths.model_dir is forbidden for candidate/shadow runtime; "
+                "publish an immutable artifacts/registry/models/<strategy>/shadow.json pointer"
+            )
 
         raw_pred_dir = paths.get("predictions_dir")
         if raw_pred_dir:
@@ -193,8 +193,6 @@ class AlphaV1StrategyAdapter(BaseStrategyAdapter):
 
     @property
     def _model_dir(self) -> Path:
-        if self._config_model_dir is not None:
-            return self._config_model_dir
         from qsys.ops.model_resolver import resolve_model_for_strategy  # noqa: PLC0415
 
         resolved = resolve_model_for_strategy(
@@ -266,6 +264,15 @@ class AlphaV1StrategyAdapter(BaseStrategyAdapter):
     def load_model(self) -> None:
         import lightgbm as lgb
 
+        features_file = self._model_dir / "features.json"
+        if not features_file.exists():
+            raise FileNotFoundError(
+                f"Approved model is missing ordered features.json: {features_file}"
+            )
+        self._clean_features = json.loads(features_file.read_text())
+        if not isinstance(self._clean_features, list) or not self._clean_features:
+            raise ValueError(f"Invalid ordered feature list: {features_file}")
+
         models: dict[str, tuple[Any, pd.Series, pd.Series]] = {}
         for tag in ["5d", "20d"]:
             model_path = self._model_dir / f"model_{tag}.txt"
@@ -276,19 +283,21 @@ class AlphaV1StrategyAdapter(BaseStrategyAdapter):
             model = lgb.Booster(model_file=str(model_path))
             center = pd.Series(json.loads(center_path.read_text()))
             scale = pd.Series(json.loads(scale_path.read_text()))
+            if list(center.index) != self._clean_features:
+                raise ValueError(
+                    f"Model {tag} center feature order does not match features.json"
+                )
+            if list(scale.index) != self._clean_features:
+                raise ValueError(
+                    f"Model {tag} scale feature order does not match features.json"
+                )
+            if model.num_feature() != len(self._clean_features):
+                raise ValueError(
+                    f"Model {tag} feature count mismatch: "
+                    f"model={model.num_feature()}, ordered={len(self._clean_features)}"
+                )
             models[tag] = (model, center, scale)
             print(f"  Model {tag}: {model.num_trees()} trees")
-        # Resolve feature list
-        features_file = self._model_dir / "features.json"
-        if features_file.exists():
-            self._clean_features = json.loads(features_file.read_text())
-        else:
-            from qsys.feature.library import FeatureLibrary
-
-            all_features = FeatureLibrary.get_semantic_all_features_config()
-            from qsys.strategy.alpha_v1.spec import get_clean_features
-
-            self._clean_features = get_clean_features(all_features)
         print(f"  Features: {len(self._clean_features)}")
         self._loaded_models = models
 
@@ -296,14 +305,14 @@ class AlphaV1StrategyAdapter(BaseStrategyAdapter):
         from qlib.data import D as qlib_D
 
         from qsys.data.adapter import QlibAdapter
-        from qsys.feature.library import FeatureLibrary
-
         adapter = QlibAdapter()
         adapter.init_qlib()
-        all_features = FeatureLibrary.get_semantic_all_features_config()
+        if not self._clean_features:
+            raise ValueError("clean_features empty — call load_model() first")
+        requested_features = list(dict.fromkeys([*self._clean_features, "$close"]))
         raw = adapter.get_features(
             self.UNIVERSE,
-            all_features + ["$close"],
+            requested_features,
             start_time=data_date,
             end_time=data_date,
         )

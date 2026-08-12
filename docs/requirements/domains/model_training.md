@@ -20,8 +20,7 @@ stable
 包含：
 - 定时（每周）全量训练
 - 模型 artifact 持久化（model.pkl, meta.yaml, config_snapshot, features.json）
-- 可选 shadow pointer 写入（`pointer_write_mode=shadow`）
-- `pointer_write_mode=none` 的 research bundle（不得隐式晋级）
+- `pointer_write_mode=none` 的 immutable model artifact（不得隐式晋级）
 - 训练 metrics 记录
 - ordered feature list、实际有效训练窗口、universe/label/training snapshot hash
 - label artifact 与当前训练 universe 的 membership coverage
@@ -50,6 +49,13 @@ stable
 ### Key Artifacts
 - `artifacts/registry/models/{strategy}/shadow.json`
 - `experiments/alpha_v1_models/{timestamp}/`
+
+Shadow model pointer 使用 schema v2，必须包含按相对文件路径与文件
+SHA-256 计算的 model artifact hash。解析时重算并比对；不再回退到
+`models/latest_shadow_model.json` 或任何 `latest` model directory symlink。
+训练成功只产出待审核 artifact，不得直接重写 shadow model pointer；否则会
+使 promotion pointer 绑定的 model hash 立即失效。只有显式 candidate promotion
+流程可以同步发布 model pointer 与 promotion runtime binding。
 
 ### Required Checks
 - `harness/checks/check_no_latest_model_resolution.py`
@@ -97,6 +103,6 @@ Target shape:
 - ``universe``
 - ``train_start`` / ``train_end``
 - ``output_artifact_dir``
-- ``registry_pointer_write_mode``: `none` / `shadow` / `candidate`
+- ``registry_pointer_write_mode``: `none` （shadow publication 由 promotion UC 完成）
 
 Do **not** add new feature-combination-specific train scripts (e.g. ``run_alpha_vX_weekly_train.py``).

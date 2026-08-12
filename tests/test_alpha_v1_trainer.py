@@ -5,7 +5,12 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from qsys.model.alpha_v1_trainer import AlphaV1Trainer, _discover_artifacts, _try_discover_metrics
+from qsys.model.alpha_v1_trainer import (
+    AlphaV1Trainer,
+    _discover_artifacts,
+    _discover_model_dir,
+    _try_discover_metrics,
+)
 
 
 class TestDiscoverArtifacts:
@@ -131,3 +136,12 @@ class TestAlphaV1Trainer:
         assert result.status == "success"
         assert "model_5d.txt" in result.artifacts
         assert "model_20d.txt" in result.artifacts
+
+    def test_model_discovery_ignores_latest_symlink(self, tmp_path):
+        base = tmp_path / "experiments/alpha_v1_models"
+        approved = base / "20260704"
+        approved.mkdir(parents=True)
+        latest_target = tmp_path / "external_latest"
+        latest_target.mkdir()
+        (base / "latest").symlink_to(latest_target, target_is_directory=True)
+        assert _discover_model_dir(tmp_path).endswith("20260704")

@@ -13,6 +13,8 @@ usecases:
     entrypoints:
       - scripts/data_sync.py
       - scripts/run_daily.py
+      - scripts/run_daily_batch.py
+      - scripts/ops/sync_csi800_daily.py
     artifacts:
       - daily/{trade_date}/pre_open/signals/
       - daily/{trade_date}/post_close/
@@ -27,6 +29,8 @@ usecases:
     allowed_paths:
       - scripts/data_sync.py
       - scripts/run_daily.py
+      - scripts/run_daily_batch.py
+      - scripts/ops/sync_csi800_daily.py
       - qsys/ops/
       - configs/strategies/
       - harness/checks/

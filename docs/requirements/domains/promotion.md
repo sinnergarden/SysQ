@@ -30,13 +30,18 @@ stable
 ### Inputs
 - 回测 artifact path
 - 信号引用（signal_id, signal_run_id）
-- 策略配置引用
+- 策略配置引用及文件 SHA-256
+- 明确的 shadow model pointer、model path 和 artifact SHA-256（禁止 latest symlink）
 - 人工决策
 
 ### Outputs
 - `data/research/candidates/{candidate_id}/candidate.yaml`
 - `data/research/promotions/shadow.yaml`
 - `artifacts/registry/models/{strategy_id}/prod.json`（远期）
+
+`shadow.yaml` 不是一个只指 candidate ID 的别名。它必须保存
+`runtime_binding`，并在每次 daily dispatch 前重算策略配置、model directory
+和 model pointer 的 hash。任一不一致都必须 fail closed。
 
 ### Canonical Entrypoints
 - `scripts/promote_candidate.py create|promote`
@@ -48,7 +53,8 @@ stable
 
 ### Required Checks
 - TBD: candidate artifact schema check
-- TBD: promotion lineage check（signal_run_id, backtest_id 必须可解析）
+- `resolve_shadow_promotion()` runtime binding check（strategy/config/model/pointer）
+- TBD: full signal/backtest artifact resolution
 
 ### Owner Agent
 operator_agent
