@@ -45,6 +45,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from qsys.common.config import load_strategy_config
 from qsys.ops.daily_runner import DailyRunner
+from qsys.ops.daily_artifacts import validate_daily_stage_manifest
 from qsys.ops.attempts import (
     build_attempt_id,
     make_active_attempt_payload,
@@ -232,7 +233,11 @@ def run_daily_main(argv: list[str] | None = None) -> None:
         if not pointer_path.is_absolute() and not pointer_path.exists():
             pointer_path = PROJECT_ROOT / raw_pointer
         try:
-            promotion_lineage = resolve_shadow_promotion(pointer_path)
+            promotion_lineage = resolve_shadow_promotion(
+                pointer_path,
+                expected_strategy_id=strategy_id,
+                project_root=PROJECT_ROOT,
+            )
         except FileNotFoundError as e:
             print(f"  ❌ {e}", file=sys.stderr)
             sys.exit(1)
@@ -277,6 +282,13 @@ def run_daily_main(argv: list[str] | None = None) -> None:
             signal_id=promotion_lineage.get("signal_id"),
             signal_run_id=promotion_lineage.get("signal_run_id"),
             strategy_config_id=promotion_lineage.get("strategy_config_id"),
+            strategy_config_path=promotion_lineage.get("strategy_config_path"),
+            strategy_config_sha256=promotion_lineage.get("strategy_config_sha256"),
+            model_id=promotion_lineage.get("model_id"),
+            model_path=promotion_lineage.get("model_path"),
+            model_artifact_hash=promotion_lineage.get("model_artifact_hash"),
+            model_pointer_path=promotion_lineage.get("model_pointer_path"),
+            model_pointer_sha256=promotion_lineage.get("model_pointer_sha256"),
             strategy_template_id=promotion_lineage.get("strategy_template_id"),
             strategy_run_id=promotion_lineage.get("strategy_run_id"),
             backtest_id=promotion_lineage.get("backtest_id"),
@@ -305,7 +317,7 @@ def run_daily_main(argv: list[str] | None = None) -> None:
     active_attempt_val = False
     promotion_snapshot_path_val: str | None = None
 
-    if args.mode == "preopen":
+    if args.mode == "preopen" and not args.notify_only:
         existing = read_active_attempt(run_root) if not args.debug_run else None
         attempt_seq = next_attempt_seq(run_root)
 
@@ -367,6 +379,9 @@ def run_daily_main(argv: list[str] | None = None) -> None:
             "candidate_id", "candidate_path", "signal_id", "signal_run_id",
             "strategy_config_id", "strategy_template_id", "strategy_run_id",
             "backtest_id", "promoted_at", "promoted_by",
+            "strategy_config_path", "strategy_config_sha256", "model_id",
+            "model_path", "model_artifact_hash", "model_pointer_path",
+            "model_pointer_sha256",
         ):
             val = snap.get(field)
             if val is not None:
@@ -403,6 +418,13 @@ def run_daily_main(argv: list[str] | None = None) -> None:
         signal_id=promotion_lineage.get("signal_id"),
         signal_run_id=promotion_lineage.get("signal_run_id"),
         strategy_config_id=promotion_lineage.get("strategy_config_id"),
+        strategy_config_path=promotion_lineage.get("strategy_config_path"),
+        strategy_config_sha256=promotion_lineage.get("strategy_config_sha256"),
+        model_id=promotion_lineage.get("model_id"),
+        model_path=promotion_lineage.get("model_path"),
+        model_artifact_hash=promotion_lineage.get("model_artifact_hash"),
+        model_pointer_path=promotion_lineage.get("model_pointer_path"),
+        model_pointer_sha256=promotion_lineage.get("model_pointer_sha256"),
         strategy_template_id=promotion_lineage.get("strategy_template_id"),
         strategy_run_id=promotion_lineage.get("strategy_run_id"),
         backtest_id=promotion_lineage.get("backtest_id"),
@@ -433,6 +455,12 @@ def run_daily_main(argv: list[str] | None = None) -> None:
     # ── Preopen / Postclose ──────────────────────────────────────────
     if args.mode == "preopen":
         runner.run_preopen(ctx, strategy)
+        validate_daily_stage_manifest(
+            run_root,
+            trade_date=trade_date,
+            strategy_id=strategy.strategy_id,
+            stage="preopen",
+        )
         # Only persist active pointer AFTER a successful preopen
         # (manifest written = preopen completed without early return).
         if not args.debug_run and args.run_mode == "shadow":
@@ -447,6 +475,12 @@ def run_daily_main(argv: list[str] | None = None) -> None:
                 print(f"  📝 Active attempt: {ctx.attempt_id}")
     elif args.mode == "postclose":
         runner.run_postclose(ctx, strategy)
+        validate_daily_stage_manifest(
+            run_root,
+            trade_date=trade_date,
+            strategy_id=strategy.strategy_id,
+            stage="postclose",
+        )
 
 
 # ── Structured dispatch for batch runner ────────────────────────────────

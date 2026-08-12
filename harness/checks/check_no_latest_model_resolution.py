@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Static check: forbid ``latest`` / ``mtime`` / ``symlink`` model discovery in production paths.
 
-Scans ``qsys/strategy/``, ``qsys/ops/``, ``qsys/live/``, ``qsys/model/`` for
+Scans production Python paths and ``configs/strategies/`` for
 patterns that bypass the approved pointer mechanism:
 
 - ``stat().st_mtime``
@@ -39,11 +39,11 @@ FORBIDDEN_PATTERNS: list[re.Pattern] = [
     re.compile(r"experiments/alpha_v2_models/latest"),
     re.compile(r"_models/latest"),
     re.compile(r"Falling back to latest model"),
+    re.compile(r"model_dir\s*:\s*[^#\n]*\blatest\b"),
 ]
 
 # Patterns that are allowed ONLY in specific files
 ALLOWED_FOR_PATTERN: dict[str, list[str]] = {
-    "qsys/ops/model_resolver.py": ["_models/latest"],  # backward compat read
     "qsys/ops/model_registry.py": ["_models/latest"],  # legacy path definition
     "qsys/ops/manifest.py": ["_models/latest"],  # legacy pointer name
     # training.py sorts *report files* by mtime, not model directories
@@ -55,6 +55,7 @@ SCAN_DIRS = [
     "qsys/ops",
     "qsys/live",
     "qsys/model",
+    "configs/strategies",
 ]
 
 
@@ -100,7 +101,7 @@ def main() -> int:
             continue
         for root, _dirs, files in os.walk(scan_path):
             for f in files:
-                if not f.endswith(".py"):
+                if not f.endswith((".py", ".yaml", ".yml")):
                     continue
                 path = Path(root) / f
                 file_rel = str(path.relative_to(PROJECT_ROOT))

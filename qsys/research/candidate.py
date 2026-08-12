@@ -8,6 +8,9 @@ daily ops, backtesting, or production trading is included.
 from __future__ import annotations
 
 import json
+import hashlib
+import os
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -21,6 +24,7 @@ _REQUIRED_DOTTED_FIELDS = (
     "signal_ref.signal_id",
     "signal_ref.signal_run_id",
     "strategy.strategy_config_id",
+    "strategy.strategy_id",
     "strategy.strategy_template_id",
     "backtest_ref.strategy_run_id",
     "backtest_ref.backtest_id",
@@ -49,6 +53,20 @@ def _shadow_pointer_path(research_root: Path) -> Path:
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _write_yaml_atomic(path: Path, payload: dict[str, Any]) -> Path:
+    """Atomically publish one YAML artifact; readers never see partial files."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        "w", delete=False, dir=str(path.parent), encoding="utf-8"
+    ) as handle:
+        yaml.safe_dump(
+            payload, handle, sort_keys=False, allow_unicode=True
+        )
+        temp_name = handle.name
+    os.replace(temp_name, path)
+    return path
 
 
 # ── Core functions ──────────────────────────────────────────────────────
@@ -105,7 +123,9 @@ def build_candidate_payload(
             "signal_run_id": signal_ref.get("signal_run_id", ""),
         },
         "strategy": {
+            "strategy_id": strategy.get("strategy_id", ""),
             "strategy_config_id": strategy.get("strategy_config_id", ""),
+            "strategy_config_path": strategy.get("strategy_config_path", ""),
             "strategy_template_id": strategy.get("strategy_template_id", ""),
             "top_n": strategy.get("top_n"),
             "rebalance_freq": strategy.get("rebalance_freq"),
@@ -180,12 +200,7 @@ def write_candidate(
             f"(use overwrite=True or --overwrite to replace)"
         )
 
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        yaml.safe_dump(candidate, sort_keys=False, allow_unicode=True),
-        encoding="utf-8",
-    )
-    return path
+    return _write_yaml_atomic(path, candidate)
 
 
 def load_candidate(
@@ -304,6 +319,7 @@ def promote_candidate_to_shadow(
     research_root: str | Path = "data/research",
     promoted_by: str = "manual",
     overwrite_pointer: bool = False,
+    project_root: str | Path | None = None,
 ) -> dict[str, Any]:
     """Promote a candidate to shadow and write the promotion pointer.
 
@@ -329,6 +345,7 @@ def promote_candidate_to_shadow(
         The promotion pointer dict that was written.
     """
     root = Path(research_root)
+    project = Path(project_root or Path.cwd()).resolve()
     candidate = load_candidate(candidate_id, research_root=root)
 
     # Validate
@@ -349,13 +366,62 @@ def promote_candidate_to_shadow(
 
     now = _now_iso()
     candidate_path = _candidate_path(root, candidate_id)
+    candidate_path_resolved = candidate_path.resolve()
+    try:
+        candidate_path_ref = candidate_path_resolved.relative_to(project).as_posix()
+    except ValueError as exc:
+        raise ValueError(
+            f"Candidate path escapes project root: {candidate_path_resolved}"
+        ) from exc
+
+    strategy_id = str(_get_nested(candidate, "strategy.strategy_id"))
+    config_path_value = str(
+        _get_nested(candidate, "strategy.strategy_config_path")
+        or f"configs/strategies/{strategy_id}.yaml"
+    )
+    config_path = Path(config_path_value)
+    if not config_path.is_absolute():
+        config_path = project / config_path
+    config_path = config_path.resolve()
+    try:
+        config_relative = config_path.relative_to(project).as_posix()
+    except ValueError as exc:
+        raise ValueError(
+            f"Strategy config escapes project root: {config_path}"
+        ) from exc
+    if not config_path.is_file():
+        raise FileNotFoundError(f"Strategy config not found: {config_path}")
+
+    from qsys.ops.model_resolver import resolve_model_for_strategy
+
+    resolved_model = resolve_model_for_strategy(
+        project_root=project,
+        strategy_id=strategy_id,
+        mode="shadow",
+    )
+    runtime_binding = {
+        "strategy_id": strategy_id,
+        "strategy_config_path": config_relative,
+        "strategy_config_sha256": hashlib.sha256(config_path.read_bytes()).hexdigest(),
+        "model_ref": {
+            "mode": "shadow",
+            "model_id": resolved_model.model_id,
+            "model_path": resolved_model.model_path.relative_to(project).as_posix(),
+            "artifact_hash": resolved_model.artifact_hash,
+            "pointer_path": resolved_model.pointer_path.relative_to(project).as_posix(),
+            "pointer_sha256": hashlib.sha256(
+                resolved_model.pointer_path.read_bytes()
+            ).hexdigest(),
+        },
+    }
 
     # Build pointer payload
     pointer: dict[str, Any] = {
         "artifact_type": "shadow_promotion_pointer",
         "promotion_target": "shadow",
         "candidate_id": candidate_id,
-        "candidate_path": str(candidate_path),
+        "candidate_path": candidate_path_ref,
+        "runtime_binding": runtime_binding,
         "signal_ref": {
             "signal_id": _get_nested(candidate, "signal_ref.signal_id"),
             "signal_run_id": _get_nested(candidate, "signal_ref.signal_run_id"),
@@ -373,19 +439,12 @@ def promote_candidate_to_shadow(
     candidate["promotion_target"] = "shadow"
     candidate["promoted_at"] = now
     candidate["promoted_by"] = promoted_by
+    candidate["runtime_binding"] = runtime_binding
 
     # Write updated candidate back
-    candidate_path.parent.mkdir(parents=True, exist_ok=True)
-    candidate_path.write_text(
-        yaml.safe_dump(candidate, sort_keys=False, allow_unicode=True),
-        encoding="utf-8",
-    )
+    _write_yaml_atomic(candidate_path, candidate)
 
     # Write pointer
-    pointer_path.parent.mkdir(parents=True, exist_ok=True)
-    pointer_path.write_text(
-        yaml.safe_dump(pointer, sort_keys=False, allow_unicode=True),
-        encoding="utf-8",
-    )
+    _write_yaml_atomic(pointer_path, pointer)
 
     return pointer

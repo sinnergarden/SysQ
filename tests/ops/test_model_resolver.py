@@ -9,8 +9,8 @@ Covers:
 6. model_path escapes project_root → fail-fast
 7. write_model_pointer writes shadow pointer correctly
 8. write_model_pointer writes prod pointer
-9. backward compat: legacy models/latest_shadow_model.json
-10. backward compat: missing legacy pointer → fail-fast
+9. legacy models/latest_shadow_model.json is ignored
+10. symlinked model paths are rejected
 """
 
 from __future__ import annotations
@@ -39,6 +39,7 @@ def tmp_project(tmp_path: Path) -> Path:
     """Create a temporary project root with a mock model directory."""
     model_dir = tmp_path / "experiments" / "alpha_v1_models" / "my_trained_model"
     model_dir.mkdir(parents=True, exist_ok=True)
+    (model_dir / "model.bin").write_bytes(b"model-artifact")
     return tmp_path
 
 
@@ -155,15 +156,10 @@ class TestResolveModel:
 
     def test_resolve_model_path_missing(self, tmp_project: Path) -> None:
         """5. Model path on disk missing → FileNotFoundError."""
-        _write_valid_pointer(
-            tmp_project,
-            model_path="experiments/alpha_v1_models/nonexistent",
-        )
         with pytest.raises(FileNotFoundError):
-            resolve_model_for_strategy(
-                project_root=tmp_project,
-                strategy_id="alpha_v1",
-                mode="shadow",
+            _write_valid_pointer(
+                tmp_project,
+                model_path="experiments/alpha_v1_models/nonexistent",
             )
 
     def test_resolve_model_path_escape(self, tmp_project: Path) -> None:
@@ -171,15 +167,11 @@ class TestResolveModel:
         # Create a model outside the project root
         outside = tmp_project.parent / "outside_model"
         outside.mkdir(parents=True, exist_ok=True)
-        _write_valid_pointer(
-            tmp_project,
-            model_path=str(outside),
-        )
-        with pytest.raises(ValueError, match="escapes project root"):
-            resolve_model_for_strategy(
-                project_root=tmp_project,
-                strategy_id="alpha_v1",
-                mode="shadow",
+        (outside / "model.bin").write_bytes(b"outside")
+        with pytest.raises(ValueError, match="must be relative"):
+            _write_valid_pointer(
+                tmp_project,
+                model_path=str(outside),
             )
 
     def test_resolve_prod_pointer_shadow_no_fallback(self, tmp_project: Path) -> None:
@@ -190,6 +182,22 @@ class TestResolveModel:
                 project_root=tmp_project,
                 strategy_id="alpha_v1",
                 mode="prod",
+            )
+
+    def test_unapproved_pointer_is_rejected(self, tmp_project: Path) -> None:
+        write_model_pointer(
+            project_root=tmp_project,
+            strategy_id="alpha_v1",
+            mode="shadow",
+            model_id="pending_model",
+            model_path="experiments/alpha_v1_models/my_trained_model",
+            status="pending",
+        )
+        with pytest.raises(ValueError, match="status must be 'approved'"):
+            resolve_model_for_strategy(
+                project_root=tmp_project,
+                strategy_id="alpha_v1",
+                mode="shadow",
             )
 
 
@@ -213,7 +221,7 @@ class TestWriteAndReadPointer:
 
         # Verify content
         payload = json.loads(path.read_text())
-        assert payload["schema_version"] == 1
+        assert payload["schema_version"] == 2
         assert payload["strategy_id"] == "alpha_v1"
         assert payload["mode"] == "shadow"
         assert payload["model_id"] == "alpha_v1_20260704"
@@ -283,16 +291,14 @@ class TestPointerMalformed:
 
 class TestBackwardCompat:
     def test_legacy_pointer_resolve(self, tmp_project: Path) -> None:
-        """9. Legacy models/latest_shadow_model.json resolves for alpha_v1/shadow."""
+        """9. Legacy latest pointer is never consulted."""
         _write_legacy_pointer(tmp_project)
-        resolved = resolve_model_for_strategy(
-            project_root=tmp_project,
-            strategy_id="alpha_v1",
-            mode="shadow",
-        )
-        assert isinstance(resolved, ResolvedModel)
-        assert resolved.model_path.name == "my_trained_model"
-        assert resolved.model_id == "alpha_v1_20260704"
+        with pytest.raises(FileNotFoundError):
+            resolve_model_for_strategy(
+                project_root=tmp_project,
+                strategy_id="alpha_v1",
+                mode="shadow",
+            )
 
     def test_legacy_pointer_missing_for_non_alpha_v1(
         self, tmp_project: Path
@@ -352,6 +358,30 @@ class TestBackwardCompat:
                 project_root=tmp_project,
                 strategy_id="alpha_v1",
                 mode="shadow",
+            )
+
+    def test_symlink_model_directory_is_rejected(self, tmp_project: Path) -> None:
+        target = tmp_project / "experiments" / "alpha_v1_models" / "real"
+        target.mkdir(parents=True)
+        (target / "model.bin").write_bytes(b"real")
+        link = tmp_project / "experiments" / "alpha_v1_models" / "latest"
+        link.symlink_to(target, target_is_directory=True)
+        with pytest.raises(ValueError, match="symlink components"):
+            _write_valid_pointer(
+                tmp_project,
+                model_path="experiments/alpha_v1_models/latest",
+            )
+
+    def test_symlink_parent_component_is_rejected(self, tmp_project: Path) -> None:
+        real = tmp_project / "real_models/model_v1"
+        real.mkdir(parents=True)
+        (real / "model.bin").write_bytes(b"real")
+        parent = tmp_project / "experiments/linked_models"
+        parent.symlink_to(tmp_project / "real_models", target_is_directory=True)
+        with pytest.raises(ValueError, match="symlink components"):
+            _write_valid_pointer(
+                tmp_project,
+                model_path="experiments/linked_models/model_v1",
             )
 
 

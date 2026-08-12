@@ -47,6 +47,11 @@ data/feature_cache/matrices/{feature_list_id}/{matrix_hash}.parquet
 
 **用途**：同一 feature_list_id 在多个实验中重复出现时的优化。
 
+Rolling LightGBM 的 per-window matrix cache 必须使用内容身份，不得只用
+日期区间命名。当前 identity 同时绑定 schema/builder version、
+`source_manifest_hash`、universe、feature-list ID、有序 feature 列表与窗口起止日。
+开启该 cache 时，缺少显式 feature-list 或 source manifest hash 必须 fail closed。
+
 ### Per-feature cache（未来扩展）
 
 当前不作为主路径，留作扩展。

@@ -123,6 +123,62 @@ def _check_stock_data_status(store: StockDataStore, codes: list[str], target_dt:
     }
 
 
+def _resolve_catchup_start(
+    adapter: QlibAdapter,
+    store: StockDataStore,
+    target_dt: str,
+) -> str:
+    """Return the first open session missing from the qlib materialized view.
+
+    The qlib calendar is the durable watermark for the last completed
+    conversion.  The canonical trade calendar is used to step forward because
+    a stale qlib calendar cannot resolve sessions that have not been converted
+    yet.  If the two calendars cannot establish a safe interval, fail closed
+    instead of guessing with weekday dates.
+    """
+    cal_path = adapter.qlib_dir / "calendars" / "day.txt"
+    if not cal_path.exists():
+        return target_dt
+
+    qlib_dates = [
+        line.strip().replace("-", "")
+        for line in cal_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    if not qlib_dates:
+        return target_dt
+
+    qlib_latest = max(qlib_dates)
+    if qlib_latest >= target_dt:
+        return target_dt
+
+    calendar = store.get_calendar()
+    if calendar is None or calendar.empty:
+        raise ValueError(
+            "Cannot resolve catch-up window: canonical trade calendar is empty"
+        )
+    required = {"cal_date", "is_open"}
+    if not required.issubset(calendar.columns):
+        raise ValueError(
+            "Cannot resolve catch-up window: canonical trade calendar lacks "
+            f"columns {sorted(required - set(calendar.columns))}"
+        )
+
+    open_dates = sorted(
+        calendar.loc[calendar["is_open"] == 1, "cal_date"]
+        .astype(str)
+        .str.replace("-", "", regex=False)
+        .loc[lambda values: (values > qlib_latest) & (values <= target_dt)]
+        .tolist()
+    )
+    if not open_dates:
+        raise ValueError(
+            "Cannot resolve catch-up window from canonical calendar: "
+            f"qlib_latest={qlib_latest}, target={target_dt}"
+        )
+    return open_dates[0]
+
+
 # Index codes refreshed daily alongside stock data
 _INDEX_CODES = [
     "000001.SH", "000300.SH", "000905.SH", "000852.SH",
@@ -200,9 +256,15 @@ def _update_index_daily(collector: TushareCollector, target_dt: str) -> dict:
     return results
 
 
-def _do_raw_fetch(collector: TushareCollector, codes: list[str], target_dt: str) -> dict:
+def _do_raw_fetch(
+    collector: TushareCollector,
+    codes: list[str],
+    target_dt: str,
+    *,
+    since_date: str | None = None,
+) -> dict:
     """
-    Fetch raw data for target date for the given codes.
+    Fetch raw data from ``since_date`` through the target date.
     Uses optimized path: batch-fetch daily/adj/moneyflow by date loop,
     per-stock loop for daily_basic/stk_limit/margin (Tushare API constraints).
     """
@@ -217,7 +279,7 @@ def _do_raw_fetch(collector: TushareCollector, codes: list[str], target_dt: str)
         # The batch-size is set to 200 to maximize batch API efficiency.
         collector.update_universe_history(
             universe=codes,  # pass the list directly (get_universe handles list)
-            start_date=target_dt,
+            start_date=since_date or target_dt,
             end_date=target_dt,
             incremental=False,
             batch_size=200,
@@ -225,7 +287,13 @@ def _do_raw_fetch(collector: TushareCollector, codes: list[str], target_dt: str)
             include_margin=True,
         )
         elapsed = time.time() - t0
-        return {"status": "success", "codes_fetched": len(codes), "elapsed_s": round(elapsed, 1)}
+        return {
+            "status": "success",
+            "codes_fetched": len(codes),
+            "since_date": since_date or target_dt,
+            "target_date": target_dt,
+            "elapsed_s": round(elapsed, 1),
+        }
     except Exception as e:
         elapsed = time.time() - t0
         log.error(f"Raw fetch failed: {e}")
@@ -374,6 +442,12 @@ def main() -> None:
     t0 = time.time()
     collector = TushareCollector()
     store = StockDataStore()
+    catchup_start = _resolve_catchup_start(adapter, store, target_dt)
+    report["catchup_window"] = {
+        "start_date": catchup_start,
+        "target_date": target_dt,
+        "is_catchup": catchup_start < target_dt,
+    }
     codes = collector.get_universe("csi800")
     step1 = {"constituent_count": len(codes), "elapsed_s": round(time.time() - t0, 1)}
     report["steps"]["get_universe"] = step1
@@ -402,10 +476,22 @@ def main() -> None:
     t0 = time.time()
     raw_summary = {"skipped": True, "reason": "all_up_to_date", "elapsed_s": 0}
     if do_apply:
-        if not status_check["missing"]:
+        fetch_codes = codes if catchup_start < target_dt else status_check["missing"]
+        if not fetch_codes:
             log.info("All stocks up to date, skipping raw fetch.")
         else:
-            raw_summary = _do_raw_fetch(collector, status_check["missing"], target_dt)
+            if catchup_start < target_dt:
+                log.info(
+                    "Catch-up window detected: %s -> %s; fetching full universe",
+                    catchup_start,
+                    target_dt,
+                )
+            raw_summary = _do_raw_fetch(
+                collector,
+                fetch_codes,
+                target_dt,
+                since_date=catchup_start,
+            )
         report["steps"]["raw_fetch"] = raw_summary
     else:
         if status_check["need_fetch"] > 0:
@@ -425,7 +511,9 @@ def main() -> None:
     # Step 5: Qlib convert
     qlib_summary = {"mode": "skipped", "status": "skipped"}
     if do_apply and not args.no_qlib_convert:
-        since = target_date
+        since = (
+            f"{catchup_start[:4]}-{catchup_start[4:6]}-{catchup_start[6:]}"
+        )
         try:
             t1 = time.time()
             adapter.convert_incremental(since)

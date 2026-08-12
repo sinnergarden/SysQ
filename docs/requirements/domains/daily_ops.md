@@ -31,8 +31,8 @@ stable
 ### Inputs
 - 行情数据（canonical daily / qlib_bin）
 - 策略配置
-- 模型 pointer（`artifacts/registry/models/{strategy_id}/shadow.json` 或 legacy pointer）
-- promotion pointer（`data/research/promotions/shadow.yaml`）
+- 模型 pointer（仅 `artifacts/registry/models/{strategy_id}/shadow.json`）
+- promotion pointer（`data/research/promotions/shadow.yaml`，必须绑定 strategy/config/model hash）
 
 ### Outputs
 - `data/canonical/daily/` — 规范行情数据
@@ -45,7 +45,7 @@ stable
 ### Canonical Entrypoints
 - `scripts/data_sync.py` — 数据同步
 - `scripts/run_daily.py --mode preopen|postclose` — 盘前/盘后
-- `scripts/run_daily_batch.py` — 批量 wrapper，非独立 canonical entrypoint
+- `scripts/run_daily_batch.py` — 批量 wrapper，只调度 shadow pointer 真正指向的策略
 
 对齐 `docs/USE_CASES.md` §7。
 
@@ -58,8 +58,8 @@ stable
 ### Required Checks
 - `harness/checks/check_model_resolution_boundary.py`
 - `harness/checks/check_no_latest_model_resolution.py`
-- TBD: daily artifact schema check
-- TBD: preopen/postclose stage integrity check
+- `validate_daily_stage_manifest()`：独立复核日期、策略、stage status；子进程 exit 0 不能代替 manifest
+- preopen 内部任一阶段失败必须非零退出，且成功后才写 active attempt
 
 ### Owner Agent
 operator_agent
@@ -67,6 +67,8 @@ operator_agent
 ### Allowed Paths
 - `scripts/data_sync.py`
 - `scripts/run_daily.py`
+- `scripts/run_daily_batch.py`
+- `scripts/ops/sync_csi800_daily.py`
 - `qsys/ops/`
 - `configs/strategies/`
 - `harness/checks/`

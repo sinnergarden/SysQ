@@ -69,13 +69,13 @@ class TestArgParsing(unittest.TestCase):
         self.assertTrue(args.force_rerun)
         self.assertEqual(args.reason, "验证测试")
 
-    def test_trade_date_required_for_preopen(self):
-        with self.assertRaises(SystemExit):
-            parse_args(["--strategy", "alpha_v1", "--mode", "preopen"])
+    def test_trade_date_defaults_for_preopen(self):
+        args = parse_args(["--strategy", "alpha_v1", "--mode", "preopen"])
+        self.assertIsNotNone(args.trade_date)
 
-    def test_trade_date_required_for_postclose(self):
-        with self.assertRaises(SystemExit):
-            parse_args(["--strategy", "alpha_v1", "--mode", "postclose"])
+    def test_trade_date_defaults_for_postclose(self):
+        args = parse_args(["--strategy", "alpha_v1", "--mode", "postclose"])
+        self.assertIsNotNone(args.trade_date)
 
     def test_notify_only(self):
         args = parse_args([
@@ -84,9 +84,9 @@ class TestArgParsing(unittest.TestCase):
         ])
         self.assertTrue(args.notify_only)
 
-    def test_notify_only_without_trade_date_fails(self):
-        with self.assertRaises(SystemExit):
-            parse_args(["--strategy", "alpha_v1", "--notify-only"])
+    def test_notify_only_without_trade_date_defaults(self):
+        args = parse_args(["--strategy", "alpha_v1", "--notify-only"])
+        self.assertIsNotNone(args.trade_date)
 
     def test_mode_default_preopen(self):
         args = parse_args(["--strategy", "alpha_v1", "--trade-date", "2026-05-22"])
@@ -110,9 +110,16 @@ class TestArgParsing(unittest.TestCase):
         args = parse_args([
             "--strategy", "alpha_v1", "--mode", "preopen",
             "--trade-date", "2026-05-22",
-            "--output-dir", "/tmp/test_out",
+            "--debug-run", "--output-dir", "/tmp/test_out",
         ])
         self.assertEqual(args.output_dir, "/tmp/test_out")
+
+    def test_output_dir_without_debug_is_rejected(self):
+        with self.assertRaises(SystemExit):
+            parse_args([
+                "--strategy", "alpha_v1", "--mode", "preopen",
+                "--trade-date", "2026-05-22", "--output-dir", "/tmp/test_out",
+            ])
 
     def test_strategy_is_required(self):
         with self.assertRaises(SystemExit):
@@ -121,6 +128,28 @@ class TestArgParsing(unittest.TestCase):
 
 class TestDispatch(unittest.TestCase):
     """Verify run_daily_main dispatches to the correct runner method."""
+
+    def setUp(self):
+        self._patches = [
+            patch(
+                "scripts.run_daily.resolve_shadow_promotion",
+                return_value={"strategy_id": "alpha_v1", "candidate_id": "cand_test"},
+            ),
+            patch("scripts.run_daily.validate_daily_stage_manifest"),
+            patch("scripts.run_daily.snapshot_promotion_pointer"),
+            patch("scripts.run_daily.read_active_attempt", return_value=None),
+            patch("scripts.run_daily.resolve_promotion_snapshot", return_value={
+                "candidate_id": "cand_test",
+                "promotion_pointer_path": "data/research/promotions/shadow.yaml",
+            }),
+            patch("scripts.run_daily.write_active_attempt"),
+        ]
+        for item in self._patches:
+            item.start()
+
+    def tearDown(self):
+        for item in reversed(self._patches):
+            item.stop()
 
     @patch("scripts.run_daily.DailyRunner")
     @patch("scripts.run_daily.create_strategy")
@@ -172,8 +201,11 @@ class TestDispatch(unittest.TestCase):
     @patch("scripts.run_daily.create_strategy")
     @patch("scripts.run_daily.load_strategy_config")
     @patch("scripts.run_daily.resolve_run_root")
+    @patch("scripts.run_daily.read_active_attempt", return_value={
+        "attempt_id": "attempt-1", "attempt_seq": 1,
+    })
     def test_dispatch_postclose(
-        self, mock_resolve_root, mock_load_cfg,
+        self, mock_active, mock_resolve_root, mock_load_cfg,
         mock_create, mock_runner_cls,
     ):
         mock_strategy = mock_create.return_value
@@ -286,7 +318,7 @@ class TestDispatch(unittest.TestCase):
 
         run_daily_main([
             "--strategy", "alpha_v1", "--mode", "train",
-            "--output-dir", "/tmp/my_train_run",
+            "--debug-run", "--output-dir", "/tmp/my_train_run",
         ])
 
         ctx = mock_runner.run_train.call_args[0][0]
@@ -338,6 +370,28 @@ class TestDispatch(unittest.TestCase):
 class TestAlphaV2Dispatch(unittest.TestCase):
     """Verify alpha_v2 dispatches through run_daily_main."""
 
+    def setUp(self):
+        self._patches = [
+            patch(
+                "scripts.run_daily.resolve_shadow_promotion",
+                return_value={"strategy_id": "alpha_v2", "candidate_id": "cand_test"},
+            ),
+            patch("scripts.run_daily.validate_daily_stage_manifest"),
+            patch("scripts.run_daily.snapshot_promotion_pointer"),
+            patch("scripts.run_daily.read_active_attempt", return_value=None),
+            patch("scripts.run_daily.resolve_promotion_snapshot", return_value={
+                "candidate_id": "cand_test",
+                "promotion_pointer_path": "data/research/promotions/shadow.yaml",
+            }),
+            patch("scripts.run_daily.write_active_attempt"),
+        ]
+        for item in self._patches:
+            item.start()
+
+    def tearDown(self):
+        for item in reversed(self._patches):
+            item.stop()
+
     @patch("scripts.run_daily.DailyRunner")
     @patch("scripts.run_daily.create_strategy")
     @patch("scripts.run_daily.load_strategy_config")
@@ -380,8 +434,11 @@ class TestAlphaV2Dispatch(unittest.TestCase):
     @patch("scripts.run_daily.create_strategy")
     @patch("scripts.run_daily.load_strategy_config")
     @patch("scripts.run_daily.resolve_run_root")
+    @patch("scripts.run_daily.read_active_attempt", return_value={
+        "attempt_id": "attempt-1", "attempt_seq": 1,
+    })
     def test_dispatch_alpha_v2_postclose(
-        self, mock_resolve_root, mock_load_cfg, mock_create, mock_runner_cls,
+        self, mock_active, mock_resolve_root, mock_load_cfg, mock_create, mock_runner_cls,
     ):
         """Alpha v2 postclose mode dispatches to DailyRunner.run_postclose."""
         mock_strat = mock_create.return_value

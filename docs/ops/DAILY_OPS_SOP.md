@@ -52,6 +52,12 @@ current CSI800 constituents snapshot，因此只能视为 research artifact，�
 
 `--trade-date auto` 取机器本地当天日期（`datetime.now().strftime("%Y-%m-%d")`），用于避免 systemd ExecStart 中的 shell 展开 `$(date ...)`。交易日历感知是后续改进。
 `--debug-run` 不修改 shadow/account.json / positions.csv / ledger.csv。`run_daily_batch.py` 另有 `--dry-run` 仅打印将要调度的策略而不执行。
+
+systemd 传入的 `--output-root runs` 只控制 batch summary 位置。正式子进程仍使用
+`experiments/{strategy_id}_daily/{trade_date}` 的 canonical run root；仅
+`--debug-run` 可把子进程产物重定向到 output root。Batch 只调度
+`shadow.yaml` 绑定的单一策略，并在子进程成功后独立验证
+`daily_manifest.json`。
 `--no-notify` 跳过 Telegram 通知（debug-run 默认行为，也可手动指定）。
 
 

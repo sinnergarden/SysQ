@@ -47,6 +47,8 @@ from qsys.strategy.spec import (
     validate_stage,
 )
 from qsys.strategy.registry import get_strategy_class
+from qsys.ops.daily_artifacts import validate_daily_stage_manifest
+from qsys.ops.promotion_resolver import resolve_shadow_promotion
 
 BATCH_STAGES = {"candidate", "production"}
 SUPPORTED_MODES = {"preopen", "postclose", "train", "notify-only"}
@@ -115,7 +117,11 @@ def _build_command(
         cmd.append("--debug-run")
     if no_notify:
         cmd.append("--no-notify")
-    if output_root:
+    # ``--output-dir`` is a debug-only escape hatch in run_daily.py.  For a
+    # real shadow run, output_root controls only the batch summary location;
+    # each child must use its canonical run root so committed/ledger gates
+    # cannot be bypassed.
+    if output_root and debug_run:
         out_dir = str(Path(output_root) / trade_date / strategy_id)
         cmd.extend(["--output-dir", out_dir])
     if triggered_by and triggered_by != "manual":
@@ -130,6 +136,63 @@ def _build_command(
 def _command_preview(cmd: list[str]) -> str:
     """Return a human-readable preview of the command."""
     return " ".join(cmd)
+
+
+def _expected_run_root(
+    strategy_id: str,
+    mode: str,
+    trade_date: str,
+    *,
+    debug_run: bool,
+    output_root: str | None,
+) -> Path:
+    if debug_run and output_root:
+        return Path(output_root) / trade_date / strategy_id
+    if mode == "train":
+        return PROJECT_ROOT / "experiments" / f"{strategy_id}_train" / trade_date
+    return PROJECT_ROOT / "experiments" / f"{strategy_id}_daily" / trade_date
+
+
+def _validate_child_artifact(
+    *,
+    strategy_id: str,
+    mode: str,
+    trade_date: str,
+    run_root: Path,
+) -> None:
+    """Require canonical evidence in addition to subprocess exit status."""
+    if mode in {"preopen", "postclose"}:
+        validate_daily_stage_manifest(
+            run_root,
+            trade_date=trade_date,
+            strategy_id=strategy_id,
+            stage=mode,
+        )
+        return
+    if mode == "notify-only":
+        manifest = run_root / "daily_manifest.json"
+        if not manifest.is_file():
+            raise RuntimeError(
+                f"notify-only completed without an existing daily manifest: {manifest}"
+            )
+        return
+    if mode == "train":
+        result_path = run_root / "training_result.json"
+        if not result_path.is_file():
+            raise RuntimeError(
+                f"train completed without training_result.json: {result_path}"
+            )
+        try:
+            payload = json.loads(result_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            raise RuntimeError(
+                f"training result is unreadable: {result_path}: {exc}"
+            ) from exc
+        if payload.get("status") != "success":
+            raise RuntimeError(
+                f"training result is not successful: {result_path}: "
+                f"status={payload.get('status')!r}"
+            )
 
 
 # ── Core dispatch ───────────────────────────────────────────────────────
@@ -165,7 +228,8 @@ def run_batch(
     trade_date : str or None
         Target date (``YYYY-MM-DD`` or ``auto``).  Defaults to today.
     output_root : str or None
-        Root directory for per-strategy output.
+        Root directory for the batch summary.  Child output is redirected under
+        this root only for ``debug_run``; real runs always use canonical roots.
     config_root : str or None
         Root directory for strategy YAML configs.  Defaults to
         ``configs/strategies/``.
@@ -228,6 +292,30 @@ def run_batch(
     specs = load_strategy_specs_for_stage(
         stage, cfg_root, registry_required=False,
     )
+
+    if stage == "candidate" and run_mode == "shadow":
+        pointer_path = Path(
+            promotion_pointer
+            or PROJECT_ROOT / "data/research/promotions/shadow.yaml"
+        )
+        promotion = resolve_shadow_promotion(
+            pointer_path,
+            project_root=PROJECT_ROOT,
+        )
+        promoted_strategy_id = str(promotion["strategy_id"])
+        if strategy_filter and promoted_strategy_id not in set(strategy_filter):
+            raise ValueError(
+                "Requested candidate strategies do not include the promoted "
+                f"shadow strategy {promoted_strategy_id!r}"
+            )
+        specs = [
+            spec for spec in specs if spec.strategy_id == promoted_strategy_id
+        ]
+        if not specs:
+            raise ValueError(
+                f"Promoted shadow strategy {promoted_strategy_id!r} has no "
+                f"candidate config under {cfg_root}"
+            )
 
     if strategy_filter:
         filter_set = set(strategy_filter)
@@ -312,7 +400,7 @@ def run_batch(
             strat_result = {
                 "strategy_id": spec.strategy_id,
                 "stage": spec.stage,
-                "status": "skipped",
+                "status": "failed",
                 "run_root": None,
                 "duration_sec": time.time() - strat_start,
                 "command": preview,
@@ -336,25 +424,54 @@ def run_batch(
                 timeout=3600,
             )
             duration = time.time() - strat_start
-            run_root = (
-                str(Path(output_root) / trade_date_resolved / spec.strategy_id)
-                if output_root else None
+            run_root_path = _expected_run_root(
+                spec.strategy_id,
+                mode,
+                trade_date_resolved,
+                debug_run=debug_run,
+                output_root=output_root,
             )
+            run_root = str(run_root_path)
 
             if result.returncode == 0:
-                strat_result = {
-                    "strategy_id": spec.strategy_id,
-                    "stage": spec.stage,
-                    "status": "success",
-                    "run_root": run_root,
-                    "duration_sec": round(duration, 3),
-                    "command": preview,
-                    "error": None,
-                }
-                print(f"    ✓ {spec.strategy_id} completed ({duration:.1f}s)")
+                try:
+                    _validate_child_artifact(
+                        strategy_id=spec.strategy_id,
+                        mode=mode,
+                        trade_date=trade_date_resolved,
+                        run_root=run_root_path,
+                    )
+                except Exception as artifact_error:
+                    strat_result = {
+                        "strategy_id": spec.strategy_id,
+                        "stage": spec.stage,
+                        "status": "failed",
+                        "run_root": run_root,
+                        "duration_sec": round(duration, 3),
+                        "command": preview,
+                        "error": str(artifact_error),
+                    }
+                    failed += 1
+                    print(
+                        f"    ✗ {spec.strategy_id} missing/invalid evidence "
+                        f"({duration:.1f}s)"
+                    )
+                else:
+                    strat_result = {
+                        "strategy_id": spec.strategy_id,
+                        "stage": spec.stage,
+                        "status": "success",
+                        "run_root": run_root,
+                        "duration_sec": round(duration, 3),
+                        "command": preview,
+                        "error": None,
+                    }
+                    print(f"    ✓ {spec.strategy_id} completed ({duration:.1f}s)")
             else:
-                stdout = result.stdout[-500:] if result.stdout else ""
-                stderr = result.stderr[-500:] if result.stderr else ""
+                # Preserve enough tail to include the chained exception's
+                # root-cause line, not only the final traceback frames.
+                stdout = result.stdout[-4000:] if result.stdout else ""
+                stderr = result.stderr[-4000:] if result.stderr else ""
                 error_detail = (stderr or stdout).strip()
                 strat_result = {
                     "strategy_id": spec.strategy_id,
@@ -528,7 +645,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--output-root", default=None,
-        help="Root directory for per-strategy output and batch summary",
+        help=(
+            "Batch summary root; child output is redirected only with "
+            "--debug-run (real runs keep canonical roots)"
+        ),
     )
     parser.add_argument(
         "--config-root", default=None,

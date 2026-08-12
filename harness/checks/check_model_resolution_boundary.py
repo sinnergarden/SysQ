@@ -18,7 +18,6 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 EXPECTED_RESOLVER_USE: dict[str, str] = {
     "qsys/strategy/alpha_v1/adapter.py": "resolve_model_for_strategy",
-    "qsys/strategy/alpha_v2/adapter.py": "resolve_model_for_strategy",
     "qsys/ops/daily_runner.py": "resolve_model_for_strategy",
 }
 

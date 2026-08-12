@@ -32,7 +32,6 @@ promotion_gates:
   observation_days: 5
 
 paths:
-  model_dir: experiments/alpha_v2_models/latest
   predictions_dir: experiments/alpha_v2_shadow_predictions
   ledger_db: data/trade.db
 

@@ -81,7 +81,14 @@ def _register_fake_strategies():
     for sid in test_ids:
         if sid not in existing:
             reg.register(sid, FakeAdapter)
-    yield
+    promotion = {
+        "strategy_id": "alpha_v1",
+        "candidate_id": "cand_test",
+    }
+    with patch.object(
+        batch_module, "resolve_shadow_promotion", return_value=promotion
+    ), patch.object(batch_module, "_validate_child_artifact"):
+        yield
     # Cleanup: remove any IDs we added
     for sid in test_ids:
         if sid not in existing:
@@ -122,7 +129,7 @@ class TestStageFilter:
             dry_run=True,
         )
         ids = {s["strategy_id"] for s in summary["strategies"]}
-        assert ids == {"alpha_v1", "alpha_v2"}
+        assert ids == {"alpha_v1"}
         assert summary["stage"] == "candidate"
 
     def test_selects_production_only(self, fake_config_dir: Path):
@@ -194,17 +201,50 @@ class TestUnregisteredStrategy:
             "universe": "csi300",
         }), encoding="utf-8")
 
-        summary = run_batch(
-            stage="candidate",
-            mode="preopen",
-            trade_date="2026-05-22",
-            config_root=str(isolated_dir),
-            dry_run=True,
-        )
+        with patch.object(
+            batch_module,
+            "resolve_shadow_promotion",
+            return_value={"strategy_id": "unregistered_foo"},
+        ):
+            summary = run_batch(
+                stage="candidate",
+                mode="preopen",
+                trade_date="2026-05-22",
+                config_root=str(isolated_dir),
+                dry_run=True,
+            )
         # unregistered_foo is listed in dry_run (registry check skipped in dry_run)
         assert len(summary["strategies"]) == 1
         assert summary["strategies"][0]["strategy_id"] == "unregistered_foo"
         assert summary["strategies"][0]["status"] == "dry_run"
+
+    def test_unregistered_promoted_candidate_fails_batch(self, tmp_path: Path):
+        import yaml
+
+        isolated_dir = tmp_path / "configs"
+        isolated_dir.mkdir()
+        (isolated_dir / "unregistered_foo.yaml").write_text(
+            yaml.dump({
+                "strategy_id": "unregistered_foo",
+                "stage": "candidate",
+                "display_name": "Not Registered",
+                "universe": "csi300",
+            }),
+            encoding="utf-8",
+        )
+        with patch.object(
+            batch_module,
+            "resolve_shadow_promotion",
+            return_value={"strategy_id": "unregistered_foo"},
+        ):
+            summary = run_batch(
+                stage="candidate",
+                mode="preopen",
+                trade_date="2026-05-22",
+                config_root=str(isolated_dir),
+            )
+        assert summary["status"] == "failed"
+        assert summary["failed_count"] == 1
 
 
 class TestDryRun:
@@ -241,22 +281,13 @@ class TestDispatch:
             )
 
         successes = [s for s in summary["strategies"] if s["status"] == "success"]
-        assert len(successes) == 2  # alpha_v1 and alpha_v2
+        assert len(successes) == 1  # only the promoted alpha_v1
 
-    def test_failure_isolation(self, fake_config_dir: Path):
-        """One failed strategy does not stop batch with continue-on-error."""
-        call_count = 0
-
-        def _mock_run(*args, **kwargs):
-            nonlocal call_count
-            call_count += 1
-            result = subprocess.CompletedProcess(args[0], 0)
-            if call_count == 1:
-                result.returncode = 1
-                result.stderr = "mock failure"
-            return result
-
-        with patch.object(subprocess, "run", side_effect=_mock_run):
+    def test_promoted_candidate_failure_is_reported(self, fake_config_dir: Path):
+        """A failed promoted strategy makes the batch fail."""
+        with patch.object(subprocess, "run") as mock_run:
+            mock_run.return_value.returncode = 1
+            mock_run.return_value.stderr = "mock failure"
             summary = run_batch(
                 stage="candidate",
                 mode="preopen",
@@ -265,11 +296,9 @@ class TestDispatch:
                 continue_on_error=True,
             )
 
-        statuses = {s["status"] for s in summary["strategies"]}
-        assert "failed" in statuses
-        assert "success" in statuses
-        # Both strategies should have been attempted
-        assert len(summary["strategies"]) == 2
+        assert summary["status"] == "failed"
+        assert len(summary["strategies"]) == 1
+        assert summary["strategies"][0]["status"] == "failed"
 
     def test_fail_fast_stops_after_first_failure(self, fake_config_dir: Path):
         """fail-fast stops dispatching after the first failure."""
@@ -312,6 +341,28 @@ class TestDispatch:
 
         assert summary["status"] in ("failed", "partial_failed")
         assert summary["failed_count"] > 0
+
+    def test_zero_exit_without_valid_manifest_is_failed(
+        self, fake_config_dir: Path
+    ):
+        """Exit zero is insufficient when the child evidence is invalid."""
+        with patch.object(subprocess, "run") as mock_run, patch.object(
+            batch_module,
+            "_validate_child_artifact",
+            side_effect=RuntimeError("manifest missing"),
+        ):
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = "done"
+            mock_run.return_value.stderr = ""
+            summary = run_batch(
+                stage="candidate",
+                mode="preopen",
+                trade_date="2026-05-22",
+                config_root=str(fake_config_dir),
+            )
+
+        assert summary["status"] == "failed"
+        assert "manifest missing" in summary["strategies"][0]["error"]
 
 
 class TestSummaryOutput:
@@ -387,6 +438,20 @@ class TestBuildCommand:
         cmd = _build_command("alpha_v1", "preopen", "2026-05-22", debug_run=True)
         assert "--debug-run" in cmd
 
+    def test_output_root_is_not_forwarded_to_production_child(self):
+        cmd = _build_command(
+            "alpha_v1", "preopen", "2026-05-22", output_root="/tmp/batch"
+        )
+        assert "--output-dir" not in cmd
+
+    def test_output_root_is_forwarded_for_debug_child(self):
+        cmd = _build_command(
+            "alpha_v1", "preopen", "2026-05-22",
+            output_root="/tmp/batch", debug_run=True,
+        )
+        assert "--output-dir" in cmd
+        assert "/tmp/batch/2026-05-22/alpha_v1" in cmd
+
     def test_no_notify_flag(self):
         cmd = _build_command("alpha_v1", "preopen", "2026-05-22", no_notify=True)
         assert "--no-notify" in cmd
@@ -409,18 +474,17 @@ class TestBuildCommand:
 
 
 class TestEdgeCases:
-    def test_no_matching_strategies(self, fake_config_dir: Path):
-        """Batch with no matching strategies returns skipped status."""
-        summary = run_batch(
-            stage="candidate",
-            mode="preopen",
-            trade_date="2026-05-22",
-            config_root=str(fake_config_dir),
-            strategy_filter=["nonexistent"],
-            dry_run=True,
-        )
-        assert summary["status"] == "skipped"
-        assert summary["selected_count"] == 0
+    def test_filter_cannot_exclude_promoted_strategy(self, fake_config_dir: Path):
+        """A filter cannot silently replace the promoted shadow strategy."""
+        with pytest.raises(ValueError, match="do not include the promoted"):
+            run_batch(
+                stage="candidate",
+                mode="preopen",
+                trade_date="2026-05-22",
+                config_root=str(fake_config_dir),
+                strategy_filter=["nonexistent"],
+                dry_run=True,
+            )
 
     def test_research_stage_rejected(self, fake_config_dir: Path):
         """research stage raises ValueError for daily batch."""

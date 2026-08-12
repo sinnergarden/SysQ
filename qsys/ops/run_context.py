@@ -40,6 +40,13 @@ class DailyRunContext:
     signal_id: str | None = None
     signal_run_id: str | None = None
     strategy_config_id: str | None = None
+    strategy_config_path: str | None = None
+    strategy_config_sha256: str | None = None
+    model_id: str | None = None
+    model_path: str | None = None
+    model_artifact_hash: str | None = None
+    model_pointer_path: str | None = None
+    model_pointer_sha256: str | None = None
     strategy_template_id: str | None = None
     strategy_run_id: str | None = None
     backtest_id: str | None = None

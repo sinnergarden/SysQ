@@ -42,7 +42,6 @@ class AlphaV2StrategyAdapter(BaseStrategyAdapter):
 
         # Config overrides (set by from_config)
         self._config_display_name: str | None = None
-        self._config_model_dir: Path | None = None
         self._config_predictions_dir: Path | None = None
         self._config_ledger_db_path: str | None = None
 
@@ -75,8 +74,9 @@ class AlphaV2StrategyAdapter(BaseStrategyAdapter):
 
         raw_model_dir = paths.get("model_dir")
         if raw_model_dir:
-            p = Path(raw_model_dir)
-            self._config_model_dir = p if p.is_absolute() else pr / raw_model_dir
+            raise ValueError(
+                "paths.model_dir is forbidden for candidate/shadow runtime"
+            )
 
         raw_pred_dir = paths.get("predictions_dir")
         if raw_pred_dir:
@@ -106,16 +106,10 @@ class AlphaV2StrategyAdapter(BaseStrategyAdapter):
 
     @property
     def _model_dir(self) -> Path:
-        if self._config_model_dir is not None:
-            return self._config_model_dir
-        from qsys.ops.model_resolver import resolve_model_for_strategy  # noqa: PLC0415
-
-        resolved = resolve_model_for_strategy(
-            project_root=self._project_root,
-            strategy_id="alpha_v2",
-            mode="shadow",
-        )
-        return resolved.model_path
+        # Alpha V2 is a rule-based smoke adapter and has no learned model.
+        # Keep its local metadata in an explicit versioned directory; it must
+        # never participate in approved model-pointer resolution.
+        return self._project_root / "experiments/alpha_v2_models/rule_based_smoke_v1"
 
     @property
     def _predictions_dir(self) -> Path:

@@ -13,7 +13,8 @@ not through latest symlinks or directory mtime sorting.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict
+import hashlib
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
@@ -65,9 +66,9 @@ def resolve_model_for_strategy(
 ) -> ResolvedModel:
     """Resolve approved model for *strategy_id* via explicit pointer only.
 
-    Resolution order (first match wins):
-    1. ``artifacts/registry/models/{strategy_id}/{mode}.json`` (strategy-aware)
-    2. Legacy ``models/latest_shadow_model.json`` (alpha_v1/shadow only, backward compat)
+    Resolution uses only
+    ``artifacts/registry/models/{strategy_id}/{mode}.json``.  Legacy latest
+    pointers and model-directory symlinks are intentionally not consulted.
 
     Returns
     -------
@@ -81,8 +82,9 @@ def resolve_model_for_strategy(
     ValueError
         If pointer contents are structurally invalid.
     """
-    # 1. Strategy-aware pointer
     pointer = pointer_path_for_strategy(project_root, strategy_id, mode)
+    if pointer.is_symlink():
+        raise ValueError(f"Model pointer must not be a symlink: {pointer}")
     if pointer.exists():
         payload = load_json(pointer)
         if not payload:
@@ -91,12 +93,6 @@ def resolve_model_for_strategy(
             )
         _validate_pointer_payload(payload, strategy_id, mode)
         return _build_resolved(project_root, payload, pointer)
-
-    # 2. Backward compat: legacy singleton pointer (alpha_v1/shadow only)
-    if strategy_id == "alpha_v1" and mode == "shadow":
-        legacy = _try_load_legacy_pointer(project_root)
-        if legacy is not None:
-            return _build_resolved(project_root, legacy, pointer)
 
     raise FileNotFoundError(
         f"No approved {mode} model pointer found for strategy '{strategy_id}'. "
@@ -158,8 +154,17 @@ def write_model_pointer(
         The written pointer file path.
     """
     created_at = created_at or _utc_now()
+    if Path(model_path).is_absolute():
+        raise ValueError("Model pointer model_path must be relative to project_root")
+    resolved_model_path = _validate_model_path(project_root, model_path)
+    actual_artifact_hash = compute_model_artifact_hash(resolved_model_path)
+    if artifact_hash and artifact_hash != actual_artifact_hash:
+        raise ValueError(
+            "Refusing to write model pointer with a mismatched artifact hash: "
+            f"declared={artifact_hash}, actual={actual_artifact_hash}"
+        )
     payload: dict[str, Any] = {
-        "schema_version": 1,
+        "schema_version": 2,
         "strategy_id": strategy_id,
         "mode": mode,
         "model_id": model_id,
@@ -167,7 +172,7 @@ def write_model_pointer(
         "created_at": created_at,
         "status": status,
         "source_run_id": source_run_id or "",
-        "artifact_hash": artifact_hash or "",
+        "artifact_hash": actual_artifact_hash,
         "approved_by": approved_by or "manual",
     }
     pointer = pointer_path_for_strategy(project_root, strategy_id, mode)
@@ -208,9 +213,9 @@ def _validate_pointer_payload(
         raise ValueError("Pointer payload must be a dict")
 
     schema_ver = payload.get("schema_version")
-    if schema_ver != 1:
+    if schema_ver != 2:
         raise ValueError(
-            f"Pointer schema_version mismatch: expected 1, got {schema_ver}"
+            f"Pointer schema_version mismatch: expected 2, got {schema_ver}"
         )
 
     actual_sid = payload.get("strategy_id")
@@ -227,26 +232,52 @@ def _validate_pointer_payload(
             f"got '{actual_mode}'"
         )
 
+    if payload.get("status") != "approved":
+        raise ValueError(
+            "Pointer status must be 'approved' for runtime resolution, "
+            f"got {payload.get('status')!r}"
+        )
+
     if not payload.get("model_path"):
         raise ValueError("Pointer model_path is empty or missing")
+    if Path(str(payload["model_path"])).is_absolute():
+        raise ValueError("Pointer model_path must be relative to project_root")
+    artifact_hash = payload.get("artifact_hash")
+    if (
+        not isinstance(artifact_hash, str)
+        or len(artifact_hash) != 64
+        or any(ch not in "0123456789abcdef" for ch in artifact_hash)
+    ):
+        raise ValueError("Pointer artifact_hash must be a SHA-256 hex digest")
 
 
 def _validate_model_path(project_root: Path, model_path_str: str) -> Path:
     """Validate and resolve model path.  Raises on absence or escape."""
     model_path = Path(model_path_str)
+    unresolved = model_path if model_path.is_absolute() else project_root / model_path
+    project_resolved = project_root.resolve()
     if not model_path.is_absolute():
-        model_path = (project_root / model_path).resolve()
+        current = project_resolved
+        for part in model_path.parts:
+            current = current / part
+            if current.is_symlink():
+                raise ValueError(
+                    f"Model path must not contain symlink components: {current}"
+                )
+    elif unresolved.is_symlink():
+        raise ValueError(f"Model path must not be a symlink: {unresolved}")
+    if not model_path.is_absolute():
+        model_path = unresolved.resolve()
     else:
         model_path = model_path.resolve()
 
     # Prevent directory traversal escape
-    proj_root_resolved = project_root.resolve()
     try:
-        model_path.relative_to(proj_root_resolved)
+        model_path.relative_to(project_resolved)
     except ValueError:
         raise ValueError(
             f"Model path '{model_path}' escapes project root "
-            f"'{proj_root_resolved}'"
+            f"'{project_resolved}'"
         )
 
     if not model_path.exists():
@@ -255,12 +286,41 @@ def _validate_model_path(project_root: Path, model_path_str: str) -> Path:
     return model_path
 
 
+def compute_model_artifact_hash(model_path: Path) -> str:
+    """Hash an immutable model directory by relative path and file content."""
+    root = model_path.resolve()
+    if not root.is_dir():
+        raise ValueError(f"Model artifact path is not a directory: {root}")
+    files = sorted(path for path in root.rglob("*") if path.is_file())
+    if not files:
+        raise ValueError(f"Model artifact directory contains no files: {root}")
+
+    digest = hashlib.sha256()
+    for path in files:
+        if path.is_symlink():
+            raise ValueError(f"Model artifact must not contain symlinks: {path}")
+        relative = path.relative_to(root).as_posix().encode("utf-8")
+        file_digest = hashlib.sha256(path.read_bytes()).hexdigest().encode("ascii")
+        digest.update(relative)
+        digest.update(b"\0")
+        digest.update(file_digest)
+        digest.update(b"\n")
+    return digest.hexdigest()
+
+
 def _build_resolved(
     project_root: Path,
     payload: dict[str, Any],
     pointer_path: Path,
 ) -> ResolvedModel:
     model_path = _validate_model_path(project_root, payload["model_path"])
+    actual_hash = compute_model_artifact_hash(model_path)
+    declared_hash = str(payload.get("artifact_hash") or "")
+    if actual_hash != declared_hash:
+        raise ValueError(
+            f"Model artifact hash mismatch at {model_path}: "
+            f"declared={declared_hash}, actual={actual_hash}"
+        )
     return ResolvedModel(
         strategy_id=payload["strategy_id"],
         mode=payload["mode"],
@@ -268,66 +328,10 @@ def _build_resolved(
         model_path=model_path,
         pointer_path=pointer_path,
         created_at=payload.get("created_at"),
-        artifact_hash=payload.get("artifact_hash"),
+        artifact_hash=actual_hash,
         source_run_id=payload.get("source_run_id"),
         approved_by=payload.get("approved_by"),
     )
-
-
-def _try_load_pointer(
-    pointer: Path,
-    expected_strategy_id: str,
-    expected_mode: str,
-) -> dict[str, Any] | None:
-    """Try to load and validate a pointer file.  Returns None on failure."""
-    payload = load_json(pointer)
-    if not payload:
-        return None
-    try:
-        _validate_pointer_payload(payload, expected_strategy_id, expected_mode)
-    except ValueError:
-        return None
-    return payload
-
-
-def _try_load_legacy_pointer(
-    project_root: Path,
-) -> dict[str, Any] | None:
-    """Try to load the legacy singleton pointer ``models/latest_shadow_model.json``.
-
-    Only used for backward compat with alpha_v1/shadow.
-    """
-    # Local import to avoid circular dependency (model_resolver →
-    # model_registry → state, no reverse edge).
-    from qsys.ops.model_registry import (  # noqa: PLC0415
-        latest_shadow_model_is_usable,
-        read_latest_shadow_model,
-    )
-
-    payload = read_latest_shadow_model(project_root)
-    if not payload:
-        return None
-
-    model_path = payload.get("model_path", "")
-    if not model_path:
-        return None
-
-    is_usable = latest_shadow_model_is_usable(project_root, payload)
-    if not is_usable:
-        return None
-
-    return {
-        "schema_version": 1,
-        "strategy_id": "alpha_v1",
-        "mode": "shadow",
-        "model_id": payload.get("model_name", ""),
-        "model_path": model_path,
-        "created_at": payload.get("trained_at", ""),
-        "status": "approved",
-        "source_run_id": payload.get("train_run_id", ""),
-        "artifact_hash": "",
-        "approved_by": "system",
-    }
 
 
 def _utc_now() -> str:
