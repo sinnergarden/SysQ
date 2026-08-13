@@ -55,6 +55,8 @@ def test_materialize_blend_persists_equal_weight_signal_and_lineage(tmp_path: Pa
         blend_output_signal_run_id="historical_equal_v1",
         research_root=str(tmp_path),
         overwrite=False,
+        start_date="2026-06-15",
+        end_date="2026-06-15",
     )
 
     signal_id, run_id, manifest_path = module._materialize_blend(args)
@@ -72,10 +74,15 @@ def test_materialize_blend_persists_equal_weight_signal_and_lineage(tmp_path: Pa
         ("signal_180d", "run_180d", 0.5),
     ]
     assert all(len(row["predictions_sha256"]) == 64 for row in manifest["inputs"])
+    assert all(len(row["manifest_sha256"]) == 64 for row in manifest["inputs"])
     signal_manifest = store.load_manifest(signal_id, run_id)
     assert signal_manifest["predictions_sha256"] == store.signal_data_sha256(
         signal_id, run_id
     )
+    assert signal_manifest["required_date_range"] == {
+        "start": "2026-06-15",
+        "end": "2026-06-15",
+    }
 
 
 def test_default_blend_run_id_pins_both_source_run_ids() -> None:
@@ -83,3 +90,81 @@ def test_default_blend_run_id_pins_both_source_run_ids() -> None:
     first = module._default_blend_ids("s60", "r60", "s180", "r180_a", 0.5)
     second = module._default_blend_ids("s60", "r60", "s180", "r180_b", 0.5)
     assert first != second
+
+
+def test_default_blend_run_id_pins_source_hashes_and_range() -> None:
+    module = _load_cli_module()
+    first = module._default_blend_ids(
+        "s60",
+        "r60",
+        "s180",
+        "r180",
+        0.5,
+        primary_sha256="a" * 64,
+        secondary_sha256="b" * 64,
+        start_date="2021-01-01",
+        end_date="2025-12-31",
+    )
+    changed_hash = module._default_blend_ids(
+        "s60",
+        "r60",
+        "s180",
+        "r180",
+        0.5,
+        primary_sha256="c" * 64,
+        secondary_sha256="b" * 64,
+        start_date="2021-01-01",
+        end_date="2025-12-31",
+    )
+    changed_range = module._default_blend_ids(
+        "s60",
+        "r60",
+        "s180",
+        "r180",
+        0.5,
+        primary_sha256="a" * 64,
+        secondary_sha256="b" * 64,
+        start_date="2022-01-01",
+        end_date="2025-12-31",
+    )
+    assert first != changed_hash
+    assert first != changed_range
+
+
+def test_materialize_blend_rejects_missing_secondary_date(tmp_path: Path) -> None:
+    module = _load_cli_module()
+    store = SignalStore(tmp_path)
+    _save_signal(store, "signal_60d", "run_60d", [1.0, -1.0])
+    frame = store.load_signal_run("signal_60d", "run_60d").copy()
+    frame["trade_date"] = "2026-06-16"
+    frame["data_date"] = "2026-06-15"
+    frame["signal_id"] = "signal_60d"
+    frame["signal_run_id"] = "run_60d"
+    store.save_signal_run(
+        "signal_60d",
+        "run_60d",
+        pd.concat(
+            [store.load_signal_run("signal_60d", "run_60d"), frame],
+            ignore_index=True,
+        ),
+        overwrite=True,
+    )
+    _save_signal(store, "signal_180d", "run_180d", [0.0, 2.0])
+    args = argparse.Namespace(
+        signal_id="signal_60d",
+        signal_run_id="run_60d",
+        signal_id_2="signal_180d",
+        signal_run_id_2="run_180d",
+        blend_weight=0.5,
+        blend_output_signal_id=None,
+        blend_output_signal_run_id=None,
+        research_root=str(tmp_path),
+        overwrite=False,
+        start_date="2026-06-15",
+        end_date="2026-06-16",
+    )
+
+    import pytest
+
+    with pytest.raises(ValueError, match="trade-date coverage mismatch"):
+        module._materialize_blend(args)

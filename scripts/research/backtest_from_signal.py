@@ -34,6 +34,13 @@ def _default_blend_ids(
     signal_id_2: str,
     signal_run_id_2: str,
     blend_weight: float,
+    *,
+    primary_sha256: str | None = None,
+    secondary_sha256: str | None = None,
+    primary_manifest_sha256: str | None = None,
+    secondary_manifest_sha256: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
 ) -> tuple[str, str]:
     """Return stable identifiers for a materialized two-signal blend."""
     raw = json.dumps(
@@ -42,6 +49,12 @@ def _default_blend_ids(
             "secondary": [signal_id_2, signal_run_id_2],
             "primary_weight": blend_weight,
             "secondary_weight": 1.0 - blend_weight,
+            "primary_sha256": primary_sha256,
+            "secondary_sha256": secondary_sha256,
+            "primary_manifest_sha256": primary_manifest_sha256,
+            "secondary_manifest_sha256": secondary_manifest_sha256,
+            "start_date": start_date,
+            "end_date": end_date,
         },
         ensure_ascii=True,
         sort_keys=True,
@@ -57,17 +70,31 @@ def _materialize_blend(args: argparse.Namespace) -> tuple[str, str, Path]:
     from qsys.research.signal_combine import CombineInput, CombineSpec, combine_signals
     from qsys.signal.store import SignalStore
 
+    store = SignalStore(args.research_root)
+    primary_identity = store.validate_backtest_source(
+        args.signal_id, args.signal_run_id
+    )
+    secondary_identity = store.validate_backtest_source(
+        args.signal_id_2, args.signal_run_id_2
+    )
+    start_date = getattr(args, "start_date", None)
+    end_date = getattr(args, "end_date", None)
     output_signal_id, output_signal_run_id = _default_blend_ids(
         args.signal_id,
         args.signal_run_id,
         args.signal_id_2,
         args.signal_run_id_2,
         args.blend_weight,
+        primary_sha256=primary_identity["predictions_sha256"],
+        secondary_sha256=secondary_identity["predictions_sha256"],
+        primary_manifest_sha256=primary_identity["manifest_sha256"],
+        secondary_manifest_sha256=secondary_identity["manifest_sha256"],
+        start_date=start_date,
+        end_date=end_date,
     )
     output_signal_id = args.blend_output_signal_id or output_signal_id
     output_signal_run_id = args.blend_output_signal_run_id or output_signal_run_id
     paths = ResearchPaths(args.research_root)
-    store = SignalStore(args.research_root)
     spec = CombineSpec(
         combine_id=f"cached_blend_{args.blend_weight:g}_{1.0 - args.blend_weight:g}",
         combine_type="linear_blend",
@@ -91,6 +118,8 @@ def _materialize_blend(args: argparse.Namespace) -> tuple[str, str, Path]:
         signal_store=store,
         research_paths=paths,
         overwrite=args.overwrite,
+        required_start_date=start_date,
+        required_end_date=end_date,
     )
     manifest_path = (
         paths.signal_dir(output_signal_id, output_signal_run_id)
@@ -127,8 +156,15 @@ def main() -> None:
                         help="Stop-loss threshold e.g. 0.07 = sell at -7%%")
     parser.add_argument("--trailing-stop", type=float, default=None,
                         help="Trailing stop e.g. 0.10 = sell if -10%% from peak")
-    parser.add_argument("--use-adjusted-price", action=argparse.BooleanOptionalAction, default=True,
-                        help="Multiply prices by factor for signal-consistent backtest (default True)")
+    parser.add_argument(
+        "--use-adjusted-price",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Legacy synthetic-price mode. It is rejected because adjusted "
+            "prices cannot be used for A-share lot sizing/execution."
+        ),
+    )
     parser.add_argument("--signal-id-2", default=None,
                         help="Second signal ID for blending")
     parser.add_argument("--signal-run-id-2", default=None,
@@ -161,6 +197,11 @@ def main() -> None:
         parser.error("--blend-weight must be within [0, 1]")
     if args.materialize_blend and args.signal_id_2 is None:
         parser.error("--materialize-blend requires the second signal id and run id")
+    if args.signal_id_2 is not None and not args.materialize_blend:
+        parser.error(
+            "two-signal backtests require --materialize-blend so coverage and "
+            "source hashes are pinned"
+        )
     if (args.blend_output_signal_id or args.blend_output_signal_run_id) and not args.materialize_blend:
         parser.error("blend output identifiers require --materialize-blend")
 

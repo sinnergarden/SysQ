@@ -11,6 +11,15 @@ import pytest
 from qsys.research.generators.lightgbm_single_label import (
     LightGBMSingleLabelGenerator,
 )
+from qsys.signal.store import FEATURE_VISIBILITY_CONTRACT_V1
+
+
+def test_generator_declares_feature_visibility_contract() -> None:
+    generator = LightGBMSingleLabelGenerator()
+    assert (
+        generator.feature_visibility_contract
+        == FEATURE_VISIBILITY_CONTRACT_V1
+    )
 
 
 class FakeModel:

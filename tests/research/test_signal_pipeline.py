@@ -153,6 +153,33 @@ class TestSignalResearchPipelineMatrix:
         assert mf["transform_count"] == 2
         assert len(mf["signal_runs"]) == 2
 
+    @patch("qsys.label.store.LabelStore.load_labels")
+    def test_matrix_persists_generator_visibility_contract(
+        self, mock_labels, tmp_path: Path
+    ) -> None:
+        from qsys.research.generators.fixture import FixtureSignalGenerator
+        from qsys.signal.store import FEATURE_VISIBILITY_CONTRACT_V1
+
+        mock_labels.return_value = _make_fake_labels()
+        generator = FixtureSignalGenerator(n_instruments=10)
+        generator.feature_visibility_contract = FEATURE_VISIBILITY_CONTRACT_V1
+        pipeline = SignalResearchPipeline(str(tmp_path))
+        result = pipeline.run(
+            self._matrix_config(),
+            signal_generator=generator,
+            overwrite_signal=True,
+            overwrite_eval=True,
+        )
+
+        for ref in result.signal_runs:
+            manifest = pipeline._signal_store.load_manifest(
+                ref.signal_id, ref.signal_run_id
+            )
+            assert (
+                manifest["feature_visibility_contract"]
+                == FEATURE_VISIBILITY_CONTRACT_V1
+            )
+
 
 class TestSignalResearchPipelineMultiHead:
     """Multi-head generator support."""
