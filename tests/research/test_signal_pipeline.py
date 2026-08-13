@@ -100,6 +100,24 @@ class TestSignalResearchPipelineBasics:
         assert "backtest_count" not in mf
         assert "backtest_refs" not in mf
 
+    @patch("qsys.label.store.LabelStore.load_labels")
+    def test_signal_manifest_pins_source_snapshot(
+        self, mock_labels, tmp_path: Path
+    ) -> None:
+        mock_labels.return_value = _make_fake_labels()
+        pipeline = SignalResearchPipeline(str(tmp_path))
+        config = _make_minimal_config(source_manifest_hash="source-sha-256")
+
+        result = pipeline.run(
+            config, overwrite_signal=True, overwrite_eval=True
+        )
+        signal_ref = result.signal_runs[0]
+        manifest = pipeline._signal_store.load_manifest(
+            signal_ref.signal_id, signal_ref.signal_run_id
+        )
+
+        assert manifest["source_manifest_hash"] == "source-sha-256"
+
 
 class TestSignalResearchPipelineMatrix:
     """Matrix experiment path: generators × transforms."""

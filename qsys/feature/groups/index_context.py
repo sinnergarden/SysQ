@@ -153,7 +153,7 @@ def load_multi_index(
     if columns is None:
         columns = ["close"]
     if root is None:
-        root = str(cfg.project_root / "data" / "raw" / "index")
+        root = str(Path(cfg.get_path("root")) / "raw" / "index")
 
     root_path = Path(root)
     merged = None

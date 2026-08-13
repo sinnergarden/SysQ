@@ -226,6 +226,10 @@ class SignalResearchPipeline:
             signal_manifest["feature_visibility_contract"] = (
                 feature_visibility_contract
             )
+        if config.source_manifest_hash:
+            signal_manifest["source_manifest_hash"] = (
+                config.source_manifest_hash
+            )
         self._signal_store.save_signal_run(
             signal_id, signal_run_id, predictions,
             manifest=signal_manifest,
@@ -377,6 +381,10 @@ class SignalResearchPipeline:
             if feature_visibility_contract:
                 signal_manifest["feature_visibility_contract"] = (
                     feature_visibility_contract
+                )
+            if config.source_manifest_hash:
+                signal_manifest["source_manifest_hash"] = (
+                    config.source_manifest_hash
                 )
             self._signal_store.save_signal_run(
                 job.signal_id, job.signal_run_id, transformed,
