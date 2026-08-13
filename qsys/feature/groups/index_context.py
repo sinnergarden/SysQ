@@ -79,7 +79,7 @@ def load_index_daily(
     Index(['ts_code', 'trade_date', 'close', 'open', 'high', 'low', ...])
     """
     if root is None:
-        root = str(cfg.project_root / "data" / "raw" / "index")
+        root = str(Path(cfg.get_path("root")) / "raw" / "index")
     code = INDEX_CODE_MAP[index_name]
     path = Path(root) / f"{code}.csv"
     return _read_index_csv(path)
