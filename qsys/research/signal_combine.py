@@ -95,6 +95,8 @@ def combine_signals(
     research_paths: ResearchPaths,
     overwrite: bool = False,
     join_policy: str | None = None,
+    required_start_date: str | None = None,
+    required_end_date: str | None = None,
 ) -> pd.DataFrame:
     """Combine multiple SignalRuns into one derived SignalRun.
 
@@ -119,6 +121,10 @@ def combine_signals(
         Join policy for combining signals. Default "inner":
         only rows covered by ALL input signals are combined.
         "outer_zero_fill": outer join with fillna(0) for missing scores.
+    required_start_date, required_end_date:
+        Optional inclusive range whose trade-date coverage must be identical
+        across all inputs.  This is used by fixed-weight backtests so a
+        missing secondary date cannot silently degrade to one signal.
 
     Returns the combined DataFrame.
     """
@@ -132,10 +138,14 @@ def combine_signals(
 
     input_row_counts: list[int] = []
     input_data_hashes: list[str] = []
+    input_manifest_hashes: list[str] = []
+    input_date_sets: list[set[str]] = []
     frames: list[pd.DataFrame] = []
     for idx, inp in enumerate(spec.inputs):
         df = signal_store.load_signal_run(
             inp.source_signal_id, inp.source_signal_run_id,
+            start_date=required_start_date,
+            end_date=required_end_date,
         )
         if df.empty:
             raise ValueError(
@@ -143,13 +153,47 @@ def combine_signals(
                 f"{inp.source_signal_run_id}"
             )
         input_row_counts.append(len(df))
+        input_date_sets.append(set(df["trade_date"].astype(str)))
         input_data_hashes.append(
             signal_store.signal_data_sha256(
                 inp.source_signal_id, inp.source_signal_run_id
             )
         )
+        input_manifest_hashes.append(
+            signal_store.signal_manifest_sha256(
+                inp.source_signal_id, inp.source_signal_run_id
+            )
+        )
         df = df.rename(columns={"score": f"score_{idx}"})
         frames.append(df)
+
+    if required_start_date or required_end_date:
+        reference_dates = input_date_sets[0]
+        for idx, dates in enumerate(input_date_sets[1:], start=1):
+            if dates != reference_dates:
+                missing = sorted(reference_dates - dates)[:5]
+                extra = sorted(dates - reference_dates)[:5]
+                raise ValueError(
+                    "Combine: input trade-date coverage mismatch inside "
+                    f"required range [{required_start_date}, "
+                    f"{required_end_date}] for input {idx}; "
+                    f"missing={missing}, extra={extra}"
+                )
+        if required_start_date and required_end_date:
+            from qsys.data.calendar import get_trading_calendar
+
+            expected_dates = set(
+                get_trading_calendar(
+                    required_start_date, required_end_date
+                )
+            )
+            missing_from_all = sorted(expected_dates - reference_dates)
+            if missing_from_all:
+                raise ValueError(
+                    "Combine: all inputs are missing required trading dates "
+                    f"inside [{required_start_date}, {required_end_date}]: "
+                    f"{missing_from_all[:5]}"
+                )
 
     # Join on (trade_date, data_date, instrument)
     how = "inner" if join_policy == "inner" else "outer"
@@ -161,6 +205,8 @@ def combine_signals(
             how=how,
             suffixes=("", "_right"),
         )
+    if combined.empty:
+        raise ValueError("Combine: no common signal rows after join")
 
     # Clean up any _right columns from duplicate merge keys
     right_cols = [c for c in combined.columns if c.endswith("_right")]
@@ -217,6 +263,7 @@ def combine_signals(
             "signal_run_id": inp.source_signal_run_id,
             "weight": inp.weight,
             "predictions_sha256": input_data_hashes[idx],
+            "manifest_sha256": input_manifest_hashes[idx],
         }
         for idx, inp in enumerate(spec.inputs)
     ]
@@ -229,6 +276,10 @@ def combine_signals(
             "combine_type": spec.combine_type,
             "join_policy": join_policy,
             "inputs": input_refs,
+            "required_date_range": {
+                "start": required_start_date,
+                "end": required_end_date,
+            },
         },
         overwrite=overwrite,
     )
@@ -246,6 +297,10 @@ def combine_signals(
         "input_row_counts": input_row_counts,
         "output_row_count": len(combined),
         "dropped_by_join": dropped_by_join,
+        "required_date_range": {
+            "start": required_start_date,
+            "end": required_end_date,
+        },
         "date_range": {
             "start": str(combined["trade_date"].min()),
             "end": str(combined["trade_date"].max()),

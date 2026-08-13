@@ -10,6 +10,7 @@ import pytest
 
 from qsys.backtest.strategy_runner import BacktestRunner
 from qsys.signal.store import SignalStore
+from qsys.signal.store import FEATURE_VISIBILITY_CONTRACT_V1
 
 
 def _signal_fixture(store: SignalStore, n_dates: int = 3, n_inst: int = 10) -> None:
@@ -60,6 +61,78 @@ def _run_bt(tmp_path, runner_kwargs=None, **kwargs):
 
 
 class TestRunFromSignalCache:
+    def test_rejects_legacy_generated_signal_without_visibility_contract(
+        self, tmp_path: Path
+    ) -> None:
+        store = SignalStore(str(tmp_path))
+        _signal_fixture(store, n_dates=1, n_inst=5)
+        manifest_path = store.paths.signal_manifest("test_sig", "test_run")
+        import json
+
+        manifest = json.loads(manifest_path.read_text())
+        manifest.update(
+            {
+                "model_mode": "signal_research_matrix",
+                "generator_id": "legacy_lightgbm",
+            }
+        )
+        manifest_path.write_text(json.dumps(manifest))
+        with pytest.raises(ValueError, match="not certified"):
+            BacktestRunner().run_from_signal_cache(
+                signal_id="test_sig",
+                signal_run_id="test_run",
+                start_date="2026-06-15",
+                end_date="2026-06-15",
+                research_root=str(tmp_path),
+                output_dir=tmp_path / "legacy_out",
+            )
+
+    def test_accepts_generated_signal_with_visibility_contract(
+        self, tmp_path: Path
+    ) -> None:
+        store = SignalStore(str(tmp_path))
+        _signal_fixture(store, n_dates=1, n_inst=5)
+        manifest_path = store.paths.signal_manifest("test_sig", "test_run")
+        import json
+
+        manifest = json.loads(manifest_path.read_text())
+        manifest.update(
+            {
+                "model_mode": "signal_research_matrix",
+                "generator_id": "current_lightgbm",
+                "feature_visibility_contract": FEATURE_VISIBILITY_CONTRACT_V1,
+            }
+        )
+        manifest_path.write_text(json.dumps(manifest))
+        with patch("qsys.backtest.strategy_runner.fetch_market_snapshot", _mock_prices), \
+             patch("qsys.backtest.strategy_runner._resolve_trading_dates", _mock_calendar):
+            result = BacktestRunner().run_from_signal_cache(
+                signal_id="test_sig",
+                signal_run_id="test_run",
+                start_date="2026-06-15",
+                end_date="2026-06-15",
+                research_root=str(tmp_path),
+                output_dir=tmp_path / "current_out",
+                commission=0.0,
+                stamp_duty=0.0,
+                min_commission=0.0,
+                slippage=0.0,
+            )
+        assert result.status == "completed"
+
+    def test_rejects_adjusted_price_for_real_lot_execution(
+        self, tmp_path: Path
+    ) -> None:
+        with pytest.raises(ValueError, match="lot sizing"):
+            _run_bt(
+                tmp_path,
+                signal_id="test_sig",
+                signal_run_id="test_run",
+                start_date="2026-06-15",
+                end_date="2026-06-15",
+                use_adjusted_price=True,
+            )
+
     def test_rejects_incomplete_secondary_reference(self, tmp_path: Path) -> None:
         runner = BacktestRunner()
         with pytest.raises(ValueError, match="must be provided together"):
@@ -145,6 +218,55 @@ class TestRunFromSignalCache:
         assert isinstance(mf["trading_dates"], list)
         assert mf["trading_day_count"] == 2
         assert mf["rebalance_freq"] == "daily"
+        assert mf["price_adjustment_policy"] == "raw_execution_and_mtm"
+        assert mf["corporate_action_policy"] == "not_modeled"
+        assert len(mf["signal_sources"][0]["predictions_sha256"]) == 64
+
+    def test_loads_signal_range_once_not_once_per_rebalance(
+        self, tmp_path: Path
+    ) -> None:
+        original = SignalStore.load_signal_run
+        with patch.object(
+            SignalStore, "load_signal_run", autospec=True, side_effect=original
+        ) as load:
+            _run_bt(
+                tmp_path,
+                fixture_dates=3,
+                signal_id="test_sig",
+                signal_run_id="test_run",
+                start_date="2026-06-15",
+                end_date="2026-06-17",
+            )
+        assert load.call_count == 1
+
+    def test_secondary_missing_rebalance_date_fails_closed(
+        self, tmp_path: Path
+    ) -> None:
+        store = SignalStore(str(tmp_path))
+        _signal_fixture(store, n_dates=2, n_inst=5)
+        secondary = store.load_signal_run("test_sig", "test_run")
+        secondary = secondary[secondary["trade_date"] == "2026-06-15"].copy()
+        secondary["signal_id"] = "secondary"
+        secondary["signal_run_id"] = "secondary_run"
+        store.save_signal_run(
+            "secondary", "secondary_run", secondary, overwrite=True
+        )
+        with patch("qsys.backtest.strategy_runner.fetch_market_snapshot", _mock_prices), \
+             patch("qsys.backtest.strategy_runner._resolve_trading_dates", _mock_calendar), \
+             pytest.raises(ValueError, match="refusing to degrade"):
+            BacktestRunner().run_from_signal_cache(
+                signal_id="test_sig",
+                signal_run_id="test_run",
+                signal_id_2="secondary",
+                signal_run_id_2="secondary_run",
+                blend_weight=0.5,
+                start_date="2026-06-15",
+                end_date="2026-06-16",
+                research_root=str(tmp_path),
+                output_dir=tmp_path / "missing_secondary",
+                overwrite=True,
+                rebalance_freq="daily",
+            )
 
     def test_weekly_rebalance_in_result(self, tmp_path: Path) -> None:
         import json
@@ -228,6 +350,36 @@ class TestRunFromSignalCache:
                      start_date="2026-06-15", end_date="2026-06-17",
                      output_dir=tmp_path / "bt_det2")
         assert r1.final_value == r2.final_value
+
+    def test_backtest_id_pins_signal_content_hash(self, tmp_path: Path) -> None:
+        store = SignalStore(str(tmp_path))
+        _signal_fixture(store, n_dates=1, n_inst=5)
+
+        def run(output: str):
+            with patch("qsys.backtest.strategy_runner.fetch_market_snapshot", _mock_prices), \
+                 patch("qsys.backtest.strategy_runner._resolve_trading_dates", _mock_calendar):
+                return BacktestRunner().run_from_signal_cache(
+                    signal_id="test_sig",
+                    signal_run_id="test_run",
+                    start_date="2026-06-15",
+                    end_date="2026-06-15",
+                    research_root=str(tmp_path),
+                    output_dir=tmp_path / output,
+                    overwrite=True,
+                    commission=0.0,
+                    stamp_duty=0.0,
+                    min_commission=0.0,
+                    slippage=0.0,
+                )
+
+        first = run("hash_first")
+        changed = store.load_signal_run("test_sig", "test_run")
+        changed.loc[0, "score"] += 1.0
+        store.save_signal_run(
+            "test_sig", "test_run", changed, overwrite=True
+        )
+        second = run("hash_second")
+        assert first.backtest_id != second.backtest_id
 
     def test_debug_mode_writes_daily_artifacts(self, tmp_path: Path) -> None:
         out = tmp_path / "bt_debug"

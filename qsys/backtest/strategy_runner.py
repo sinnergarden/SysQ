@@ -572,7 +572,7 @@ class BacktestRunner:
         research_root: str | Path = "data/research",
         stop_loss: float | None = None,
         trailing_stop: float | None = None,
-        use_adjusted_price: bool = True,
+        use_adjusted_price: bool = False,
         signal_id_2: str | None = None,
         signal_run_id_2: str | None = None,
         blend_weight: float = 1.0,
@@ -602,11 +602,73 @@ class BacktestRunner:
             raise ValueError(
                 f"blend_weight must be within [0, 1], got {blend_weight}"
             )
+        if use_adjusted_price:
+            raise ValueError(
+                "use_adjusted_price=True is unsafe: synthetic adjusted prices "
+                "cannot be used for A-share lot sizing, cash settlement, or "
+                "fees. Use raw execution prices; corporate actions remain an "
+                "explicit research limitation."
+            )
 
-        hash_input = (f"accumulate_{strategy_template_id}_{signal_id}_{signal_run_id}_"
-                      f"{top_n}_{commission}_{slippage}_{rebalance_freq}_"
-                      f"{start_date}_{end_date}_{initial_capital}_{signal_id_2}_{signal_run_id_2}_"
-                      f"{blend_weight}_{maxdd_signal_id}_{maxdd_signal_run_id}_{maxdd_threshold}_{maxdd_percentile}")
+        signal_store = SignalStore(str(research_root))
+        primary_identity = signal_store.validate_backtest_source(
+            signal_id, signal_run_id
+        )
+        primary_signal = signal_store.load_signal_run(
+            signal_id, signal_run_id, start_date=start_date, end_date=end_date
+        )
+        primary_by_date = {
+            str(date): frame.reset_index(drop=True)
+            for date, frame in primary_signal.groupby("trade_date", sort=False)
+        }
+        secondary_identity: dict[str, Any] | None = None
+        secondary_by_date: dict[str, pd.DataFrame] = {}
+        if signal_id_2 and signal_run_id_2:
+            secondary_identity = signal_store.validate_backtest_source(
+                signal_id_2, signal_run_id_2
+            )
+            secondary_signal = signal_store.load_signal_run(
+                signal_id_2,
+                signal_run_id_2,
+                start_date=start_date,
+                end_date=end_date,
+            )
+            secondary_by_date = {
+                str(date): frame.reset_index(drop=True)
+                for date, frame in secondary_signal.groupby(
+                    "trade_date", sort=False
+                )
+            }
+
+        hash_input = json.dumps(
+            {
+                "mode": "accumulate",
+                "strategy_template_id": strategy_template_id,
+                "top_n": top_n,
+                "commission": commission,
+                "stamp_duty": stamp_duty,
+                "min_commission": min_commission,
+                "slippage": slippage,
+                "rebalance_freq": rebalance_freq,
+                "start_date": start_date,
+                "end_date": end_date,
+                "initial_capital": initial_capital,
+                "score_column": score_column,
+                "execution_price_mode": self._execution_price_mode,
+                "use_adjusted_price": use_adjusted_price,
+                "stop_loss": stop_loss,
+                "trailing_stop": trailing_stop,
+                "blend_weight": blend_weight,
+                "primary_signal": primary_identity,
+                "secondary_signal": secondary_identity,
+                "maxdd_signal_id": maxdd_signal_id,
+                "maxdd_signal_run_id": maxdd_signal_run_id,
+                "maxdd_threshold": maxdd_threshold,
+                "maxdd_percentile": maxdd_percentile,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
         short_hash = hashlib.sha256(hash_input.encode()).hexdigest()[:8]
         strategy_run_id = f"accumulate_{strategy_template_id}__{signal_id}__{short_hash}"
         backtest_id = f"acc_{start_date}_{end_date}_{short_hash}"
@@ -623,7 +685,6 @@ class BacktestRunner:
         if not trading_dates:
             raise ValueError(f"No trading dates in range [{start_date}, {end_date}]")
 
-        signal_store = SignalStore(str(research_root))
         account = Account(init_cash=initial_capital)
         daily_summaries: list[dict[str, Any]] = []
         self._last_prices = {}
@@ -638,8 +699,6 @@ class BacktestRunner:
                         trade_date, list(account.positions.keys()),
                         price_col="close" if self._execution_price_mode == "open" else "close",
                     )
-                    if use_adjusted_price:
-                        mtm_prices = self._apply_adjustment_factor(mtm_prices, list(account.positions.keys()), trade_date)
                 except Exception:
                     pass
 
@@ -668,7 +727,7 @@ class BacktestRunner:
                 continue
 
             # Load signal
-            day_signal = signal_store.load_signal_for_date(signal_id, signal_run_id, trade_date)
+            day_signal = primary_by_date.get(trade_date, pd.DataFrame()).copy()
             if day_signal.empty:
                 cash_before = float(account.cash)
                 mv_before = float(sum(max(0, mtm_prices.get(code, 0)) * pos.total_amount for code, pos in account.positions.items())) if mtm_prices else 0.0
@@ -703,20 +762,30 @@ class BacktestRunner:
 
             # Optional blend
             if signal_id_2 and signal_run_id_2 and blend_weight < 1.0:
-                day_signal_2 = signal_store.load_signal_for_date(signal_id_2, signal_run_id_2, trade_date)
-                if not day_signal_2.empty:
-                    if "data_date" in day_signal_2.columns and "trade_date" in day_signal_2.columns:
-                        day_signal_2["_dd"] = pd.to_datetime(day_signal_2["data_date"]).dt.strftime("%Y-%m-%d")
-                        day_signal_2["_td"] = pd.to_datetime(day_signal_2["trade_date"]).dt.strftime("%Y-%m-%d")
-                        if len(day_signal_2[day_signal_2["_dd"] >= day_signal_2["_td"]]) > 0:
-                            raise ValueError(f"Signal-2 lookahead at {trade_date}")
-                        day_signal_2.drop(columns=["_dd", "_td"], inplace=True)
-                    sc2 = score_column + "_2"
-                    day_signal_2 = day_signal_2[["instrument", score_column]].rename(columns={score_column: sc2})
-                    day_signal = day_signal.merge(day_signal_2, on="instrument", how="inner")
-                    if score_column in day_signal.columns and sc2 in day_signal.columns:
-                        day_signal[score_column] = blend_weight * day_signal[score_column] + (1 - blend_weight) * day_signal[sc2]
-                        day_signal = day_signal.drop(columns=[sc2])
+                day_signal_2 = secondary_by_date.get(
+                    trade_date, pd.DataFrame()
+                ).copy()
+                if day_signal_2.empty:
+                    raise ValueError(
+                        f"Secondary SignalRun has no rows for rebalance date "
+                        f"{trade_date}; refusing to degrade the fixed blend"
+                    )
+                if "data_date" in day_signal_2.columns and "trade_date" in day_signal_2.columns:
+                    day_signal_2["_dd"] = pd.to_datetime(day_signal_2["data_date"]).dt.strftime("%Y-%m-%d")
+                    day_signal_2["_td"] = pd.to_datetime(day_signal_2["trade_date"]).dt.strftime("%Y-%m-%d")
+                    if len(day_signal_2[day_signal_2["_dd"] >= day_signal_2["_td"]]) > 0:
+                        raise ValueError(f"Signal-2 lookahead at {trade_date}")
+                    day_signal_2.drop(columns=["_dd", "_td"], inplace=True)
+                sc2 = score_column + "_2"
+                join_keys = ["trade_date", "data_date", "instrument"]
+                day_signal_2 = day_signal_2[join_keys + [score_column]].rename(columns={score_column: sc2})
+                day_signal = day_signal.merge(day_signal_2, on=join_keys, how="inner")
+                if day_signal.empty:
+                    raise ValueError(
+                        f"Signal blend has no common rows for {trade_date}"
+                    )
+                day_signal[score_column] = blend_weight * day_signal[score_column] + (1 - blend_weight) * day_signal[sc2]
+                day_signal = day_signal.drop(columns=[sc2])
 
             # Fetch prices
             instruments = sorted(set(day_signal["instrument"].astype(str)) | set(account.positions.keys()))
@@ -727,11 +796,7 @@ class BacktestRunner:
                 else:
                     exec_prices_raw, market_status = fetch_market_snapshot(trade_date, instruments)
                     mtm_prices_raw = exec_prices_raw
-                if use_adjusted_price:
-                    exec_prices = self._apply_adjustment_factor(exec_prices_raw, instruments, trade_date)
-                    mtm_prices = self._apply_adjustment_factor(mtm_prices_raw, instruments, trade_date)
-                else:
-                    exec_prices, mtm_prices = exec_prices_raw, mtm_prices_raw
+                exec_prices, mtm_prices = exec_prices_raw, mtm_prices_raw
             except Exception as exc:
                 daily_summaries.append(dict(status="no_market_data"))
                 continue
@@ -842,6 +907,17 @@ class BacktestRunner:
             "stop_loss": stop_loss, "trailing_stop": trailing_stop,
             "use_adjusted_price": use_adjusted_price,
             "signal_id_2": signal_id_2, "signal_run_id_2": signal_run_id_2, "blend_weight": blend_weight,
+            "signal_sources": [
+                identity
+                for identity in (primary_identity, secondary_identity)
+                if identity is not None
+            ],
+            "price_adjustment_policy": "raw_execution_and_mtm",
+            "corporate_action_policy": "not_modeled",
+            "research_limitations": [
+                "cash dividends, splits, and other corporate actions are not modeled",
+                "current-universe historical runs contain survivorship bias unless the source declares PIT membership",
+            ],
         })
         write_manifest(output_dir / "manifest.json", manifest)
         if daily_summaries:
@@ -887,22 +963,6 @@ class BacktestRunner:
 
     # ── PR109: cached-signal backtest ─────────────────────────────────────
     # ── Helpers for run_from_signal_cache ───────────────────────────────
-
-    @staticmethod
-    def _apply_adjustment_factor(prices: dict[str, float], instruments: list[str], trade_date: str) -> dict[str, float]:
-        """Multiply raw prices by ``\$factor`` for signal-consistent pricing."""
-        from qsys.data.adapter import QlibAdapter as _QA
-        try:
-            _fact = _QA().get_features(instruments, ["$factor"], start_time=trade_date, end_time=trade_date)
-        except Exception:
-            return prices
-        if _fact is None or _fact.empty:
-            return prices
-        _fvals = _fact.reset_index()
-        _fvals["datetime"] = _fvals["datetime"].astype(str).str[:10]
-        _fvals = _fvals[_fvals["datetime"] == trade_date]
-        _fm = dict(zip(_fvals["instrument"], _fvals["$factor"]))
-        return {k: v * _fm.get(k, 1.0) for k, v in prices.items()}
 
     def _stop_loss_check(self, account: Account, mtm_prices: dict[str, float],
                          stop_loss: float | None, trailing_stop: float | None,
@@ -974,7 +1034,7 @@ class BacktestRunner:
         research_root: str | Path = "data/research",
         stop_loss: float | None = None,
         trailing_stop: float | None = None,
-        use_adjusted_price: bool = True,
+        use_adjusted_price: bool = False,
         signal_id_2: str | None = None,
         signal_run_id_2: str | None = None,
         blend_weight: float = 1.0,
@@ -1018,8 +1078,10 @@ class BacktestRunner:
             Trailing stop threshold, e.g. 0.10 = sell if price falls 10% from
             peak since entry.  When ``None``, no trailing stop.
         use_adjusted_price:
-            When True multiply prices by ``$factor`` so backtest prices match
-            adjusted-close signals.
+            Reserved legacy flag. ``True`` is rejected because synthetic
+            adjusted prices are invalid for lot sizing and cash settlement.
+            Raw prices are used and corporate actions are declared as an
+            explicit limitation in the manifest.
 
         Returns
         -------
@@ -1038,13 +1100,74 @@ class BacktestRunner:
             raise ValueError(
                 f"blend_weight must be within [0, 1], got {blend_weight}"
             )
+        if use_adjusted_price:
+            raise ValueError(
+                "use_adjusted_price=True is unsafe: synthetic adjusted prices "
+                "cannot be used for A-share lot sizing, cash settlement, or "
+                "fees. Use raw execution prices; corporate actions remain an "
+                "explicit research limitation."
+            )
+
+        signal_store = SignalStore(str(research_root))
+        primary_identity = signal_store.validate_backtest_source(
+            signal_id, signal_run_id
+        )
+        primary_signal = signal_store.load_signal_run(
+            signal_id, signal_run_id, start_date=start_date, end_date=end_date
+        )
+        primary_by_date = {
+            str(date): frame.reset_index(drop=True)
+            for date, frame in primary_signal.groupby("trade_date", sort=False)
+        }
+        secondary_identity: dict[str, Any] | None = None
+        secondary_by_date: dict[str, pd.DataFrame] = {}
+        if signal_id_2 and signal_run_id_2:
+            secondary_identity = signal_store.validate_backtest_source(
+                signal_id_2, signal_run_id_2
+            )
+            secondary_signal = signal_store.load_signal_run(
+                signal_id_2,
+                signal_run_id_2,
+                start_date=start_date,
+                end_date=end_date,
+            )
+            secondary_by_date = {
+                str(date): frame.reset_index(drop=True)
+                for date, frame in secondary_signal.groupby(
+                    "trade_date", sort=False
+                )
+            }
 
         # ── Build run/backtest IDs ────────────────────────────────────────
         # Cached signal semantics:
         # - signal.trade_date = intended_execution_date
         # - allocation before open, execution at open, MTM at close
         # - Preopen-equivalent, NOT BacktestEngine next-open convention
-        hash_input = f"{strategy_template_id}_{signal_id}_{signal_run_id}_{allocation_method}_{top_n}_{max_weight}_{commission}_{stamp_duty}_{min_commission}_{slippage}_{rebalance_freq}_{start_date}_{end_date}_{initial_capital}_{signal_id_2}_{signal_run_id_2}_{blend_weight}"  # noqa: E501
+        hash_payload = {
+            "strategy_template_id": strategy_template_id,
+            "allocation_method": allocation_method,
+            "top_n": top_n,
+            "max_weight": max_weight,
+            "commission": commission,
+            "stamp_duty": stamp_duty,
+            "min_commission": min_commission,
+            "slippage": slippage,
+            "rebalance_freq": rebalance_freq,
+            "start_date": start_date,
+            "end_date": end_date,
+            "initial_capital": initial_capital,
+            "score_column": score_column,
+            "execution_price_mode": self._execution_price_mode,
+            "use_adjusted_price": use_adjusted_price,
+            "stop_loss": stop_loss,
+            "trailing_stop": trailing_stop,
+            "blend_weight": blend_weight,
+            "primary_signal": primary_identity,
+            "secondary_signal": secondary_identity,
+        }
+        hash_input = json.dumps(
+            hash_payload, sort_keys=True, separators=(",", ":")
+        )
         short_hash = hashlib.sha256(hash_input.encode()).hexdigest()[:8]
         strategy_run_id = f"{strategy_template_id}__{signal_id}__{signal_run_id}__{short_hash}"
         backtest_id = f"bt_{start_date}_{end_date}_{short_hash}"
@@ -1065,9 +1188,6 @@ class BacktestRunner:
         if not trading_dates:
             raise ValueError(f"No trading dates in range [{start_date}, {end_date}]")
 
-        # ── Signal store ──────────────────────────────────────────────────
-        signal_store = SignalStore(str(research_root))
-
         # ── Account ───────────────────────────────────────────────────────
         account = Account(init_cash=initial_capital)
 
@@ -1087,8 +1207,6 @@ class BacktestRunner:
                         trade_date, list(account.positions.keys()),
                         price_col="close" if self._execution_price_mode == "open" else "close",
                     )
-                    if use_adjusted_price:
-                        mtm_prices = self._apply_adjustment_factor(mtm_prices, list(account.positions.keys()), trade_date)
                 except Exception:
                     pass
 
@@ -1134,7 +1252,7 @@ class BacktestRunner:
                 continue
 
             # 2. Load signal for this date
-            day_signal = signal_store.load_signal_for_date(signal_id, signal_run_id, trade_date)
+            day_signal = primary_by_date.get(trade_date, pd.DataFrame()).copy()
             if day_signal.empty:
                 # Before-state, stop-loss, after-state
                 if mtm_prices:
@@ -1185,25 +1303,39 @@ class BacktestRunner:
 
             # 2c. Optional second signal blend
             if signal_id_2 and signal_run_id_2 and blend_weight < 1.0:
-                day_signal_2 = signal_store.load_signal_for_date(signal_id_2, signal_run_id_2, trade_date)
-                if not day_signal_2.empty:
-                    # No-lookahead check on second signal too
-                    if "data_date" in day_signal_2.columns and "trade_date" in day_signal_2.columns:
-                        day_signal_2["_dd"] = pd.to_datetime(day_signal_2["data_date"]).dt.strftime("%Y-%m-%d")
-                        day_signal_2["_td"] = pd.to_datetime(day_signal_2["trade_date"]).dt.strftime("%Y-%m-%d")
-                        _v2 = day_signal_2[day_signal_2["_dd"] >= day_signal_2["_td"]]
-                        if len(_v2) > 0:
-                            raise ValueError(f"Signal-2 lookahead at {trade_date}: {len(_v2)} bad rows")
-                        day_signal_2.drop(columns=["_dd", "_td"], inplace=True)
-                    sc2 = score_column + "_2"
-                    day_signal_2 = day_signal_2[["instrument", score_column]].rename(
-                        columns={score_column: sc2}
+                day_signal_2 = secondary_by_date.get(
+                    trade_date, pd.DataFrame()
+                ).copy()
+                if day_signal_2.empty:
+                    raise ValueError(
+                        f"Secondary SignalRun has no rows for rebalance date "
+                        f"{trade_date}; refusing to degrade the fixed blend"
                     )
-                    day_signal = day_signal.merge(day_signal_2, on="instrument", how="inner")
-                    if score_column in day_signal.columns and sc2 in day_signal.columns:
-                        day_signal[score_column] = (blend_weight * day_signal[score_column]
-                                                     + (1 - blend_weight) * day_signal[sc2])
-                        day_signal = day_signal.drop(columns=[sc2])
+                # No-lookahead check on second signal too
+                if "data_date" in day_signal_2.columns and "trade_date" in day_signal_2.columns:
+                    day_signal_2["_dd"] = pd.to_datetime(day_signal_2["data_date"]).dt.strftime("%Y-%m-%d")
+                    day_signal_2["_td"] = pd.to_datetime(day_signal_2["trade_date"]).dt.strftime("%Y-%m-%d")
+                    _v2 = day_signal_2[day_signal_2["_dd"] >= day_signal_2["_td"]]
+                    if len(_v2) > 0:
+                        raise ValueError(f"Signal-2 lookahead at {trade_date}: {len(_v2)} bad rows")
+                    day_signal_2.drop(columns=["_dd", "_td"], inplace=True)
+                sc2 = score_column + "_2"
+                join_keys = ["trade_date", "data_date", "instrument"]
+                day_signal_2 = day_signal_2[join_keys + [score_column]].rename(
+                    columns={score_column: sc2}
+                )
+                day_signal = day_signal.merge(
+                    day_signal_2, on=join_keys, how="inner"
+                )
+                if day_signal.empty:
+                    raise ValueError(
+                        f"Signal blend has no common rows for {trade_date}"
+                    )
+                day_signal[score_column] = (
+                    blend_weight * day_signal[score_column]
+                    + (1 - blend_weight) * day_signal[sc2]
+                )
+                day_signal = day_signal.drop(columns=[sc2])
 
             # 3. Build target weights
             targets = build_rank_weight_targets(
@@ -1228,11 +1360,7 @@ class BacktestRunner:
                     exec_prices_raw, market_status = fetch_market_snapshot(trade_date, instruments)
                     mtm_prices_raw = exec_prices_raw
 
-                if use_adjusted_price:
-                    exec_prices = self._apply_adjustment_factor(exec_prices_raw, instruments, trade_date)
-                    mtm_prices = self._apply_adjustment_factor(mtm_prices_raw, instruments, trade_date)
-                else:
-                    exec_prices, mtm_prices = exec_prices_raw, mtm_prices_raw
+                exec_prices, mtm_prices = exec_prices_raw, mtm_prices_raw
             except Exception as exc:
                 daily_summaries.append(self._empty_day(
                     trade_date, trade_date, account, f"no_market_data: {exc}"
@@ -1317,6 +1445,11 @@ class BacktestRunner:
             "signal_id_2": signal_id_2,
             "signal_run_id_2": signal_run_id_2,
             "blend_weight": blend_weight,
+            "signal_sources": [
+                identity
+                for identity in (primary_identity, secondary_identity)
+                if identity is not None
+            ],
             "strategy_run_id": strategy_run_id,
             "strategy_template_id": strategy_template_id,
             "signal_id": signal_id,
@@ -1341,6 +1474,12 @@ class BacktestRunner:
             "execution_timing": "preopen",
             "signal_trade_date_semantics": "intended_execution_date",
             "mtm_price": "close",
+            "price_adjustment_policy": "raw_execution_and_mtm",
+            "corporate_action_policy": "not_modeled",
+            "research_limitations": [
+                "cash dividends, splits, and other corporate actions are not modeled",
+                "current-universe historical runs contain survivorship bias unless the source declares PIT membership",
+            ],
             "commission_bp": commission,
             "stamp_duty_bp": stamp_duty,
             "min_commission": min_commission,

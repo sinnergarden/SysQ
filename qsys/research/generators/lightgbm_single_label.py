@@ -36,11 +36,19 @@ from qsys.utils.logger import log
 
 _WINDOW_CACHE_SCHEMA_VERSION = 2
 _WINDOW_CACHE_BUILDER_ID = "lightgbm_single_label_qlib_frame_v2"
+FEATURE_VISIBILITY_CONTRACT = (
+    "actual_feature_date_strictly_before_trade_date_v1"
+)
 
 
 @dataclass
 class LightGBMSingleLabelGenerator:
     """Rolling signal generator — trains one LightGBM per label."""
+
+    feature_visibility_contract: str = field(
+        default=FEATURE_VISIBILITY_CONTRACT,
+        init=False,
+    )
 
     label_id: str = "fwd_ret_5d_xsz_clip3"
     universe: str = "csi300"

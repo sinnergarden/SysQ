@@ -24,6 +24,9 @@ _OPTIONAL_COLUMNS = {
     "universe", "score_raw", "score_rank", "score_z",
     "is_valid", "invalid_reason",
 }
+FEATURE_VISIBILITY_CONTRACT_V1 = (
+    "actual_feature_date_strictly_before_trade_date_v1"
+)
 PARQUET_AVAILABLE: bool | None = None
 
 
@@ -290,7 +293,20 @@ class SignalStore:
         """
         data_path = self._resolve_data_path(signal_id, signal_run_id)
         if data_path.suffix == ".parquet":
-            df = pd.read_parquet(data_path)
+            filters: list[tuple[str, str, str]] = []
+            if start_date:
+                filters.append(("trade_date", ">=", start_date))
+            if end_date:
+                filters.append(("trade_date", "<=", end_date))
+            try:
+                # PyArrow applies these predicates while scanning row groups,
+                # avoiding a full million-row read for a short backtest.
+                df = pd.read_parquet(data_path, filters=filters or None)
+            except (TypeError, ValueError, OSError):
+                # Keep compatibility with parquet engines/files that cannot
+                # push string-date predicates down; the filters below remain
+                # the source of truth.
+                df = pd.read_parquet(data_path)
         else:
             df = pd.read_csv(data_path)
 
@@ -320,6 +336,117 @@ class SignalStore:
     def signal_data_sha256(self, signal_id: str, signal_run_id: str) -> str:
         """Return the SHA-256 of the persisted predictions file."""
         return _sha256_file(self._resolve_data_path(signal_id, signal_run_id))
+
+    def signal_manifest_sha256(self, signal_id: str, signal_run_id: str) -> str:
+        """Return the SHA-256 of the persisted SignalRun manifest."""
+        return _sha256_file(
+            self.paths.signal_manifest(signal_id, signal_run_id)
+        )
+
+    def validate_backtest_source(
+        self,
+        signal_id: str,
+        signal_run_id: str,
+        *,
+        require_feature_visibility_contract: bool = True,
+        _seen: set[tuple[str, str]] | None = None,
+    ) -> dict[str, Any]:
+        """Validate and return immutable identity for a backtest input.
+
+        The row-level ``data_date`` check cannot prove which feature bars a
+        historical generator actually read.  Model-generated SignalRuns must
+        therefore carry an explicit generator contract.  Combined SignalRuns
+        recursively pin and validate their sources.
+        """
+        key = (signal_id, signal_run_id)
+        seen = _seen if _seen is not None else set()
+        if key in seen:
+            raise ValueError(
+                f"cyclic SignalRun lineage at {signal_id}/{signal_run_id}"
+            )
+        seen.add(key)
+        try:
+            manifest = self.load_manifest(signal_id, signal_run_id)
+            manifest_sha = self.signal_manifest_sha256(
+                signal_id, signal_run_id
+            )
+            actual_sha = self.signal_data_sha256(signal_id, signal_run_id)
+            declared_sha = manifest.get("predictions_sha256")
+            if not declared_sha:
+                raise ValueError(
+                    f"SignalRun {signal_id}/{signal_run_id} has no "
+                    "predictions_sha256"
+                )
+            if declared_sha != actual_sha:
+                raise ValueError(
+                    f"SignalRun {signal_id}/{signal_run_id} predictions SHA "
+                    f"mismatch: manifest={declared_sha}, actual={actual_sha}"
+                )
+
+            is_generated = (
+                manifest.get("model_mode") == "signal_research_matrix"
+                and bool(manifest.get("generator_id"))
+            )
+            contract = manifest.get("feature_visibility_contract")
+            if (
+                require_feature_visibility_contract
+                and is_generated
+                and contract != FEATURE_VISIBILITY_CONTRACT_V1
+            ):
+                raise ValueError(
+                    f"SignalRun {signal_id}/{signal_run_id} is not certified "
+                    "for backtest feature visibility: expected "
+                    f"{FEATURE_VISIBILITY_CONTRACT_V1!r}, got {contract!r}. "
+                    "Regenerate the SignalRun with the current generator."
+                )
+
+            input_identities: list[dict[str, Any]] = []
+            for source in manifest.get("inputs", []):
+                source_id = source.get("signal_id")
+                source_run_id = source.get("signal_run_id")
+                source_sha = source.get("predictions_sha256")
+                source_manifest_sha = source.get("manifest_sha256")
+                if (
+                    not source_id
+                    or not source_run_id
+                    or not source_sha
+                    or not source_manifest_sha
+                ):
+                    raise ValueError(
+                        f"SignalRun {signal_id}/{signal_run_id} has incomplete "
+                        "combined-signal lineage"
+                    )
+                identity = self.validate_backtest_source(
+                    str(source_id),
+                    str(source_run_id),
+                    require_feature_visibility_contract=(
+                        require_feature_visibility_contract
+                    ),
+                    _seen=seen,
+                )
+                if identity["predictions_sha256"] != source_sha:
+                    raise ValueError(
+                        f"Combined SignalRun {signal_id}/{signal_run_id} source "
+                        f"SHA mismatch for {source_id}/{source_run_id}"
+                    )
+                if identity["manifest_sha256"] != source_manifest_sha:
+                    raise ValueError(
+                        f"Combined SignalRun {signal_id}/{signal_run_id} source "
+                        f"manifest SHA mismatch for {source_id}/{source_run_id}"
+                    )
+                input_identities.append(identity)
+
+            return {
+                "signal_id": signal_id,
+                "signal_run_id": signal_run_id,
+                "predictions_sha256": actual_sha,
+                "manifest_sha256": manifest_sha,
+                "feature_visibility_contract": contract,
+                "git_commit": manifest.get("git_commit"),
+                "inputs": input_identities,
+            }
+        finally:
+            seen.remove(key)
 
     # ── List ────────────────────────────────────────────────────────────
 

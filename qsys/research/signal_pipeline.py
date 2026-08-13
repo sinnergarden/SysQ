@@ -214,13 +214,21 @@ class SignalResearchPipeline:
             all_preds.append(pred)
 
         predictions = pd.concat(all_preds, ignore_index=True)
+        signal_manifest = {
+            "model_mode": "rolling_train",
+            "window_count": len(windows),
+            "train_window_days": config.calendar.get("train_window_days"),
+        }
+        feature_visibility_contract = getattr(
+            gen, "feature_visibility_contract", None
+        )
+        if feature_visibility_contract:
+            signal_manifest["feature_visibility_contract"] = (
+                feature_visibility_contract
+            )
         self._signal_store.save_signal_run(
             signal_id, signal_run_id, predictions,
-            manifest={
-                "model_mode": "rolling_train",
-                "window_count": len(windows),
-                "train_window_days": config.calendar.get("train_window_days"),
-            },
+            manifest=signal_manifest,
             overwrite=overwrite_signal,
         )
 
@@ -307,6 +315,7 @@ class SignalResearchPipeline:
 
         # ── 3. Generate raw predictions once per generator ──
         raw_predictions: dict[str, pd.DataFrame] = {}
+        generator_visibility_contracts: dict[str, str | None] = {}
         for gen_cfg in effective_generators:
             gen_id = gen_cfg["generator_id"]
             gen = signal_generator if explicit_generator else _create_generator_from_config(
@@ -315,6 +324,9 @@ class SignalResearchPipeline:
                 write_through=config.write_through,
                 feature_cache_root=config.feature_cache_root,
                 source_manifest_hash=config.source_manifest_hash,
+            )
+            generator_visibility_contracts[gen_id] = getattr(
+                gen, "feature_visibility_contract", None
             )
 
             all_preds: list[pd.DataFrame] = []
@@ -352,15 +364,23 @@ class SignalResearchPipeline:
             transformed["signal_id"] = job.signal_id
             transformed["signal_run_id"] = job.signal_run_id
 
+            signal_manifest = {
+                "model_mode": "signal_research_matrix",
+                "window_count": len(windows),
+                "generator_id": job.generator_id,
+                "transform_id": job.transform_id,
+                "train_window_days": config.calendar.get("train_window_days"),
+            }
+            feature_visibility_contract = generator_visibility_contracts.get(
+                job.generator_id
+            )
+            if feature_visibility_contract:
+                signal_manifest["feature_visibility_contract"] = (
+                    feature_visibility_contract
+                )
             self._signal_store.save_signal_run(
                 job.signal_id, job.signal_run_id, transformed,
-                manifest={
-                    "model_mode": "signal_research_matrix",
-                    "window_count": len(windows),
-                    "generator_id": job.generator_id,
-                    "transform_id": job.transform_id,
-                    "train_window_days": config.calendar.get("train_window_days"),
-                },
+                manifest=signal_manifest,
                 overwrite=overwrite_signal,
             )
 
