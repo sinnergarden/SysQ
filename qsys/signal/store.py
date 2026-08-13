@@ -442,6 +442,7 @@ class SignalStore:
                 "predictions_sha256": actual_sha,
                 "manifest_sha256": manifest_sha,
                 "feature_visibility_contract": contract,
+                "source_manifest_hash": manifest.get("source_manifest_hash"),
                 "git_commit": manifest.get("git_commit"),
                 "inputs": input_identities,
             }

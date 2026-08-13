@@ -31,10 +31,14 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from qsys.config import cfg
+
 warnings.filterwarnings("ignore")
 
-REPO = Path(__file__).resolve().parents[3]
-TUSHARE_DIR = REPO / "data" / "tushare"
+
+def _tushare_dir() -> Path:
+    """Resolve external financial tables from the configured data root."""
+    return Path(cfg.get_path("root")) / "tushare"
 
 # ── Forecast type mapping ──
 FORECAST_TYPE_MAP = {
@@ -54,7 +58,7 @@ FORECAST_TYPE_MAP = {
 # ═══════════════════════════════════════════════════════════════════
 
 def _load_forecast() -> pd.DataFrame:
-    path = TUSHARE_DIR / "forecast.parquet"
+    path = _tushare_dir() / "forecast.parquet"
     if not path.exists():
         raise FileNotFoundError(f"Forecast data not found at {path}")
     df = pd.read_parquet(path)
@@ -69,7 +73,7 @@ def _load_income() -> pd.DataFrame:
     PIT dedup: if multiple records for same (ts_code, end_date), keep
     the one with the latest ``ann_date`` (most recently revised).
     """
-    path = TUSHARE_DIR / "income.parquet"
+    path = _tushare_dir() / "income.parquet"
     if not path.exists():
         raise FileNotFoundError(f"Income data not found at {path}")
     df = pd.read_parquet(path)
