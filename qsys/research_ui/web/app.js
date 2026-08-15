@@ -44,6 +44,9 @@ const state = {
     selectedInstrument: '',
     ordersByDate: new Map(),
     positionsByDate: new Map(),
+    episodes: null,
+    episodeSummary: null,
+    episodesLoaded: false,
   },
   caseData: null,
   featureData: {
@@ -1645,6 +1648,303 @@ function renderBacktestPositionsTable(positions) {
   });
 }
 
+async function loadBacktestEpisodes({ force = false } = {}) {
+  const runId = state.context.runId || byId('backtest-run-select').value;
+  if (!runId) return;
+  if (!force && state.backtest.episodesLoaded) return;
+  state.backtest.episodesLoaded = true;
+  try {
+    const payload = await getJson(`/api/backtest-runs/${runId}/behavior/episodes`, { useCache: false });
+    const data = unwrapData(payload) || {};
+    state.backtest.episodes = data.episodes || [];
+    state.backtest.episodeSummary = data.summary || {};
+  } catch (error) {
+    state.backtest.episodes = null;
+    state.backtest.episodeSummary = null;
+    renderEpisodeAnalyticsError(error);
+    return;
+  }
+  renderEpisodeAnalytics();
+}
+
+function renderEpisodeAnalytics() {
+  const episodes = state.backtest.episodes || [];
+  const summary = state.backtest.episodeSummary || {};
+  byId('backtest-episode-count').textContent = summary.total_episodes != null ? `${summary.total_episodes} episodes` : '';
+  renderEpisodeSummaryRow(summary);
+  renderEpisodeReturnDist(episodes);
+  renderEpisodeHoldingDist(episodes);
+  renderEpisodeMfeMaeScatter(episodes);
+  renderEpisodeExitReasonTable(summary);
+  renderEpisodeDetailTable(episodes);
+}
+
+function renderEpisodeAnalyticsError(error) {
+  byId('backtest-episode-count').textContent = '';
+  renderMetricCard('episode-total', '-', 'episode-total-note', 'total / closed / open');
+  renderMetricCard('episode-win-rate', '-', 'episode-win-rate-note', 'closed episodes');
+  renderMetricCard('episode-avg-return', '-', 'episode-avg-return-note', 'cash-weighted,含费');
+  renderMetricCard('episode-median-return', '-', 'episode-median-return-note', 'closed');
+  renderMetricCard('episode-avg-holding', '-', 'episode-avg-holding-note', 'trading days');
+  const message = `<div class="empty">${escapeHtml(error.message || 'Episodes unavailable')}</div>`;
+  renderChartError('backtest-episode-return-dist', 'No episode data');
+  renderChartError('backtest-episode-holding-dist', 'No episode data');
+  renderChartError('backtest-episode-mfe-mae-scatter', 'No episode data');
+  byId('backtest-episode-exit-reason-table').innerHTML = message;
+  byId('backtest-episode-detail-table').innerHTML = message;
+}
+
+function renderEpisodeSummaryRow(summary) {
+  const total = summary.total_episodes != null ? String(summary.total_episodes) : '-';
+  renderMetricCard('episode-total', total, 'episode-total-note', `total / closed ${summary.closed_episodes ?? 0} / open ${summary.open_episodes ?? 0}`);
+  renderMetricCard('episode-win-rate', formatPercent(summary.win_rate, 1), 'episode-win-rate-note', 'closed episodes');
+  renderMetricCard('episode-avg-return', formatPercent(summary.avg_return, 1), 'episode-avg-return-note', 'cash-weighted,含费');
+  renderMetricCard('episode-median-return', formatPercent(summary.median_return, 1), 'episode-median-return-note', 'closed');
+  renderMetricCard('episode-avg-holding', summary.avg_holding_days != null ? formatNumber(summary.avg_holding_days, 1) : '-', 'episode-avg-holding-note', 'trading days');
+}
+
+function renderEpisodeReturnDist(episodes) {
+  const returns = (episodes || [])
+    .filter((item) => item.exit_reason !== 'open' && item.realized_return != null)
+    .map((item) => Number(item.realized_return) * 100);
+  if (!returns.length) {
+    renderChartError('backtest-episode-return-dist', 'No closed episodes');
+    return;
+  }
+  const layout = plotlyBaseLayout({
+    title: 'Realized Return Distribution (%)',
+    height: 240,
+    yAxisTitle: 'Count',
+  });
+  layout.xaxis = { title: { text: 'Return %' } };
+  renderPlotlyChart('backtest-episode-return-dist', [{
+    type: 'histogram',
+    x: returns,
+    nbinsx: 40,
+    marker: { color: CHART_COLORS.strategy, line: { color: '#fff', width: 0.5 } },
+    hovertemplate: 'Return %{x:.1f}%<br>Count: %{y}<extra></extra>',
+  }], layout);
+}
+
+function renderEpisodeHoldingDist(episodes) {
+  const days = (episodes || [])
+    .map((item) => item.holding_days)
+    .filter((value) => value != null && Number.isFinite(Number(value)));
+  if (!days.length) {
+    renderChartError('backtest-episode-holding-dist', 'No holding-day data');
+    return;
+  }
+  const layout = plotlyBaseLayout({
+    title: 'Holding Days Distribution',
+    height: 240,
+    yAxisTitle: 'Count',
+  });
+  layout.xaxis = { title: { text: 'Trading days' } };
+  renderPlotlyChart('backtest-episode-holding-dist', [{
+    type: 'histogram',
+    x: days,
+    nbinsx: 30,
+    marker: { color: CHART_COLORS.accent, line: { color: '#fff', width: 0.5 } },
+    hovertemplate: 'Days %{x}<br>Count: %{y}<extra></extra>',
+  }], layout);
+}
+
+function renderEpisodeMfeMaeScatter(episodes) {
+  const closed = (episodes || []).filter((item) => item.exit_reason !== 'open' && item.realized_return != null);
+  const points = closed.filter((item) => item.MFE != null && item.MAE != null);
+  if (!points.length) {
+    renderChartError('backtest-episode-mfe-mae-scatter', 'No closed episodes with excursion data');
+    return;
+  }
+  const colors = points.map((item) => Number(item.realized_return) * 100);
+  const colorMin = Math.min(...colors);
+  const colorMax = Math.max(...colors);
+  const layout = plotlyBaseLayout({
+    title: 'MFE vs MAE (color = realized return %)',
+    height: 280,
+    yAxisTitle: 'MAE %',
+  });
+  layout.xaxis = { title: { text: 'MFE %' } };
+  renderPlotlyChart('backtest-episode-mfe-mae-scatter', [{
+    type: 'scatter',
+    mode: 'markers',
+    x: points.map((item) => Number(item.MFE) * 100),
+    y: points.map((item) => Number(item.MAE) * 100),
+    text: points.map((item) => item.symbol),
+    customdata: colors,
+    marker: {
+      size: 8,
+      color: colors,
+      colorscale: 'RdYlGn',
+      cmin: colorMin,
+      cmax: colorMax,
+      showscale: true,
+      colorbar: { title: { text: 'Return %' }, thickness: 12 },
+      line: { color: 'rgba(31,41,51,0.4)', width: 0.5 },
+    },
+    hovertemplate: '%{text}<br>MFE %{x:.1f}%<br>MAE %{y:.1f}%<br>Return %{customdata:.1f}%<extra></extra>',
+  }], layout);
+}
+
+function renderEpisodeExitReasonTable(summary) {
+  const rows = (summary.by_exit_reason || [])
+    .map((item) => ({ ...item, reason: item.exit_reason }))
+    .filter((item) => item.count != null);
+  renderDataTable('backtest-episode-exit-reason-table', rows, [
+    {
+      key: 'reason',
+      label: 'Exit Reason',
+      render: (row) => makeBadge(row.reason || row.exit_reason, row.reason === 'open' ? 'neutral' : 'success'),
+      sortValue: (row) => row.reason || row.exit_reason,
+    },
+    {
+      key: 'count',
+      label: 'Count',
+      sortValue: (row) => toNumber(row.count),
+    },
+    {
+      key: 'win_rate',
+      label: 'Win Rate',
+      render: (row) => formatPercent(row.win_rate, 1),
+      sortValue: (row) => toNumber(row.win_rate),
+    },
+    {
+      key: 'avg_return',
+      label: 'Avg Return',
+      render: (row) => formatPercent(row.avg_return, 1),
+      sortValue: (row) => toNumber(row.avg_return),
+    },
+    {
+      key: 'median_return',
+      label: 'Median Return',
+      render: (row) => formatPercent(row.median_return, 1),
+      sortValue: (row) => toNumber(row.median_return),
+    },
+    {
+      key: 'avg_mfe',
+      label: 'Avg MFE',
+      render: (row) => formatPercent(row.avg_mfe, 1),
+      sortValue: (row) => toNumber(row.avg_mfe),
+    },
+    {
+      key: 'avg_mae',
+      label: 'Avg MAE',
+      render: (row) => formatPercent(row.avg_mae, 1),
+      sortValue: (row) => toNumber(row.avg_mae),
+    },
+  ], {
+    tableKey: 'backtest-episode-exit-reason',
+    emptyMessage: 'No closed episodes',
+  });
+}
+
+function renderEpisodeDetailTable(episodes) {
+  renderDataTable('backtest-episode-detail-table', episodes || [], [
+    {
+      id: 'symbol',
+      key: 'symbol',
+      label: 'Symbol',
+      render: (row) => renderInstrumentLink(row.symbol, toDateLabel(row.entry_date || state.backtest.selectedDate)),
+      sortValue: (row) => row.symbol,
+      filterValue: (row) => row.symbol,
+    },
+    {
+      key: 'exit_reason',
+      label: 'Exit',
+      render: (row) => makeBadge(row.exit_reason || 'open', row.exit_reason === 'open' ? 'neutral' : row.exit_reason === 'hard_stop' ? 'danger' : 'success'),
+      sortValue: (row) => row.exit_reason,
+    },
+    {
+      key: 'entry_date',
+      label: 'Entry',
+      sortValue: (row) => toDateLabel(row.entry_date),
+    },
+    {
+      key: 'exit_date',
+      label: 'Exit Date',
+      render: (row) => row.exit_date != null ? toDateLabel(row.exit_date) : '-',
+      sortValue: (row) => toDateLabel(row.exit_date || ''),
+    },
+    {
+      key: 'holding_days',
+      label: 'Days',
+      sortValue: (row) => toNumber(row.holding_days),
+    },
+    {
+      id: 'return',
+      label: 'Return',
+      render: (row) => {
+        if (row.exit_reason === 'open' && row.unrealized_return != null) {
+          return `<span class="badge badge-warning">${escapeHtml(formatPercent(row.unrealized_return, 1))} (open)</span>`;
+        }
+        if (row.realized_return != null) {
+          return makeBadge(formatPercent(row.realized_return, 1), row.realized_return >= 0 ? 'success' : 'danger');
+        }
+        return '-';
+      },
+      sortValue: (row) => row.exit_reason === 'open' ? toNumber(row.unrealized_return) : toNumber(row.realized_return),
+    },
+    {
+      key: 'MFE',
+      label: 'MFE',
+      render: (row) => formatPercent(row.MFE, 1),
+      sortValue: (row) => toNumber(row.MFE),
+    },
+    {
+      key: 'MAE',
+      label: 'MAE',
+      render: (row) => formatPercent(row.MAE, 1),
+      sortValue: (row) => toNumber(row.MAE),
+    },
+    {
+      key: 'max_drawdown_from_peak',
+      label: 'Max DD',
+      render: (row) => formatPercent(row.max_drawdown_from_peak, 1),
+      sortValue: (row) => toNumber(row.max_drawdown_from_peak),
+    },
+    {
+      key: 'entry_score',
+      label: 'Entry Score',
+      render: (row) => row.entry_score != null ? formatNumber(row.entry_score, 3) : '-',
+      sortValue: (row) => toNumber(row.entry_score),
+    },
+    {
+      key: 'exit_score',
+      label: 'Exit Score',
+      render: (row) => row.exit_score != null ? formatNumber(row.exit_score, 3) : '-',
+      sortValue: (row) => toNumber(row.exit_score),
+    },
+    {
+      key: 'score_delta_5d',
+      label: 'Δ5d',
+      render: (row) => row.score_delta_5d != null ? formatNumber(row.score_delta_5d, 3) : '-',
+      sortValue: (row) => toNumber(row.score_delta_5d),
+    },
+    {
+      key: 'score_delta_20d',
+      label: 'Δ20d',
+      render: (row) => row.score_delta_20d != null ? formatNumber(row.score_delta_20d, 3) : '-',
+      sortValue: (row) => toNumber(row.score_delta_20d),
+    },
+    {
+      key: 'post_exit_return_20d',
+      label: 'Post 20d',
+      render: (row) => row.post_exit_return_20d != null ? formatPercent(row.post_exit_return_20d, 1) : '-',
+      sortValue: (row) => toNumber(row.post_exit_return_20d),
+    },
+    {
+      key: 'post_exit_return_60d',
+      label: 'Post 60d',
+      render: (row) => row.post_exit_return_60d != null ? formatPercent(row.post_exit_return_60d, 1) : '-',
+      sortValue: (row) => toNumber(row.post_exit_return_60d),
+    },
+  ], {
+    tableKey: 'backtest-episode-detail',
+    onRowClick: (row) => jumpToCase(row.symbol, toDateLabel(row.entry_date || state.backtest.selectedDate)),
+    emptyMessage: 'No episodes for this backtest run',
+  });
+}
+
 function renderBacktestContextLinks() {
   const selectedDate = state.backtest.selectedDate;
   const orders = state.backtest.ordersByDate.get(selectedDate) || [];
@@ -1752,6 +2052,9 @@ async function loadBacktest() {
     state.backtest.sectionArtifacts = {};
     state.backtest.ordersByDate = new Map();
     state.backtest.positionsByDate = new Map();
+    state.backtest.episodes = null;
+    state.backtest.episodeSummary = null;
+    state.backtest.episodesLoaded = false;
     renderParameterSummary(summary);
     renderBacktestRunContext();
     renderBacktestSignalMetrics(summary);
@@ -1764,6 +2067,7 @@ async function loadBacktest() {
       : dailyItems[dailyItems.length - 1]?.trade_date || '';
     if (!selectedDate) throw new Error('No daily backtest payload found');
     selectBacktestDate(selectedDate);
+    loadBacktestEpisodes();
   } catch (error) {
     renderParameterSummary(null);
     renderChartError('backtest-equity-chart', error.message);
@@ -1780,6 +2084,7 @@ async function loadBacktest() {
     renderChartError('backtest-signal-windows-chart', error.message);
     renderChartError('backtest-return-dist-chart', error.message);
     renderChartError('backtest-ic-dist-chart', error.message);
+    renderEpisodeAnalyticsError(error);
   }
 }
 function filterFeatureRows(features, searchValue) {

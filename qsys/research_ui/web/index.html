@@ -206,6 +206,39 @@
               </div>
             </div>
           </section>
+
+          <section class="panel">
+            <div class="panel-head compact-head">
+              <div>
+                <p class="eyebrow">Strategy Behavior Diagnostics</p>
+                <h3>Episode Analytics</h3>
+              </div>
+              <span id="backtest-episode-count" class="panel-tag"></span>
+            </div>
+            <div class="summary-grid summary-grid-tight">
+              <article class="panel stat-card"><span>Episodes</span><strong id="episode-total">-</strong><small id="episode-total-note">total / closed / open</small></article>
+              <article class="panel stat-card"><span>Win Rate</span><strong id="episode-win-rate">-</strong><small id="episode-win-rate-note">closed episodes</small></article>
+              <article class="panel stat-card"><span>Avg Return</span><strong id="episode-avg-return">-</strong><small id="episode-avg-return-note">cash-weighted,含费</small></article>
+              <article class="panel stat-card"><span>Median Return</span><strong id="episode-median-return">-</strong><small id="episode-median-return-note">closed</small></article>
+              <article class="panel stat-card"><span>Avg Holding</span><strong id="episode-avg-holding">-</strong><small id="episode-avg-holding-note">trading days</small></article>
+            </div>
+            <div class="subpanel-grid">
+              <div>
+                <div class="section-label">Return Distribution</div>
+                <div id="backtest-episode-return-dist" class="chart plotly-chart chart-mid"></div>
+              </div>
+              <div>
+                <div class="section-label">Holding Days</div>
+                <div id="backtest-episode-holding-dist" class="chart plotly-chart chart-mid"></div>
+              </div>
+            </div>
+            <div class="section-label" style="margin-top:14px;">MFE / MAE vs Realized Return</div>
+            <div id="backtest-episode-mfe-mae-scatter" class="chart plotly-chart chart-mid"></div>
+            <div class="section-label" style="margin-top:14px;">By Exit Reason</div>
+            <div id="backtest-episode-exit-reason-table" class="table-wrap"></div>
+            <div class="section-label" style="margin-top:14px;">Episode Detail</div>
+            <div id="backtest-episode-detail-table" class="table-wrap"></div>
+          </section>
         </div><!-- END backtest-main -->
 
           <section class="side-stack">
