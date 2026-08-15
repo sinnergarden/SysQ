@@ -57,6 +57,10 @@ import pandas as pd
 
 from qsys.backtest.result import BacktestRunResult
 from qsys.backtest.daily_kernel import should_skip_weekly_rebalance
+from qsys.backtest._execution import (
+    EXECUTION_ARTIFACT_COLUMNS,
+    EXECUTION_ARTIFACT_SCHEMA_VERSION,
+)
 from qsys.backtest.posterior_policy import (
     PosteriorPolicyConfig,
     PosteriorPolicyState,
@@ -1248,6 +1252,7 @@ class BacktestRunner:
 
         # ── Daily loop ────────────────────────────────────────────────────
         daily_summaries: list[dict[str, Any]] = []
+        execution_rows: list[dict[str, Any]] = []
         daily_debug_dir = output_dir / "daily" if artifact_mode == "debug" else None
         self._last_prices = {}
         self._last_trade_date = None
@@ -1316,6 +1321,7 @@ class BacktestRunner:
                     slippage=slippage,
                     execution_price_mode=self._execution_price_mode,
                     market_snapshot_fn=fetch_market_snapshot,
+                    execution_collector=execution_rows,
                 )
                 self._last_trade_date = trade_date
                 daily_summaries.append(day_result)
@@ -1510,6 +1516,9 @@ class BacktestRunner:
                 account, day_signal, targets.set_index("instrument")["target_weight"].to_dict(),
                 exec_prices, trade_date,
             )
+            for order in orders:
+                order["execution_phase"] = "rebalance"
+                order["trade_reason"] = "rebalance_to_target_weight"
 
             # 7. Execute, settle, MTM
             from qsys.backtest._execution import execute_trade_day
@@ -1518,6 +1527,7 @@ class BacktestRunner:
                 commission=commission, stamp_duty=stamp_duty,
                 min_commission=min_commission, slippage=slippage,
                 execution_price_mode=self._execution_price_mode,
+                execution_collector=execution_rows,
             )
             self._last_prices = mtm_prices
             self._last_trade_date = trade_date
@@ -1562,6 +1572,14 @@ class BacktestRunner:
             final_value = account.cash + final_mv
 
         total_return = (final_value / initial_capital) - 1.0 if initial_capital > 0 else 0.0
+
+        executions_path = output_dir / "executions.csv"
+        pd.DataFrame(
+            execution_rows, columns=EXECUTION_ARTIFACT_COLUMNS
+        ).to_csv(executions_path, index=False)
+        executions_sha256 = hashlib.sha256(
+            executions_path.read_bytes()
+        ).hexdigest()
 
         # ── Write manifest ────────────────────────────────────────────────
         from qsys.research.manifest import with_standard_metadata, write_manifest
@@ -1616,6 +1634,15 @@ class BacktestRunner:
             "slippage": slippage,
             "rebalance_freq": rebalance_freq,
             "data_cutoff_policy": "preopen_previous",
+            "artifacts": {
+                "executions": {
+                    "path": "executions.csv",
+                    "schema_version": EXECUTION_ARTIFACT_SCHEMA_VERSION,
+                    "sha256": executions_sha256,
+                    "row_count": len(execution_rows),
+                    "complete": stop_loss is None and trailing_stop is None,
+                }
+            },
         })
         if posterior_config is not None:
             manifest["holding_policy"] = holding_policy

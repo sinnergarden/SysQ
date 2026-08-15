@@ -190,6 +190,7 @@ def run_posterior_policy_day(
     slippage: float,
     execution_price_mode: str,
     market_snapshot_fn: Any,
+    execution_collector: list[dict[str, Any]] | None = None,
 ) -> tuple[dict[str, Any], pd.DataFrame, list[dict[str, Any]]]:
     """Advance the posterior policy by one execution date."""
     if day_signal.empty and "instrument" not in day_signal.columns:
@@ -303,6 +304,11 @@ def run_posterior_policy_day(
         account, day_signal, sell_targets, exec_prices, trade_date
     )
     sell_orders = [order for order in sell_orders if order["side"] == "sell"]
+    for order in sell_orders:
+        order["execution_phase"] = "exit"
+        order["trade_reason"] = exit_reasons.get(
+            str(order.get("symbol") or ""), "posterior_exit"
+        )
     before = set(account.positions)
     sell_result = execute_trade_day(
         account,
@@ -316,6 +322,7 @@ def run_posterior_policy_day(
         min_commission=min_commission,
         slippage=slippage,
         execution_price_mode=execution_price_mode,
+        execution_collector=execution_collector,
     )
     after_sells = set(account.positions)
     actual_exits = before.difference(after_sells)
@@ -349,6 +356,15 @@ def run_posterior_policy_day(
             account, day_signal, buy_targets, exec_prices, trade_date
         )
         buy_orders = [order for order in generated if order["side"] == "buy"]
+        replacement_entries = {candidate for _, candidate in reserved_replacements}
+        for order in buy_orders:
+            instrument = str(order.get("symbol") or "")
+            order["execution_phase"] = "entry"
+            order["trade_reason"] = (
+                "stale_replacement_entry"
+                if instrument in replacement_entries
+                else "top_n_entry"
+            )
 
     buy_result = execute_trade_day(
         account,
@@ -362,6 +378,7 @@ def run_posterior_policy_day(
         min_commission=min_commission,
         slippage=slippage,
         execution_price_mode=execution_price_mode,
+        execution_collector=execution_collector,
     )
     after = set(account.positions)
     actual_entries = after.difference(after_sells)

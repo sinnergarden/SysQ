@@ -60,6 +60,12 @@ UC-5（Signal Analytics）、UC-6（Signal Combination）、UC-7（Signal Backte
 - `data/research/experiments/` — 实验索引
 - `data/research/backtests/` — 回测产物
 
+Canonical cached-signal backtest 还必须输出 manifest 绑定的
+`executions.csv`（schema `backtest_executions_v1`），逐订单记录请求数量、真实
+模拟成交数量/价格、费用、拒单原因及策略明确提供的交易原因。不得从日级汇总
+反推逐笔成交；启用尚未接入逐笔 collector 的 legacy stop 时，manifest 必须将
+该 artifact 标为不完整。
+
 ### Financial RC 60d/180d Cache-to-Backtest Runbook
 
 60d 与 180d 必须分别运行研究配置，使训练标签分别使用 61 与 181 个交易日的

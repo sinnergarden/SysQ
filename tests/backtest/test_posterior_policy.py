@@ -257,6 +257,9 @@ def test_policy_parameters_are_hashed_and_manifested(tmp_path: Path) -> None:
     assert manifest["holding_policy"] == "posterior_confirmed"
     assert manifest["posterior_policy"]["score_delta_quantile"] == 0.20
     assert manifest["posterior_policy_contract"]["price_decision"] == "previous_completed_close"
+    executions = pd.read_csv(tmp_path / "second" / "executions.csv")
+    assert set(executions["execution_phase"]) == {"entry"}
+    assert set(executions["trade_reason"]) == {"top_n_entry"}
 
 
 def test_top_n_must_be_positive(tmp_path: Path) -> None:
