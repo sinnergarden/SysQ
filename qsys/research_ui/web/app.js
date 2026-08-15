@@ -1653,6 +1653,7 @@ async function loadBacktestEpisodes({ force = false } = {}) {
   if (!runId) return;
   if (!force && state.backtest.episodesLoaded) return;
   state.backtest.episodesLoaded = true;
+  renderEpisodeLoading();
   try {
     const payload = await getJson(`/api/backtest-runs/${runId}/behavior/episodes`, { useCache: false });
     const data = unwrapData(payload) || {};
@@ -1665,6 +1666,22 @@ async function loadBacktestEpisodes({ force = false } = {}) {
     return;
   }
   renderEpisodeAnalytics();
+}
+
+function renderEpisodeLoading() {
+  // Clear the previous run's panel so a slow first load doesn't read as stale.
+  byId('backtest-episode-count').textContent = 'Loading episodes…';
+  renderMetricCard('episode-total', '…', 'episode-total-note', 'total / closed / open');
+  renderMetricCard('episode-win-rate', '…', 'episode-win-rate-note', 'closed episodes');
+  renderMetricCard('episode-avg-return', '…', 'episode-avg-return-note', 'cash-weighted,含费');
+  renderMetricCard('episode-median-return', '…', 'episode-median-return-note', 'closed');
+  renderMetricCard('episode-avg-holding', '…', 'episode-avg-holding-note', 'trading days');
+  const loading = '<div class="empty">Loading episodes…</div>';
+  byId('backtest-episode-return-dist').innerHTML = loading;
+  byId('backtest-episode-holding-dist').innerHTML = loading;
+  byId('backtest-episode-mfe-mae-scatter').innerHTML = loading;
+  byId('backtest-episode-exit-reason-table').innerHTML = loading;
+  byId('backtest-episode-detail-table').innerHTML = loading;
 }
 
 function renderEpisodeAnalytics() {

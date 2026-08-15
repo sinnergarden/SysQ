@@ -21,7 +21,12 @@ def _is_filled(row: dict[str, Any]) -> bool:
 
 
 def _price_lookup(frame: pd.DataFrame | None) -> tuple[dict[str, dict[str, float]], list[str]]:
-    """Normalize a raw daily frame into {date: {high, low, close}} + sorted dates."""
+    """Normalize a raw daily frame into {date: {high, low, close}} + sorted dates.
+
+    Vectorized: the per-row ``iterrows`` path was ~30s over 200+ symbol frames
+    (one pandas ``Series`` constructed per row), so columns are extracted once
+    with ``to_numeric`` and zipped.
+    """
     if frame is None or frame.empty or "trade_date" not in frame.columns:
         return {}, []
     f = frame.copy()
@@ -32,17 +37,18 @@ def _price_lookup(frame: pd.DataFrame | None) -> tuple[dict[str, dict[str, float
     if f.empty:
         return {}, []
     f = f.sort_values("d")
-    rows: dict[str, dict[str, float]] = {}
-    for _, r in f.iterrows():
-        d = str(r["d"])
-        high = r.get("high")
-        low = r.get("low")
+    dates = f["d"].tolist()
+    close_vals = pd.to_numeric(f["close"], errors="coerce").tolist()
+    high_vals = pd.to_numeric(f["high"], errors="coerce").tolist() if "high" in f.columns else [None] * len(dates)
+    low_vals = pd.to_numeric(f["low"], errors="coerce").tolist() if "low" in f.columns else [None] * len(dates)
+    rows: dict[str, dict[str, float | None]] = {}
+    for d, h, l, c in zip(dates, high_vals, low_vals, close_vals):
         rows[d] = {
-            "high": float(high) if high is not None and pd.notna(high) else None,
-            "low": float(low) if low is not None and pd.notna(low) else None,
-            "close": float(r["close"]),
+            "high": float(h) if h is not None and not pd.isna(h) else None,
+            "low": float(l) if l is not None and not pd.isna(l) else None,
+            "close": float(c),
         }
-    return rows, sorted(rows.keys())
+    return rows, dates
 
 
 def derive_episodes(
@@ -94,14 +100,22 @@ def derive_episodes(
         inst_col = "instrument" if "instrument" in sf.columns else "symbol"
         if "score" not in sf.columns:
             sf = sf.rename(columns={"score_raw": "score"})
-        for _, srow in sf.iterrows():
-            d = _norm_date(srow.get("trade_date") or srow.get("date"))
-            inst = str(srow.get(inst_col) or "")
-            if d and inst:
-                try:
-                    score_map[(d, inst)] = float(srow["score"])
-                except (TypeError, ValueError, KeyError):
-                    continue
+        # Vectorized: the per-row iterrows path was ~30s over ~1.25M prediction
+        # rows (a pandas Series per row); build effective date + score columns
+        # once and zip the underlying lists instead.  A frame with no usable
+        # score column simply yields an empty map (matches the old per-row
+        # KeyError swallow) and episode derivation continues.
+        if "score" in sf.columns:
+            date_col = "trade_date" if "trade_date" in sf.columns else "date"
+            raw_dates = sf[date_col]
+            if date_col == "trade_date" and "date" in sf.columns:
+                blank = raw_dates.isna() | (raw_dates.astype(str).str.strip() == "")
+                raw_dates = raw_dates.where(~blank, sf["date"])
+            inst_vals = sf[inst_col].map(lambda v: str(v or ""))
+            score_vals = pd.to_numeric(sf["score"], errors="coerce")
+            for d, inst, sc in zip(raw_dates.map(_norm_date), inst_vals, score_vals):
+                if d and inst and sc is not None and not pd.isna(sc):
+                    score_map[(d, inst)] = float(sc)
 
     def score_on(date: str, symbol: str) -> float | None:
         return score_map.get((date, symbol))

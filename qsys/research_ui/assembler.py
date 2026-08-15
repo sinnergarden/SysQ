@@ -67,6 +67,10 @@ class ResearchCockpitRepository:
         self._model_meta_cache: dict[Path, dict[str, Any]] = {}
         self._universe_cache: dict[str, set[str]] = {}
         self._feature_snapshot_cache: dict[str, dict[str, Any]] = {}
+        # Episodes are derived from immutable canonical backtest artifacts, so
+        # the full result per run_id can be cached (limit is applied after the
+        # cache hit).  Same pattern as the other _backtest_*_cache dicts.
+        self._behavior_episodes_cache: dict[str, dict[str, Any]] = {}
         self._qlib_ready = False
 
     def _load_universe_set(self, universe: str) -> set[str]:
@@ -871,7 +875,15 @@ class ResearchCockpitRepository:
         (for entry/exit scores and score deltas) and raw daily bars (for MFE/MAE
         and post-exit returns).  All prices are RAW to match execution deal
         prices.  Unknown runs raise FileNotFoundError (→ 404 at the API layer).
+
+        Results are cached per run_id (full episode list; ``limit`` slices the
+        cached copy) — derivation is ~seconds of pandas work over 200+ symbol
+        frames, and canonical artifacts are immutable.
         """
+        cached = self._behavior_episodes_cache.get(run_id)
+        if cached is not None:
+            return {"episodes": cached["episodes"][:limit], "summary": cached["summary"]}
+
         source = self._get_canonical_backtest_source(run_id)
         if source is None:
             self._resolve_backtest_report(run_id)  # raises for unknown runs
@@ -914,8 +926,8 @@ class ResearchCockpitRepository:
                 prices_by_symbol[symbol] = df
 
         episodes = derive_episodes(rows, prices_by_symbol=prices_by_symbol, scores_frame=scores_frame, calendar=calendar)
-        episodes = episodes[:limit]
-        return {"episodes": episodes, "summary": summarize_episodes(episodes)}
+        self._behavior_episodes_cache[run_id] = {"episodes": episodes, "summary": summarize_episodes(episodes)}
+        return {"episodes": episodes[:limit], "summary": self._behavior_episodes_cache[run_id]["summary"]}
 
     def build_decision_replay(self, *, execution_date: str, account_name: str) -> DecisionReplay:
         manifest = self.build_daily_run_manifest(execution_date)

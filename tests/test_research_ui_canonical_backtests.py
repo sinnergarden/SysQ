@@ -8,6 +8,7 @@ import pandas as pd
 import pytest
 
 from qsys.research_ui.assembler import ResearchCockpitRepository
+from qsys.research_ui.behavior import derive_episodes
 
 
 def _write_canonical_backtest(root: Path) -> str:
@@ -402,6 +403,24 @@ def test_behavior_episodes_assembler_layer(tmp_path: Path) -> None:
     # realized return is cash-weighted, fees included
     closed = by_symbol["600000.SH"]
     assert closed["realized_return"] == pytest.approx((100 * 30.3 - 0.909) / (100 * 10.1 + 0.303) - 1)
+
+
+def test_behavior_episodes_cached_per_run(tmp_path: Path) -> None:
+    """Repeated queries for the same run reuse the cached derivation.
+
+    Guards the perf fix: episode derivation walks ~200 symbol frames and used
+    to cost ~30-50s per UI run switch; the assembler caches per run_id and the
+    episodes endpoint serves from a shared repo.
+    """
+    run_id = _write_canonical_backtest_with_executions(tmp_path)
+    repo = ResearchCockpitRepository(project_root=tmp_path)
+    with patch.object(repo.store, "load_daily", return_value=_raw_daily_frame()), \
+         patch("qsys.research_ui.assembler.derive_episodes", wraps=derive_episodes) as mocked:
+        first = repo.get_behavior_episodes(run_id)
+        second = repo.get_behavior_episodes(run_id)
+    assert mocked.call_count == 1  # second call served from cache
+    assert first["episodes"] == second["episodes"]
+    assert first["summary"] == second["summary"]
 
 
 def test_behavior_episodes_empty_when_no_executions(tmp_path: Path) -> None:

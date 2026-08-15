@@ -284,8 +284,12 @@ def create_app(project_root: str | Path = ".") -> FastAPI:
     def get_behavior_episodes(
         run_id: str,
         limit: int = Query(5000, ge=1, le=100000),
+        repo: ResearchCockpitRepository = Depends(get_repo),
     ) -> dict:
-        repo = _fresh_repo_backtests()
+        # Shared repo (not _fresh_repo_backtests): episodes derive from the
+        # run's immutable canonical artifacts, so the repo's per-run cache is
+        # safe to reuse across requests — re-deriving ~200 symbol frames on
+        # every run switch made the panel ~30-50s per load.
         try:
             payload = repo.get_behavior_episodes(run_id, limit=limit)
         except FileNotFoundError as exc:
