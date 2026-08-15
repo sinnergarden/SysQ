@@ -387,3 +387,33 @@ def test_load_bars_raw_mode_uses_unadjusted_ohlc_from_raw_store(tmp_path: Path) 
     assert bars[0]["close"] == pytest.approx(10.5)
     assert bars[0]["open"] == pytest.approx(10.0)
     assert "adj_close" not in bars[0]
+
+
+def test_behavior_episodes_assembler_layer(tmp_path: Path) -> None:
+    """Episode diagnostics derive from the immutable executions artifact."""
+    run_id = _write_canonical_backtest_with_executions(tmp_path)
+    repo = ResearchCockpitRepository(project_root=tmp_path)
+    with patch.object(repo.store, "load_daily", return_value=_raw_daily_frame()):
+        payload = repo.get_behavior_episodes(run_id)
+    assert payload["summary"]["total_episodes"] == 2  # 600000 closed, 600001 open
+    by_symbol = {e["symbol"]: e for e in payload["episodes"]}
+    assert by_symbol["600000.SH"]["exit_reason"] == "score_delta_exit"
+    assert by_symbol["600001.SH"]["exit_reason"] == "open"
+    # realized return is cash-weighted, fees included
+    closed = by_symbol["600000.SH"]
+    assert closed["realized_return"] == pytest.approx((100 * 30.3 - 0.909) / (100 * 10.1 + 0.303) - 1)
+
+
+def test_behavior_episodes_empty_when_no_executions(tmp_path: Path) -> None:
+    run_id = _write_canonical_backtest(tmp_path)  # base fixture has no executions artifact
+    repo = ResearchCockpitRepository(project_root=tmp_path)
+    with patch.object(repo.store, "load_daily", return_value=_raw_daily_frame()):
+        payload = repo.get_behavior_episodes(run_id)
+    assert payload["episodes"] == []
+    assert payload["summary"]["total_episodes"] == 0
+
+
+def test_behavior_episodes_404_unknown_run(tmp_path: Path) -> None:
+    repo = ResearchCockpitRepository(project_root=tmp_path)
+    with pytest.raises(FileNotFoundError, match="Unknown backtest run_id"):
+        repo.get_behavior_episodes("canonical__zzz__zzz")

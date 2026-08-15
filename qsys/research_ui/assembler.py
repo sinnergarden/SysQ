@@ -18,6 +18,7 @@ from qsys.feature.library import FeatureLibrary
 from qsys.feature.registry import list_feature_groups
 from qsys.live.account import RealAccount
 from qsys.live.ops_manifest import load_manifest
+from qsys.research_ui.behavior import derive_episodes, summarize_episodes
 from qsys.research_ui.schema import (
     BacktestDailyPoint,
     BacktestRunSummary,
@@ -862,6 +863,45 @@ class ResearchCockpitRepository:
             result.append(item)
         result.sort(key=lambda item: abs(item.get("market_value") or 0), reverse=True)
         return result[:limit]
+
+    def get_behavior_episodes(self, run_id: str, *, limit: int = 5000) -> dict[str, Any]:
+        """Derive holding-episode diagnostics for a canonical backtest run.
+
+        Reads the immutable executions artifact, the signal predictions parquet
+        (for entry/exit scores and score deltas) and raw daily bars (for MFE/MAE
+        and post-exit returns).  All prices are RAW to match execution deal
+        prices.  Unknown runs raise FileNotFoundError (→ 404 at the API layer).
+        """
+        source = self._get_canonical_backtest_source(run_id)
+        if source is None:
+            self._resolve_backtest_report(run_id)  # raises for unknown runs
+            return {"episodes": [], "summary": summarize_episodes([])}
+        rows = self._read_canonical_executions(source)
+        if not rows:
+            return {"episodes": [], "summary": summarize_episodes([])}
+
+        manifest = source["manifest"]
+        signal_id = str(manifest.get("signal_id") or "")
+        signal_run_id = str(manifest.get("signal_run_id") or "")
+        scores_frame: pd.DataFrame | None = None
+        if signal_id and signal_run_id:
+            pred_path = self.project_root / "data" / "research" / "signals" / signal_id / signal_run_id / "predictions.parquet"
+            if pred_path.exists():
+                try:
+                    scores_frame = pd.read_parquet(pred_path)
+                except Exception:
+                    scores_frame = None
+
+        symbols = sorted({str(r.get("instrument") or r.get("symbol") or "") for r in rows if r.get("instrument") or r.get("symbol")})
+        prices_by_symbol: dict[str, pd.DataFrame] = {}
+        for symbol in symbols:
+            df = self.store.load_daily(symbol)
+            if df is not None and not df.empty:
+                prices_by_symbol[symbol] = df
+
+        episodes = derive_episodes(rows, prices_by_symbol=prices_by_symbol, scores_frame=scores_frame)
+        episodes = episodes[:limit]
+        return {"episodes": episodes, "summary": summarize_episodes(episodes)}
 
     def build_decision_replay(self, *, execution_date: str, account_name: str) -> DecisionReplay:
         manifest = self.build_daily_run_manifest(execution_date)
