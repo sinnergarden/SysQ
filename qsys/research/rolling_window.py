@@ -21,7 +21,10 @@ class RollingWindow:
 def _calendar_backdate(start_date: str, n_days: int, buffer: int = 10) -> str:
     from datetime import datetime, timedelta
     dt = datetime.strptime(start_date, "%Y-%m-%d")
-    estimated = dt - timedelta(days=int(n_days * 1.4) + buffer + 5)
+    # A-share calendars average fewer than five sessions per seven calendar
+    # days once public holidays are included.  Use a conservative factor so
+    # long maturity embargoes do not silently shorten the requested OOS span.
+    estimated = dt - timedelta(days=int(n_days * 1.6) + buffer + 5)
     return estimated.strftime("%Y-%m-%d")
 
 
@@ -30,6 +33,7 @@ def build_rolling_windows(
     end_date: str,
     *,
     train_window_days: int = 252,
+    predict_window_days: int | None = None,
     step_days: int = 5,
     label_maturity_lag_trading_days: int = 0,
 ) -> list[RollingWindow]:
@@ -47,7 +51,18 @@ def build_rolling_windows(
     """
     from qsys.data.calendar import get_trading_calendar
 
-    _extended_start = _calendar_backdate(start_date, train_window_days)
+    if predict_window_days is not None and predict_window_days != step_days:
+        raise ValueError(
+            "predict_window_days is a deprecated compatibility alias and "
+            "must equal step_days to preserve gap-free, non-overlapping windows"
+        )
+
+    # The calendar prefix must cover both the training window and the label
+    # maturity embargo.  Backdating only ``train_window_days`` silently skips
+    # the first months of long-horizon studies (notably 180d), even when the
+    # underlying dataset contains sufficient history.
+    history_days = train_window_days + label_maturity_lag_trading_days
+    _extended_start = _calendar_backdate(start_date, history_days)
     full_cal = get_trading_calendar(_extended_start, end_date)
     if not full_cal:
         raise ValueError(f"No trading dates in [{_extended_start}, {end_date}]")
@@ -59,9 +74,9 @@ def build_rolling_windows(
     windows: list[RollingWindow] = []
 
     for offset in range(0, len(pred_cal), step_days):
-        pred_end_offset = offset + step_days - 1
-        if pred_end_offset >= len(pred_cal):
-            break
+        # Keep the terminal partial window so a study ends on its declared
+        # end_date instead of silently truncating to the last full step.
+        pred_end_offset = min(offset + step_days - 1, len(pred_cal) - 1)
 
         predict_start = pred_cal[offset]
         predict_end = pred_cal[pred_end_offset]

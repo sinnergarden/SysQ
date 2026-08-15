@@ -39,7 +39,7 @@ class TestBuildRollingWindows:
         with patch("qsys.data.calendar.get_trading_calendar", return_value=_MOCK_CAL):
             windows = build_rolling_windows(
                 "2026-05-06", "2026-05-31",
-                train_window_days=5, predict_window_days=5, step_days=5,
+                train_window_days=20, predict_window_days=5, step_days=5,
             )
             assert len(windows) >= 1
             assert windows[0].predict_start >= "2026-05-06"
@@ -58,6 +58,42 @@ class TestBuildRollingWindows:
         with patch("qsys.data.calendar.get_trading_calendar", return_value=[]):
             with pytest.raises(ValueError, match="No trading dates"):
                 build_rolling_windows("2026-05-01", "2026-05-31")
+
+    def test_keeps_terminal_partial_prediction_window(self) -> None:
+        calendar = [f"2026-04-{day:02d}" for day in range(1, 31)] + [
+            f"2026-05-{day:02d}" for day in range(1, 13)
+        ]
+        with patch("qsys.data.calendar.get_trading_calendar", return_value=calendar):
+            windows = build_rolling_windows(
+                "2026-05-01",
+                "2026-05-12",
+                train_window_days=20,
+                step_days=5,
+            )
+
+        assert [(w.predict_start, w.predict_end) for w in windows] == [
+            ("2026-05-01", "2026-05-05"),
+            ("2026-05-06", "2026-05-10"),
+            ("2026-05-11", "2026-05-12"),
+        ]
+
+    def test_calendar_backdate_includes_label_maturity_history(self) -> None:
+        with patch(
+            "qsys.research.rolling_window._calendar_backdate",
+            wraps=_calendar_backdate,
+        ) as backdate, patch(
+            "qsys.data.calendar.get_trading_calendar",
+            return_value=_MOCK_CAL,
+        ):
+            build_rolling_windows(
+                "2026-05-10",
+                "2026-05-15",
+                train_window_days=20,
+                step_days=2,
+                label_maturity_lag_trading_days=7,
+            )
+
+        backdate.assert_called_once_with("2026-05-10", 27)
 
 
 class TestFixtureSignalGenerator:
