@@ -50,6 +50,7 @@ def derive_episodes(
     *,
     prices_by_symbol: dict[str, pd.DataFrame] | None = None,
     scores_frame: pd.DataFrame | None = None,
+    calendar: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Reconstruct contiguous holding episodes per symbol from exact fills.
 
@@ -58,6 +59,14 @@ def derive_episodes(
     a later buy after a close starts a fresh episode.  All prices are RAW
     (unadjusted) to match execution deal prices.  Read-only; never touches
     backtest engine code.
+
+    ``calendar`` is the backtest's trading-day calendar (YYYY-MM-DD strings).
+    It defines ``holding_days``, the ``score_delta_*`` lookbacks, and the
+    window bound: excursions and open-episode finalization never read prices
+    after the last calendar date.  Callers pass the immutable daily_summary
+    trade dates so results stay deterministic and inside the backtest window.
+    When omitted, the union of execution dates and per-symbol price dates is
+    used as a best-effort fallback.
     """
     rows = [r for r in executions_rows if _is_filled(r)]
     if not rows:
@@ -66,9 +75,18 @@ def derive_episodes(
         rows,
         key=lambda r: (_norm_date(r.get("trade_date") or r.get("date")), r.get("sequence") or 0),
     )
-    calendar = sorted({_norm_date(r.get("trade_date") or r.get("date")) for r in ordered})
-    cal_index = {d: i for i, d in enumerate(calendar)}
+    fill_dates = {_norm_date(r.get("trade_date") or r.get("date")) for r in ordered}
     prices_by_symbol = prices_by_symbol or {}
+    if calendar:
+        calendar = sorted({_norm_date(d) for d in calendar if d})
+    else:
+        all_price_dates: set[str] = set()
+        for frame in prices_by_symbol.values():
+            _, price_dates = _price_lookup(frame)
+            all_price_dates.update(price_dates)
+        calendar = sorted(fill_dates | all_price_dates)
+    cal_index = {d: i for i, d in enumerate(calendar)}
+    max_cal_date = calendar[-1] if calendar else ""
 
     score_map: dict[tuple[str, str], float] = {}
     if scores_frame is not None and not scores_frame.empty:
@@ -82,7 +100,7 @@ def derive_episodes(
             if d and inst:
                 try:
                     score_map[(d, inst)] = float(srow["score"])
-                except (TypeError, ValueError):
+                except (TypeError, ValueError, KeyError):
                     continue
 
     def score_on(date: str, symbol: str) -> float | None:
@@ -99,7 +117,7 @@ def derive_episodes(
     for symbol, fills in fills_by_symbol.items():
         price_rows, price_dates = _price_lookup(prices_by_symbol.get(symbol))
         episodes.extend(
-            _simulate_symbol(symbol, fills, price_rows, price_dates, calendar, cal_index, score_on)
+            _simulate_symbol(symbol, fills, price_rows, price_dates, calendar, cal_index, max_cal_date, score_on)
         )
     return episodes
 
@@ -134,6 +152,7 @@ def _simulate_symbol(
     price_dates: list[str],
     calendar: list[str],
     cal_index: dict[str, int],
+    max_cal_date: str,
     score_on,
 ) -> list[dict[str, Any]]:
     qty = 0.0
@@ -144,12 +163,17 @@ def _simulate_symbol(
     episodes: list[dict[str, Any]] = []
 
     fill_dates = {_norm_date(r.get("trade_date") or r.get("date")) for r in fills}
-    walk = sorted(fill_dates | set(price_rows.keys()))
+    walk_dates = fill_dates | set(price_rows.keys())
+    if max_cal_date:
+        walk_dates = {d for d in walk_dates if d <= max_cal_date}
+    walk = sorted(walk_dates)
     day_fills: dict[str, list[dict[str, Any]]] = {}
     for r in fills:
         day_fills.setdefault(_norm_date(r.get("trade_date") or r.get("date")), []).append(r)
 
     for date in walk:
+        opened_today = False
+        closed_today = False
         for r in day_fills.get(date, []):
             side = str(r.get("side") or "").lower()
             if side != "buy" and qty <= 0:
@@ -162,6 +186,7 @@ def _simulate_symbol(
             if side == "buy":
                 if qty == 0:
                     ep = _new_episode(symbol, date, score_on(date, symbol))
+                    opened_today = True
                 buy_cost += fqty * price + fee
                 buy_qty += fqty
                 qty += fqty
@@ -181,8 +206,11 @@ def _simulate_symbol(
                 if qty == 0:
                     _close_episode(ep, date, r, episodes, price_rows, price_dates, calendar, cal_index, score_on)
                     ep = None
-        # excursion update after the day's fills (only while holding)
-        if ep is not None and qty > 0 and avg_cost > 0:
+                    closed_today = True
+        # excursion update after the day's fills (only while holding).
+        # On a same-day close-then-reopen the day's high/low may precede the
+        # new entry, so the new episode's excursion starts the following day.
+        if ep is not None and qty > 0 and avg_cost > 0 and not (opened_today and closed_today):
             prow = price_rows.get(date)
             if prow:
                 if prow.get("high") is not None:
@@ -198,9 +226,14 @@ def _simulate_symbol(
                         dd = (ep["peak_close"] - close) / ep["peak_close"]
                         ep["max_drawdown_from_peak"] = max(ep["max_drawdown_from_peak"], dd)
 
-    # finalize open episodes
+    # finalize open episodes (bounded to the calendar window)
     if ep is not None and qty > 0:
-        _finalize_open(ep, avg_cost, price_rows, cal_index)
+        exit_date = ep["entry_date"]
+        if price_rows:
+            bounded = [d for d in price_rows if not max_cal_date or d <= max_cal_date]
+            if bounded:
+                exit_date = max(bounded)
+        _finalize_open(ep, avg_cost, price_rows, cal_index, exit_date)
         episodes.append(ep)
     return episodes
 
@@ -246,20 +279,16 @@ def _finalize_open(
     avg_cost: float,
     price_rows: dict[str, dict[str, float]],
     cal_index: dict[str, int],
+    exit_date: str,
 ) -> None:
-    symbol = ep["symbol"]
-    dates = sorted(price_rows.keys())
-    if not dates:
-        ep["exit_date"] = ep["entry_date"]
-    else:
-        ep["exit_date"] = dates[-1]
-        last_close = price_rows[dates[-1]].get("close")
-        if last_close is not None and avg_cost > 0:
-            ep["unrealized_return"] = last_close / avg_cost - 1.0
+    ep["exit_date"] = exit_date
+    last_close = price_rows.get(exit_date, {}).get("close")
+    if last_close is not None and avg_cost > 0:
+        ep["unrealized_return"] = last_close / avg_cost - 1.0
     ep["exit_score"] = None
     ep["realized_return"] = None
     entry_i = cal_index.get(ep["entry_date"])
-    exit_i = cal_index.get(ep["exit_date"])
+    exit_i = cal_index.get(exit_date)
     ep["holding_days"] = (exit_i - entry_i + 1) if (entry_i is not None and exit_i is not None) else None
     ep.pop("buy_cost", None)
     ep.pop("sell_proceeds", None)

@@ -24,6 +24,18 @@ def _prices(dates):
     )
 
 
+def _weekdays(start: str, end: str) -> list[str]:
+    """Mon–Fri dates between two ISO dates inclusive (trading-day stand-in)."""
+    out = []
+    day = datetime.date.fromisoformat(start)
+    last = datetime.date.fromisoformat(end)
+    while day <= last:
+        if day.weekday() < 5:
+            out.append(day.isoformat())
+        day += datetime.timedelta(days=1)
+    return out
+
+
 def test_episode_simple_round_trip():
     rows = [
         _row("b1", "2021-01-04", 0, "600000.SH", "buy", "top_n_entry", 100, 10.0, fee=1.0),
@@ -35,14 +47,16 @@ def test_episode_simple_round_trip():
         ("2021-02-01", 11.9, 12.5, 11.5, 12.0),
         ("2021-02-02", 12.0, 12.8, 11.8, 12.5),
     ])}
-    episodes = derive_episodes(rows, prices_by_symbol=prices)
+    calendar = _weekdays("2021-01-04", "2021-02-01")
+    episodes = derive_episodes(rows, prices_by_symbol=prices, calendar=calendar)
     assert len(episodes) == 1
     ep = episodes[0]
     assert ep["symbol"] == "600000.SH"
     assert ep["entry_date"] == "2021-01-04"
     assert ep["exit_date"] == "2021-02-01"
     assert ep["exit_reason"] == "hard_stop"
-    assert ep["holding_days"] == 2  # 01-04, 02-01
+    # 21 trading days (weekdays 01-04 .. 02-01 inclusive), not the 2 exec dates.
+    assert ep["holding_days"] == 21
     assert ep["realized_return"] == pytest.approx((1200 - 1) / (1000 + 1) - 1)
     assert ep["unrealized_return"] is None
     # excursion days: 01-04 (after buy), 01-05; 02-01 closes → not counted.
@@ -183,6 +197,102 @@ def test_episode_post_exit_returns_when_price_data_sufficient():
     # exit 2021-01-08 sits at weekday index 4; +20 lands mid-series, +60 is past the end.
     assert ep["post_exit_return_20d"] is not None
     assert ep["post_exit_return_60d"] is None
+
+
+def test_holding_days_uses_trading_calendar_not_execution_dates():
+    # Executions are sparse (weekly rebalance: only 2 fill dates), but the
+    # trading calendar spans every weekday in between. holding_days must count
+    # trading days, not distinct fill/price dates.
+    rows = [
+        _row("b1", "2021-01-04", 0, "600000.SH", "buy", "top_n_entry", 100, 10.0),
+        _row("s1", "2021-02-01", 0, "600000.SH", "sell", "hard_stop", 100, 12.0),
+    ]
+    prices = {"600000.SH": _prices([
+        ("2021-01-04", 10.0, 10.5, 9.5, 10.2),
+        ("2021-02-01", 11.9, 12.5, 11.5, 12.0),
+    ])}
+    calendar = _weekdays("2021-01-04", "2021-02-05")  # extends past exit
+    ep = derive_episodes(rows, prices_by_symbol=prices, calendar=calendar)[0]
+    assert ep["holding_days"] == 21  # weekdays 01-04..02-01, not the 2 fill dates
+
+
+def test_open_episode_bounded_to_calendar_end_ignores_post_window_prices():
+    # The backtest window ends 01-05, but price data extends to 01-07. The open
+    # episode must finalize at the window edge and never read post-window
+    # prices (a 13.5 high / 13.0 close would otherwise inflate MFE/unrealized).
+    rows = [
+        _row("b1", "2021-01-04", 0, "600000.SH", "buy", "top_n_entry", 100, 10.0, fee=1.0),
+    ]
+    prices = {"600000.SH": _prices([
+        ("2021-01-04", 10.0, 10.5, 9.5, 10.2),
+        ("2021-01-05", 10.3, 11.0, 10.0, 10.8),
+        ("2021-01-06", 10.8, 12.0, 10.5, 11.8),
+        ("2021-01-07", 12.5, 13.5, 12.0, 13.0),
+    ])}
+    calendar = _weekdays("2021-01-04", "2021-01-05")
+    ep = derive_episodes(rows, prices_by_symbol=prices, calendar=calendar)[0]
+    assert ep["exit_reason"] == "open"
+    assert ep["exit_date"] == "2021-01-05"  # bounded, not 01-07
+    avg_cost = (1000 + 1) / 100
+    assert ep["MFE"] == pytest.approx(11.0 / avg_cost - 1)  # only 01-04/01-05 highs
+    assert ep["MAE"] == pytest.approx(min(9.5 / avg_cost - 1, 10.0 / avg_cost - 1))
+    assert ep["unrealized_return"] == pytest.approx(10.8 / avg_cost - 1)  # 01-05 close
+    assert ep["holding_days"] == 2  # calendar index 0..1
+
+
+def test_same_day_close_then_reopen_skips_entry_day_excursion():
+    # 01-04: buy → sell → buy again. The day's high 12.0 / low 8.0 may precede
+    # the reopened position, so excursion for the reopened episode starts the
+    # following day. The same-day-open/closed episodes get no excursion at all.
+    rows = [
+        _row("b1", "2021-01-04", 0, "600000.SH", "buy", "top_n_entry", 100, 10.0),
+        _row("s1", "2021-01-04", 1, "600000.SH", "sell", "hard_stop", 100, 10.0),
+        _row("b2", "2021-01-04", 2, "600000.SH", "buy", "top_n_entry", 100, 10.0),
+        _row("s2", "2021-01-05", 0, "600000.SH", "sell", "hard_stop", 100, 11.0),
+        _row("b3", "2021-01-05", 1, "600000.SH", "buy", "top_n_entry", 100, 11.0),
+        _row("s3", "2021-01-08", 0, "600000.SH", "sell", "hard_stop", 100, 12.0),
+    ]
+    prices = {"600000.SH": _prices([
+        ("2021-01-04", 10.0, 12.0, 8.0, 10.0),
+        ("2021-01-05", 11.0, 11.5, 10.5, 11.0),
+        ("2021-01-06", 11.0, 11.5, 10.5, 11.2),
+        ("2021-01-07", 11.2, 11.8, 10.8, 11.5),
+        ("2021-01-08", 12.0, 12.5, 11.5, 12.0),
+    ])}
+    calendar = _weekdays("2021-01-04", "2021-01-08")
+    episodes = derive_episodes(rows, prices_by_symbol=prices, calendar=calendar)
+    assert len(episodes) == 3
+    # Same-day open/close episodes never get an excursion row.
+    assert episodes[0]["MFE"] is None
+    assert episodes[0]["MAE"] is None
+    assert episodes[1]["MFE"] is None
+    assert episodes[1]["MAE"] is None
+    # Reopened episode: cost basis 11.0 (b3 @01-05), excursion starts 01-06;
+    # 01-04 high 12.0/low 8.0 and the 01-05 reopen day are all excluded.
+    third = episodes[2]
+    assert third["MFE"] == pytest.approx(11.8 / 11.0 - 1)  # not 12.0/11-1
+    assert third["MAE"] == pytest.approx(10.5 / 11.0 - 1)  # not 8.0/11-1
+
+
+def test_scores_frame_without_score_column_does_not_crash():
+    rows = [
+        _row("b1", "2021-01-04", 0, "600000.SH", "buy", "top_n_entry", 100, 10.0),
+        _row("s1", "2021-01-08", 0, "600000.SH", "sell", "score_delta_exit", 100, 12.0),
+    ]
+    prices = {"600000.SH": _prices([
+        ("2021-01-04", 10.0, 10.5, 9.5, 10.2),
+        ("2021-01-08", 12.0, 12.5, 11.5, 12.0),
+    ])}
+    # No "score" and no "score_raw" column → per-cell KeyError must be swallowed.
+    scores = pd.DataFrame({
+        "trade_date": ["2021-01-04", "2021-01-08"],
+        "instrument": ["600000.SH", "600000.SH"],
+        "prediction": [0.5, 0.3],
+    })
+    episodes = derive_episodes(rows, prices_by_symbol=prices, scores_frame=scores)
+    assert len(episodes) == 1
+    assert episodes[0]["entry_score"] is None
+    assert episodes[0]["exit_score"] is None
 
 
 def test_summarize_episodes_groups_by_exit_reason():

@@ -892,6 +892,20 @@ class ResearchCockpitRepository:
                 except Exception:
                     scores_frame = None
 
+        # The backtest's own daily_summary trade dates are the trading-day
+        # calendar: immutable, and bounded to the backtest window so open
+        # episodes and excursions never read prices past the last strategy day.
+        calendar: list[str] | None = None
+        daily_path = source.get("daily_path")
+        if daily_path is not None and daily_path.exists():
+            try:
+                daily_df = pd.read_csv(daily_path, usecols=["trade_date"])
+                calendar = sorted(
+                    {self._normalize_trade_date_value(v) for v in daily_df["trade_date"].dropna() if str(v).strip()}
+                )
+            except Exception:
+                calendar = None
+
         symbols = sorted({str(r.get("instrument") or r.get("symbol") or "") for r in rows if r.get("instrument") or r.get("symbol")})
         prices_by_symbol: dict[str, pd.DataFrame] = {}
         for symbol in symbols:
@@ -899,7 +913,7 @@ class ResearchCockpitRepository:
             if df is not None and not df.empty:
                 prices_by_symbol[symbol] = df
 
-        episodes = derive_episodes(rows, prices_by_symbol=prices_by_symbol, scores_frame=scores_frame)
+        episodes = derive_episodes(rows, prices_by_symbol=prices_by_symbol, scores_frame=scores_frame, calendar=calendar)
         episodes = episodes[:limit]
         return {"episodes": episodes, "summary": summarize_episodes(episodes)}
 
