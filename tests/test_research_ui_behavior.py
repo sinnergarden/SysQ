@@ -508,6 +508,92 @@ def test_capture_giveback_recovery_metrics():
     assert ep["giveback_return"] == pytest.approx(0.2 - 0.1)
     assert ep["giveback_ratio"] == pytest.approx(1 - 0.1 / 0.2)
     assert ep["recovery_from_mae"] == pytest.approx(1.1 / 0.8 - 1)
+    # A clean one-buy-one-sell round trip is capture-eligible.
+    assert ep["is_simple_round_trip"] is True
+    assert ep["capture_eligible"] is True
+
+
+def test_complex_round_trip_capture_fields_none():
+    # Partial sell → re-add → final sell splits the holding into multiple
+    # cashflow regimes: MFE/MAE track the *dynamic* avg_cost excursion while
+    # realized_return is cashflow-based, so the two are not comparable.  Such
+    # episodes are not capture-eligible and keep all capture fields None — even
+    # though MFE/MAE/realized_return themselves are still measured.
+    rows = [
+        _row("b1", "2021-01-04", 0, "600000.SH", "buy", "top_n_entry", 100, 10.0),
+        _row("s1", "2021-01-08", 0, "600000.SH", "sell", "score_delta_exit", 50, 10.5),   # partial sell
+        _row("b2", "2021-01-12", 0, "600000.SH", "buy", "top_n_entry", 50, 10.0),         # re-add
+        _row("s2", "2021-01-15", 0, "600000.SH", "sell", "winner_trailing", 100, 11.0),   # final full close
+    ]
+    prices = {"600000.SH": _prices([
+        ("2021-01-04", 10.0, 12.0, 8.0, 10.2),   # entry-day high → MFE 0.2
+        ("2021-01-08", 10.5, 11.0, 10.0, 10.5),
+        ("2021-01-12", 10.0, 11.0, 9.0, 10.2),
+        ("2021-01-15", 11.0, 11.5, 10.5, 11.0),
+    ])}
+    episodes = derive_episodes(rows, prices_by_symbol=prices)
+    assert len(episodes) == 1
+    ep = episodes[0]
+    assert ep["exit_reason"] == "winner_trailing"
+    # Excursions and cashflow returns are still computed…
+    assert ep["MFE"] == pytest.approx(0.2)
+    # realized_return includes BOTH cashflow legs: partial sale 50×10.5 and
+    # final 100×11.0 against the total buy cashflow 100×10 + 50×10.
+    assert ep["realized_return"] == pytest.approx((50 * 10.5 + 100 * 11.0) / (100 * 10.0 + 50 * 10.0) - 1)
+    # …but the episode is not a simple round trip, so capture/giveback/recovery
+    # stay None (the compare would mix dynamic-avg_cost excursions with a
+    # cashflow return) and are excluded from aggregate buckets downstream.
+    assert ep["is_simple_round_trip"] is False
+    assert ep["capture_eligible"] is False
+    assert ep["capture_ratio"] is None
+    assert ep["giveback_return"] is None
+    assert ep["giveback_ratio"] is None
+    assert ep["recovery_from_mae"] is None
+    summary = summarize_episodes([ep])
+    assert summary["capture_eligible_count"] == 0
+    # MFE 0.2 > 0.10 would qualify the episode for the capture buckets, but with
+    # capture None it is excluded — the bucket counts stay zero.
+    assert all(b["count"] == 0 for b in summary["capture_ratio_distribution"])
+
+
+def test_unknown_execution_side_is_ignored_while_holding():
+    # An invalid/unknown side must never fall through into the sell branch —
+    # even while holding a position.  It must not change qty / cashflow /
+    # episode boundary, and the eventual real exit must still be a simple
+    # round trip (one buy + one sell).  Checked over several adversarial side
+    # spellings; the lowercased set-membership guard treats every non buy/sell
+    # value identically (verified by probe: uppercase, whitespace, None,
+    # numeric and HOLD/cancel all skip the fill).
+    for side_variant in ["cancel", "HOLD", "SELL ", "", None, "reverse"]:
+        rows = [
+            _row("b1", "2021-01-04", 0, "600000.SH", "buy", "top_n_entry", 100, 10.0),
+            _row("x1", "2021-01-08", 0, "600000.SH", side_variant, "score_delta_exit", 100, 10.5, fee=0.5),
+            _row("s1", "2021-01-12", 0, "600000.SH", "sell", "winner_trailing", 100, 11.0),
+        ]
+        prices = {"600000.SH": _prices([
+            ("2021-01-04", 10.0, 10.5, 9.5, 10.2),
+            ("2021-01-08", 10.5, 11.0, 10.0, 10.5),
+            ("2021-01-12", 11.0, 11.5, 10.5, 11.0),
+        ])}
+        episodes = derive_episodes(rows, prices_by_symbol=prices)
+        assert len(episodes) == 1
+        ep = episodes[0]
+        assert ep["exit_reason"] == "winner_trailing"
+        assert ep["exit_date"] == "2021-01-12"
+        # The bogus row never entered the state machine: the position stays at
+        # 100 until the real sell, buy_cost is untouched by the bogus fee, and
+        # the episode closes as a simple round trip.
+        assert ep["total_buy_cashflow"] == pytest.approx(100 * 10.0)
+        assert ep["total_sell_proceeds"] == pytest.approx(100 * 11.0)
+        assert ep["episode_pnl"] == pytest.approx(100 * 11.0 - 100 * 10.0)
+        assert ep["realized_return"] == pytest.approx(0.1)
+        assert ep["is_simple_round_trip"] is True
+        assert ep["capture_eligible"] is True
+        # MFE runs over held bars before the exit day (01-04 high 10.5 /
+        # 01-08 high 11.0; the 01-12 exit day closes → its bar is not
+        # counted) → 0.10.
+        assert ep["MFE"] == pytest.approx(0.10)
+        assert ep["capture_ratio"] == pytest.approx(0.1 / 0.10)
 
 
 def test_capture_ratio_distribution():
@@ -563,7 +649,7 @@ def test_holding_horizon_buckets():
     assert horizons["11-20"]["median_mfe"] == pytest.approx(0.05)
 
 
-def test_hard_stop_false_stop_rate():
+def test_hard_stop_post_exit_positive_rate():
     rows = []
     for i, sym in enumerate(["600000.SH", "600001.SH", "600002.SH"]):
         rows.append(_row(f"b{i}", "2021-01-04", 0, sym, "buy", "top_n_entry", 100, 10.0))
@@ -578,8 +664,10 @@ def test_hard_stop_false_stop_rate():
     sq = summary["stop_quality"]
     assert sq["hard_stop_count"] == 3
     assert sq["post_exit_20d_count"] == 2
-    assert sq["false_stop_rate_20d"] == pytest.approx(0.5)  # 1 of 2 stopped exits recovered
-    assert sq["false_stop_rate_60d"] is None
+    # Renamed from false_stop_rate_*: the measure only reports the exit-horizon
+    # return being > 0 (a descriptive outcome), NOT that the stop rule was wrong.
+    assert sq["post_exit_positive_rate_20d"] == pytest.approx(0.5)  # 1 of 2 stopped exits recovered
+    assert sq["post_exit_positive_rate_60d"] is None
 
 
 def test_pnl_concentration_top_shares_and_curve():

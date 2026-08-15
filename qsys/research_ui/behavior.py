@@ -185,6 +185,14 @@ def _new_episode(symbol: str, entry_date: str, entry_score: float | None) -> dic
         "giveback_return": None,
         "giveback_ratio": None,
         "recovery_from_mae": None,
+        # Semantic gate: MFE/MAE are price excursions against the *dynamic*
+        # avg_cost, while realized_return is cashflow-based
+        # (episode_pnl / total_buy_cashflow).  The two are only comparable on a
+        # simple round trip (one buy, one full-close sell).  Complex episodes —
+        # any mid-hold partial sell, re-add buy, or never-closed open position —
+        # keep the capture/giveback/recovery fields None.
+        "is_simple_round_trip": None,
+        "capture_eligible": None,
         "buy_cost": 0.0,
         "sell_proceeds": 0.0,
         "peak_close": None,
@@ -222,6 +230,11 @@ def _simulate_symbol(
         closed_today = False
         for r in day_fills.get(date, []):
             side = str(r.get("side") or "").lower()
+            # An unknown/invalid side is not a trade event.  Guard before the
+            # sell branch so a bogus side can never be mistaken for a sell —
+            # even while holding a position — and silently mutate qty/cashflow.
+            if side not in {"buy", "sell"}:
+                continue
             if side != "buy" and qty <= 0:
                 continue
             fqty = _finite(r.get("filled_qty"))
@@ -239,7 +252,12 @@ def _simulate_symbol(
             if side == "buy":
                 if qty == 0:
                     ep = _new_episode(symbol, date, score_on(date, symbol))
+                    ep_buy_fills = 1
+                    ep_sell_fills = 0
+                    ep_saw_partial_sell = False
                     opened_today = True
+                else:
+                    ep_buy_fills += 1
                 buy_cost += fqty * price + fee
                 buy_qty += fqty
                 qty += fqty
@@ -248,7 +266,17 @@ def _simulate_symbol(
             else:  # sell
                 if ep is None:
                     ep = _new_episode(symbol, date, score_on(date, symbol))
+                    ep_buy_fills = 0
+                    ep_sell_fills = 0
+                    ep_saw_partial_sell = False
                 sold = min(fqty, qty)
+                ep_sell_fills += 1
+                if sold < qty:
+                    # A sell that leaves the position open splits the holding
+                    # into two cashflow regimes: MFE/MAE track the *dynamic*
+                    # avg_cost excursion while realized_return is
+                    # cashflow-based, so the two are not comparable any more.
+                    ep_saw_partial_sell = True
                 ep["sell_proceeds"] += sold * price - fee
                 if buy_qty > 0:
                     removed = min(sold, buy_qty)
@@ -257,6 +285,9 @@ def _simulate_symbol(
                 qty = max(0.0, qty - fqty)
                 avg_cost = buy_cost / buy_qty if buy_qty > 0 else 0.0
                 if qty == 0:
+                    is_simple = not ep_saw_partial_sell and ep_buy_fills == 1 and ep_sell_fills == 1
+                    ep["is_simple_round_trip"] = is_simple
+                    ep["capture_eligible"] = is_simple
                     _close_episode(ep, date, r, episodes, price_rows, calendar, cal_index, score_on)
                     ep = None
                     closed_today = True
@@ -353,8 +384,17 @@ def _close_episode(
     ep["holding_days"] = (exit_i - entry_i + 1) if (entry_i is not None and exit_i is not None) else None
     ep["episode_end_date"] = exit_date
     ep["valuation_date"] = None
-    cap, gb_ret, gb_ratio, rec = _return_metrics(ep["realized_return"], ep["MFE"], ep["MAE"])
-    ep["capture_ratio"], ep["giveback_return"], ep["giveback_ratio"], ep["recovery_from_mae"] = cap, gb_ret, gb_ratio, rec
+    # Capture/giveback/recovery compare the episode's *cashflow* return against
+    # its *avg_cost* excursions.  That comparison is only well-defined on a
+    # simple round trip; complex episodes keep these fields None.
+    if ep.get("capture_eligible"):
+        cap, gb_ret, gb_ratio, rec = _return_metrics(ep["realized_return"], ep["MFE"], ep["MAE"])
+        ep["capture_ratio"], ep["giveback_return"], ep["giveback_ratio"], ep["recovery_from_mae"] = cap, gb_ret, gb_ratio, rec
+    else:
+        ep["capture_ratio"] = None
+        ep["giveback_return"] = None
+        ep["giveback_ratio"] = None
+        ep["recovery_from_mae"] = None
     ep.pop("buy_cost", None)
     ep.pop("sell_proceeds", None)
     ep.pop("peak_close", None)
@@ -404,8 +444,15 @@ def _finalize_open(
     entry_i = cal_index.get(ep["entry_date"])
     end_i = cal_index.get(ep["episode_end_date"]) if ep["episode_end_date"] else None
     ep["holding_days"] = (end_i - entry_i + 1) if (entry_i is not None and end_i is not None) else None
-    cap, gb_ret, gb_ratio, rec = _return_metrics(ep["unrealized_return"], ep["MFE"], ep["MAE"])
-    ep["capture_ratio"], ep["giveback_return"], ep["giveback_ratio"], ep["recovery_from_mae"] = cap, gb_ret, gb_ratio, rec
+    # An open position never completes a full close, so it is never a simple
+    # round trip: the cashflow-vs-excursion comparison does not apply and the
+    # capture/giveback/recovery fields stay None.
+    ep["is_simple_round_trip"] = False
+    ep["capture_eligible"] = False
+    ep["capture_ratio"] = None
+    ep["giveback_return"] = None
+    ep["giveback_ratio"] = None
+    ep["recovery_from_mae"] = None
     ep.pop("buy_cost", None)
     ep.pop("sell_proceeds", None)
     ep.pop("peak_close", None)
@@ -618,6 +665,11 @@ def _mfe_distribution(episodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
     Each bucket reports the median MFE, final return (realized for closed,
     unrealized for open), giveback return, capture ratio and holding days, so a
     downstream consumer can see how much of a winner's peak was held vs given back.
+
+    ``median_giveback_return`` and ``median_capture_ratio`` are computed over
+    capture-eligible episodes only (simple round trips, see
+    ``capture_eligible_count``) — complex episodes carry None for those fields
+    and are excluded.  ``count`` still covers every episode in the MFE bucket.
     """
     result: list[dict[str, Any]] = []
     for name, lo, hi in MFE_BUCKETS:
@@ -639,7 +691,14 @@ def _mfe_distribution(episodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _stop_quality(episodes: list[dict[str, Any]]) -> dict[str, Any]:
-    """hard_stop diagnostics, incl. false-stop rates (price recovered post-exit)."""
+    """hard_stop diagnostics, incl. post-exit positive rates.
+
+    ``post_exit_positive_rate_{20d,60d}`` is the fraction of hard_stop episodes
+    whose market return over the N-day horizon after exit is positive.  It is a
+    *descriptive* measure of the exit-horizon outcome only — NOT a claim that
+    the stop rule was wrong.  A true counterfactual (what would have happened
+    had the position been kept) belongs to the Exit Rule Ablation chapter.
+    """
     stops = [e for e in episodes if str(e.get("exit_reason") or "") == "hard_stop"]
     returns = [v for e in stops if (v := _finite(e.get("realized_return"))) is not None]
     mfes = [v for e in stops if (v := _finite(e.get("MFE"))) is not None]
@@ -654,10 +713,10 @@ def _stop_quality(episodes: list[dict[str, Any]]) -> dict[str, Any]:
         "avg_mae": _safe_mean(maes),
         "post_exit_20d_count": len(pe20),
         "avg_post_exit_20d": _safe_mean(pe20),
-        "false_stop_rate_20d": _fraction(sum(1 for v in pe20 if v > 0), len(pe20)),
+        "post_exit_positive_rate_20d": _fraction(sum(1 for v in pe20 if v > 0), len(pe20)),
         "post_exit_60d_count": len(pe60),
         "avg_post_exit_60d": _safe_mean(pe60),
-        "false_stop_rate_60d": _fraction(sum(1 for v in pe60 if v > 0), len(pe60)),
+        "post_exit_positive_rate_60d": _fraction(sum(1 for v in pe60 if v > 0), len(pe60)),
     }
 
 
@@ -773,6 +832,11 @@ def summarize_episodes(episodes: list[dict[str, Any]]) -> dict[str, Any]:
         "total_episodes": len(episodes),
         "closed_episodes": len(closed),
         "open_episodes": len(episodes) - len(closed),
+        # Only simple round trips (no partial sell / re-add / never-closed) are
+        # eligible for the excursion-vs-cashflow capture/giveback/recovery
+        # fields.  Every *_count that feeds those aggregates is a subset of this
+        # count, so it makes the aggregate sample denominator explicit.
+        "capture_eligible_count": sum(1 for e in episodes if e.get("capture_eligible")),
         "return_count": len(returns),
         "win_rate": _fraction(sum(1 for r in returns if r > 0), len(returns)),
         "avg_return": _safe_mean(returns),

@@ -226,11 +226,11 @@
             <div id="backtest-episode-capture-scatter" class="chart plotly-chart chart-wide"></div>
             <div class="subpanel-grid" style="margin-top:14px;">
               <div>
-                <div class="section-label">Capture Ratio Distribution <span class="muted-text">(MFE &gt; 10%)</span></div>
+                <div class="section-label">Capture Ratio Distribution <span class="muted-text" id="episode-capture-eligible-note">(MFE &gt; 10%)</span></div>
                 <div id="backtest-episode-capture-ratio-dist" class="table-wrap"></div>
               </div>
               <div>
-                <div class="section-label">Hard-Stop Quality</div>
+                <div class="section-label">Hard-Stop Quality <span class="muted-text">(post-exit positive = exit-horizon return &gt; 0, not a stop-rule error)</span></div>
                 <div id="backtest-episode-stop-quality" class="table-wrap"></div>
               </div>
             </div>

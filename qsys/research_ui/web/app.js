@@ -46,6 +46,7 @@ const state = {
     positionsByDate: new Map(),
     episodes: null,
     episodeSummary: null,
+    episodeMeta: null,
     episodesLoaded: false,
   },
   caseData: null,
@@ -1676,11 +1677,13 @@ async function loadBacktestEpisodes({ force = false } = {}) {
     const data = unwrapData(payload) || {};
     state.backtest.episodes = data.episodes || [];
     state.backtest.episodeSummary = data.summary || {};
+    state.backtest.episodeMeta = (payload && payload.meta) || {};
   } catch (error) {
     const activeRunId = state.context.runId || byId('backtest-run-select').value;
     if (isEpisodeResponseStale({ seq, requestedRunId, requestSeq: episodeRequestSeq, activeRunId })) return;
     state.backtest.episodes = null;
     state.backtest.episodeSummary = null;
+    state.backtest.episodeMeta = null;
     renderEpisodeAnalyticsError(error);
     return;
   }
@@ -1690,6 +1693,8 @@ async function loadBacktestEpisodes({ force = false } = {}) {
 function renderEpisodeLoading() {
   // Clear the previous run's panel so a slow first load doesn't read as stale.
   byId('backtest-episode-count').textContent = 'Loading episodes…';
+  const noteEl = byId('episode-capture-eligible-note');
+  if (noteEl) noteEl.textContent = '(MFE > 10%)';
   renderMetricCard('episode-total', '…', 'episode-total-note', 'total / closed / open');
   renderMetricCard('episode-win-rate', '…', 'episode-win-rate-note', 'closed episodes');
   renderMetricCard('episode-avg-return', '…', 'episode-avg-return-note', 'cash-weighted,含费');
@@ -1712,7 +1717,17 @@ function renderEpisodeLoading() {
 function renderEpisodeAnalytics() {
   const episodes = state.backtest.episodes || [];
   const summary = state.backtest.episodeSummary || {};
-  byId('backtest-episode-count').textContent = summary.total_episodes != null ? `${summary.total_episodes} episodes` : '';
+  let countText = summary.total_episodes != null ? `${summary.total_episodes} episodes` : '';
+  // When the API truncated the per-episode detail rows, the charts and tables
+  // are computed over a sample of the full episode set — make that explicit so
+  // the denominator is not read as "all episodes".
+  const meta = state.backtest.episodeMeta || {};
+  if (meta.truncated) {
+    const shown = meta.returned_episodes != null ? String(meta.returned_episodes) : String(episodes.length);
+    const total = meta.total_episodes != null ? String(meta.total_episodes) : (summary.total_episodes != null ? String(summary.total_episodes) : '');
+    if (total) countText += ` · detail charts use ${shown} / ${total}`;
+  }
+  byId('backtest-episode-count').textContent = countText;
   renderEpisodeSummaryRow(summary);
   renderEpisodeCaptureScatter(episodes);
   renderEpisodeCaptureRatioDist(summary);
@@ -1729,6 +1744,8 @@ function renderEpisodeAnalytics() {
 
 function renderEpisodeAnalyticsError(error) {
   byId('backtest-episode-count').textContent = '';
+  const noteEl = byId('episode-capture-eligible-note');
+  if (noteEl) noteEl.textContent = '(MFE > 10%)';
   renderMetricCard('episode-total', '-', 'episode-total-note', 'total / closed / open');
   renderMetricCard('episode-win-rate', '-', 'episode-win-rate-note', 'closed episodes');
   renderMetricCard('episode-avg-return', '-', 'episode-avg-return-note', 'cash-weighted,含费');
@@ -1810,6 +1827,17 @@ function renderEpisodeCaptureScatter(episodes) {
 
 function renderEpisodeCaptureRatioDist(summary) {
   const buckets = summary.capture_ratio_distribution || [];
+  // Make the capture/giveback sample denominator explicit: only simple round
+  // trips (no partial sell / re-add) are eligible for the excursion-vs-cashflow
+  // comparison, so these buckets are computed over `capture_eligible_count`.
+  const eligible = summary.capture_eligible_count;
+  const total = summary.total_episodes;
+  const noteEl = byId('episode-capture-eligible-note');
+  if (noteEl) {
+    const parts = ['MFE > 10%'];
+    if (eligible != null && total != null) parts.push(`eligible ${eligible} / ${total}`);
+    noteEl.textContent = `(${parts.join('; ')})`;
+  }
   renderDataTable('backtest-episode-capture-ratio-dist', buckets, [
     { key: 'bucket', label: 'Capture', sortValue: (row) => row.bucket },
     { key: 'count', label: 'Episodes', sortValue: (row) => toNumber(row.count) },
@@ -1841,8 +1869,8 @@ function renderEpisodeStopQuality(summary) {
   const sq = summary.stop_quality || {};
   const rows = [
     { metric: 'Hard-Stop Exits', value: sq.hard_stop_count != null ? String(sq.hard_stop_count) : '-', type: 'num' },
-    { metric: 'False-Stop Rate 20d', value: formatPercent(sq.false_stop_rate_20d, 1), type: 'pct' },
-    { metric: 'False-Stop Rate 60d', value: formatPercent(sq.false_stop_rate_60d, 1), type: 'pct' },
+    { metric: 'Post-Exit Positive 20d', value: formatPercent(sq.post_exit_positive_rate_20d, 1), type: 'pct' },
+    { metric: 'Post-Exit Positive 60d', value: formatPercent(sq.post_exit_positive_rate_60d, 1), type: 'pct' },
     { metric: 'Avg Post-Exit 20d', value: formatPercent(sq.avg_post_exit_20d, 1), type: 'pct' },
     { metric: 'Avg Post-Exit 60d', value: formatPercent(sq.avg_post_exit_60d, 1), type: 'pct' },
     { metric: 'Avg MFE', value: formatPercent(sq.avg_mfe, 1), type: 'pct' },
@@ -2354,6 +2382,7 @@ async function loadBacktest() {
     state.backtest.positionsByDate = new Map();
     state.backtest.episodes = null;
     state.backtest.episodeSummary = null;
+    state.backtest.episodeMeta = null;
     state.backtest.episodesLoaded = false;
     renderParameterSummary(summary);
     renderBacktestRunContext();

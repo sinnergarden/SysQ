@@ -44,8 +44,28 @@ check('superseded request + switched run is stale', isEpisodeResponseStale({ seq
 // Same token, same run, different requestedRunId string — still fresh (no false positive on equality).
 check('run string equality is not confused', isEpisodeResponseStale({ seq: 1, requestedRunId: 'R1', requestSeq: 1, activeRunId: 'R1' }), false);
 
+// Fix #4 — truncated-detail visibility: the response meta must be captured
+// (so the UI can tell the detail rows were truncated) and the render path must
+// surface a "detail charts use N / total" note when meta.truncated is true.
+if (!src.includes('state.backtest.episodeMeta = (payload && payload.meta) || {}')) {
+  failures.push('episodeMeta not captured from response payload.meta');
+} else {
+  passed += 1;
+}
+const truncRe = /meta\.truncated[^]*?detail charts use \$\{shown\} \/ \$\{total\}/;
+if (!truncRe.test(src)) {
+  failures.push('truncated detail-visibility note not wired into renderEpisodeAnalytics');
+} else {
+  passed += 1;
+}
+if (!src.includes("episodeMeta = null")) {
+  failures.push('episodeMeta not reset on run change / error');
+} else {
+  passed += 1;
+}
+
 if (failures.length) {
   console.error('FAILED:\n  ' + failures.join('\n  '));
   process.exit(1);
 }
-console.log(`isEpisodeResponseStale: ${passed} checks passed`);
+console.log(`isEpisodeResponseStale + truncated-visibility: ${passed} checks passed`);
