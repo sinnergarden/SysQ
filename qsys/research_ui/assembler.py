@@ -705,6 +705,24 @@ class ResearchCockpitRepository:
             rows.append({key: self._normalize_scalar(value) for key, value in row.items()})
         return rows
 
+    def _read_canonical_executions(self, source: dict[str, Any]) -> list[dict[str, Any]]:
+        """Read the raw executions rows of a canonical backtest artifact.
+
+        Rows keep their artifact column names (``instrument`` / ``trade_date`` /
+        ``filled_qty`` / ``side`` / ``deal_price`` / ``total_fee`` ...) so
+        callers can normalize for the orders table or derive holdings.
+        """
+        csv_path = self._canonical_executions_path(source)
+        if csv_path is None:
+            return []
+        frame = self._read_csv_safe(csv_path)
+        if frame.empty:
+            return []
+        return [
+            {key: self._normalize_scalar(value) for key, value in row.items()}
+            for row in frame.to_dict(orient="records")
+        ]
+
     def _load_canonical_executions_orders(
         self,
         source: dict[str, Any],
@@ -721,30 +739,129 @@ class ResearchCockpitRepository:
         ``filled_qty`` so the rows are normalized here, keeping the web layer
         schema stable across artifact formats.
         """
-        csv_path = self._canonical_executions_path(source)
-        if csv_path is None:
+        rows = self._read_canonical_executions(source)
+        if not rows:
             return []
-        frame = self._read_csv_safe(csv_path)
-        if frame.empty:
+        normalized: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            if "date" not in item and "trade_date" in item:
+                item["date"] = str(item["trade_date"])[:10]
+            if "symbol" not in item and "instrument" in item:
+                item["symbol"] = item["instrument"]
+            if "filled_amount" not in item and "filled_qty" in item:
+                item["filled_amount"] = item["filled_qty"]
+            if trade_date and str(item.get("trade_date") or item.get("date") or "")[:10] != str(trade_date):
+                continue
+            if instrument_id and str(item.get("instrument") or item.get("symbol") or "") != str(instrument_id):
+                continue
+            normalized.append(item)
+            if len(normalized) >= limit:
+                break
+        return normalized
+
+    def _derive_positions_from_executions(self, rows: list[dict[str, Any]], *, as_of_date: str | None = None) -> dict[str, dict[str, Any]]:
+        """Derive per-instrument holdings as of a date from exact backtest fills.
+
+        Buys add, sells remove.  Cost basis is the average buy cost including
+        fees; sells realize ``(sell_price - avg_cost) * qty - fee`` and reduce
+        the cost basis proportionally.  Holdings are derived read-only from the
+        immutable executions artifact (the canonical runs carry no positions
+        file), so they are an exact reconstruction, not an estimate.
+        """
+        positions: dict[str, dict[str, Any]] = {}
+        ordered = sorted(
+            rows,
+            key=lambda r: (str(r.get("trade_date") or r.get("date") or "")[:10], r.get("sequence") or 0),
+        )
+        for row in ordered:
+            date = str(row.get("trade_date") or row.get("date") or "")[:10]
+            if as_of_date and date > str(as_of_date):
+                continue
+            symbol = str(row.get("instrument") or row.get("symbol") or "")
+            if not symbol:
+                continue
+            side = str(row.get("side") or "").lower()
+            qty = float(row.get("filled_qty") or row.get("filled_amount") or 0)
+            price = float(row.get("deal_price") or 0)
+            fee = float(row.get("total_fee") or 0)
+            if qty <= 0:
+                continue
+            position = positions.setdefault(
+                symbol,
+                {
+                    "instrument": symbol,
+                    "qty": 0.0,
+                    "buy_qty": 0.0,
+                    "buy_cost": 0.0,
+                    "avg_cost": 0.0,
+                    "realized_pnl": 0.0,
+                    "first_trade_date": date,
+                    "last_trade_date": date,
+                },
+            )
+            position["last_trade_date"] = date
+            if side == "sell":
+                if position["qty"] > 0:
+                    position["realized_pnl"] += (price - position["avg_cost"]) * qty - fee
+                reduce_qty = min(qty, position["buy_qty"])
+                if position["buy_qty"] > 0:
+                    position["buy_qty"] -= reduce_qty
+                    position["buy_cost"] = max(0.0, position["buy_cost"] - position["avg_cost"] * reduce_qty)
+                position["qty"] = max(0.0, position["qty"] - qty)
+                position["avg_cost"] = position["buy_cost"] / position["buy_qty"] if position["buy_qty"] > 0 else 0.0
+            else:
+                position["buy_qty"] += qty
+                position["buy_cost"] += qty * price + fee
+                position["qty"] += qty
+                position["avg_cost"] = position["buy_cost"] / position["buy_qty"] if position["buy_qty"] > 0 else 0.0
+        return positions
+
+    def _last_close_on_or_before(self, instrument_id: str, as_of_date: str | None) -> float | None:
+        df = self.store.load_daily(instrument_id)
+        if df is None or df.empty or "trade_date" not in df.columns or "close" not in df.columns:
+            return None
+        df = df.copy()
+        df["trade_date"] = df["trade_date"].map(self._normalize_trade_date_value)
+        if as_of_date:
+            df = df[df["trade_date"] <= str(as_of_date)]
+        if df.empty:
+            return None
+        return self._normalize_scalar(float(df["close"].iloc[-1]))
+
+    def get_backtest_positions(
+        self,
+        run_id: str,
+        *,
+        trade_date: str | None = None,
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        """Holdings of a canonical backtest as of a date, derived from executions.
+
+        Only currently-held instruments are returned (qty > 0).  When a close
+        price is available on/before ``trade_date`` the row is enriched with
+        ``last_close`` / ``market_value`` / ``unrealized_pnl``.
+        """
+        source = self._get_canonical_backtest_source(run_id)
+        if source is None:
             return []
-        frame = frame.copy()
-        if "date" not in frame.columns and "trade_date" in frame.columns:
-            frame["date"] = frame["trade_date"].astype(str).str[:10]
-        if "symbol" not in frame.columns and "instrument" in frame.columns:
-            frame["symbol"] = frame["instrument"]
-        if "filled_amount" not in frame.columns and "filled_qty" in frame.columns:
-            frame["filled_amount"] = frame["filled_qty"]
-        if trade_date:
-            date_col = "trade_date" if "trade_date" in frame.columns else "date"
-            frame = frame[frame[date_col].astype(str).str[:10] == str(trade_date)]
-        if instrument_id:
-            symbol_col = "instrument" if "instrument" in frame.columns else "symbol"
-            frame = frame[frame[symbol_col].astype(str) == str(instrument_id)]
-        frame = frame.head(limit)
-        return [
-            {key: self._normalize_scalar(value) for key, value in row.items()}
-            for row in frame.to_dict(orient="records")
-        ]
+        rows = self._read_canonical_executions(source)
+        if not rows:
+            return []
+        positions = self._derive_positions_from_executions(rows, as_of_date=trade_date)
+        result: list[dict[str, Any]] = []
+        for symbol, position in positions.items():
+            if position["qty"] <= 0:
+                continue
+            item = {key: self._normalize_scalar(value) for key, value in position.items()}
+            last_close = self._last_close_on_or_before(symbol, trade_date)
+            if last_close is not None:
+                item["last_close"] = last_close
+                item["market_value"] = round(last_close * position["qty"], 2)
+                item["unrealized_pnl"] = round((last_close - position["avg_cost"]) * position["qty"], 2)
+            result.append(item)
+        result.sort(key=lambda item: abs(item.get("market_value") or 0), reverse=True)
+        return result[:limit]
 
     def build_decision_replay(self, *, execution_date: str, account_name: str) -> DecisionReplay:
         manifest = self.build_daily_run_manifest(execution_date)
@@ -940,16 +1057,66 @@ class ResearchCockpitRepository:
             else:
                 end_date = trade_date
         frame = self.research_view.get_feature([instrument_id], fields, start_date, end_date)
-        if frame.empty:
+        if not frame.empty:
+            rows: list[dict[str, Any]] = []
+            for (dt, code), row in frame.reset_index().set_index(["trade_date", "ts_code"]).iterrows():
+                normalized_date = self._normalize_trade_date_value(dt)
+                if not normalized_date:
+                    continue
+                item = {"trade_date": normalized_date, "instrument_id": str(code), "price_mode": price_mode}
+                for col, value in row.items():
+                    item[str(col)] = self._normalize_scalar(value)
+                rows.append(item)
+            ohlc_fields = ["adj_open", "adj_high", "adj_low", "adj_close"] if price_mode == "fq" else ["open", "high", "low", "close"]
+            if any(row.get(field) is not None for row in rows for field in ohlc_fields):
+                return rows
+        # The qlib bin for some instruments only carries `volume` (no OHLC /
+        # adj_* fields).  Fall back to the raw daily store, which is the
+        # authoritative open/high/low/close source, and forward-adjust it the
+        # same way ResearchDataView does (latest-factor ratio) for fq mode.
+        return self._load_bars_from_raw_store(raw_daily, instrument_id, price_mode, start_date, end_date)
+
+    def _load_bars_from_raw_store(
+        self,
+        raw_daily: pd.DataFrame | None,
+        instrument_id: str,
+        price_mode: str,
+        start_date: str | None,
+        end_date: str | None,
+    ) -> list[dict[str, Any]]:
+        if raw_daily is None or raw_daily.empty:
             return []
+        df = raw_daily.copy()
+        if "trade_date" not in df.columns or "close" not in df.columns:
+            return []
+        df["trade_date"] = df["trade_date"].map(self._normalize_trade_date_value)
+        df = df[df["trade_date"] != ""]
+        mask = pd.Series(True, index=df.index)
+        if start_date:
+            mask &= df["trade_date"] >= str(start_date)
+        if end_date:
+            mask &= df["trade_date"] <= str(end_date)
+        df = df[mask]
+        if df.empty:
+            return []
+        if price_mode == "fq" and "factor" in df.columns:
+            latest_factor = float(df["factor"].iloc[-1]) if df["factor"].notna().any() else 1.0
+            if not latest_factor or latest_factor == 0:
+                latest_factor = 1.0
+            ratio = df["factor"].astype(float) / latest_factor
+            df = df.assign(
+                adj_open=df["open"].astype(float) * ratio,
+                adj_high=df["high"].astype(float) * ratio,
+                adj_low=df["low"].astype(float) * ratio,
+                adj_close=df["close"].astype(float) * ratio,
+            )
         rows: list[dict[str, Any]] = []
-        for (dt, code), row in frame.reset_index().set_index(["trade_date", "ts_code"]).iterrows():
-            normalized_date = self._normalize_trade_date_value(dt)
-            if not normalized_date:
-                continue
-            item = {"trade_date": normalized_date, "instrument_id": str(code), "price_mode": price_mode}
-            for col, value in row.items():
-                item[str(col)] = self._normalize_scalar(value)
+        ohlc_fields = ["adj_open", "adj_high", "adj_low", "adj_close"] if price_mode == "fq" else ["open", "high", "low", "close"]
+        for _, row in df.iterrows():
+            item = {"trade_date": str(row["trade_date"]), "instrument_id": instrument_id, "price_mode": price_mode}
+            for field in ohlc_fields + ["volume"]:
+                if field in df.columns:
+                    item[field] = self._normalize_scalar(row.get(field))
             rows.append(item)
         return rows
 

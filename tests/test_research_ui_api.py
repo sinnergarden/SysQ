@@ -1,12 +1,14 @@
 import os
 import sys
 import unittest
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from qsys.research_ui.api import create_app
+from qsys.research_ui.assembler import ResearchCockpitRepository
 
 
 class TestResearchUiApi(unittest.TestCase):
@@ -143,6 +145,41 @@ class TestResearchUiApi(unittest.TestCase):
 
     def test_missing_backtest_returns_clear_404(self):
         response = self.client.get('/api/backtest-runs/not-a-real-run/summary')
+        self.assertEqual(response.status_code, 404)
+        self.assertIn('Unknown backtest run_id', response.json()['detail'])
+
+    def test_positions_endpoint_contract(self):
+        # Routes re-scan per request (fresh repo), so patch the class method:
+        # every ResearchCockpitRepository instance serves the mocked holdings.
+        sample = [{
+            'instrument': '600000.SH',
+            'qty': 100,
+            'avg_cost': 10.1,
+            'last_close': 12.0,
+            'market_value': 1200.0,
+            'unrealized_pnl': 190.0,
+            'realized_pnl': 0.0,
+            'first_trade_date': '2021-01-04',
+            'last_trade_date': '2021-01-04',
+        }]
+        with patch.object(ResearchCockpitRepository, 'get_backtest_positions', return_value=sample) as mocked:
+            response = self.client.get('/api/backtest-runs/some-run/positions', params={'trade_date': '2021-01-04'})
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload['api_version'], 'v1')
+        self.assertEqual(payload['meta']['resource'], 'backtest_positions')
+        self.assertEqual(payload['run_id'], 'some-run')
+        self.assertEqual(payload['trade_date'], '2021-01-04')
+        self.assertEqual(payload['count'], 1)
+        self.assertEqual(payload['items'][0]['instrument'], '600000.SH')
+        self.assertEqual(payload['items'][0]['market_value'], 1200.0)
+        mocked.assert_called_once()
+        call_kwargs = mocked.call_args.kwargs
+        self.assertEqual(call_kwargs.get('trade_date'), '2021-01-04')
+
+    def test_positions_endpoint_404_when_run_unknown(self):
+        with patch.object(ResearchCockpitRepository, 'get_backtest_positions', side_effect=FileNotFoundError('Unknown backtest run_id: canonical__nope__nope')):
+            response = self.client.get('/api/backtest-runs/canonical__nope__nope/positions')
         self.assertEqual(response.status_code, 404)
         self.assertIn('Unknown backtest run_id', response.json()['detail'])
 

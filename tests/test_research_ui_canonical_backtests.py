@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
+import pandas as pd
 import pytest
 
 from qsys.research_ui.assembler import ResearchCockpitRepository
@@ -249,3 +250,140 @@ def test_canonical_cost_estimate_without_executions_uses_decimal_fee_rates(tmp_p
     expected_fees = 100_000 * (0.0003 + 0.001 * 0.5)
     assert cost["metrics"]["total_fees"] == pytest.approx(expected_fees)
     assert cost["metrics"]["fee_ratio"] == pytest.approx(expected_fees / 100_000)
+
+
+def test_canonical_positions_derive_from_executions(tmp_path: Path) -> None:
+    """Positions are reconstructed exactly from the executions artifact."""
+    run_id = _write_canonical_backtest_with_executions(tmp_path)
+    repo = ResearchCockpitRepository(project_root=tmp_path)
+
+    # As of the first trade date the 600000.SH sell (2026-07-31) has not
+    # happened yet, so both buys are still held.
+    early = repo.get_backtest_positions(run_id, trade_date="2021-01-04")
+    by_symbol = {row["instrument"]: row for row in early}
+    assert set(by_symbol) == {"600000.SH", "600001.SH"}
+    assert by_symbol["600000.SH"]["qty"] == pytest.approx(100)
+    assert by_symbol["600000.SH"]["avg_cost"] == pytest.approx((100 * 10.1 + 0.303) / 100)
+    assert by_symbol["600001.SH"]["qty"] == pytest.approx(200)
+    assert by_symbol["600001.SH"]["avg_cost"] == pytest.approx((200 * 20.2 + 1.212) / 200)
+    assert all(row["realized_pnl"] == pytest.approx(0) for row in early)
+
+    # After the sell the 600000.SH position is closed (qty 0) and drops out of
+    # the holdings view; the never-sold 600001.SH remains.
+    final = repo.get_backtest_positions(run_id)
+    assert [row["instrument"] for row in final] == ["600001.SH"]
+    assert final[0]["qty"] == pytest.approx(200)
+    assert final[0]["realized_pnl"] == pytest.approx(0)
+
+    # The closed position still carries its realized gain in the derivation.
+    positions = repo._derive_positions_from_executions(
+        repo._read_canonical_executions(repo._get_canonical_backtest_source(run_id))
+    )
+    closed = positions["600000.SH"]
+    assert closed["qty"] == pytest.approx(0)
+    assert closed["realized_pnl"] == pytest.approx((30.3 - (100 * 10.1 + 0.303) / 100) * 100 - 0.909)
+
+
+def test_canonical_positions_empty_when_no_executions(tmp_path: Path) -> None:
+    run_id = _write_canonical_backtest(tmp_path)  # base fixture has no executions artifact
+    repo = ResearchCockpitRepository(project_root=tmp_path)
+    assert repo.get_backtest_positions(run_id) == []
+
+
+def test_canonical_positions_partial_sell_reduces_cost_basis(tmp_path: Path) -> None:
+    """A partial sell keeps the remaining lot's average cost and books realized pnl."""
+    strategy_run_id = "partial_sell_top5__stablehash"
+    backtest_id = "bt_2021-01-04_2026-07-31_stablehash"
+    run_dir = tmp_path / "data" / "research" / "backtests" / strategy_run_id / backtest_id
+    run_dir.mkdir(parents=True)
+    (run_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "artifact_type": "backtest_run",
+                "strategy_run_id": strategy_run_id,
+                "backtest_id": backtest_id,
+                "effective_start_date": "2021-01-04",
+                "effective_end_date": "2026-07-31",
+                "artifacts": {"executions": {"path": "executions.csv", "complete": True, "schema_version": "backtest_executions_v1"}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "executions.csv").write_text(
+        "execution_id,trade_date,sequence,instrument,side,execution_phase,trade_reason,"
+        "requested_qty,requested_price,execution_price_mode,reference_price,status,"
+        "filled_qty,deal_price,gross_amount,commission,tax,total_fee,rejection_reason\n"
+        "buy,2021-01-04,0,600000.SH,buy,entry,top_n_entry,100,10.0,open,10.0,filled,100,10.0,1000.0,1.0,0.0,1.0,\n"
+        "sell,2021-02-01,0,600000.SH,sell,exit,score_delta_exit,50,12.0,open,12.0,filled,50,12.0,600.0,1.0,0.0,1.0,\n",
+        encoding="utf-8",
+    )
+    repo = ResearchCockpitRepository(project_root=tmp_path)
+    run_id = f"canonical__{strategy_run_id}__{backtest_id}"
+
+    rows = repo.get_backtest_positions(run_id)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["qty"] == pytest.approx(50)
+    avg_cost = (100 * 10.0 + 1.0) / 100
+    assert row["avg_cost"] == pytest.approx(avg_cost)
+    assert row["realized_pnl"] == pytest.approx((12.0 - avg_cost) * 50 - 1.0)
+
+
+def _raw_daily_frame() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "trade_date": ["2024-01-02", "2024-01-03", "2024-01-04"],
+            "open": [10.0, 12.0, 14.0],
+            "high": [11.0, 13.0, 15.0],
+            "low": [9.0, 11.0, 13.0],
+            "close": [10.5, 12.5, 14.5],
+            "volume": [1000.0, 1100.0, 1200.0],
+            "factor": [1.0, 1.5, 2.0],
+        }
+    )
+
+
+def test_load_bars_falls_back_to_raw_store_when_qlib_lacks_ohlc(tmp_path: Path) -> None:
+    """Instruments whose qlib bin only carries `volume` get OHLC from the raw store."""
+    run_id = _write_canonical_backtest_with_executions(tmp_path)
+    repo = ResearchCockpitRepository(project_root=tmp_path)
+    instrument_id = "600000.SH"
+    raw = _raw_daily_frame()
+    sparse = pd.DataFrame(
+        {"volume": raw["volume"].values},
+        index=pd.MultiIndex.from_tuples(
+            [(d, instrument_id) for d in raw["trade_date"]],
+            names=["trade_date", "ts_code"],
+        ),
+    )
+
+    with patch.object(repo.research_view, "get_feature", return_value=sparse), patch.object(repo.store, "load_daily", return_value=raw):
+        bars = repo._load_bars(instrument_id=instrument_id, trade_date="2024-01-04", price_mode="fq", start_date="2024-01-02", end_date="2024-01-04")
+
+    assert len(bars) == 3
+    # Forward adjustment matches ResearchDataView: ratio = factor / latest_factor.
+    assert bars[0]["adj_close"] == pytest.approx(10.5 * (1.0 / 2.0))
+    assert bars[0]["adj_open"] == pytest.approx(10.0 * (1.0 / 2.0))
+    assert bars[2]["adj_close"] == pytest.approx(14.5)
+    assert bars[0]["volume"] == pytest.approx(1000)
+
+
+def test_load_bars_raw_mode_uses_unadjusted_ohlc_from_raw_store(tmp_path: Path) -> None:
+    run_id = _write_canonical_backtest_with_executions(tmp_path)
+    repo = ResearchCockpitRepository(project_root=tmp_path)
+    instrument_id = "600000.SH"
+    raw = _raw_daily_frame()
+    sparse = pd.DataFrame(
+        {"volume": raw["volume"].values},
+        index=pd.MultiIndex.from_tuples(
+            [(d, instrument_id) for d in raw["trade_date"]],
+            names=["trade_date", "ts_code"],
+        ),
+    )
+
+    with patch.object(repo.research_view, "get_feature", return_value=sparse), patch.object(repo.store, "load_daily", return_value=raw):
+        bars = repo._load_bars(instrument_id=instrument_id, trade_date="2024-01-04", price_mode="raw", start_date="2024-01-02", end_date="2024-01-04")
+
+    assert bars[0]["close"] == pytest.approx(10.5)
+    assert bars[0]["open"] == pytest.approx(10.0)
+    assert "adj_close" not in bars[0]
