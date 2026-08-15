@@ -251,12 +251,20 @@ def create_app(project_root: str | Path = ".") -> FastAPI:
     ) -> dict:
         repo = _fresh_repo_backtests()
         try:
+            execution_artifact = repo.get_backtest_execution_artifact_status(
+                run_id
+            )
+            if execution_artifact.get("status") == "corrupt":
+                raise HTTPException(
+                    status_code=409,
+                    detail=str(execution_artifact.get("reason")),
+                )
             items = repo.get_backtest_orders(run_id, trade_date=trade_date, instrument_id=instrument_id, limit=limit)
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return _envelope(
             items=items,
-            meta={"resource": "backtest_orders", "run_id": run_id, "trade_date": trade_date, "instrument_id": instrument_id, "limit": limit},
+            meta={"resource": "backtest_orders", "run_id": run_id, "trade_date": trade_date, "instrument_id": instrument_id, "limit": limit, "execution_artifact": execution_artifact},
             run_id=run_id,
             trade_date=trade_date,
             instrument_id=instrument_id,

@@ -95,6 +95,11 @@ class TestResearchUiApi(unittest.TestCase):
         self.assertEqual(orders_payload['run_id'], run_id)
         self.assertEqual(orders_payload['trade_date'], first_trade_date)
         self.assertIn('items', orders_payload)
+        self.assertIn('execution_artifact', orders_payload['meta'])
+        self.assertIn(
+            orders_payload['meta']['execution_artifact']['status'],
+            {'available', 'unavailable'},
+        )
 
     def test_feature_snapshot_defaults_to_full_available_set(self):
         full_response = self.client.get('/api/feature-snapshot', params={'instrument_id': self.case_instrument, 'trade_date': self.execution_date})

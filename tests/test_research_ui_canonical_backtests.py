@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from pathlib import Path
 from unittest.mock import patch
 
@@ -9,7 +10,9 @@ import pytest
 from qsys.research_ui.assembler import ResearchCockpitRepository
 
 
-def _write_canonical_backtest(root: Path) -> str:
+def _write_canonical_backtest(
+    root: Path, *, with_executions: bool = False
+) -> str:
     strategy_run_id = "rank_weight_top20__financial_rc_60d_180d_50_50__stablehash"
     backtest_id = "bt_2021-01-04_2026-07-31_stablehash"
     run_dir = root / "data" / "research" / "backtests" / strategy_run_id / backtest_id
@@ -33,6 +36,23 @@ def _write_canonical_backtest(root: Path) -> str:
         "total_return": 0.25,
         "trading_day_count": 2,
     }
+    if with_executions:
+        executions_path = run_dir / "executions.csv"
+        executions_path.write_text(
+            "execution_id,trade_date,sequence,instrument,side,execution_phase,trade_reason,requested_qty,requested_price,execution_price_mode,reference_price,status,filled_qty,deal_price,gross_amount,commission,tax,total_fee,rejection_reason\n"
+            "2021-01-04:000000:000001.SZ:buy,2021-01-04,0,000001.SZ,buy,rebalance,rebalance_to_target_weight,100,10.0,open,10.0,filled,100,10.01,1001.0,5.0,0.0,5.0,\n"
+            "2026-07-31:000001:000001.SZ:sell,2026-07-31,1,000001.SZ,sell,exit,score_delta,100,12.0,open,12.0,filled,100,11.988,1198.8,5.0,1.1988,6.1988,\n",
+            encoding="utf-8",
+        )
+        manifest["artifacts"] = {
+            "executions": {
+                "path": "executions.csv",
+                "schema_version": "backtest_executions_v1",
+                "sha256": hashlib.sha256(executions_path.read_bytes()).hexdigest(),
+                "row_count": 2,
+                "complete": True,
+            }
+        }
     (run_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
     (run_dir / "metrics.json").write_text(
         json.dumps({"total_return": 0.25, "trading_day_count": 2, "order_count_total": 7}),
@@ -90,3 +110,83 @@ def test_manifest_identity_must_match_canonical_directory(tmp_path: Path) -> Non
 
     repo = ResearchCockpitRepository(project_root=tmp_path)
     assert run_id not in {item.run_id for item in repo.list_backtest_runs(limit=10)}
+
+
+def test_canonical_execution_artifact_supports_date_and_instrument_filters(
+    tmp_path: Path,
+) -> None:
+    run_id = _write_canonical_backtest(tmp_path, with_executions=True)
+    repo = ResearchCockpitRepository(project_root=tmp_path)
+
+    status = repo.get_backtest_execution_artifact_status(run_id)
+    assert status["status"] == "available"
+    assert status["complete"] is True
+    assert status["row_count"] == 2
+    rows = repo.get_backtest_orders(
+        run_id, instrument_id="000001.SZ", limit=10
+    )
+    assert [row["side"] for row in rows] == ["buy", "sell"]
+    assert rows[-1]["trade_reason"] == "score_delta"
+    selected = repo.get_backtest_orders(
+        run_id, trade_date="2026-07-31", limit=10
+    )
+    assert len(selected) == 1
+    assert selected[0]["deal_price"] == 11.988
+
+
+def test_old_canonical_run_reports_execution_detail_unavailable(
+    tmp_path: Path,
+) -> None:
+    run_id = _write_canonical_backtest(tmp_path)
+    repo = ResearchCockpitRepository(project_root=tmp_path)
+    status = repo.get_backtest_execution_artifact_status(run_id)
+    assert status == {
+        "status": "unavailable",
+        "reason": "canonical_run_did_not_persist_executions",
+        "complete": False,
+    }
+    assert repo.get_backtest_orders(run_id) == []
+
+
+def test_tampered_canonical_execution_artifact_fails_closed(
+    tmp_path: Path,
+) -> None:
+    run_id = _write_canonical_backtest(tmp_path, with_executions=True)
+    path = next(
+        (tmp_path / "data/research/backtests").glob("*/*/executions.csv")
+    )
+    path.write_text(path.read_text() + "tampered\n", encoding="utf-8")
+    repo = ResearchCockpitRepository(project_root=tmp_path)
+    assert repo.get_backtest_execution_artifact_status(run_id)["status"] == "corrupt"
+    with pytest.raises(ValueError, match="sha256_mismatch"):
+        repo.get_backtest_orders(run_id)
+
+
+def test_canonical_sections_derive_returns_and_report_unavailable_signal_metrics(
+    tmp_path: Path,
+) -> None:
+    run_id = _write_canonical_backtest(tmp_path, with_executions=True)
+    repo = ResearchCockpitRepository(project_root=tmp_path)
+    payload = repo.get_backtest_sections(run_id)
+    statuses = {item["name"]: item["status"] for item in payload["sections"]}
+    assert statuses["Performance"] == "success"
+    assert statuses["Monthly Returns"] == "success"
+    assert statuses["Rolling Windows"] == "success"
+    assert statuses["Cost Analysis"] == "success"
+    assert statuses["Trade Detail"] == "available"
+    assert statuses["Signal Metrics"] == "unavailable"
+    assert payload["artifacts"]["monthly_returns"]
+    assert payload["artifacts"]["rolling_metrics"]
+
+
+def test_frontend_exposes_execution_fields_and_section_availability() -> None:
+    root = Path(__file__).resolve().parents[1]
+    app = (root / "qsys/research_ui/web/app.js").read_text(encoding="utf-8")
+    index = (root / "qsys/research_ui/web/index.html").read_text(
+        encoding="utf-8"
+    )
+    assert "backtest-section-status" in index
+    assert "Trade detail unavailable" in app
+    assert "row.filled_qty" in app
+    assert "row.trade_reason" in app
+    assert "item.deal_price" in app

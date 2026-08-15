@@ -42,6 +42,10 @@ draft
 
 ### Key Artifacts
 - 无持久化 artifact（UI 是读取层）
+- canonical backtest `executions.csv`（可选、只读）：存在且 manifest
+  SHA-256 校验通过时，UI 可按日期或股票展示真实模拟成交、费用、拒单原因与
+  策略记录的交易原因。旧回测若未持久化该 artifact，必须显式显示
+  `unavailable`，不得从日级 turnover/order_count 反推逐笔成交。
 
 ### Required Checks
 - TBD: UI read-only check（禁止 UI 代码写 ledger/broker）

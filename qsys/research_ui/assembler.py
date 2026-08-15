@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 from pathlib import Path
 from typing import Any
@@ -660,23 +661,109 @@ class ResearchCockpitRepository:
     ) -> list[dict[str, Any]]:
         if self._get_synthetic_backtest_source(run_id) is not None:
             return []
-        if self._get_canonical_backtest_source(run_id) is not None:
-            return []
-        csv_path = self._resolve_backtest_trades_path(run_id)
+        canonical_source = self._get_canonical_backtest_source(run_id)
+        if canonical_source is not None:
+            status = self.get_backtest_execution_artifact_status(run_id)
+            if status.get("status") == "corrupt":
+                raise ValueError(str(status.get("reason")))
+            if status.get("status") != "available":
+                return []
+            csv_path = self._canonical_executions_path(canonical_source)
+            if csv_path is None:
+                return []
+        else:
+            csv_path = self._resolve_backtest_trades_path(run_id)
         if not csv_path.exists():
             return []
         frame = pd.read_csv(csv_path)
         if frame.empty:
             return []
-        if "date" in frame.columns and trade_date:
-            frame = frame[frame["date"].astype(str).str[:10] == str(trade_date)]
-        if "symbol" in frame.columns and instrument_id:
-            frame = frame[frame["symbol"].astype(str) == str(instrument_id)]
+        date_col = "trade_date" if "trade_date" in frame.columns else "date"
+        instrument_col = (
+            "instrument" if "instrument" in frame.columns else "symbol"
+        )
+        if date_col in frame.columns and trade_date:
+            frame = frame[
+                frame[date_col].astype(str).str[:10] == str(trade_date)
+            ]
+        if instrument_col in frame.columns and instrument_id:
+            frame = frame[
+                frame[instrument_col].astype(str) == str(instrument_id)
+            ]
         frame = frame.head(limit)
         rows: list[dict[str, Any]] = []
         for row in frame.to_dict(orient="records"):
             rows.append({key: self._normalize_scalar(value) for key, value in row.items()})
         return rows
+
+    def get_backtest_execution_artifact_status(
+        self, run_id: str
+    ) -> dict[str, Any]:
+        synthetic_source = self._get_synthetic_backtest_source(run_id)
+        if synthetic_source is not None:
+            return {
+                "status": "unavailable",
+                "reason": "live_rolling_run_has_no_execution_artifact",
+            }
+        canonical_source = self._get_canonical_backtest_source(run_id)
+        if canonical_source is None:
+            path = self._resolve_backtest_trades_path(run_id)
+            return {
+                "status": "available" if path.exists() else "unavailable",
+                "reason": "legacy_trades_csv" if path.exists() else "legacy_run_has_no_trades_csv",
+                "path": str(path) if path.exists() else None,
+            }
+        artifact = (
+            canonical_source["manifest"].get("artifacts") or {}
+        ).get("executions")
+        if not isinstance(artifact, dict):
+            return {
+                "status": "unavailable",
+                "reason": "canonical_run_did_not_persist_executions",
+                "complete": False,
+            }
+        path = self._canonical_executions_path(canonical_source)
+        if path is None or not path.exists():
+            return {
+                "status": "unavailable",
+                "reason": "declared_execution_artifact_missing_or_unsafe",
+                "complete": False,
+            }
+        expected_hash = str(artifact.get("sha256") or "")
+        actual_hash = hashlib.sha256(path.read_bytes()).hexdigest()
+        if expected_hash and expected_hash != actual_hash:
+            return {
+                "status": "corrupt",
+                "reason": "execution_artifact_sha256_mismatch",
+                "complete": False,
+                "schema_version": artifact.get("schema_version"),
+            }
+        return {
+            "status": "available",
+            "reason": "immutable_execution_artifact",
+            "complete": bool(artifact.get("complete", False)),
+            "schema_version": artifact.get("schema_version"),
+            "row_count": self._to_int(artifact.get("row_count")),
+            "sha256": actual_hash,
+        }
+
+    @staticmethod
+    def _canonical_executions_path(
+        source: dict[str, Any]
+    ) -> Path | None:
+        artifact = (source["manifest"].get("artifacts") or {}).get(
+            "executions"
+        )
+        if not isinstance(artifact, dict):
+            return None
+        relative = str(artifact.get("path") or "").strip()
+        if not relative:
+            return None
+        run_dir = Path(source["run_dir"]).resolve()
+        candidate = (run_dir / relative).resolve()
+        if candidate != run_dir and run_dir not in candidate.parents:
+            return None
+        return candidate
 
     def build_decision_replay(self, *, execution_date: str, account_name: str) -> DecisionReplay:
         manifest = self.build_daily_run_manifest(execution_date)
@@ -1423,17 +1510,16 @@ class ResearchCockpitRepository:
                 if canonical_source["metrics_path"].exists()
                 else {}
             )
+            daily = self._read_csv_safe(canonical_source["daily_path"])
+            derived = self._build_canonical_backtest_sections(
+                run_id=run_id,
+                source=canonical_source,
+                daily=daily,
+                metrics=metrics,
+            )
             return {
-                "sections": [
-                    {
-                        "name": "Performance",
-                        "status": "success",
-                        "message": "canonical signal-cache backtest artifact",
-                        "metrics": metrics,
-                        "details": {},
-                    }
-                ],
-                "artifacts": {"metrics": metrics},
+                "sections": derived["sections"],
+                "artifacts": derived["artifacts"],
             }
         report_path = self._resolve_backtest_report(run_id)
         payload = self._load_json(report_path)
@@ -1456,6 +1542,144 @@ class ResearchCockpitRepository:
                 except Exception:
                     pass
         return {"sections": sections, "artifacts": artifacts}
+
+    def _build_canonical_backtest_sections(
+        self,
+        *,
+        run_id: str,
+        source: dict[str, Any],
+        daily: pd.DataFrame,
+        metrics: dict[str, Any],
+    ) -> dict[str, Any]:
+        monthly_returns: list[dict[str, Any]] = []
+        rolling_metrics: list[dict[str, Any]] = []
+        if not daily.empty and {
+            "trade_date", "total_value_after"
+        }.issubset(daily.columns):
+            frame = daily[["trade_date", "total_value_after"]].copy()
+            frame["trade_date"] = pd.to_datetime(
+                frame["trade_date"], errors="coerce"
+            )
+            frame["equity"] = pd.to_numeric(
+                frame["total_value_after"], errors="coerce"
+            )
+            frame = frame.dropna(subset=["trade_date", "equity"])
+            initial = self._to_float(
+                source["manifest"].get("initial_capital")
+            )
+            month_end = frame.set_index("trade_date")["equity"].resample("ME").last()
+            previous = initial
+            for date, equity in month_end.items():
+                if previous and previous > 0:
+                    monthly_returns.append({
+                        "month": date.strftime("%Y-%m"),
+                        "return": float(equity / previous - 1.0),
+                    })
+                previous = float(equity)
+            window_size = 20
+            for start in range(0, len(frame), window_size):
+                window = frame.iloc[start : start + window_size]
+                if window.empty:
+                    continue
+                before = (
+                    initial
+                    if start == 0
+                    else float(frame.iloc[start - 1]["equity"])
+                )
+                after = float(window.iloc[-1]["equity"])
+                rolling_metrics.append({
+                    "window_id": f"{window.iloc[0]['trade_date']:%Y-%m-%d}..{window.iloc[-1]['trade_date']:%Y-%m-%d}",
+                    "test_start": window.iloc[0]["trade_date"].strftime("%Y-%m-%d"),
+                    "test_end": window.iloc[-1]["trade_date"].strftime("%Y-%m-%d"),
+                    "total_return": float(after / before - 1.0)
+                    if before and before > 0 else None,
+                })
+
+        execution_status = self.get_backtest_execution_artifact_status(run_id)
+        cost_metrics: dict[str, Any] = {}
+        if execution_status.get("status") == "available":
+            path = self._canonical_executions_path(source)
+            executions = self._read_csv_safe(path) if path else pd.DataFrame()
+            if not executions.empty:
+                fees = pd.to_numeric(
+                    executions["total_fee"], errors="coerce"
+                ).fillna(0.0) if "total_fee" in executions else pd.Series(dtype=float)
+                gross = pd.to_numeric(
+                    executions["gross_amount"], errors="coerce"
+                ).fillna(0.0) if "gross_amount" in executions else pd.Series(dtype=float)
+                initial = self._to_float(
+                    source["manifest"].get("initial_capital")
+                ) or 0.0
+                total_fees = float(fees.sum())
+                total_turnover = float(gross.sum())
+                cost_metrics = {
+                    "total_fees": total_fees,
+                    "total_turnover": total_turnover,
+                    "fee_ratio": total_fees / total_turnover
+                    if total_turnover > 0 else None,
+                    "fees_as_pct_of_initial": total_fees / initial
+                    if initial > 0 else None,
+                    "avg_daily_fee": total_fees / max(len(daily), 1),
+                }
+
+        sections = [
+            {
+                "name": "Performance",
+                "status": "success",
+                "message": "canonical signal-cache backtest artifact",
+                "metrics": metrics,
+                "details": {},
+            },
+            {
+                "name": "Monthly Returns",
+                "status": "success" if monthly_returns else "unavailable",
+                "message": "derived from immutable daily equity"
+                if monthly_returns else "daily equity unavailable",
+                "metrics": {"month_count": len(monthly_returns)},
+                "details": {},
+            },
+            {
+                "name": "Rolling Windows",
+                "status": "success" if rolling_metrics else "unavailable",
+                "message": "non-overlapping 20-session windows derived from daily equity"
+                if rolling_metrics else "daily equity unavailable",
+                "metrics": {"window_count": len(rolling_metrics)},
+                "details": {},
+            },
+            {
+                "name": "Cost Analysis",
+                "status": "success" if cost_metrics else "unavailable",
+                "message": execution_status.get("reason"),
+                "metrics": cost_metrics,
+                "details": {"execution_artifact": execution_status},
+            },
+            {
+                "name": "Signal Metrics",
+                "status": "unavailable",
+                "message": "canonical backtest daily artifact has no IC/RankIC series",
+                "metrics": {},
+                "details": {},
+            },
+            {
+                "name": "Trade Detail",
+                "status": execution_status.get("status", "unavailable"),
+                "message": execution_status.get("reason"),
+                "metrics": {
+                    "row_count": execution_status.get("row_count"),
+                    "complete": execution_status.get("complete"),
+                },
+                "details": {"execution_artifact": execution_status},
+            },
+        ]
+        return {
+            "sections": sections,
+            "artifacts": {
+                "metrics": metrics,
+                "monthly_returns": monthly_returns,
+                "rolling_metrics": rolling_metrics,
+                "execution_artifact": execution_status,
+            },
+        }
 
     def _build_live_rolling_sections(self, metrics_frame: pd.DataFrame) -> list[dict[str, Any]]:
         positive_returns = self._series_positive_ratio(metrics_frame, "total_return")

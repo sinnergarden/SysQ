@@ -43,6 +43,7 @@ const state = {
     selectedDate: '',
     selectedInstrument: '',
     ordersByDate: new Map(),
+    executionArtifact: null,
   },
   caseData: null,
   featureData: {
@@ -1043,6 +1044,7 @@ function renderBacktestSections() {
       const sections = data.sections || [];
       state.backtest.sections = sections;
       state.backtest.sectionArtifacts = artifacts;
+      renderBacktestSectionStatus(sections);
       renderBacktestMonthlyHeatmap(artifacts);
       renderBacktestWindowsChart(artifacts);
       renderBacktestCostGrid(sections, artifacts);
@@ -1051,12 +1053,32 @@ function renderBacktestSections() {
       renderBacktestICDistChart(artifacts);
     })
     .catch(() => {
+      renderBacktestSectionStatus([]);
       renderChartError('backtest-monthly-chart', 'Sections endpoint not available for this run');
       renderChartError('backtest-windows-chart', 'Sections endpoint not available');
       renderChartError('backtest-signal-windows-chart', 'Sections endpoint not available');
       renderChartError('backtest-return-dist-chart', 'Sections endpoint not available');
       renderChartError('backtest-ic-dist-chart', 'Sections endpoint not available');
     });
+}
+
+function renderBacktestSectionStatus(sections) {
+  const root = byId('backtest-section-status');
+  if (!root) return;
+  if (!sections || !sections.length) {
+    root.innerHTML = '<div class="empty">Section contract unavailable</div>';
+    return;
+  }
+  root.innerHTML = sections.map((section) => {
+    const status = String(section.status || 'unavailable');
+    const tone = ['success', 'available'].includes(status) ? 'success' : (status === 'corrupt' ? 'danger' : 'warning');
+    return `
+      <div class="stack-item">
+        <div><span>Section</span><strong>${escapeHtml(section.name || '-')}</strong></div>
+        <div><span>${makeBadge(status, tone)}</span><strong>${escapeHtml(section.message || '')}</strong></div>
+      </div>
+    `;
+  }).join('');
 }
 
 function renderBacktestMonthlyHeatmap(artifacts) {
@@ -1471,8 +1493,8 @@ function buildBacktestSelectionSummary(day) {
 function computeContributorRows(orders) {
   const grouped = new Map();
   (orders || []).forEach((row) => {
-    const instrumentId = row.symbol || row.instrument_id || '-';
-    const quantity = toNumber(row.filled_amount || row.quantity || row.amount) || 0;
+    const instrumentId = row.instrument || row.symbol || row.instrument_id || '-';
+    const quantity = toNumber(row.filled_qty ?? row.filled_amount ?? row.quantity ?? row.amount) || 0;
     const price = toNumber(row.deal_price || row.price) || 0;
     const tradedValue = Math.abs(quantity * price);
     const current = grouped.get(instrumentId) || { instrument_id: instrumentId, orders: 0, traded_value: 0, buy_qty: 0, sell_qty: 0 };
@@ -1489,7 +1511,11 @@ function renderBacktestContributors(orders) {
   const contributors = computeContributorRows(orders).slice(0, 6);
   const root = byId('backtest-contributors');
   if (!contributors.length) {
-    root.innerHTML = '<div class="empty">No per-instrument contributors yet. Current UI derives them from order notional.</div>';
+    const availability = state.backtest.executionArtifact || {};
+    const message = availability.status === 'unavailable'
+      ? `Trade detail unavailable: ${availability.reason || 'execution artifact missing'}`
+      : 'No executions on the selected date.';
+    root.innerHTML = `<div class="empty">${escapeHtml(message)}</div>`;
     return;
   }
   root.innerHTML = contributors.map((row) => `
@@ -1512,7 +1538,7 @@ function renderBacktestContextMeta(orders) {
   const buyCount = (orders || []).filter((row) => normalizeTradeSide(row.side) !== 'sell').length;
   const sellCount = (orders || []).filter((row) => normalizeTradeSide(row.side) === 'sell').length;
   const tradedValue = (orders || []).reduce((sum, row) => {
-    const quantity = toNumber(row.filled_amount || row.quantity || row.amount) || 0;
+    const quantity = toNumber(row.filled_qty ?? row.filled_amount ?? row.quantity ?? row.amount) || 0;
     const price = toNumber(row.deal_price || row.price) || 0;
     return sum + Math.abs(quantity * price);
   }, 0);
@@ -1521,6 +1547,13 @@ function renderBacktestContextMeta(orders) {
     { label: 'Buy / Sell', value: `${buyCount} / ${sellCount}` },
     { label: 'Gross Traded', value: formatNumber(tradedValue, 0) },
   ];
+  const availability = state.backtest.executionArtifact || {};
+  if ((!orders || !orders.length) && availability.status === 'unavailable') {
+    cards.splice(0, cards.length,
+      { label: 'Trade Detail', value: 'Unavailable' },
+      { label: 'Reason', value: availability.reason || 'execution artifact missing' },
+    );
+  }
   if ((!orders || !orders.length) && stability) {
     cards.splice(0, cards.length,
       { label: 'Positive Return', value: formatPercent(stability.positive_return_ratio, 1) },
@@ -1542,15 +1575,15 @@ function renderBacktestOrdersTable(orders) {
     {
       key: 'date',
       label: 'Date',
-      render: (row) => renderTradeDateLink(toDateLabel(row.date || state.backtest.selectedDate)),
-      sortValue: (row) => toDateLabel(row.date || state.backtest.selectedDate),
+      render: (row) => renderTradeDateLink(toDateLabel(row.trade_date || row.date || state.backtest.selectedDate)),
+      sortValue: (row) => toDateLabel(row.trade_date || row.date || state.backtest.selectedDate),
     },
     {
       id: 'instrument',
       label: 'Instrument',
-      render: (row) => renderInstrumentLink(row.symbol || row.instrument_id, toDateLabel(row.date || state.backtest.selectedDate)),
-      sortValue: (row) => row.symbol || row.instrument_id,
-      filterValue: (row) => row.symbol || row.instrument_id,
+      render: (row) => renderInstrumentLink(row.instrument || row.symbol || row.instrument_id, toDateLabel(row.trade_date || row.date || state.backtest.selectedDate)),
+      sortValue: (row) => row.instrument || row.symbol || row.instrument_id,
+      filterValue: (row) => row.instrument || row.symbol || row.instrument_id,
     },
     {
       key: 'side',
@@ -1561,14 +1594,26 @@ function renderBacktestOrdersTable(orders) {
     {
       key: 'filled_amount',
       label: 'Filled Qty',
-      render: (row) => formatNumber(row.filled_amount || row.quantity || row.amount, 0),
-      sortValue: (row) => toNumber(row.filled_amount || row.quantity || row.amount),
+      render: (row) => formatNumber(row.filled_qty ?? row.filled_amount ?? row.quantity ?? row.amount, 0),
+      sortValue: (row) => toNumber(row.filled_qty ?? row.filled_amount ?? row.quantity ?? row.amount),
     },
     {
       key: 'deal_price',
       label: 'Deal Price',
       render: (row) => formatNumber(row.deal_price || row.price, 2),
       sortValue: (row) => toNumber(row.deal_price || row.price),
+    },
+    {
+      key: 'total_fee',
+      label: 'Fee',
+      render: (row) => formatNumber(row.total_fee ?? row.fee, 2),
+      sortValue: (row) => toNumber(row.total_fee ?? row.fee),
+    },
+    {
+      key: 'trade_reason',
+      label: 'Reason',
+      render: (row) => escapeHtml(row.trade_reason || row.reason || row.rejection_reason || '-'),
+      filterValue: (row) => row.trade_reason || row.reason || row.rejection_reason || '',
     },
     {
       key: 'status',
@@ -1580,15 +1625,17 @@ function renderBacktestOrdersTable(orders) {
       id: 'case',
       label: 'Case',
       sortable: false,
-      render: (row) => `<button type="button" class="action-link" onclick="jumpToCase('${quoteJsString(row.symbol || row.instrument_id)}', '${quoteJsString(toDateLabel(row.date || state.backtest.selectedDate))}')">Open Case</button>`,
+      render: (row) => `<button type="button" class="action-link" onclick="jumpToCase('${quoteJsString(row.instrument || row.symbol || row.instrument_id)}', '${quoteJsString(toDateLabel(row.trade_date || row.date || state.backtest.selectedDate))}')">Open Case</button>`,
       filterValue: () => '',
     },
   ], {
     tableKey: 'backtest-orders',
     selectedValue: state.backtest.selectedInstrument,
-    selectedRowId: (row) => row.symbol || row.instrument_id,
-    onRowClick: (row) => selectBacktestInstrument(row.symbol || row.instrument_id),
-    emptyMessage: 'Select a trade date to load orders',
+    selectedRowId: (row) => row.instrument || row.symbol || row.instrument_id,
+    onRowClick: (row) => selectBacktestInstrument(row.instrument || row.symbol || row.instrument_id),
+    emptyMessage: state.backtest.executionArtifact?.status === 'unavailable'
+      ? `Trade detail unavailable: ${state.backtest.executionArtifact.reason || 'execution artifact missing'}`
+      : 'No executions on the selected date',
   });
 }
 
@@ -1624,6 +1671,7 @@ async function loadBacktestOrders(tradeDate, { force = false } = {}) {
   try {
     const payload = await getJson(`/api/backtest-runs/${runId}/orders?trade_date=${tradeDate}`);
     const items = unwrapItems(payload);
+    state.backtest.executionArtifact = payload?.meta?.execution_artifact || null;
     state.backtest.ordersByDate.set(tradeDate, items);
     renderBacktestContextMeta(items);
     renderBacktestOrdersTable(items);
@@ -1689,6 +1737,7 @@ async function loadBacktest() {
     state.backtest.sections = [];
     state.backtest.sectionArtifacts = {};
     state.backtest.ordersByDate = new Map();
+    state.backtest.executionArtifact = null;
     renderParameterSummary(summary);
     renderBacktestRunContext();
     renderBacktestSignalMetrics(summary);
@@ -1710,6 +1759,7 @@ async function loadBacktest() {
     byId('backtest-contributors').innerHTML = '<div class="empty">No contributors</div>';
     byId('backtest-selected-summary').innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
     byId('backtest-signal-metrics').innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
+    renderBacktestSectionStatus([]);
     renderChartError('backtest-group-returns-chart', error.message);
     byId('backtest-group-returns-table').innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
     renderChartError('backtest-monthly-chart', error.message);
@@ -1763,14 +1813,14 @@ function renderCaseOrdersTable(orderRows) {
     {
       key: 'instrument_id',
       label: 'Instrument',
-      render: (row) => renderInstrumentLink(row.instrument_id || row.symbol, toDateLabel(row.date || row.trade_date || state.context.tradeDate)),
-      filterValue: (row) => row.instrument_id || row.symbol,
+      render: (row) => renderInstrumentLink(row.instrument || row.instrument_id || row.symbol, toDateLabel(row.trade_date || row.date || state.context.tradeDate)),
+      filterValue: (row) => row.instrument || row.instrument_id || row.symbol,
     },
     {
       key: 'quantity',
       label: 'Qty',
-      render: (row) => formatNumber(row.quantity || row.filled_amount || row.amount, 0),
-      sortValue: (row) => toNumber(row.quantity || row.filled_amount || row.amount),
+      render: (row) => formatNumber(row.filled_qty ?? row.quantity ?? row.filled_amount ?? row.amount, 0),
+      sortValue: (row) => toNumber(row.filled_qty ?? row.quantity ?? row.filled_amount ?? row.amount),
     },
     {
       key: 'side',
@@ -1785,6 +1835,18 @@ function renderCaseOrdersTable(orderRows) {
       sortValue: (row) => toNumber(row.deal_price || row.price),
     },
     {
+      key: 'total_fee',
+      label: 'Fee',
+      render: (row) => formatNumber(row.total_fee ?? row.fee, 2),
+      sortValue: (row) => toNumber(row.total_fee ?? row.fee),
+    },
+    {
+      key: 'trade_reason',
+      label: 'Reason',
+      render: (row) => escapeHtml(row.trade_reason || row.reason || row.rejection_reason || '-'),
+      filterValue: (row) => row.trade_reason || row.reason || row.rejection_reason || '',
+    },
+    {
       key: 'status',
       label: 'Status',
       render: (row) => makeBadge(row.status || row.note || '-', row.status && String(row.status).toLowerCase().includes('planned') ? 'warning' : 'neutral'),
@@ -1792,7 +1854,9 @@ function renderCaseOrdersTable(orderRows) {
     },
   ], {
     tableKey: 'case-orders-table',
-    emptyMessage: 'No positions / orders for this case',
+    emptyMessage: state.backtest.executionArtifact?.status === 'unavailable'
+      ? `Trade detail unavailable: ${state.backtest.executionArtifact.reason || 'execution artifact missing'}`
+      : 'No positions / executions for this case',
   });
 }
 
@@ -1815,7 +1879,7 @@ function buildCaseExplanation(payload, backtestTrades) {
   parts.push(`Instrument ${payload.instrument_id} is anchored to trade_date ${payload.trade_date} and signal_date ${payload.signal_date || payload.trade_date}.`);
   if (score !== null) parts.push(`Latest signal score is ${formatValue(score)}${rank !== null ? ` with rank ${formatValue(rank)}` : ''}.`);
   if (position) parts.push(`Previous position snapshot shows quantity ${formatNumber(position.quantity || position.amount || position.total_amount, 0)} at price ${formatNumber(position.price, 2)}.`);
-  if (order) parts.push(`Execution trace shows ${escapeHtml(String(order.side || 'planned'))} ${formatNumber(order.quantity || order.filled_amount || order.amount, 0)} around ${formatNumber(order.deal_price || order.price, 2)}.`);
+  if (order) parts.push(`Execution trace shows ${escapeHtml(String(order.side || 'planned'))} ${formatNumber(order.filled_qty ?? order.quantity ?? order.filled_amount ?? order.amount, 0)} around ${formatNumber(order.deal_price ?? order.price, 2)}.`);
   if (!order) parts.push('No matched replay/backtest order was found for the current context, so execution impact stays as a placeholder.');
   return parts.map((item) => `<p>${item}</p>`).join('');
 }
@@ -1830,7 +1894,7 @@ function renderCaseLoop(payload, backtestTrades) {
     { stage: 'Feature', value: featureCount, note: 'snapshot values loaded' },
     { stage: 'Signal', value: score === null ? 'n/a' : formatValue(score), note: rank === null ? 'rank unavailable' : `rank ${formatValue(rank)}` },
     { stage: 'Position', value: formatNumber(positionQty, 0), note: 'previous position qty' },
-    { stage: 'Orders', value: String((payload.orders || []).length + (backtestTrades || []).length), note: 'replay + backtest fills' },
+    { stage: 'Orders', value: String((payload.orders || []).length + (backtestTrades || []).length), note: 'replay + backtest executions' },
     { stage: 'Explain', value: payload.trade_date, note: 'current loop date' },
   ].map((item) => `
     <div class="pipeline-card">
@@ -1849,7 +1913,7 @@ function renderCaseSignalSummary(payload, backtestTrades) {
     { label: 'Signal Date', value: payload.signal_date ? renderTradeDateLink(payload.signal_date) : '-' },
     { label: 'Benchmark', value: escapeHtml(payload.benchmark_label || 'CSI300') },
     { label: 'Replay Orders', value: String((payload.orders || []).length) },
-    { label: 'Backtest Fills', value: String((backtestTrades || []).length) },
+    { label: 'Backtest Executions', value: String((backtestTrades || []).length) },
   ];
   byId('case-signal-summary').innerHTML = makeStackItems(summaryItems);
 }
@@ -1877,12 +1941,13 @@ async function loadCase() {
 
     // Fire bars (fast) and case bundle (slow) in parallel
     const barsPromise = getJson(`/api/bars?instrument_id=${encodeURIComponent(instrumentId)}&price_mode=${priceMode}`, { useCache: false }).catch(() => null);
-    const casePromise = getJson(`/api/cases/${executionDate}:${instrumentId}:${priceMode}`, { useCache: false });
+    const casePromise = getJson(`/api/cases/${executionDate}:${instrumentId}:${priceMode}`, { useCache: false }).catch(() => null);
 
     let backtestTrades = [];
     if (backtestRunId) {
       const tradePayload = await getJson(`/api/backtest-runs/${backtestRunId}/orders?instrument_id=${encodeURIComponent(instrumentId)}&limit=5000`, { useCache: false });
       backtestTrades = unwrapItems(tradePayload);
+      state.backtest.executionArtifact = tradePayload?.meta?.execution_artifact || null;
     }
 
     const priceKeys = priceMode === 'fq'
@@ -1919,7 +1984,19 @@ async function loadCase() {
 
     // ---- STEP 2: wait for full case bundle (features, signal, benchmarks) ----
     const caseResponse = await casePromise;
-    const payload = unwrapData(caseResponse);
+    const payload = caseResponse ? unwrapData(caseResponse) : {
+      run_id: backtestRunId,
+      instrument_id: instrumentId,
+      trade_date: executionDate,
+      signal_date: executionDate,
+      execution_date: executionDate,
+      price_mode: priceMode,
+      signal_snapshot: {},
+      feature_snapshot: { features: {} },
+      orders: [],
+      positions: [],
+      links: [],
+    };
     state.caseData = payload;
 
     const replayOrderMarkers = (payload.orders || []).map((item) => ({
@@ -1930,10 +2007,10 @@ async function loadCase() {
       source: 'order',
     }));
     const tradeMarkers = [...backtestTrades.map((item) => ({
-      trade_date: item.date,
-      value: toNumber(item.price),
+      trade_date: item.trade_date || item.date,
+      value: toNumber(item.deal_price ?? item.price),
       side: item.side,
-      quantity: item.amount,
+      quantity: item.filled_qty ?? item.amount,
       source: 'fill',
     })), ...replayOrderMarkers];
 
@@ -1956,7 +2033,7 @@ async function loadCase() {
     const orderRows = [
       ...(payload.positions || []).map((item) => ({ ...item, record_type: 'Previous Position', date: item.as_of_date || payload.trade_date, instrument_id: item.instrument_id || item.symbol })),
       ...(payload.orders || []).map((item) => ({ ...item, record_type: 'Replay Order', date: payload.trade_date, instrument_id: item.instrument_id || item.symbol || payload.instrument_id })),
-      ...backtestTrades.map((item) => ({ ...item, record_type: 'Backtest Fill', instrument_id: item.symbol || item.instrument_id || payload.instrument_id })),
+      ...backtestTrades.map((item) => ({ ...item, record_type: 'Backtest Execution', instrument_id: item.instrument || item.symbol || item.instrument_id || payload.instrument_id })),
     ];
     renderCaseOrdersTable(orderRows);
   } catch (error) {
