@@ -42,6 +42,7 @@ class ResearchCockpitRepository:
         self.daily_root = self.project_root / "daily"
         self.experiments_root = self.project_root / "experiments"
         self.reports_root = self.experiments_root / "reports"
+        self.canonical_backtests_root = self.project_root / "data" / "research" / "backtests"
         # F05: removed unused TradeLedger(self.project_root / "data" / "trade.db")
         # — it pointed TradeLedger at the LedgerService SOT with a conflicting
         # schema and was never read.
@@ -59,6 +60,7 @@ class ResearchCockpitRepository:
         self._backtest_report_paths_cache: list[Path] | None = None
         self._backtest_report_index: dict[str, Path] = {}
         self._synthetic_backtest_index: dict[str, dict[str, Any]] = {}
+        self._canonical_backtest_index: dict[str, dict[str, Any]] = {}
         self._json_cache: dict[Path, dict[str, Any]] = {}
         self._model_meta_cache: dict[Path, dict[str, Any]] = {}
         self._universe_cache: dict[str, set[str]] = {}
@@ -400,11 +402,66 @@ class ResearchCockpitRepository:
             return self._synthetic_backtest_index.get(run_id)
         return None
 
+    @staticmethod
+    def _canonical_backtest_run_id(payload: dict[str, Any]) -> str:
+        strategy_run_id = str(payload.get("strategy_run_id") or "").strip()
+        backtest_id = str(payload.get("backtest_id") or "").strip()
+        if not strategy_run_id or not backtest_id:
+            return ""
+        return f"canonical__{strategy_run_id}__{backtest_id}"
+
+    def _iter_canonical_backtest_sources(self) -> list[dict[str, Any]]:
+        """Index immutable backtest manifests by their explicit artifact identity."""
+        if not self.canonical_backtests_root.exists():
+            return []
+        sources: list[dict[str, Any]] = []
+        for manifest_path in sorted(self.canonical_backtests_root.glob("*/*/manifest.json")):
+            payload = self._load_json(manifest_path)
+            if payload.get("artifact_type") != "backtest_run":
+                continue
+            run_id = self._canonical_backtest_run_id(payload)
+            if (
+                manifest_path.parent.name != str(payload.get("backtest_id") or "")
+                or manifest_path.parent.parent.name != str(payload.get("strategy_run_id") or "")
+            ):
+                # The directory identity is part of the canonical contract.  A
+                # mismatched manifest must not be published under another run.
+                continue
+            if not run_id or run_id in self._canonical_backtest_index:
+                continue
+            source = {
+                "run_id": run_id,
+                "run_dir": manifest_path.parent,
+                "manifest_path": manifest_path,
+                "manifest": payload,
+                "daily_path": manifest_path.parent / "daily_summary.csv",
+                "metrics_path": manifest_path.parent / "metrics.json",
+                "result_path": manifest_path.parent / "backtest_result.json",
+            }
+            self._canonical_backtest_index[run_id] = source
+            sources.append(source)
+        return sources
+
+    def _get_canonical_backtest_source(self, run_id: str) -> dict[str, Any] | None:
+        source = self._canonical_backtest_index.get(run_id)
+        if source is not None:
+            return source
+        if run_id.startswith("canonical__"):
+            self._iter_canonical_backtest_sources()
+            return self._canonical_backtest_index.get(run_id)
+        return None
+
     def list_backtest_runs(self, limit: int = 50) -> list[BacktestRunSummary]:
         cached = self._backtest_runs_cache.get(limit)
         if cached is not None:
             return cached
         grouped_runs: dict[str, BacktestRunSummary] = {}
+        for source in self._iter_canonical_backtest_sources():
+            summary = self._build_canonical_backtest_summary(source)
+            self._backtest_summary_cache[summary.run_id] = summary
+            # Canonical runs are separately addressable artifacts.  Do not collapse
+            # Top-N sensitivity runs or distinct signal/config identities.
+            grouped_runs[f"canonical:{summary.run_id}"] = summary
         for path in self._iter_backtest_report_paths():
             summary = self._build_backtest_summary(path)
             self._backtest_summary_cache[summary.run_id] = summary
@@ -437,6 +494,11 @@ class ResearchCockpitRepository:
             summary = self._build_live_rolling_backtest_summary(synthetic_source)
             self._backtest_summary_cache[run_id] = summary
             return summary
+        canonical_source = self._get_canonical_backtest_source(run_id)
+        if canonical_source is not None:
+            summary = self._build_canonical_backtest_summary(canonical_source)
+            self._backtest_summary_cache[run_id] = summary
+            return summary
         report_path = self._resolve_backtest_report(run_id)
         summary = self._build_backtest_summary(report_path)
         self._backtest_summary_cache[run_id] = summary
@@ -452,22 +514,37 @@ class ResearchCockpitRepository:
             points = self._build_live_rolling_daily_points(synthetic_source)
             self._backtest_daily_cache[run_id] = points
             return points
-        report_path = self._resolve_backtest_report(run_id)
-        payload = self._load_json(report_path)
-        daily_path = (payload.get("artifacts") or {}).get("daily_result")
-        if not daily_path:
-            return []
-        csv_path = self._resolve_project_artifact_path(daily_path)
+        canonical_source = self._get_canonical_backtest_source(run_id)
+        if canonical_source is not None:
+            csv_path = canonical_source["daily_path"]
+        else:
+            report_path = self._resolve_backtest_report(run_id)
+            payload = self._load_json(report_path)
+            daily_path = (payload.get("artifacts") or {}).get("daily_result")
+            if not daily_path:
+                return []
+            csv_path = self._resolve_project_artifact_path(daily_path)
         if not csv_path.exists():
             return []
         frame = pd.read_csv(csv_path)
         if frame.empty:
             return []
         # Support both total_assets and equity column names
-        equity_col = "total_assets" if "total_assets" in frame.columns else "equity"
+        if "total_assets" in frame.columns:
+            equity_col = "total_assets"
+        elif "equity" in frame.columns:
+            equity_col = "equity"
+        else:
+            equity_col = "total_value_after"
         if equity_col in frame.columns:
             eq_vals = pd.to_numeric(frame[equity_col], errors="coerce")
             cummax = eq_vals.cummax()
+            if canonical_source is not None:
+                initial_capital = self._to_float(
+                    canonical_source["manifest"].get("initial_capital")
+                )
+                if initial_capital is not None:
+                    cummax = cummax.clip(lower=initial_capital)
             frame = frame.copy()
             frame["drawdown"] = (eq_vals / cummax) - 1.0
         benchmark_points = self._load_benchmark_points(
@@ -489,6 +566,7 @@ class ResearchCockpitRepository:
         equity_base = self._to_float(frame.iloc[0].get(equity_col)) if not frame.empty else None
         previous_benchmark_close = benchmark_base
         previous_benchmark2_close = benchmark2_base
+        previous_equity = None
         points: list[BacktestDailyPoint] = []
         for _, row in frame.iterrows():
             trade_date = str(row.get("date") or row.get("trade_date") or "")
@@ -515,21 +593,29 @@ class ResearchCockpitRepository:
             # Fall back to CSV-column benchmark if index data isn't available
             csv_benchmark = self._to_float(row.get("benchmark_equity"))
             csv_drawdown = self._to_float(row.get("drawdown"))
+            equity_value = self._to_float(row.get(equity_col))
+            daily_return = self._to_float(row.get("daily_return"))
+            if daily_return is None and previous_equity and equity_value is not None:
+                daily_return = (equity_value / previous_equity) - 1.0
+            if equity_value is not None:
+                previous_equity = equity_value
+            turnover_value = row.get("turnover") if "turnover" in frame.columns else row.get("daily_turnover")
+            trade_count_value = row.get("trade_count") if "trade_count" in frame.columns else row.get("order_count")
             points.append(
                 BacktestDailyPoint(
                     trade_date=trade_date,
-                    equity=self._to_float(row.get(equity_col)),
+                    equity=equity_value,
                     zero_cost_equity=self._to_float(row.get("zero_cost_total_assets")),
-                    daily_return=self._to_float(row.get("daily_return")),
+                    daily_return=daily_return,
                     drawdown=csv_drawdown if csv_drawdown is not None else self._to_float(row.get("drawdown")),
                     benchmark_equity=benchmark_equity if benchmark_equity is not None else csv_benchmark,
                     benchmark_daily_return=benchmark_daily_return,
                     benchmark2_equity=benchmark2_equity,
                     benchmark2_daily_return=benchmark2_daily_return,
-                    turnover=self._to_float(row.get("turnover") or row.get("daily_turnover")),
+                    turnover=self._to_float(turnover_value),
                     ic=self._to_float(row.get("ic")),
                     rank_ic=self._to_float(row.get("rank_ic")),
-                    trade_count=self._to_int(row.get("trade_count")),
+                    trade_count=self._to_int(trade_count_value),
                 )
             )
         self._backtest_daily_cache[run_id] = points
@@ -541,6 +627,9 @@ class ResearchCockpitRepository:
             return cached
         synthetic_source = self._get_synthetic_backtest_source(run_id)
         if synthetic_source is not None:
+            self._backtest_group_returns_cache[run_id] = []
+            return []
+        if self._get_canonical_backtest_source(run_id) is not None:
             self._backtest_group_returns_cache[run_id] = []
             return []
         report_path = self._resolve_backtest_report(run_id)
@@ -570,6 +659,8 @@ class ResearchCockpitRepository:
         limit: int = 2000,
     ) -> list[dict[str, Any]]:
         if self._get_synthetic_backtest_source(run_id) is not None:
+            return []
+        if self._get_canonical_backtest_source(run_id) is not None:
             return []
         csv_path = self._resolve_backtest_trades_path(run_id)
         if not csv_path.exists():
@@ -1079,6 +1170,95 @@ class ResearchCockpitRepository:
             manifest_ref=report_logical,
         )
 
+    def _build_canonical_backtest_summary(self, source: dict[str, Any]) -> BacktestRunSummary:
+        payload = source["manifest"]
+        metrics_payload = (
+            self._load_json(source["metrics_path"])
+            if source["metrics_path"].exists()
+            else {}
+        )
+        daily = self._read_csv_safe(source["daily_path"])
+        max_drawdown = None
+        if not daily.empty and "total_value_after" in daily.columns:
+            equity = pd.to_numeric(daily["total_value_after"], errors="coerce")
+            peak = equity.cummax()
+            initial_capital = self._to_float(payload.get("initial_capital"))
+            if initial_capital is not None:
+                peak = peak.clip(lower=initial_capital)
+            max_drawdown = self._to_float((equity / peak - 1.0).min())
+        top_n = self._to_int((payload.get("allocation_params") or {}).get("top_n"))
+        signal_id = str(payload.get("signal_id") or "unknown")
+        strategy_template = str(payload.get("strategy_template_id") or "backtest")
+        logical_manifest = str(source["manifest_path"].relative_to(self.project_root))
+        artifacts = [
+            RunArtifactRef(
+                artifact_id="manifest",
+                kind="manifest",
+                logical_path=logical_manifest,
+                title="canonical backtest manifest",
+            )
+        ]
+        for artifact_id, kind, media_type in [
+            ("daily_summary", "backtest_daily", "text/csv"),
+            ("metrics", "other", "application/json"),
+            ("backtest_result", "report", "application/json"),
+        ]:
+            path = source[f"{artifact_id.replace('daily_summary', 'daily').replace('backtest_result', 'result')}_path"]
+            if path.exists():
+                artifacts.append(
+                    RunArtifactRef(
+                        artifact_id=artifact_id,
+                        kind=kind,
+                        logical_path=str(path.relative_to(self.project_root)),
+                        title=path.name,
+                        media_type=media_type,
+                    )
+                )
+        return BacktestRunSummary(
+            run_id=source["run_id"],
+            run_type="canonical_backtest",
+            model_name=signal_id,
+            feature_set=signal_id,
+            universe=str(payload.get("universe") or "unknown"),
+            train_range={"start": None, "end": None},
+            test_range={
+                "start": payload.get("effective_start_date") or payload.get("start_date"),
+                "end": payload.get("effective_end_date") or payload.get("end_date"),
+            },
+            top_k=top_n,
+            price_mode="fq" if payload.get("use_adjusted_price") else "raw",
+            display_label=f"{signal_id} · Top{top_n or '?'} · {strategy_template}",
+            parameter_summary={
+                "source_key": f"canonical:{source['run_id']}",
+                "source_label": "canonical signal-cache backtest",
+                "artifact_identity": source["run_id"],
+                "strategy_run_id": payload.get("strategy_run_id"),
+                "backtest_id": payload.get("backtest_id"),
+                "signal_id": signal_id,
+                "signal_run_id": payload.get("signal_run_id"),
+                "strategy_type": strategy_template,
+                "rebalance_freq": payload.get("rebalance_freq"),
+                "top_k": top_n,
+                "execution_price": payload.get("execution_price"),
+                "mtm_price": payload.get("mtm_price"),
+                "git_commit": payload.get("git_commit"),
+                "signal_date": payload.get("effective_start_date") or payload.get("start_date"),
+                "execution_date": payload.get("effective_end_date") or payload.get("end_date"),
+                "notes": ["version=canonical_backtest_v1"],
+            },
+            metrics={
+                "total_return": self._fmt_pct(metrics_payload.get("total_return", payload.get("total_return"))),
+                "sharpe": self._fmt_num(metrics_payload.get("sharpe")),
+                "max_drawdown": self._fmt_pct(max_drawdown),
+                "trade_count": metrics_payload.get("order_count_total"),
+                "days": metrics_payload.get("trading_day_count", payload.get("trading_day_count")),
+            },
+            signal_metrics={"status": "not_available"},
+            group_returns_summary={"status": "not_available"},
+            artifacts=artifacts,
+            manifest_ref=logical_manifest,
+        )
+
     def _build_live_rolling_backtest_summary(self, source: dict[str, Any]) -> BacktestRunSummary:
         metrics_frame = self._read_csv_safe(source["metrics_path"])
         summary_payload = self._load_json(source["summary_path"]) if source["summary_path"].exists() else {}
@@ -1235,6 +1415,25 @@ class ResearchCockpitRepository:
                     "signal_metrics": self._build_live_rolling_signal_metrics(metrics_frame),
                     "rolling_stability": self._build_live_rolling_stability(metrics_frame),
                 },
+            }
+        canonical_source = self._get_canonical_backtest_source(run_id)
+        if canonical_source is not None:
+            metrics = (
+                self._load_json(canonical_source["metrics_path"])
+                if canonical_source["metrics_path"].exists()
+                else {}
+            )
+            return {
+                "sections": [
+                    {
+                        "name": "Performance",
+                        "status": "success",
+                        "message": "canonical signal-cache backtest artifact",
+                        "metrics": metrics,
+                        "details": {},
+                    }
+                ],
+                "artifacts": {"metrics": metrics},
             }
         report_path = self._resolve_backtest_report(run_id)
         payload = self._load_json(report_path)
