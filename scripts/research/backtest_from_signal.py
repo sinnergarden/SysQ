@@ -172,6 +172,21 @@ def main() -> None:
     parser.add_argument("--blend-weight", type=float, default=1.0,
                         help="Weight for primary signal (0.0-1.0). Secondary gets 1-w.")
     parser.add_argument(
+        "--holding-policy",
+        choices=["target_rebalance", "posterior_confirmed"],
+        default="target_rebalance",
+    )
+    parser.add_argument("--score-delta-lookback", type=int, default=20)
+    parser.add_argument("--score-delta-quantile", type=float, default=0.10)
+    parser.add_argument("--score-delta-history-days", type=int, default=504)
+    parser.add_argument("--score-delta-min-observations", type=int, default=500)
+    parser.add_argument("--posterior-stop-loss", type=float, default=0.09)
+    parser.add_argument("--winner-activation-return", type=float, default=0.20)
+    parser.add_argument("--winner-trailing-stop", type=float, default=0.125)
+    parser.add_argument("--stale-after-days", type=int, default=20)
+    parser.add_argument("--stale-max-return", type=float, default=0.03)
+    parser.add_argument("--replacement-rank-gap", type=int, default=20)
+    parser.add_argument(
         "--materialize-blend",
         action="store_true",
         help=(
@@ -239,6 +254,17 @@ def main() -> None:
         signal_run_id_2=args.signal_run_id_2,
         blend_weight=args.blend_weight,
         research_root=args.research_root,
+        holding_policy=args.holding_policy,
+        score_delta_lookback=args.score_delta_lookback,
+        score_delta_quantile=args.score_delta_quantile,
+        score_delta_history_days=args.score_delta_history_days,
+        score_delta_min_observations=args.score_delta_min_observations,
+        posterior_stop_loss=args.posterior_stop_loss,
+        winner_activation_return=args.winner_activation_return,
+        winner_trailing_stop=args.winner_trailing_stop,
+        stale_after_days=args.stale_after_days,
+        stale_max_return=args.stale_max_return,
+        replacement_rank_gap=args.replacement_rank_gap,
         maxdd_signal_id=args.maxdd_signal_id,
         maxdd_signal_run_id=args.maxdd_signal_run_id,
         maxdd_threshold=args.maxdd_threshold,

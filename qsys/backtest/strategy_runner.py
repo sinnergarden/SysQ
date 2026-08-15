@@ -57,6 +57,12 @@ import pandas as pd
 
 from qsys.backtest.result import BacktestRunResult
 from qsys.backtest.daily_kernel import should_skip_weekly_rebalance
+from qsys.backtest.posterior_policy import (
+    PosteriorPolicyConfig,
+    PosteriorPolicyState,
+    prepare_posterior_signal_views,
+    run_posterior_policy_day,
+)
 from qsys.ops.market_snapshot import fetch_market_snapshot
 from qsys.ops.plan_builder import build_order_intents
 from qsys.ops.shadow_execution import positions_frame
@@ -1038,6 +1044,17 @@ class BacktestRunner:
         signal_id_2: str | None = None,
         signal_run_id_2: str | None = None,
         blend_weight: float = 1.0,
+        holding_policy: str = "target_rebalance",
+        score_delta_lookback: int = 20,
+        score_delta_quantile: float = 0.10,
+        score_delta_history_days: int = 504,
+        score_delta_min_observations: int = 500,
+        posterior_stop_loss: float = 0.09,
+        winner_activation_return: float = 0.20,
+        winner_trailing_stop: float = 0.125,
+        stale_after_days: int = 20,
+        stale_max_return: float = 0.03,
+        replacement_rank_gap: int = 20,
     ) -> BacktestRunResult:
         """Backtest from a saved SignalRun (no model inference).
 
@@ -1107,13 +1124,48 @@ class BacktestRunner:
                 "fees. Use raw execution prices; corporate actions remain an "
                 "explicit research limitation."
             )
+        if holding_policy not in {"target_rebalance", "posterior_confirmed"}:
+            raise ValueError(
+                "holding_policy must be 'target_rebalance' or "
+                "'posterior_confirmed'"
+            )
+        if top_n < 1:
+            raise ValueError("top_n must be positive")
+        posterior_config: PosteriorPolicyConfig | None = None
+        if holding_policy == "posterior_confirmed":
+            if signal_id_2 is not None:
+                raise ValueError(
+                    "posterior_confirmed requires a materialized single "
+                    "SignalRun; combine inputs before backtesting"
+                )
+            if stop_loss is not None or trailing_stop is not None:
+                raise ValueError(
+                    "legacy stop_loss/trailing_stop cannot be combined with "
+                    "posterior_confirmed policy controls"
+                )
+            posterior_config = PosteriorPolicyConfig(
+                score_delta_lookback=score_delta_lookback,
+                score_delta_quantile=score_delta_quantile,
+                score_delta_history_days=score_delta_history_days,
+                score_delta_min_observations=score_delta_min_observations,
+                posterior_stop_loss=posterior_stop_loss,
+                winner_activation_return=winner_activation_return,
+                winner_trailing_stop=winner_trailing_stop,
+                stale_after_days=stale_after_days,
+                stale_max_return=stale_max_return,
+                replacement_rank_gap=replacement_rank_gap,
+            )
+            posterior_config.validate()
 
         signal_store = SignalStore(str(research_root))
         primary_identity = signal_store.validate_backtest_source(
             signal_id, signal_run_id
         )
         primary_signal = signal_store.load_signal_run(
-            signal_id, signal_run_id, start_date=start_date, end_date=end_date
+            signal_id,
+            signal_run_id,
+            start_date=None if posterior_config is not None else start_date,
+            end_date=end_date,
         )
         primary_by_date = {
             str(date): frame.reset_index(drop=True)
@@ -1165,6 +1217,9 @@ class BacktestRunner:
             "primary_signal": primary_identity,
             "secondary_signal": secondary_identity,
         }
+        if posterior_config is not None:
+            hash_payload["holding_policy"] = holding_policy
+            hash_payload["posterior_policy"] = posterior_config.to_manifest()
         hash_input = json.dumps(
             hash_payload, sort_keys=True, separators=(",", ":")
         )
@@ -1197,8 +1252,83 @@ class BacktestRunner:
         self._last_prices = {}
         self._last_trade_date = None
         self._position_peaks: dict[str, float] = {}
+        posterior_state: PosteriorPolicyState | None = None
+        posterior_views = None
+        if posterior_config is not None:
+            if "data_date" in primary_signal.columns:
+                signal_trade_dates = pd.to_datetime(
+                    primary_signal["trade_date"], errors="coerce"
+                )
+                signal_data_dates = pd.to_datetime(
+                    primary_signal["data_date"], errors="coerce"
+                )
+                invalid = (
+                    signal_trade_dates.isna()
+                    | signal_data_dates.isna()
+                    | signal_data_dates.ge(signal_trade_dates)
+                )
+                if invalid.any():
+                    sample = primary_signal.loc[
+                        invalid, ["trade_date", "data_date"]
+                    ].head(3).to_dict(orient="records")
+                    raise ValueError(
+                        "Signal lookahead violation in posterior policy; "
+                        f"examples: {sample}"
+                    )
+            posterior_state = PosteriorPolicyState()
+            posterior_view_dates = sorted(
+                date for date in primary_by_date if date <= end_date
+            )
+            posterior_views = prepare_posterior_signal_views(
+                primary_by_date,
+                posterior_view_dates,
+                score_column=score_column,
+                config=posterior_config,
+            )
 
-        for trade_date in trading_dates:
+        for trading_index, trade_date in enumerate(trading_dates):
+            if posterior_config is not None:
+                assert posterior_state is not None
+                assert posterior_views is not None
+                day_signal = primary_by_date.get(
+                    trade_date, pd.DataFrame()
+                ).copy()
+                previous_trade_date = (
+                    trading_dates[trading_index - 1]
+                    if trading_index > 0 else None
+                )
+                is_rebalance = not should_skip_weekly_rebalance(
+                    rebalance_freq, trade_date, previous_trade_date
+                )
+                day_result, targets, orders = run_posterior_policy_day(
+                    account=account,
+                    state=posterior_state,
+                    config=posterior_config,
+                    views=posterior_views,
+                    day_signal=day_signal,
+                    trade_date=trade_date,
+                    trading_index=trading_index,
+                    is_rebalance=is_rebalance,
+                    top_n=top_n,
+                    commission=commission,
+                    stamp_duty=stamp_duty,
+                    min_commission=min_commission,
+                    slippage=slippage,
+                    execution_price_mode=self._execution_price_mode,
+                    market_snapshot_fn=fetch_market_snapshot,
+                )
+                self._last_trade_date = trade_date
+                daily_summaries.append(day_result)
+                if daily_debug_dir:
+                    day_dir = daily_debug_dir / trade_date
+                    day_dir.mkdir(parents=True, exist_ok=True)
+                    day_signal.to_csv(day_dir / "signal.csv", index=False)
+                    targets.to_csv(day_dir / "target_weights.csv", index=False)
+                    if orders:
+                        pd.DataFrame(orders).to_csv(
+                            day_dir / "order_intents.csv", index=False
+                        )
+                continue
             # ── Shared: fetch MTM prices for any existing positions ──
             mtm_prices: dict[str, float] = {}
             if account.positions:
@@ -1487,6 +1617,26 @@ class BacktestRunner:
             "rebalance_freq": rebalance_freq,
             "data_cutoff_policy": "preopen_previous",
         })
+        if posterior_config is not None:
+            manifest["holding_policy"] = holding_policy
+            manifest["posterior_policy"] = posterior_config.to_manifest()
+            manifest["allocation_method"] = "equal_weight_entry_hold_drift"
+            manifest["allocation_params"] = {
+                "top_n": top_n,
+                "initial_entry_weight": 1.0 / top_n,
+                "periodic_reweight": False,
+                "max_weight": None,
+            }
+            manifest["posterior_policy_contract"] = {
+                "score_delta": "score_t_minus_score_t_minus_N_trading_days",
+                "delta_threshold": (
+                    "pooled_quantile_from_strictly_prior_execution_dates"
+                ),
+                "price_decision": "previous_completed_close",
+                "execution": "next_execution_date_open",
+                "entry_allocation": "equal_weight_one_over_top_n",
+                "rank_exit": "disabled",
+            }
         write_manifest(output_dir / "manifest.json", manifest)
 
         # ── Write daily_summary + metrics ─────────────────────────────────
@@ -1509,6 +1659,21 @@ class BacktestRunner:
             "rejected_count_total": _rt, "avg_order_per_day": round(_ot / max(len(trading_dates), 1), 2),
             "turnover_total": round(_tt, 2), "avg_turnover": round(_tt / max(_td, 1), 2),
         }
+        if posterior_config is not None:
+            _m["policy_exit_count_total"] = sum(
+                d.get("policy_exit_count", 0) for d in daily_summaries
+            )
+            _m["policy_entry_count_total"] = sum(
+                d.get("policy_entry_count", 0) for d in daily_summaries
+            )
+            for reason in (
+                "hard_stop", "score_delta", "winner_trailing",
+                "stale_replacement",
+            ):
+                _m[f"{reason}_exit_count_total"] = sum(
+                    d.get(f"{reason}_exit_count", 0)
+                    for d in daily_summaries
+                )
         write_manifest(output_dir / "metrics.json", with_standard_metadata(_m))
 
         result = BacktestRunResult(
@@ -1528,11 +1693,16 @@ class BacktestRunner:
                 "daily_summary": str(output_dir / "daily_summary.csv") if daily_summaries else "",
                 "metrics": str(output_dir / "metrics.json"),
             },
-            notes=f"cached-signal backtest over {len(trading_dates)} trading dates; "
-                  f"signal_id={signal_id}; signal_run_id={signal_run_id}; "
-                  f"top_n={top_n}; max_weight={max_weight}; "
-                  f"rebalance_freq={rebalance_freq}; "
-                  f"slippage={slippage}",
+            notes=(
+                f"cached-signal backtest over {len(trading_dates)} trading dates; "
+                f"signal_id={signal_id}; signal_run_id={signal_run_id}; "
+                f"top_n={top_n}; max_weight={max_weight}; "
+                f"rebalance_freq={rebalance_freq}; slippage={slippage}"
+                + (
+                    f"; holding_policy={holding_policy}"
+                    if posterior_config is not None else ""
+                )
+            ),
         )
 
         self._write_summary(result, output_dir)
