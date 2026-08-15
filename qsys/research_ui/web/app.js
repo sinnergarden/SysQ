@@ -1648,18 +1648,26 @@ function renderBacktestPositionsTable(positions) {
   });
 }
 
+// Monotonic request token: a slow /behavior/episodes response must never
+// overwrite a newer run's panel (P0.7 stale-async guard).
+let episodeRequestSeq = 0;
+
 async function loadBacktestEpisodes({ force = false } = {}) {
   const runId = state.context.runId || byId('backtest-run-select').value;
   if (!runId) return;
   if (!force && state.backtest.episodesLoaded) return;
   state.backtest.episodesLoaded = true;
+  const seq = ++episodeRequestSeq;
+  const requestedRunId = runId;
   renderEpisodeLoading();
   try {
     const payload = await getJson(`/api/backtest-runs/${runId}/behavior/episodes`, { useCache: false });
+    if (seq !== episodeRequestSeq) return; // superseded by a newer request
     const data = unwrapData(payload) || {};
     state.backtest.episodes = data.episodes || [];
     state.backtest.episodeSummary = data.summary || {};
   } catch (error) {
+    if (seq !== episodeRequestSeq) return;
     state.backtest.episodes = null;
     state.backtest.episodeSummary = null;
     renderEpisodeAnalyticsError(error);
@@ -1677,6 +1685,11 @@ function renderEpisodeLoading() {
   renderMetricCard('episode-median-return', '…', 'episode-median-return-note', 'closed');
   renderMetricCard('episode-avg-holding', '…', 'episode-avg-holding-note', 'trading days');
   const loading = '<div class="empty">Loading episodes…</div>';
+  byId('backtest-episode-capture-scatter').innerHTML = loading;
+  byId('backtest-episode-winner-buckets').innerHTML = loading;
+  byId('backtest-episode-stop-quality').innerHTML = loading;
+  byId('backtest-episode-horizon-buckets').innerHTML = loading;
+  byId('backtest-episode-pnl-concentration').innerHTML = loading;
   byId('backtest-episode-return-dist').innerHTML = loading;
   byId('backtest-episode-holding-dist').innerHTML = loading;
   byId('backtest-episode-mfe-mae-scatter').innerHTML = loading;
@@ -1689,6 +1702,11 @@ function renderEpisodeAnalytics() {
   const summary = state.backtest.episodeSummary || {};
   byId('backtest-episode-count').textContent = summary.total_episodes != null ? `${summary.total_episodes} episodes` : '';
   renderEpisodeSummaryRow(summary);
+  renderEpisodeCaptureScatter(episodes);
+  renderEpisodeWinnerBuckets(summary);
+  renderEpisodeStopQuality(summary);
+  renderEpisodeHorizonBuckets(summary);
+  renderEpisodePnlConcentration(summary);
   renderEpisodeReturnDist(episodes);
   renderEpisodeHoldingDist(episodes);
   renderEpisodeMfeMaeScatter(episodes);
@@ -1704,9 +1722,14 @@ function renderEpisodeAnalyticsError(error) {
   renderMetricCard('episode-median-return', '-', 'episode-median-return-note', 'closed');
   renderMetricCard('episode-avg-holding', '-', 'episode-avg-holding-note', 'trading days');
   const message = `<div class="empty">${escapeHtml(error.message || 'Episodes unavailable')}</div>`;
+  renderChartError('backtest-episode-capture-scatter', 'No episode data');
+  renderChartError('backtest-episode-pnl-concentration', 'No episode data');
   renderChartError('backtest-episode-return-dist', 'No episode data');
   renderChartError('backtest-episode-holding-dist', 'No episode data');
   renderChartError('backtest-episode-mfe-mae-scatter', 'No episode data');
+  byId('backtest-episode-winner-buckets').innerHTML = message;
+  byId('backtest-episode-stop-quality').innerHTML = message;
+  byId('backtest-episode-horizon-buckets').innerHTML = message;
   byId('backtest-episode-exit-reason-table').innerHTML = message;
   byId('backtest-episode-detail-table').innerHTML = message;
 }
@@ -1718,6 +1741,151 @@ function renderEpisodeSummaryRow(summary) {
   renderMetricCard('episode-avg-return', formatPercent(summary.avg_return, 1), 'episode-avg-return-note', 'cash-weighted,含费');
   renderMetricCard('episode-median-return', formatPercent(summary.median_return, 1), 'episode-median-return-note', 'closed');
   renderMetricCard('episode-avg-holding', summary.avg_holding_days != null ? formatNumber(summary.avg_holding_days, 1) : '-', 'episode-avg-holding-note', 'trading days');
+}
+
+function renderEpisodeCaptureScatter(episodes) {
+  const closed = (episodes || []).filter((item) => item.exit_reason !== 'open');
+  const points = closed.filter((item) => item.MFE != null && (item.realized_return != null || item.unrealized_return != null));
+  if (!points.length) {
+    renderChartError('backtest-episode-capture-scatter', 'No closed episodes with excursion data');
+    return;
+  }
+  const finalReturn = (item) => Number(item.realized_return != null ? item.realized_return : item.unrealized_return);
+  const palette = ['#4e79a7', '#f28e2b', '#e15759', '#76b7b2', '#59a14f', '#edc948', '#b07aa1', '#ff9da7', '#9c755f', '#bab0ac'];
+  const reasons = [...new Set(points.map((p) => p.exit_reason || 'open'))];
+  const color = (reason) => palette[reasons.indexOf(reason) % palette.length];
+  const layout = plotlyBaseLayout({
+    title: 'MFE → Realized Capture',
+    height: 320,
+    yAxisTitle: 'Final Return %',
+    hoverMode: 'closest',
+  });
+  layout.xaxis = { title: { text: 'MFE %' }, type: 'linear' };
+  const mfeMax = Math.max(...points.map((p) => Number(p.MFE) * 100), 1);
+  const traces = reasons.map((reason) => {
+    const pts = points.filter((p) => (p.exit_reason || 'open') === reason);
+    return {
+      type: 'scatter',
+      mode: 'markers',
+      name: reason,
+      x: pts.map((p) => Number(p.MFE) * 100),
+      y: pts.map((p) => finalReturn(p) * 100),
+      customdata: pts.map((p) => [p.symbol, p.entry_date || '', p.exit_reason || 'open']),
+      marker: { size: 8, color: color(reason), line: { color: 'rgba(31,41,51,0.35)', width: 0.5 }, opacity: 0.85 },
+      hovertemplate: '%{customdata[0]}<br>MFE %{x:.1f}%<br>Final %{y:.1f}%<br>Reason %{customdata[2]}<extra></extra>',
+    };
+  });
+  traces.push({
+    type: 'scatter',
+    mode: 'lines',
+    name: '100% capture',
+    x: [0, mfeMax],
+    y: [0, mfeMax],
+    line: { color: 'rgba(127,127,127,0.6)', width: 1, dash: 'dot' },
+    hoverinfo: 'skip',
+  });
+  renderPlotlyChart('backtest-episode-capture-scatter', traces, layout, {
+    onClick: (evt) => {
+      const pt = evt && evt.points && evt.points[0];
+      if (!pt || !pt.customdata) return;
+      const [symbol, entryDate] = pt.customdata;
+      if (symbol) jumpToCase(symbol, toDateLabel(entryDate || state.backtest.selectedDate));
+    },
+  });
+}
+
+function renderEpisodeWinnerBuckets(summary) {
+  const buckets = summary.winner_capture_buckets || [];
+  renderDataTable('backtest-episode-winner-buckets', buckets, [
+    { key: 'bucket', label: 'Capture', sortValue: (row) => row.bucket },
+    { key: 'count', label: 'Episodes', sortValue: (row) => toNumber(row.count) },
+    { key: 'win_rate', label: 'Win Rate', render: (row) => formatPercent(row.win_rate, 1), sortValue: (row) => toNumber(row.win_rate) },
+    { key: 'avg_return', label: 'Avg Return', render: (row) => formatPercent(row.avg_return, 1), sortValue: (row) => toNumber(row.avg_return) },
+  ], {
+    tableKey: 'backtest-episode-winner-buckets',
+    emptyMessage: 'No winners with MFE > 10%',
+  });
+}
+
+function renderEpisodeStopQuality(summary) {
+  const sq = summary.stop_quality || {};
+  const rows = [
+    { metric: 'Hard-Stop Exits', value: sq.hard_stop_count != null ? String(sq.hard_stop_count) : '-', type: 'num' },
+    { metric: 'False-Stop Rate 20d', value: formatPercent(sq.false_stop_rate_20d, 1), type: 'pct' },
+    { metric: 'False-Stop Rate 60d', value: formatPercent(sq.false_stop_rate_60d, 1), type: 'pct' },
+    { metric: 'Avg Post-Exit 20d', value: formatPercent(sq.avg_post_exit_20d, 1), type: 'pct' },
+    { metric: 'Avg Post-Exit 60d', value: formatPercent(sq.avg_post_exit_60d, 1), type: 'pct' },
+    { metric: 'Avg MFE', value: formatPercent(sq.avg_mfe, 1), type: 'pct' },
+    { metric: 'Avg MAE', value: formatPercent(sq.avg_mae, 1), type: 'pct' },
+    { metric: 'Avg Return', value: formatPercent(sq.avg_return, 1), type: 'pct' },
+  ];
+  renderDataTable('backtest-episode-stop-quality', rows, [
+    { key: 'metric', label: 'Metric', sortable: false },
+    { key: 'value', label: 'Value', render: (row) => (row.type === 'pct' ? row.value : `<span class="muted-text">${escapeHtml(row.value)}</span>`), sortable: false },
+  ], {
+    tableKey: 'backtest-episode-stop-quality',
+    hideToolbar: true,
+    emptyMessage: 'No hard-stop exits',
+  });
+}
+
+function renderEpisodeHorizonBuckets(summary) {
+  const horizons = (summary.holding_horizons || [])
+    .map((row) => ({
+      ...row,
+      reasons: Object.entries(row.exit_reasons || {})
+        .sort((a, b) => b[1] - a[1])
+        .map(([reason, count]) => `${reason} × ${count}`)
+        .join(', '),
+    }));
+  renderDataTable('backtest-episode-horizon-buckets', horizons, [
+    { key: 'bucket', label: 'Holding Days', sortValue: (row) => row.bucket },
+    { key: 'count', label: 'Episodes', sortValue: (row) => toNumber(row.count) },
+    { key: 'reasons', label: 'Exit Reasons', render: (row) => `<span class="muted-text">${escapeHtml(row.reasons)}</span>`, sortable: false },
+  ], {
+    tableKey: 'backtest-episode-horizon-buckets',
+    emptyMessage: 'No holding-day data',
+  });
+}
+
+function renderEpisodePnlConcentration(summary) {
+  const pc = summary.pnl_concentration;
+  if (!pc || !pc.cumulative_curve || !pc.cumulative_curve.length) {
+    renderChartError('backtest-episode-pnl-concentration', 'No realized PnL data');
+    return;
+  }
+  const curve = pc.cumulative_curve;
+  const shares = [
+    `Top1% ${formatPercent(pc.top_1pct_share, 0)}`,
+    `Top5% ${formatPercent(pc.top_5pct_share, 0)}`,
+    `Top10% ${formatPercent(pc.top_10pct_share, 0)}`,
+  ].join(' · ');
+  const layout = plotlyBaseLayout({
+    title: `Cumulative PnL (¥) · ${shares}`,
+    height: 260,
+    yAxisTitle: 'Cumulative PnL (¥)',
+    hoverMode: 'closest',
+  });
+  layout.xaxis = { title: { text: 'Episode rank (best → worst)' }, type: 'linear' };
+  renderPlotlyChart('backtest-episode-pnl-concentration', [
+    {
+      type: 'bar',
+      name: 'Episode PnL',
+      x: curve.map((p) => p.rank),
+      y: curve.map((p) => p.pnl),
+      marker: { color: CHART_COLORS.accent, opacity: 0.7 },
+      hovertemplate: 'Rank %{x}<br>PnL %{y:,.0f}<extra></extra>',
+    },
+    {
+      type: 'scatter',
+      mode: 'lines',
+      name: 'Cumulative',
+      x: curve.map((p) => p.rank),
+      y: curve.map((p) => p.cumulative),
+      line: { color: CHART_COLORS.strategy, width: 2 },
+      hovertemplate: 'Rank %{x}<br>Cumulative %{y:,.0f}<extra></extra>',
+    },
+  ], layout);
 }
 
 function renderEpisodeReturnDist(episodes) {
@@ -1844,10 +2012,28 @@ function renderEpisodeExitReasonTable(summary) {
       sortValue: (row) => toNumber(row.avg_mfe),
     },
     {
-      key: 'avg_mae',
-      label: 'Avg MAE',
-      render: (row) => formatPercent(row.avg_mae, 1),
-      sortValue: (row) => toNumber(row.avg_mae),
+      key: 'median_mfe',
+      label: 'Median MFE',
+      render: (row) => formatPercent(row.median_mfe, 1),
+      sortValue: (row) => toNumber(row.median_mfe),
+    },
+    {
+      key: 'median_mae',
+      label: 'Median MAE',
+      render: (row) => formatPercent(row.median_mae, 1),
+      sortValue: (row) => toNumber(row.median_mae),
+    },
+    {
+      key: 'median_capture',
+      label: 'Median Capture',
+      render: (row) => formatPercent(row.median_capture, 1),
+      sortValue: (row) => toNumber(row.median_capture),
+    },
+    {
+      key: 'avg_post_exit_20d',
+      label: 'Avg Post 20d',
+      render: (row) => row.post_exit_20d_count ? `${formatPercent(row.avg_post_exit_20d, 1)} (${row.post_exit_20d_count})` : '-',
+      sortValue: (row) => toNumber(row.avg_post_exit_20d),
     },
   ], {
     tableKey: 'backtest-episode-exit-reason',
@@ -1900,6 +2086,30 @@ function renderEpisodeDetailTable(episodes) {
         return '-';
       },
       sortValue: (row) => row.exit_reason === 'open' ? toNumber(row.unrealized_return) : toNumber(row.realized_return),
+    },
+    {
+      key: 'episode_pnl',
+      label: 'PnL (¥)',
+      render: (row) => row.episode_pnl != null ? `${row.episode_pnl >= 0 ? '+' : ''}${formatNumber(row.episode_pnl, 0)}` : '-',
+      sortValue: (row) => toNumber(row.episode_pnl),
+    },
+    {
+      key: 'capture_ratio',
+      label: 'Capture',
+      render: (row) => formatPercent(row.capture_ratio, 1),
+      sortValue: (row) => toNumber(row.capture_ratio),
+    },
+    {
+      key: 'giveback',
+      label: 'Giveback',
+      render: (row) => formatPercent(row.giveback, 1),
+      sortValue: (row) => toNumber(row.giveback),
+    },
+    {
+      key: 'valuation_date',
+      label: 'Val. Date',
+      render: (row) => row.valuation_date != null ? toDateLabel(row.valuation_date) : '-',
+      sortValue: (row) => toDateLabel(row.valuation_date || ''),
     },
     {
       key: 'MFE',

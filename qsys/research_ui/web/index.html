@@ -222,7 +222,29 @@
               <article class="panel stat-card"><span>Median Return</span><strong id="episode-median-return">-</strong><small id="episode-median-return-note">closed</small></article>
               <article class="panel stat-card"><span>Avg Holding</span><strong id="episode-avg-holding">-</strong><small id="episode-avg-holding-note">trading days</small></article>
             </div>
-            <div class="subpanel-grid">
+            <div class="section-label" style="margin-top:14px;">MFE → Realized Capture <span class="muted-text">(click a point to open the case)</span></div>
+            <div id="backtest-episode-capture-scatter" class="chart plotly-chart chart-wide"></div>
+            <div class="subpanel-grid" style="margin-top:14px;">
+              <div>
+                <div class="section-label">Winner Capture Buckets <span class="muted-text">(MFE &gt; 10%)</span></div>
+                <div id="backtest-episode-winner-buckets" class="table-wrap"></div>
+              </div>
+              <div>
+                <div class="section-label">Hard-Stop Quality</div>
+                <div id="backtest-episode-stop-quality" class="table-wrap"></div>
+              </div>
+            </div>
+            <div class="subpanel-grid" style="margin-top:14px;">
+              <div>
+                <div class="section-label">Holding Horizon Buckets</div>
+                <div id="backtest-episode-horizon-buckets" class="table-wrap"></div>
+              </div>
+              <div>
+                <div class="section-label">PnL Concentration</div>
+                <div id="backtest-episode-pnl-concentration" class="chart plotly-chart chart-mid"></div>
+              </div>
+            </div>
+            <div class="subpanel-grid" style="margin-top:14px;">
               <div>
                 <div class="section-label">Return Distribution</div>
                 <div id="backtest-episode-return-dist" class="chart plotly-chart chart-mid"></div>
@@ -232,7 +254,7 @@
                 <div id="backtest-episode-holding-dist" class="chart plotly-chart chart-mid"></div>
               </div>
             </div>
-            <div class="section-label" style="margin-top:14px;">MFE / MAE vs Realized Return</div>
+            <div class="section-label" style="margin-top:14px;">MFE vs MAE <span class="muted-text">(secondary)</span></div>
             <div id="backtest-episode-mfe-mae-scatter" class="chart plotly-chart chart-mid"></div>
             <div class="section-label" style="margin-top:14px;">By Exit Reason</div>
             <div id="backtest-episode-exit-reason-table" class="table-wrap"></div>
