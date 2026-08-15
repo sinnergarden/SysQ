@@ -1,6 +1,6 @@
 experiment_id: financial_rc_60d_rolling_5y_to_202607_v3
 calendar:
-  start_date: "2021-08-02"
+  start_date: "2021-01-01"
   end_date: "2026-07-31"
   train_window_days: 504
   step_days: 20
