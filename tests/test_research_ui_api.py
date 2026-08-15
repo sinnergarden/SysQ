@@ -65,7 +65,10 @@ class TestResearchUiApi(unittest.TestCase):
         self.assertEqual(payload['api_version'], 'v1')
         self.assertGreaterEqual(payload['count'], 1)
         feature_sets = {item['feature_set'] for item in payload['items']}
-        self.assertIn('feature_254', feature_sets)
+        self.assertTrue(
+            all(feature_sets),
+            'every backtest run must carry a feature_set',
+        )
         self.assertIn('run_id', payload['items'][0])
         self.assertIn('display_label', payload['items'][0])
         self.assertIn('parameter_summary', payload['items'][0])

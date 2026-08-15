@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -451,6 +452,26 @@ class ResearchCockpitRepository:
             return self._canonical_backtest_index.get(run_id)
         return None
 
+    def _canonical_executions_path(self, source: dict[str, Any]) -> Path | None:
+        """Resolve the immutable executions artifact declared by a canonical manifest.
+
+        ``artifacts.executions.path`` is relative to the run-id directory that
+        holds the manifest.  Absolute paths (or paths that escape the run dir)
+        are rejected so a tampered manifest cannot redirect reads outside the
+        backtest artifact tree.  Returns None when the run recorded no
+        executions artifact.
+        """
+        payload = source["manifest"]
+        executions = (payload.get("artifacts") or {}).get("executions") or {}
+        exec_path = executions.get("path")
+        if not exec_path or os.path.isabs(str(exec_path)):
+            return None
+        candidate = (source["run_dir"] / str(exec_path)).resolve()
+        run_dir = source["run_dir"].resolve()
+        if not candidate.is_file() or not candidate.is_relative_to(run_dir):
+            return None
+        return candidate
+
     def list_backtest_runs(self, limit: int = 50) -> list[BacktestRunSummary]:
         cached = self._backtest_runs_cache.get(limit)
         if cached is not None:
@@ -660,8 +681,14 @@ class ResearchCockpitRepository:
     ) -> list[dict[str, Any]]:
         if self._get_synthetic_backtest_source(run_id) is not None:
             return []
-        if self._get_canonical_backtest_source(run_id) is not None:
-            return []
+        canonical_source = self._get_canonical_backtest_source(run_id)
+        if canonical_source is not None:
+            return self._load_canonical_executions_orders(
+                canonical_source,
+                trade_date=trade_date,
+                instrument_id=instrument_id,
+                limit=limit,
+            )
         csv_path = self._resolve_backtest_trades_path(run_id)
         if not csv_path.exists():
             return []
@@ -677,6 +704,47 @@ class ResearchCockpitRepository:
         for row in frame.to_dict(orient="records"):
             rows.append({key: self._normalize_scalar(value) for key, value in row.items()})
         return rows
+
+    def _load_canonical_executions_orders(
+        self,
+        source: dict[str, Any],
+        *,
+        trade_date: str | None,
+        instrument_id: str | None,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        """Read order rows from a canonical backtest's executions artifact.
+
+        The front-end order table consumes ``date`` / ``symbol`` /
+        ``filled_amount`` / ``deal_price`` / ``side`` / ``status``.  Canonical
+        executions record these under ``trade_date`` / ``instrument`` /
+        ``filled_qty`` so the rows are normalized here, keeping the web layer
+        schema stable across artifact formats.
+        """
+        csv_path = self._canonical_executions_path(source)
+        if csv_path is None:
+            return []
+        frame = self._read_csv_safe(csv_path)
+        if frame.empty:
+            return []
+        frame = frame.copy()
+        if "date" not in frame.columns and "trade_date" in frame.columns:
+            frame["date"] = frame["trade_date"].astype(str).str[:10]
+        if "symbol" not in frame.columns and "instrument" in frame.columns:
+            frame["symbol"] = frame["instrument"]
+        if "filled_amount" not in frame.columns and "filled_qty" in frame.columns:
+            frame["filled_amount"] = frame["filled_qty"]
+        if trade_date:
+            date_col = "trade_date" if "trade_date" in frame.columns else "date"
+            frame = frame[frame[date_col].astype(str).str[:10] == str(trade_date)]
+        if instrument_id:
+            symbol_col = "instrument" if "instrument" in frame.columns else "symbol"
+            frame = frame[frame[symbol_col].astype(str) == str(instrument_id)]
+        frame = frame.head(limit)
+        return [
+            {key: self._normalize_scalar(value) for key, value in row.items()}
+            for row in frame.to_dict(orient="records")
+        ]
 
     def build_decision_replay(self, *, execution_date: str, account_name: str) -> DecisionReplay:
         manifest = self.build_daily_run_manifest(execution_date)
@@ -1418,23 +1486,7 @@ class ResearchCockpitRepository:
             }
         canonical_source = self._get_canonical_backtest_source(run_id)
         if canonical_source is not None:
-            metrics = (
-                self._load_json(canonical_source["metrics_path"])
-                if canonical_source["metrics_path"].exists()
-                else {}
-            )
-            return {
-                "sections": [
-                    {
-                        "name": "Performance",
-                        "status": "success",
-                        "message": "canonical signal-cache backtest artifact",
-                        "metrics": metrics,
-                        "details": {},
-                    }
-                ],
-                "artifacts": {"metrics": metrics},
-            }
+            return self._build_canonical_sections(canonical_source)
         report_path = self._resolve_backtest_report(run_id)
         payload = self._load_json(report_path)
         sections = payload.get("sections", [])
@@ -1456,6 +1508,160 @@ class ResearchCockpitRepository:
                 except Exception:
                     pass
         return {"sections": sections, "artifacts": artifacts}
+
+    def _build_canonical_sections(self, source: dict[str, Any]) -> dict[str, Any]:
+        """Assemble UI sections for a canonical signal-cache backtest.
+
+        The immutable run records metrics.json, daily_summary.csv and (usually)
+        executions.csv.  Calendar monthly/weekly returns are derived from the
+        equity curve so the front-end heatmap and cost grid have real content;
+        per-window IC / rolling metrics do not exist for trade-level canonical
+        runs and stay honestly unavailable.
+        """
+        metrics = (
+            self._load_json(source["metrics_path"])
+            if source["metrics_path"].exists()
+            else {}
+        )
+        daily = self._read_csv_safe(source["daily_path"])
+        monthly_returns = self._derive_canonical_period_returns(daily, "M")
+        weekly_returns = self._derive_canonical_period_returns(daily, "W")
+        return {
+            "sections": [
+                self._build_canonical_performance_section(metrics, daily, monthly_returns),
+                self._build_canonical_cost_section(metrics, source),
+            ],
+            "artifacts": {
+                "metrics": metrics,
+                "monthly_returns": monthly_returns,
+                "weekly_returns": weekly_returns,
+            },
+        }
+
+    def _derive_canonical_period_returns(self, daily: pd.DataFrame, period: str) -> list[dict[str, Any]]:
+        """Derive calendar-month or calendar-week returns from the daily equity curve.
+
+        A period's return is the ratio of the last to the first observed
+        ``total_value_after`` inside that calendar period.  The first/last
+        period of a run may be partial; that matches the run's effective dates
+        and is intentional.
+        """
+        if daily.empty or "trade_date" not in daily.columns or "total_value_after" not in daily.columns:
+            return []
+        frame = daily.copy()
+        frame["date"] = pd.to_datetime(frame["trade_date"].astype(str).str[:10], errors="coerce")
+        frame["total_value_after"] = pd.to_numeric(frame["total_value_after"], errors="coerce")
+        frame = frame.dropna(subset=["date", "total_value_after"])
+        if frame.empty:
+            return []
+        if period == "W":
+            frame["label"] = frame["date"].dt.to_period("W").apply(
+                lambda p: p.start_time.strftime("%Y-%m-%d")
+            )
+        else:
+            frame["label"] = frame["date"].dt.strftime("%Y-%m")
+        rows: list[dict[str, Any]] = []
+        for label, group in frame.groupby("label", sort=True):
+            first_val = group["total_value_after"].iloc[0]
+            last_val = group["total_value_after"].iloc[-1]
+            if not first_val:
+                continue
+            ret = float(last_val / first_val - 1.0)
+            rows.append({"week": label, "return": ret} if period == "W" else {"month": label, "return": ret})
+        return rows
+
+    def _build_canonical_performance_section(
+        self,
+        metrics: dict[str, Any],
+        daily: pd.DataFrame,
+        monthly_returns: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        monthly_values = [row["return"] for row in monthly_returns if row.get("return") is not None]
+        win_rate = None
+        if monthly_values:
+            win_rate = sum(1 for value in monthly_values if value > 0) / len(monthly_values)
+        max_drawdown = self._to_float(metrics.get("max_drawdown"))
+        if max_drawdown is None and not daily.empty and "total_value_after" in daily.columns:
+            equity = pd.to_numeric(daily["total_value_after"], errors="coerce")
+            peak = equity.cummax()
+            max_drawdown = self._to_float((equity / peak - 1.0).min())
+        return {
+            "name": "Performance",
+            "status": "success",
+            "message": "canonical signal-cache backtest artifact (equity curve derived from daily_summary.csv)",
+            "metrics": {
+                "total_return": self._fmt_pct(self._to_float(metrics.get("total_return"))),
+                "max_drawdown": self._fmt_pct(max_drawdown),
+                "trading_days": metrics.get("trading_day_count"),
+                "filled_orders": metrics.get("filled_count_total"),
+                "months": len(monthly_values),
+                "month_win_rate": self._fmt_pct(win_rate),
+                "best_month": self._fmt_pct(max(monthly_values)) if monthly_values else None,
+                "worst_month": self._fmt_pct(min(monthly_values)) if monthly_values else None,
+            },
+            "details": {},
+        }
+
+    def _build_canonical_cost_section(
+        self,
+        metrics: dict[str, Any],
+        source: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Cost grid for a canonical run: exact fees when executions exist, else estimate.
+
+        ``total_fees`` uses the exact per-order ``total_fee`` column when the
+        manifest declares an executions artifact; otherwise it is estimated
+        from the configured fee rates applied to total turnover (stamp duty
+        assumed on the sell leg only).  Fee rates in the manifest are decimal
+        fractions (0.0003 = 3bp) -- they must not be re-scaled.  When neither
+        the executions artifact nor the fee config is available the cost
+        metrics stay None so the UI renders "not available" instead of a
+        misleading zero.
+        """
+        manifest = source["manifest"]
+        initial_capital = self._to_float(manifest.get("initial_capital"))
+        turnover_total = self._to_float(metrics.get("turnover_total"))
+        filled_orders = self._to_int(metrics.get("filled_count_total"))
+        days_with_orders = self._to_int(metrics.get("trading_day_count_with_orders"))
+        trading_days = self._to_int(metrics.get("trading_day_count"))
+        total_fees: float | None = None
+        exec_path = self._canonical_executions_path(source)
+        if exec_path is not None:
+            exec_frame = self._read_csv_safe(exec_path)
+            if "total_fee" in exec_frame.columns:
+                total_fees = self._to_float(pd.to_numeric(exec_frame["total_fee"], errors="coerce").sum())
+        if total_fees is None and turnover_total:
+            commission_bp = self._to_float(manifest.get("commission_bp"))
+            stamp_duty_bp = self._to_float(manifest.get("stamp_duty_bp"))
+            if commission_bp is not None:
+                stamp_rate = stamp_duty_bp * 0.5 if stamp_duty_bp is not None else 0.0
+                total_fees = turnover_total * (commission_bp + stamp_rate)
+        fee_ratio = (total_fees / turnover_total) if total_fees is not None and turnover_total else None
+        fees_pct = (total_fees / initial_capital) if total_fees is not None and initial_capital else None
+        avg_daily_fee = (total_fees / days_with_orders) if total_fees is not None and days_with_orders else None
+        annualized_turnover = None
+        if turnover_total and initial_capital:
+            annualized_turnover = turnover_total / initial_capital
+            years = (trading_days / 252.0) if trading_days else None
+            if years:
+                annualized_turnover = annualized_turnover / years
+        avg_daily_turnover = (turnover_total / days_with_orders) if turnover_total and days_with_orders else None
+        return {
+            "name": "Cost Analysis",
+            "status": "success",
+            "message": "derived from executions.csv + metrics.json + manifest.json",
+            "metrics": {
+                "total_fees": total_fees,
+                "avg_daily_fee": avg_daily_fee,
+                "total_turnover": turnover_total,
+                "avg_daily_turnover": avg_daily_turnover,
+                "annualized_turnover": annualized_turnover,
+                "fee_ratio": fee_ratio,
+                "fees_as_pct_of_initial": fees_pct,
+                "filled_orders": filled_orders,
+            },
+            "details": {},
+        }
 
     def _build_live_rolling_sections(self, metrics_frame: pd.DataFrame) -> list[dict[str, Any]]:
         positive_returns = self._series_positive_ratio(metrics_frame, "total_return")
