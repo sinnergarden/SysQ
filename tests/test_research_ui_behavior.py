@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime
+import math
 
 import pandas as pd
 import pytest
@@ -331,3 +332,296 @@ def test_summarize_episodes_median_handles_even_count():
     summary = summarize_episodes(derive_episodes(rows, prices_by_symbol=prices))
     # returns 0.0 and 0.2 → true median 0.1 (upper-middle would be 0.2)
     assert summary["median_return"] == pytest.approx(0.1)
+
+
+# ---------------------------------------------------------------------------
+# P0 / P1 correctness & diagnostics scenarios
+# ---------------------------------------------------------------------------
+
+
+def _assert_no_non_finite(ep: dict) -> None:
+    for v in ep.values():
+        if isinstance(v, float):
+            assert math.isfinite(v), f"non-finite value {v!r} leaked into episode {ep['symbol']}"
+
+
+def test_closed_episode_cashflow_and_pnl_fields():
+    rows = [
+        _row("b1", "2021-01-04", 0, "600000.SH", "buy", "top_n_entry", 100, 10.0, fee=1.0),
+        _row("s1", "2021-02-01", 0, "600000.SH", "sell", "hard_stop", 100, 12.0, fee=1.0),
+    ]
+    prices = {"600000.SH": _prices([
+        ("2021-01-04", 10.0, 10.5, 9.5, 10.2),
+        ("2021-02-01", 11.9, 12.5, 11.5, 12.0),
+    ])}
+    ep = derive_episodes(rows, prices_by_symbol=prices)[0]
+    # P0.1 — cashflow / PnL fields replace the popped internal accumulators.
+    assert ep["total_buy_cashflow"] == pytest.approx(1001.0)      # 100*10 + 1 fee
+    assert ep["total_sell_proceeds"] == pytest.approx(1199.0)     # 100*12 - 1 fee
+    assert ep["episode_pnl"] == pytest.approx(198.0)
+    assert ep["gross_buy_return"] == pytest.approx(198.0 / 1001.0)
+    assert ep["realized_return"] == ep["gross_buy_return"]
+    assert "buy_cost" not in ep and "sell_proceeds" not in ep
+    # P0.2 — closed episodes: episode_end == exit, no valuation date.
+    assert ep["episode_end_date"] == "2021-02-01"
+    assert ep["valuation_date"] is None
+    _assert_no_non_finite(ep)
+
+
+def test_open_episode_end_vs_valuation_and_holding_to_window_end():
+    # Backtest window runs to 01-08; the symbol's last bar is 01-05.  The open
+    # episode ends at the window edge but is valued at its last bar, and
+    # holding_days counts to the window end, not the last price date.
+    rows = [
+        _row("b1", "2021-01-04", 0, "600000.SH", "buy", "top_n_entry", 100, 10.0, fee=1.0),
+    ]
+    prices = {"600000.SH": _prices([
+        ("2021-01-04", 10.0, 10.5, 9.5, 10.2),
+        ("2021-01-05", 10.3, 11.0, 10.0, 10.8),
+    ])}
+    calendar = _weekdays("2021-01-04", "2021-01-08")
+    ep = derive_episodes(rows, prices_by_symbol=prices, calendar=calendar)[0]
+    assert ep["exit_reason"] == "open"
+    assert ep["episode_end_date"] == "2021-01-08"
+    assert ep["valuation_date"] == "2021-01-05"
+    assert ep["exit_date"] == "2021-01-05"  # backward-compat: last price date
+    avg_cost = 10.01
+    assert ep["unrealized_return"] == pytest.approx(10.8 / avg_cost - 1)
+    assert ep["episode_pnl"] == pytest.approx(100 * 10.8 - 1001.0)
+    assert ep["gross_buy_return"] == pytest.approx((100 * 10.8 - 1001.0) / 1001.0)
+    assert ep["realized_return"] is None
+    assert ep["holding_days"] == 5  # 01-04 .. 01-08, to window end
+    _assert_no_non_finite(ep)
+
+
+def test_open_episode_valued_at_last_available_close_when_prices_end_early():
+    # Symbol suspended after 01-08; window ends 01-15.  valuation must use the
+    # 01-08 close, and holding_days still counts to the window end.
+    rows = [
+        _row("b1", "2021-01-04", 0, "600000.SH", "buy", "top_n_entry", 100, 10.0),
+    ]
+    prices = {"600000.SH": _prices([
+        ("2021-01-04", 10.0, 10.5, 9.5, 10.2),
+        ("2021-01-08", 11.0, 11.5, 10.5, 11.0),
+    ])}
+    calendar = _weekdays("2021-01-04", "2021-01-15")
+    ep = derive_episodes(rows, prices_by_symbol=prices, calendar=calendar)[0]
+    assert ep["episode_end_date"] == "2021-01-15"
+    assert ep["valuation_date"] == "2021-01-08"
+    assert ep["unrealized_return"] == pytest.approx(11.0 / 10.0 - 1)
+    assert ep["episode_pnl"] == pytest.approx(100 * 11.0 - 1000.0)
+    assert ep["holding_days"] == 10  # 01-04 .. 01-15 weekdays
+    _assert_no_non_finite(ep)
+
+
+def test_non_finite_prices_normalized_to_none():
+    rows = [
+        _row("b1", "2021-01-04", 0, "600000.SH", "buy", "top_n_entry", 100, 10.0),
+        _row("s1", "2021-01-08", 0, "600000.SH", "sell", "hard_stop", 100, 12.0),
+    ]
+    prices = {"600000.SH": pd.DataFrame([
+        {"trade_date": "2021-01-04", "open": 10.0, "high": float("nan"), "low": 9.5, "close": 10.2},
+        {"trade_date": "2021-01-08", "open": 12.0, "high": float("inf"), "low": 11.5, "close": 12.0},
+    ])}
+    ep = derive_episodes(rows, prices_by_symbol=prices)[0]
+    assert ep["MFE"] is None        # NaN/inf highs normalized away
+    assert ep["MAE"] == pytest.approx(9.5 / 10.0 - 1)
+    assert ep["realized_return"] == pytest.approx(0.2)
+    _assert_no_non_finite(ep)
+
+
+def test_post_exit_uses_market_calendar_not_symbol_price_dates():
+    # The symbol has only 3 bars; exit is 01-08 and 02-05 is exactly 20 market
+    # days later.  Market-calendar semantics must find the 02-05 bar even
+    # though it is not 20 *price* rows after the exit bar.
+    rows = [
+        _row("b1", "2021-01-04", 0, "600000.SH", "buy", "top_n_entry", 100, 10.0),
+        _row("s1", "2021-01-08", 0, "600000.SH", "sell", "winner_trailing", 100, 12.0),
+    ]
+    prices = {"600000.SH": _prices([
+        ("2021-01-04", 10.0, 10.5, 9.5, 10.2),
+        ("2021-01-08", 12.0, 12.5, 11.5, 12.0),
+        ("2021-02-05", 13.0, 13.5, 12.5, 13.2),  # calendar[exit_idx + 20]
+    ])}
+    calendar = _weekdays("2021-01-04", "2021-02-12")
+    ep = derive_episodes(rows, prices_by_symbol=prices, calendar=calendar)[0]
+    assert ep["post_exit_return_20d"] == pytest.approx(13.2 / 12.0 - 1)
+    assert ep["post_exit_return_60d"] is None
+
+
+def test_post_exit_none_when_symbol_missing_on_calendar_target_day():
+    rows = [
+        _row("b1", "2021-01-04", 0, "600000.SH", "buy", "top_n_entry", 100, 10.0),
+        _row("s1", "2021-01-08", 0, "600000.SH", "sell", "winner_trailing", 100, 12.0),
+    ]
+    # No bar on calendar[exit_idx+20] → post_exit_20d stays None (delisted).
+    prices = {"600000.SH": _prices([
+        ("2021-01-04", 10.0, 10.5, 9.5, 10.2),
+        ("2021-01-08", 12.0, 12.5, 11.5, 12.0),
+    ])}
+    calendar = _weekdays("2021-01-04", "2021-02-12")
+    ep = derive_episodes(rows, prices_by_symbol=prices, calendar=calendar)[0]
+    assert ep["post_exit_return_20d"] is None
+    assert ep["post_exit_return_60d"] is None
+
+
+def test_summary_excludes_none_and_reports_counts():
+    rows = [
+        _row("b1", "2021-01-04", 0, "600000.SH", "buy", "top_n_entry", 100, 10.0),
+        _row("s1", "2021-01-08", 0, "600000.SH", "sell", "hard_stop", 100, 12.0),
+        _row("b2", "2021-01-04", 0, "600001.SH", "buy", "top_n_entry", 100, 20.0),
+        _row("s2", "2021-01-08", 0, "600001.SH", "sell", "hard_stop", 100, 18.0),
+        _row("b3", "2021-01-04", 0, "600002.SH", "buy", "top_n_entry", 100, 30.0),  # open, no realized
+    ]
+    prices = {
+        "600000.SH": _prices([("2021-01-04", 10, 10.5, 9.5, 10.2), ("2021-01-08", 12, 12.5, 11.5, 12)]),
+        "600001.SH": _prices([("2021-01-04", 20, 20.5, 19.5, 20.2), ("2021-01-08", 18, 18.5, 17.5, 18)]),
+        "600002.SH": _prices([("2021-01-04", 30, 30.5, 29.5, 30.2)]),
+    }
+    summary = summarize_episodes(derive_episodes(rows, prices_by_symbol=prices))
+    assert summary["return_count"] == 2
+    assert summary["win_rate"] == pytest.approx(0.5)
+    hs = next(r for r in summary["by_exit_reason"] if r["exit_reason"] == "hard_stop")
+    assert hs["count"] == 2
+    assert hs["return_count"] == 2
+    assert hs["mfe_count"] == 2
+    assert hs["mae_count"] == 2
+    assert hs["median_mfe"] == pytest.approx(0.0375)
+    assert hs["median_mae"] == pytest.approx(-0.0375)
+
+
+def test_capture_giveback_recovery_metrics():
+    rows = [
+        _row("b1", "2021-01-04", 0, "600000.SH", "buy", "top_n_entry", 100, 10.0),
+        _row("s1", "2021-01-08", 0, "600000.SH", "sell", "winner_trailing", 100, 11.0),
+    ]
+    prices = {"600000.SH": _prices([
+        ("2021-01-04", 10.0, 12.0, 8.0, 10.2),   # MFE 0.2, MAE -0.2
+        ("2021-01-08", 11.0, 11.5, 10.5, 11.0),  # exit @ 11.0
+    ])}
+    ep = derive_episodes(rows, prices_by_symbol=prices)[0]
+    assert ep["MFE"] == pytest.approx(0.2)
+    assert ep["MAE"] == pytest.approx(-0.2)
+    assert ep["realized_return"] == pytest.approx(0.1)
+    assert ep["capture_ratio"] == pytest.approx(0.1 / 0.2)
+    assert ep["giveback"] == pytest.approx(1 - 0.1 / 0.2)
+    assert ep["recovery_from_mae"] == pytest.approx(1.1 / 0.8 - 1)
+
+
+def test_winner_capture_buckets():
+    rows = [
+        _row("b1", "2021-01-04", 0, "600000.SH", "buy", "top_n_entry", 100, 10.0),
+        _row("s1", "2021-01-08", 0, "600000.SH", "sell", "winner_trailing", 100, 15.0),
+        _row("b2", "2021-01-04", 0, "600001.SH", "buy", "top_n_entry", 100, 10.0),
+        _row("s2", "2021-01-08", 0, "600001.SH", "sell", "winner_trailing", 100, 14.5),
+    ]
+    prices = {
+        "600000.SH": _prices([("2021-01-04", 10, 20, 5, 10.2), ("2021-01-08", 15, 15.5, 14.5, 15)]),   # MFE 1.0 → capture 0.5
+        "600001.SH": _prices([("2021-01-04", 10, 15, 5, 10.2), ("2021-01-08", 14.5, 15, 14, 14.5)]),   # MFE 0.5 → capture 0.9
+    }
+    summary = summarize_episodes(derive_episodes(rows, prices_by_symbol=prices))
+    buckets = {b["bucket"]: b for b in summary["winner_capture_buckets"]}
+    assert buckets["40-80%"]["count"] == 1
+    assert buckets["80-100%"]["count"] == 1
+    assert buckets["0-10%"]["count"] == 0
+    assert buckets["give_back_loss"]["count"] == 0
+    assert buckets["over_100%"]["count"] == 0
+
+
+def test_holding_horizon_buckets():
+    rows = [
+        _row("b1", "2021-01-04", 0, "600000.SH", "buy", "top_n_entry", 100, 10.0),
+        _row("s1", "2021-01-08", 0, "600000.SH", "sell", "winner_trailing", 100, 12.0),
+        _row("b2", "2021-01-04", 0, "600001.SH", "buy", "top_n_entry", 100, 10.0),
+        _row("s2", "2021-01-29", 0, "600001.SH", "sell", "winner_trailing", 100, 12.0),
+        _row("b3", "2021-01-04", 0, "600002.SH", "buy", "top_n_entry", 100, 10.0),  # stays open
+    ]
+    prices = {
+        "600000.SH": _prices([("2021-01-04", 10, 10.5, 9.5, 10.2), ("2021-01-08", 12, 12.5, 11.5, 12.0)]),
+        "600001.SH": _prices([("2021-01-04", 10, 10.5, 9.5, 10.2), ("2021-01-29", 12, 12.5, 11.5, 12.0)]),
+        "600002.SH": _prices([("2021-01-04", 10, 10.5, 9.5, 10.2)]),
+    }
+    calendar = _weekdays("2021-01-04", "2021-01-29")
+    summary = summarize_episodes(derive_episodes(rows, prices_by_symbol=prices, calendar=calendar))
+    horizons = {h["bucket"]: h for h in summary["holding_horizons"]}
+    assert horizons["0-10"]["count"] == 1
+    assert horizons["11-20"]["count"] == 2
+    assert horizons["0-10"]["exit_reasons"] == {"winner_trailing": 1}
+    assert horizons["11-20"]["exit_reasons"] == {"winner_trailing": 1, "open": 1}
+
+
+def test_hard_stop_false_stop_rate():
+    rows = []
+    for i, sym in enumerate(["600000.SH", "600001.SH", "600002.SH"]):
+        rows.append(_row(f"b{i}", "2021-01-04", 0, sym, "buy", "top_n_entry", 100, 10.0))
+        rows.append(_row(f"s{i}", "2021-01-08", 0, sym, "sell", "hard_stop", 100, 9.0))
+    prices = {
+        "600000.SH": _prices([("2021-01-04", 10, 10.5, 9.5, 10.2), ("2021-01-08", 9, 9.5, 8.5, 9.0), ("2021-02-05", 10, 10.5, 9.5, 10.0)]),  # recovered
+        "600001.SH": _prices([("2021-01-04", 10, 10.5, 9.5, 10.2), ("2021-01-08", 9, 9.5, 8.5, 9.0), ("2021-02-05", 8, 8.5, 7.5, 8.0)]),   # kept falling
+        "600002.SH": _prices([("2021-01-04", 10, 10.5, 9.5, 10.2), ("2021-01-08", 9, 9.5, 8.5, 9.0)]),                                  # no 20d bar
+    }
+    calendar = _weekdays("2021-01-04", "2021-02-12")
+    summary = summarize_episodes(derive_episodes(rows, prices_by_symbol=prices, calendar=calendar))
+    sq = summary["stop_quality"]
+    assert sq["hard_stop_count"] == 3
+    assert sq["post_exit_20d_count"] == 2
+    assert sq["false_stop_rate_20d"] == pytest.approx(0.5)  # 1 of 2 stopped exits recovered
+    assert sq["false_stop_rate_60d"] is None
+
+
+def test_pnl_concentration_top_shares_and_curve():
+    rows = []
+    prices = {}
+    for i, (sym, exit_price) in enumerate([
+        ("600004.SH", 20.0), ("600003.SH", 15.0), ("600002.SH", 12.0), ("600001.SH", 11.0),
+    ]):
+        rows.append(_row(f"b{i}", "2021-01-04", 0, sym, "buy", "top_n_entry", 100, 10.0))
+        rows.append(_row(f"s{i}", "2021-01-08", 0, sym, "sell", "winner_trailing", 100, exit_price))
+        prices[sym] = _prices([("2021-01-04", 10, 10.5, 9.5, 10.2), ("2021-01-08", exit_price, exit_price + 0.5, exit_price - 0.5, exit_price)])
+    summary = summarize_episodes(derive_episodes(rows, prices_by_symbol=prices))
+    pc = summary["pnl_concentration"]
+    assert pc["scope"] == "closed_realized"
+    assert pc["n"] == 4
+    pnls = sorted([100 * p - 1000 for p in (20, 15, 12, 11)], reverse=True)  # 1000, 500, 200, 100
+    assert pc["total_pnl"] == pytest.approx(sum(pnls))
+    assert pc["positive_pnl_total"] == pytest.approx(sum(pnls))
+    # top 1%/5%/10% all select the single best episode (ceil(4*x) == 1).
+    assert pc["top_1pct_share"] == pytest.approx(1000.0 / 1800.0)
+    assert pc["top_5pct_share"] == pytest.approx(1000.0 / 1800.0)
+    assert pc["top_10pct_share"] == pytest.approx(1000.0 / 1800.0)
+    curve = pc["cumulative_curve"]
+    assert len(curve) == 4
+    assert curve[0]["rank"] == 1 and curve[0]["pnl"] == pytest.approx(1000.0)
+    assert curve[-1]["share_of_positive"] == pytest.approx(1.0)
+
+
+def test_by_exit_reason_extended_aggregates():
+    rows = [
+        _row("b1", "2021-01-04", 0, "600000.SH", "buy", "top_n_entry", 100, 10.0),
+        _row("s1", "2021-01-08", 0, "600000.SH", "sell", "winner_trailing", 100, 11.0),
+        _row("b2", "2021-01-04", 0, "600001.SH", "buy", "top_n_entry", 100, 10.0),
+        _row("s2", "2021-01-08", 0, "600001.SH", "sell", "winner_trailing", 100, 10.5),
+    ]
+    prices = {
+        "600000.SH": _prices([
+            ("2021-01-04", 10, 12.0, 8.0, 10.2),
+            ("2021-01-08", 11, 11.5, 10.5, 11.0),
+            ("2021-02-05", 13, 13.5, 12.5, 13.0),
+        ]),
+        "600001.SH": _prices([
+            ("2021-01-04", 10, 11.0, 9.0, 10.2),
+            ("2021-01-08", 10.5, 11.0, 10.0, 10.5),
+            ("2021-02-05", 10, 10.5, 9.5, 10.0),
+        ]),
+    }
+    calendar = _weekdays("2021-01-04", "2021-02-12")
+    summary = summarize_episodes(derive_episodes(rows, prices_by_symbol=prices, calendar=calendar))
+    wt = next(r for r in summary["by_exit_reason"] if r["exit_reason"] == "winner_trailing")
+    assert wt["count"] == 2
+    assert wt["return_count"] == 2
+    assert wt["median_mfe"] == pytest.approx((0.2 + 0.1) / 2)
+    assert wt["median_mae"] == pytest.approx((-0.2 + -0.1) / 2)
+    assert wt["median_capture"] == pytest.approx(0.5)          # 0.1/0.2 and 0.05/0.1
+    assert wt["median_giveback"] == pytest.approx(0.5)
+    assert wt["post_exit_20d_count"] == 2
+    assert wt["avg_post_exit_20d"] == pytest.approx(((13.0 / 11.0 - 1) + (10.0 / 10.5 - 1)) / 2)

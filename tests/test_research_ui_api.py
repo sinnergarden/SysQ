@@ -197,7 +197,23 @@ class TestResearchUiApi(unittest.TestCase):
         self.assertEqual(payload['run_id'], 'some-run')
         self.assertEqual(payload['data']['summary']['total_episodes'], 1)
         self.assertEqual(payload['data']['episodes'][0]['symbol'], '600000.SH')
+        # P0.4 — meta reports the truncation contract.
+        self.assertEqual(payload['meta']['total_episodes'], 1)
+        self.assertEqual(payload['meta']['returned_episodes'], 1)
+        self.assertIs(payload['meta']['truncated'], False)
         mocked.assert_called_once()
+
+    def test_behavior_episodes_endpoint_meta_truncated_when_limit_slices(self):
+        sample = {
+            "episodes": [{"symbol": "600000.SH", "exit_reason": "hard_stop", "realized_return": 0.1}],
+            "summary": {"total_episodes": 5, "closed_episodes": 5, "open_episodes": 0},
+        }
+        with patch.object(ResearchCockpitRepository, 'get_behavior_episodes', return_value=sample):
+            response = self.client.get('/api/backtest-runs/some-run/behavior/episodes?limit=1')
+        payload = response.json()
+        self.assertEqual(payload['meta']['total_episodes'], 5)
+        self.assertEqual(payload['meta']['returned_episodes'], 1)
+        self.assertIs(payload['meta']['truncated'], True)
 
     def test_behavior_episodes_endpoint_404_when_run_unknown(self):
         with patch.object(ResearchCockpitRepository, 'get_behavior_episodes', side_effect=FileNotFoundError('Unknown backtest run_id: canonical__nope__nope')):

@@ -294,9 +294,18 @@ def create_app(project_root: str | Path = ".") -> FastAPI:
             payload = repo.get_behavior_episodes(run_id, limit=limit)
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        total = payload["summary"]["total_episodes"]
+        returned = len(payload["episodes"])
         return _envelope(
             data=payload,
-            meta={"resource": "behavior_episodes", "run_id": run_id, "limit": limit},
+            meta={
+                "resource": "behavior_episodes",
+                "run_id": run_id,
+                "limit": limit,
+                "total_episodes": total,
+                "returned_episodes": returned,
+                "truncated": returned < total,
+            },
             run_id=run_id,
         )
 

@@ -423,6 +423,20 @@ def test_behavior_episodes_cached_per_run(tmp_path: Path) -> None:
     assert first["summary"] == second["summary"]
 
 
+def test_behavior_episodes_limit_slices_details_summary_covers_all(tmp_path: Path) -> None:
+    """P0.4 — ``limit`` truncates detail rows only; the summary always covers
+    the full episode set (aggregates must not depend on the UI's page size)."""
+    run_id = _write_canonical_backtest_with_executions(tmp_path)
+    repo = ResearchCockpitRepository(project_root=tmp_path)
+    with patch.object(repo.store, "load_daily", return_value=_raw_daily_frame()):
+        payload = repo.get_behavior_episodes(run_id, limit=1)
+    assert len(payload["episodes"]) == 1
+    assert payload["summary"]["total_episodes"] == 2  # 600000 closed + 600001 open
+    # The open episode survives truncation in the summary (closed + open = all).
+    assert payload["summary"]["closed_episodes"] == 1
+    assert payload["summary"]["open_episodes"] == 1
+
+
 def test_behavior_episodes_empty_when_no_executions(tmp_path: Path) -> None:
     run_id = _write_canonical_backtest(tmp_path)  # base fixture has no executions artifact
     repo = ResearchCockpitRepository(project_root=tmp_path)
