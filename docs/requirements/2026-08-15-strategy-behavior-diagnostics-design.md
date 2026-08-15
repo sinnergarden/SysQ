@@ -31,7 +31,7 @@ Winner/Loser Lifecycle 与 Alpha/Beta Attribution 延后（暂不实现，设计
 - **open episode**：数据末尾仍持仓 → `exit_reason = "open"`，`realized_return = null`，用 `last_close` 折算 `unrealized_return`。
 - **post_exit_return_20d / 60d**：`close(exit + N 交易日)/close(exit) − 1`，数据不足则 `null`。
 - **swap score 分组**：按 exit 时 score 排名分位数分桶（tercile）。
-- 所有金额/价格为**前复权价**（与 executions 一致，`use_adjusted_price=true`）。
+- **价格口径 = RAW（未复权）**：已核对 canonical 回测 manifest `use_adjusted_price=false`，executions `deal_price` 与 raw open 一致（如 300487.SZ 2021-01-04 deal 44.6947 ≈ raw open 44.65）。故 avg_cost、MFE/MAE、post_exit_return 全部用 **raw high/low/close**，与成本基准同口径。不得混用前复权价。
 
 ## 4. PR #1 — Position Episode Analytics
 

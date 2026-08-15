@@ -280,6 +280,22 @@ def create_app(project_root: str | Path = ".") -> FastAPI:
             trade_date=trade_date,
         )
 
+    @app.get("/api/backtest-runs/{run_id}/behavior/episodes")
+    def get_behavior_episodes(
+        run_id: str,
+        limit: int = Query(5000, ge=1, le=100000),
+    ) -> dict:
+        repo = _fresh_repo_backtests()
+        try:
+            payload = repo.get_behavior_episodes(run_id, limit=limit)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return _envelope(
+            data=payload,
+            meta={"resource": "behavior_episodes", "run_id": run_id, "limit": limit},
+            run_id=run_id,
+        )
+
     @app.get("/api/decision-replay")
     def get_decision_replay(
         execution_date: str,
