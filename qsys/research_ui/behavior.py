@@ -287,6 +287,16 @@ def _post_exit_returns(
     return out[0], out[1]
 
 
+def _median(values: list[float]) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    mid = len(ordered) // 2
+    if len(ordered) % 2 == 1:
+        return ordered[mid]
+    return (ordered[mid - 1] + ordered[mid]) / 2.0
+
+
 def summarize_episodes(episodes: list[dict[str, Any]]) -> dict[str, Any]:
     """Aggregate episodes into a UI-friendly summary."""
     closed = [e for e in episodes if e.get("exit_reason") != "open"]
@@ -301,7 +311,7 @@ def summarize_episodes(episodes: list[dict[str, Any]]) -> dict[str, Any]:
         "open_episodes": len(episodes) - len(closed),
         "win_rate": (sum(1 for r in returns if r > 0) / len(returns)) if returns else None,
         "avg_return": (sum(returns) / len(returns)) if returns else None,
-        "median_return": sorted(returns)[len(returns) // 2] if returns else None,
+        "median_return": _median(returns),
         "avg_holding_days": (sum(holding) / len(holding)) if holding else None,
         "by_exit_reason": [
             {
@@ -309,7 +319,7 @@ def summarize_episodes(episodes: list[dict[str, Any]]) -> dict[str, Any]:
                 "count": len(items),
                 "win_rate": (sum(1 for e in items if (e.get("realized_return") or 0) > 0) / len(items)) if items else None,
                 "avg_return": (sum(e["realized_return"] or 0 for e in items) / len(items)) if items else None,
-                "median_return": sorted((e["realized_return"] or 0) for e in items)[len(items) // 2] if items else None,
+                "median_return": _median([e["realized_return"] or 0 for e in items]),
                 "avg_mfe": (sum(e.get("MFE") or 0 for e in items) / len(items)) if items else None,
                 "avg_mae": (sum(e.get("MAE") or 0 for e in items) / len(items)) if items else None,
             }

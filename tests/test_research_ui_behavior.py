@@ -207,3 +207,17 @@ def test_summarize_episodes_groups_by_exit_reason():
     reasons = {r["exit_reason"]: r for r in summary["by_exit_reason"]}
     assert set(reasons) == {"hard_stop"}
     assert reasons["hard_stop"]["count"] == 2
+
+
+def test_summarize_episodes_median_handles_even_count():
+    rows = []
+    for i, (symbol, ret_price) in enumerate([("600001.SH", 10.0), ("600002.SH", 12.0)]):
+        rows.append(_row(f"b{i}", "2021-01-04", 0, symbol, "buy", "top_n_entry", 100, 10.0))
+        rows.append(_row(f"s{i}", "2021-01-08", 0, symbol, "sell", "hard_stop", 100, ret_price))
+    prices = {
+        "600001.SH": _prices([("2021-01-04", 10, 10.5, 9.5, 10.2), ("2021-01-08", 10, 10.5, 9.5, 10.2)]),
+        "600002.SH": _prices([("2021-01-04", 10, 10.5, 9.5, 10.2), ("2021-01-08", 12, 12.5, 11.5, 12.2)]),
+    }
+    summary = summarize_episodes(derive_episodes(rows, prices_by_symbol=prices))
+    # returns 0.0 and 0.2 → true median 0.1 (upper-middle would be 0.2)
+    assert summary["median_return"] == pytest.approx(0.1)
