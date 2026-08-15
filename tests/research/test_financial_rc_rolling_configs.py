@@ -35,7 +35,7 @@ def test_financial_rc_rolling_5y_configs_are_independent_and_mature(
     }
     if "to_202607" in config_name:
         expected_calendar.update({
-            "start_date": "2021-08-02",
+            "start_date": "2021-01-01",
             "end_date": "2026-07-31",
         })
     assert config.calendar == expected_calendar
@@ -59,5 +59,5 @@ def test_financial_rc_rolling_5y_configs_are_independent_and_mature(
             step_days=config.calendar["step_days"],
             label_maturity_lag_trading_days=maturity_lag,
         )
-        assert windows[0].predict_start == "2021-08-02"
+        assert windows[0].predict_start == "2021-01-04"
         assert windows[-1].predict_end == "2026-07-31"
