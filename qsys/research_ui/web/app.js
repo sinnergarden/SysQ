@@ -19,7 +19,7 @@ const state = {
   tableState: new Map(),
   tableRegistry: new Map(),
   _syncingZoom: false,
-  latestBacktestRunId: null,
+  defaultBacktestRunId: null,
   backtestRuns: [],
   featureRegistry: [],
   caseFeatureSnapshot: {},
@@ -931,9 +931,13 @@ function renderBacktestRunOptions(runs) {
   const select = byId('backtest-run-select');
   if (!select) return;
   const currentValue = state.context.runId || select.value || '';
-  const options = (runs || []).map((item) => `<option value="${escapeHtml(item.run_id)}">${escapeHtml(item.display_label || item.run_id)}</option>`).join('');
+  const listed = (runs || []).some((item) => item.run_id === currentValue);
+  const explicitOption = currentValue && !listed
+    ? `<option value="${escapeHtml(currentValue)}">${escapeHtml(currentValue)} · explicit artifact</option>`
+    : '';
+  const options = explicitOption + (runs || []).map((item) => `<option value="${escapeHtml(item.run_id)}">${escapeHtml(item.display_label || item.run_id)}</option>`).join('');
   select.innerHTML = options || '<option value="">no backtest runs</option>';
-  if (currentValue && (runs || []).some((item) => item.run_id === currentValue)) {
+  if (currentValue) {
     select.value = currentValue;
   } else if ((runs || []).length) {
     select.value = runs[0].run_id;
@@ -1659,14 +1663,11 @@ async function loadBacktest() {
     const runsPayload = await getJson('/api/backtest-runs?limit=50', { useCache: false });
     state.backtestRuns = unwrapItems(runsPayload);
     renderBacktestRunOptions(state.backtestRuns);
-    state.latestBacktestRunId = state.backtestRuns[0]?.run_id || '';
+    state.defaultBacktestRunId = state.backtestRuns[0]?.run_id || '';
 
     let runId = state.context.runId || byId('backtest-run-select').value;
-    if (!state.backtestRuns.some((item) => item.run_id === runId)) {
-      runId = state.latestBacktestRunId || state.backtestRuns[0]?.run_id || '';
-    }
     if (!runId) {
-      runId = byId('backtest-run-select').value || state.latestBacktestRunId || state.backtestRuns[0]?.run_id || '';
+      runId = byId('backtest-run-select').value || state.defaultBacktestRunId || state.backtestRuns[0]?.run_id || '';
     }
     if (!runId) throw new Error('No backtest version available');
     updateContext({ runId }, { syncInputs: true, syncHash: true });
@@ -2559,11 +2560,11 @@ async function bootstrapDefaults() {
     const runs = unwrapItems(runsPayload);
     state.backtestRuns = runs;
     renderBacktestRunOptions(runs);
-    const latestRun = runs[0];
-    if (latestRun?.run_id) {
-      state.latestBacktestRunId = latestRun.run_id;
-      if (!state.context.runId) state.context.runId = latestRun.run_id;
-      const endDate = latestRun.test_range?.end;
+    const defaultRun = runs[0];
+    if (defaultRun?.run_id) {
+      state.defaultBacktestRunId = defaultRun.run_id;
+      if (!state.context.runId) state.context.runId = defaultRun.run_id;
+      const endDate = defaultRun.test_range?.end;
       if (endDate && !state.context.tradeDate) state.context.tradeDate = endDate;
     }
     syncInputsFromContext();
