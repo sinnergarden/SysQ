@@ -221,6 +221,16 @@ class TestResearchUiApi(unittest.TestCase):
         self.assertEqual(response.status_code, 404)
         self.assertIn('Unknown backtest run_id', response.json()['detail'])
 
+    def test_behavior_episodes_endpoint_500_when_calendar_fails_closed(self):
+        # P0.2 — a fail-closed calendar resolution (no daily_summary / manifest
+        # window) is surfaced as a diagnostic 500, never a silent fallback to
+        # un-clipped raw price dates.
+        err = ValueError('Cannot determine backtest window end for some-run: ...')
+        with patch.object(ResearchCockpitRepository, 'get_behavior_episodes', side_effect=err):
+            response = self.client.get('/api/backtest-runs/some-run/behavior/episodes')
+        self.assertEqual(response.status_code, 500)
+        self.assertIn('Cannot build episode diagnostics', response.json()['detail'])
+
 
 if __name__ == '__main__':
     unittest.main()

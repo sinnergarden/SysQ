@@ -294,6 +294,10 @@ def create_app(project_root: str | Path = ".") -> FastAPI:
             payload = repo.get_behavior_episodes(run_id, limit=limit)
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            # Fail-closed calendar resolution (no daily_summary / manifest window)
+            # is a diagnostic error, not a silent fallback to future prices.
+            raise HTTPException(status_code=500, detail=f"Cannot build episode diagnostics: {exc}") from exc
         total = payload["summary"]["total_episodes"]
         returned = len(payload["episodes"])
         return _envelope(

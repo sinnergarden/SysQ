@@ -504,11 +504,13 @@ def test_capture_giveback_recovery_metrics():
     assert ep["MAE"] == pytest.approx(-0.2)
     assert ep["realized_return"] == pytest.approx(0.1)
     assert ep["capture_ratio"] == pytest.approx(0.1 / 0.2)
-    assert ep["giveback"] == pytest.approx(1 - 0.1 / 0.2)
+    # P1.1: giveback is split into an absolute return (MFE − final) and a ratio (1 − capture).
+    assert ep["giveback_return"] == pytest.approx(0.2 - 0.1)
+    assert ep["giveback_ratio"] == pytest.approx(1 - 0.1 / 0.2)
     assert ep["recovery_from_mae"] == pytest.approx(1.1 / 0.8 - 1)
 
 
-def test_winner_capture_buckets():
+def test_capture_ratio_distribution():
     rows = [
         _row("b1", "2021-01-04", 0, "600000.SH", "buy", "top_n_entry", 100, 10.0),
         _row("s1", "2021-01-08", 0, "600000.SH", "sell", "winner_trailing", 100, 15.0),
@@ -520,7 +522,8 @@ def test_winner_capture_buckets():
         "600001.SH": _prices([("2021-01-04", 10, 15, 5, 10.2), ("2021-01-08", 14.5, 15, 14, 14.5)]),   # MFE 0.5 → capture 0.9
     }
     summary = summarize_episodes(derive_episodes(rows, prices_by_symbol=prices))
-    buckets = {b["bucket"]: b for b in summary["winner_capture_buckets"]}
+    # P2.1: winners-by-capture buckets renamed Capture Ratio Distribution.
+    buckets = {b["bucket"]: b for b in summary["capture_ratio_distribution"]}
     assert buckets["40-80%"]["count"] == 1
     assert buckets["80-100%"]["count"] == 1
     assert buckets["0-10%"]["count"] == 0
@@ -548,6 +551,16 @@ def test_holding_horizon_buckets():
     assert horizons["11-20"]["count"] == 2
     assert horizons["0-10"]["exit_reasons"] == {"winner_trailing": 1}
     assert horizons["11-20"]["exit_reasons"] == {"winner_trailing": 1, "open": 1}
+    # P2.2: each bucket also reports win_rate / median_return / median_mfe / median_mae.
+    # 0-10 bucket = 600000.SH (exit 01-08): entry-day high 10.5 → MFE 0.05, return 0.2.
+    assert horizons["0-10"]["win_rate"] == pytest.approx(1.0)
+    assert horizons["0-10"]["median_return"] == pytest.approx(0.2)
+    assert horizons["0-10"]["median_mfe"] == pytest.approx(0.05)
+    assert horizons["0-10"]["median_mae"] == pytest.approx(-0.05)
+    # 11-20 bucket = 600001.SH (realized 0.2) + 600002.SH (open → no realized return).
+    assert horizons["11-20"]["win_rate"] == pytest.approx(1.0)
+    assert horizons["11-20"]["median_return"] == pytest.approx(0.2)
+    assert horizons["11-20"]["median_mfe"] == pytest.approx(0.05)
 
 
 def test_hard_stop_false_stop_rate():
@@ -589,10 +602,20 @@ def test_pnl_concentration_top_shares_and_curve():
     assert pc["top_1pct_share"] == pytest.approx(1000.0 / 1800.0)
     assert pc["top_5pct_share"] == pytest.approx(1000.0 / 1800.0)
     assert pc["top_10pct_share"] == pytest.approx(1000.0 / 1800.0)
+    # P1.2: absolute top-N (fixed episode count) + pnl_ex_* (¥ left after removing top ranks).
+    assert pc["top_1_episode_share"] == pytest.approx(1000.0 / 1800.0)
+    assert pc["top_5_episode_share"] == pytest.approx(1.0)          # top 5 of 4 = everything
+    assert pc["pnl_ex_top1"] == pytest.approx(1800.0 - 1000.0)      # 800
+    assert pc["pnl_ex_top5"] == pytest.approx(0.0)                  # top 5 of 4 = everything
+    assert pc["pnl_ex_top10pct"] == pytest.approx(1800.0 - 1000.0)  # top10pct_k = 1
+    assert pc["share_denominator"] == "positive_pnl_total"
+    assert pc["curve_points"] == 4
     curve = pc["cumulative_curve"]
     assert len(curve) == 4
     assert curve[0]["rank"] == 1 and curve[0]["pnl"] == pytest.approx(1000.0)
     assert curve[-1]["share_of_positive"] == pytest.approx(1.0)
+    # P0.4: the last cumulative always equals total_pnl (full curve, not truncated).
+    assert curve[-1]["cumulative"] == pytest.approx(pc["total_pnl"])
 
 
 def test_by_exit_reason_extended_aggregates():
@@ -622,6 +645,109 @@ def test_by_exit_reason_extended_aggregates():
     assert wt["median_mfe"] == pytest.approx((0.2 + 0.1) / 2)
     assert wt["median_mae"] == pytest.approx((-0.2 + -0.1) / 2)
     assert wt["median_capture"] == pytest.approx(0.5)          # 0.1/0.2 and 0.05/0.1
-    assert wt["median_giveback"] == pytest.approx(0.5)
+    # P1.1: giveback split into return (MFE − final) and ratio (1 − capture).
+    assert wt["median_giveback_return"] == pytest.approx(0.075)  # (0.2−0.1 and 0.1−0.05) / 2
+    assert wt["avg_giveback_return"] == pytest.approx(0.075)
+    assert wt["median_giveback_ratio"] == pytest.approx(0.5)
+    assert wt["avg_giveback_ratio"] == pytest.approx(0.5)
     assert wt["post_exit_20d_count"] == 2
     assert wt["avg_post_exit_20d"] == pytest.approx(((13.0 / 11.0 - 1) + (10.0 / 10.5 - 1)) / 2)
+
+
+def test_score_map_skips_non_finite_scores():
+    # P0.1 — the score map is finite-normalized: +inf / -inf / NaN scores are
+    # dropped (entry_score stays None) and never leak into episode JSON.
+    rows = [
+        _row("b1", "2021-01-04", 0, "600000.SH", "buy", "top_n_entry", 100, 10.0),
+        _row("s1", "2021-02-01", 0, "600000.SH", "sell", "score_delta_exit", 100, 12.0),
+    ]
+    prices = {"600000.SH": _prices([
+        ("2021-01-04", 10.0, 10.5, 9.5, 10.2),
+        ("2021-02-01", 12.0, 12.5, 11.5, 12.0),
+        ("2021-02-02", 12.0, 12.5, 11.5, 12.0),
+    ])}
+    scores = pd.DataFrame({
+        "trade_date": ["2021-01-04", "2021-02-01", "2021-01-05", "2021-02-01"],
+        "instrument": ["600000.SH"] * 4,
+        "score": [float("inf"), float("-inf"), float("nan"), 0.3],
+    })
+    ep = derive_episodes(rows, prices_by_symbol=prices, scores_frame=scores)[0]
+    assert ep["entry_score"] is None                      # (2021-01-04, …) score was +inf
+    assert ep["exit_score"] == pytest.approx(0.3)         # (2021-02-01, …) last finite = 0.3
+    _assert_no_non_finite(ep)
+
+
+def test_malformed_executions_dropped_and_fee_normalized():
+    # P0.1 — NaN/±inf/zero qty or price drops the fill outright (it never opens
+    # or closes an episode); NaN/missing fee reads as zero per the execution
+    # contract (a bad fee must not poison an episode).
+    rows = [
+        _row("b0", "2021-01-04", 0, "600000.SH", "buy", "top_n_entry", 100, 10.0),            # valid open
+        _row("b1", "2021-01-04", 1, "600000.SH", "buy", "top_n_entry", float("nan"), 10.0),   # bad qty → dropped
+        _row("s1", "2021-01-08", 0, "600000.SH", "sell", "hard_stop", 100, float("inf")),     # bad price → dropped
+        _row("s2", "2021-01-08", 1, "600000.SH", "sell", "hard_stop", 100, 11.0, fee=float("nan")),  # fee NaN → 0
+        _row("b2", "2021-01-04", 0, "600001.SH", "buy", "top_n_entry", 0, 10.0),              # zero qty → dropped, no episode
+    ]
+    prices = {
+        "600000.SH": _prices([("2021-01-04", 10.0, 10.5, 9.5, 10.2), ("2021-01-08", 11.0, 11.5, 10.5, 11.0)]),
+        "600001.SH": _prices([("2021-01-04", 10.0, 10.5, 9.5, 10.2)]),
+    }
+    episodes = derive_episodes(rows, prices_by_symbol=prices)
+    assert [e["symbol"] for e in episodes] == ["600000.SH"]   # the zero-qty buy never opens
+    ep = episodes[0]
+    assert ep["episode_pnl"] == pytest.approx(1100.0 - 1000.0)  # NaN fee → 0
+    _assert_no_non_finite(ep)
+
+
+def test_pnl_concentration_downsampled_curve_preserves_tail():
+    # P0.4 — the full curve is computed first; the rendered list is downsampled
+    # to at most CURVE_CAP=500 points, but first/last are always kept and the
+    # last cumulative always equals total_pnl.
+    rows = []
+    for i in range(600):
+        sym = f"{600000 + i:06d}.SH"
+        rows.append(_row(f"b{i}", "2021-01-04", 0, sym, "buy", "top_n_entry", 100, 10.0))
+        rows.append(_row(f"s{i}", "2021-01-08", 0, sym, "sell", "winner_trailing", 100, 11.0))
+    shared = _prices([("2021-01-04", 10.0, 10.5, 9.5, 10.2), ("2021-01-08", 11.0, 11.5, 10.5, 11.0)])
+    prices = {f"{600000 + i:06d}.SH": shared for i in range(600)}
+    pc = summarize_episodes(derive_episodes(rows, prices_by_symbol=prices))["pnl_concentration"]
+    assert pc["curve_points"] == 600
+    curve = pc["cumulative_curve"]
+    assert len(curve) == 500
+    assert curve[0]["rank"] == 1
+    assert curve[-1]["rank"] == 600
+    assert curve[-1]["cumulative"] == pytest.approx(pc["total_pnl"])
+    assert curve[-1]["cumulative"] == pytest.approx(600 * 100.0)
+
+
+def test_mfe_distribution_buckets():
+    # P2.1 — real MFE buckets 10-20% / 20-40% / 40-80% / 80%+, each with
+    # count + median MFE / final return / giveback return / capture ratio / holding.
+    rows = []
+    prices = {}
+    for i, (sym, high) in enumerate([
+        ("600004.SH", 11.0),  # MFE 0.10 → 10-20%
+        ("600003.SH", 12.0),  # MFE 0.20 → 20-40%
+        ("600002.SH", 16.0),  # MFE 0.60 → 40-80%
+        ("600001.SH", 20.0),  # MFE 1.00 → 80%+
+    ]):
+        exit_price = 10.0 + (high - 10.0) * 0.5
+        rows.append(_row(f"b{i}", "2021-01-04", 0, sym, "buy", "top_n_entry", 100, 10.0))
+        rows.append(_row(f"s{i}", "2021-01-08", 0, sym, "sell", "winner_trailing", 100, exit_price))
+        prices[sym] = _prices([
+            ("2021-01-04", 10.0, high, 5.0, 10.2),
+            ("2021-01-08", exit_price, exit_price + 0.5, exit_price - 0.5, exit_price),
+        ])
+    calendar = _weekdays("2021-01-04", "2021-01-08")
+    summary = summarize_episodes(derive_episodes(rows, prices_by_symbol=prices, calendar=calendar))
+    dist = {b["bucket"]: b for b in summary["mfe_distribution"]}
+    assert dist["10-20%"]["count"] == 1
+    assert dist["20-40%"]["count"] == 1
+    assert dist["40-80%"]["count"] == 1
+    assert dist["80%+"]["count"] == 1
+    assert dist["10-20%"]["median_mfe"] == pytest.approx(0.10)
+    # exit at half the peak → capture 0.5, giveback_return = MFE − final.
+    assert dist["40-80%"]["median_capture_ratio"] == pytest.approx(0.5)
+    assert dist["40-80%"]["median_giveback_return"] == pytest.approx(0.60 - 0.30)
+    assert dist["80%+"]["median_final_return"] == pytest.approx(0.50)
+    assert dist["80%+"]["median_holding_days"] == pytest.approx(5)

@@ -1652,6 +1652,15 @@ function renderBacktestPositionsTable(positions) {
 // overwrite a newer run's panel (P0.7 stale-async guard).
 let episodeRequestSeq = 0;
 
+// Pure decision — kept argument-only so it is unit-testable in Node.  A
+// response may write state only when BOTH the request token still matches AND
+// the run it was requested for is still the active run.  The second check
+// covers the window where a run switch is in flight but has not yet fired a
+// fresh episodes request (e.g. loadBacktest is still fetching summary/daily).
+function isEpisodeResponseStale({ seq, requestedRunId, requestSeq, activeRunId }) {
+  return seq !== requestSeq || requestedRunId !== activeRunId;
+}
+
 async function loadBacktestEpisodes({ force = false } = {}) {
   const runId = state.context.runId || byId('backtest-run-select').value;
   if (!runId) return;
@@ -1662,12 +1671,14 @@ async function loadBacktestEpisodes({ force = false } = {}) {
   renderEpisodeLoading();
   try {
     const payload = await getJson(`/api/backtest-runs/${runId}/behavior/episodes`, { useCache: false });
-    if (seq !== episodeRequestSeq) return; // superseded by a newer request
+    const activeRunId = state.context.runId || byId('backtest-run-select').value;
+    if (isEpisodeResponseStale({ seq, requestedRunId, requestSeq: episodeRequestSeq, activeRunId })) return;
     const data = unwrapData(payload) || {};
     state.backtest.episodes = data.episodes || [];
     state.backtest.episodeSummary = data.summary || {};
   } catch (error) {
-    if (seq !== episodeRequestSeq) return;
+    const activeRunId = state.context.runId || byId('backtest-run-select').value;
+    if (isEpisodeResponseStale({ seq, requestedRunId, requestSeq: episodeRequestSeq, activeRunId })) return;
     state.backtest.episodes = null;
     state.backtest.episodeSummary = null;
     renderEpisodeAnalyticsError(error);
@@ -1686,7 +1697,8 @@ function renderEpisodeLoading() {
   renderMetricCard('episode-avg-holding', '…', 'episode-avg-holding-note', 'trading days');
   const loading = '<div class="empty">Loading episodes…</div>';
   byId('backtest-episode-capture-scatter').innerHTML = loading;
-  byId('backtest-episode-winner-buckets').innerHTML = loading;
+  byId('backtest-episode-capture-ratio-dist').innerHTML = loading;
+  byId('backtest-episode-mfe-distribution').innerHTML = loading;
   byId('backtest-episode-stop-quality').innerHTML = loading;
   byId('backtest-episode-horizon-buckets').innerHTML = loading;
   byId('backtest-episode-pnl-concentration').innerHTML = loading;
@@ -1703,7 +1715,8 @@ function renderEpisodeAnalytics() {
   byId('backtest-episode-count').textContent = summary.total_episodes != null ? `${summary.total_episodes} episodes` : '';
   renderEpisodeSummaryRow(summary);
   renderEpisodeCaptureScatter(episodes);
-  renderEpisodeWinnerBuckets(summary);
+  renderEpisodeCaptureRatioDist(summary);
+  renderEpisodeMfeDistribution(summary);
   renderEpisodeStopQuality(summary);
   renderEpisodeHorizonBuckets(summary);
   renderEpisodePnlConcentration(summary);
@@ -1727,7 +1740,8 @@ function renderEpisodeAnalyticsError(error) {
   renderChartError('backtest-episode-return-dist', 'No episode data');
   renderChartError('backtest-episode-holding-dist', 'No episode data');
   renderChartError('backtest-episode-mfe-mae-scatter', 'No episode data');
-  byId('backtest-episode-winner-buckets').innerHTML = message;
+  byId('backtest-episode-capture-ratio-dist').innerHTML = message;
+  byId('backtest-episode-mfe-distribution').innerHTML = message;
   byId('backtest-episode-stop-quality').innerHTML = message;
   byId('backtest-episode-horizon-buckets').innerHTML = message;
   byId('backtest-episode-exit-reason-table').innerHTML = message;
@@ -1794,16 +1808,32 @@ function renderEpisodeCaptureScatter(episodes) {
   });
 }
 
-function renderEpisodeWinnerBuckets(summary) {
-  const buckets = summary.winner_capture_buckets || [];
-  renderDataTable('backtest-episode-winner-buckets', buckets, [
+function renderEpisodeCaptureRatioDist(summary) {
+  const buckets = summary.capture_ratio_distribution || [];
+  renderDataTable('backtest-episode-capture-ratio-dist', buckets, [
     { key: 'bucket', label: 'Capture', sortValue: (row) => row.bucket },
     { key: 'count', label: 'Episodes', sortValue: (row) => toNumber(row.count) },
     { key: 'win_rate', label: 'Win Rate', render: (row) => formatPercent(row.win_rate, 1), sortValue: (row) => toNumber(row.win_rate) },
     { key: 'avg_return', label: 'Avg Return', render: (row) => formatPercent(row.avg_return, 1), sortValue: (row) => toNumber(row.avg_return) },
   ], {
-    tableKey: 'backtest-episode-winner-buckets',
+    tableKey: 'backtest-episode-capture-ratio-dist',
     emptyMessage: 'No winners with MFE > 10%',
+  });
+}
+
+function renderEpisodeMfeDistribution(summary) {
+  const buckets = summary.mfe_distribution || [];
+  renderDataTable('backtest-episode-mfe-distribution', buckets, [
+    { key: 'bucket', label: 'MFE Bucket', sortValue: (row) => row.bucket },
+    { key: 'count', label: 'Episodes', sortValue: (row) => toNumber(row.count) },
+    { key: 'median_mfe', label: 'Median MFE', render: (row) => formatPercent(row.median_mfe, 1), sortValue: (row) => toNumber(row.median_mfe) },
+    { key: 'median_final_return', label: 'Median Final Ret', render: (row) => formatPercent(row.median_final_return, 1), sortValue: (row) => toNumber(row.median_final_return) },
+    { key: 'median_giveback_return', label: 'Median Giveback', render: (row) => formatPercent(row.median_giveback_return, 1), sortValue: (row) => toNumber(row.median_giveback_return) },
+    { key: 'median_capture_ratio', label: 'Median Capture', render: (row) => formatPercent(row.median_capture_ratio, 1), sortValue: (row) => toNumber(row.median_capture_ratio) },
+    { key: 'median_holding_days', label: 'Median Days', sortValue: (row) => toNumber(row.median_holding_days) },
+  ], {
+    tableKey: 'backtest-episode-mfe-distribution',
+    emptyMessage: 'No MFE data',
   });
 }
 
@@ -1841,6 +1871,10 @@ function renderEpisodeHorizonBuckets(summary) {
   renderDataTable('backtest-episode-horizon-buckets', horizons, [
     { key: 'bucket', label: 'Holding Days', sortValue: (row) => row.bucket },
     { key: 'count', label: 'Episodes', sortValue: (row) => toNumber(row.count) },
+    { key: 'win_rate', label: 'Win Rate', render: (row) => formatPercent(row.win_rate, 1), sortValue: (row) => toNumber(row.win_rate) },
+    { key: 'median_return', label: 'Median Return', render: (row) => formatPercent(row.median_return, 1), sortValue: (row) => toNumber(row.median_return) },
+    { key: 'median_mfe', label: 'Median MFE', render: (row) => formatPercent(row.median_mfe, 1), sortValue: (row) => toNumber(row.median_mfe) },
+    { key: 'median_mae', label: 'Median MAE', render: (row) => formatPercent(row.median_mae, 1), sortValue: (row) => toNumber(row.median_mae) },
     { key: 'reasons', label: 'Exit Reasons', render: (row) => `<span class="muted-text">${escapeHtml(row.reasons)}</span>`, sortable: false },
   ], {
     tableKey: 'backtest-episode-horizon-buckets',
@@ -1855,13 +1889,22 @@ function renderEpisodePnlConcentration(summary) {
     return;
   }
   const curve = pc.cumulative_curve;
+  const fmtShare = (v) => v == null ? '-' : formatPercent(v, 0);
+  const fmtYuan = (v) => v == null ? '-' : formatNumber(v, 0);
   const shares = [
-    `Top1% ${formatPercent(pc.top_1pct_share, 0)}`,
-    `Top5% ${formatPercent(pc.top_5pct_share, 0)}`,
-    `Top10% ${formatPercent(pc.top_10pct_share, 0)}`,
+    `Top1% ${fmtShare(pc.top_1pct_share)}`,
+    `Top5% ${fmtShare(pc.top_5pct_share)}`,
+    `Top10% ${fmtShare(pc.top_10pct_share)}`,
+    `Top1 ep ${fmtShare(pc.top_1_episode_share)}`,
+    `Top5 ep ${fmtShare(pc.top_5_episode_share)}`,
+  ].join(' · ');
+  const excluding = [
+    `ex-Top1 ¥${fmtYuan(pc.pnl_ex_top1)}`,
+    `ex-Top5 ¥${fmtYuan(pc.pnl_ex_top5)}`,
+    `ex-Top10% ¥${fmtYuan(pc.pnl_ex_top10pct)}`,
   ].join(' · ');
   const layout = plotlyBaseLayout({
-    title: `Cumulative PnL (¥) · ${shares}`,
+    title: `Cumulative PnL (¥) · ${shares}<br>${excluding} · n=${pc.curve_points}`,
     height: 260,
     yAxisTitle: 'Cumulative PnL (¥)',
     hoverMode: 'closest',
@@ -2030,6 +2073,30 @@ function renderEpisodeExitReasonTable(summary) {
       sortValue: (row) => toNumber(row.median_capture),
     },
     {
+      key: 'avg_giveback_return',
+      label: 'Avg Giveback Ret',
+      render: (row) => formatPercent(row.avg_giveback_return, 1),
+      sortValue: (row) => toNumber(row.avg_giveback_return),
+    },
+    {
+      key: 'median_giveback_return',
+      label: 'Median Giveback Ret',
+      render: (row) => formatPercent(row.median_giveback_return, 1),
+      sortValue: (row) => toNumber(row.median_giveback_return),
+    },
+    {
+      key: 'avg_giveback_ratio',
+      label: 'Avg Giveback Ratio',
+      render: (row) => formatPercent(row.avg_giveback_ratio, 1),
+      sortValue: (row) => toNumber(row.avg_giveback_ratio),
+    },
+    {
+      key: 'median_giveback_ratio',
+      label: 'Median Giveback Ratio',
+      render: (row) => formatPercent(row.median_giveback_ratio, 1),
+      sortValue: (row) => toNumber(row.median_giveback_ratio),
+    },
+    {
       key: 'avg_post_exit_20d',
       label: 'Avg Post 20d',
       render: (row) => row.post_exit_20d_count ? `${formatPercent(row.avg_post_exit_20d, 1)} (${row.post_exit_20d_count})` : '-',
@@ -2100,10 +2167,16 @@ function renderEpisodeDetailTable(episodes) {
       sortValue: (row) => toNumber(row.capture_ratio),
     },
     {
-      key: 'giveback',
-      label: 'Giveback',
-      render: (row) => formatPercent(row.giveback, 1),
-      sortValue: (row) => toNumber(row.giveback),
+      key: 'giveback_return',
+      label: 'Giveback Ret',
+      render: (row) => formatPercent(row.giveback_return, 1),
+      sortValue: (row) => toNumber(row.giveback_return),
+    },
+    {
+      key: 'giveback_ratio',
+      label: 'Giveback Ratio',
+      render: (row) => formatPercent(row.giveback_ratio, 1),
+      sortValue: (row) => toNumber(row.giveback_ratio),
     },
     {
       key: 'valuation_date',

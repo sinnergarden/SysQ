@@ -868,6 +868,56 @@ class ResearchCockpitRepository:
         result.sort(key=lambda item: abs(item.get("market_value") or 0), reverse=True)
         return result[:limit]
 
+    def _resolve_window_bounded_calendar(
+        self,
+        rows: list[dict[str, Any]],
+        manifest: dict[str, Any],
+        prices_by_symbol: dict[str, pd.DataFrame],
+        run_id: str,
+    ) -> list[str]:
+        """Build a trading-day calendar clipped to the manifest's backtest window.
+
+        Used only when neither the daily_summary trade dates nor the manifest's
+        explicit ``trading_dates`` are available.  The union of execution and
+        price dates is clipped to ``[effective_/start_date, effective_/end_date]``
+        so a raw price store that extends past the backtest end can never leak
+        post-window prices into episode metrics.  If the window end cannot be
+        determined reliably, fail closed with a diagnostic error instead of
+        silently reading future prices.
+        """
+        window_start = self._normalize_trade_date_value(
+            manifest.get("effective_start_date") or manifest.get("start_date") or ""
+        )
+        window_end = self._normalize_trade_date_value(
+            manifest.get("effective_end_date") or manifest.get("end_date") or ""
+        )
+        if not window_end:
+            raise ValueError(
+                f"Cannot determine backtest window end for {run_id}: daily_summary "
+                "unavailable, manifest has no trading_dates and no end_date. "
+                "Refusing to fall back to un-clipped raw price dates (the raw "
+                "store can extend past the backtest end)."
+            )
+        dates: set[str] = set()
+        for r in rows:
+            d = self._normalize_trade_date_value(r.get("trade_date") or r.get("date"))
+            if d:
+                dates.add(d)
+        for frame in prices_by_symbol.values():
+            if frame is None or frame.empty or "trade_date" not in frame.columns:
+                continue
+            for value in frame["trade_date"]:
+                d = self._normalize_trade_date_value(value)
+                if d:
+                    dates.add(d)
+        clipped = sorted(
+            d for d in dates
+            if d and (not window_start or d >= window_start) and d <= window_end
+        )
+        if not clipped:
+            clipped = [window_end]
+        return clipped
+
     def get_behavior_episodes(self, run_id: str, *, limit: int = 5000) -> dict[str, Any]:
         """Derive holding-episode diagnostics for a canonical backtest run.
 
@@ -904,9 +954,18 @@ class ResearchCockpitRepository:
                 except Exception:
                     scores_frame = None
 
-        # The backtest's own daily_summary trade dates are the trading-day
-        # calendar: immutable, and bounded to the backtest window so open
-        # episodes and excursions never read prices past the last strategy day.
+        symbols = sorted({str(r.get("instrument") or r.get("symbol") or "") for r in rows if r.get("instrument") or r.get("symbol")})
+        prices_by_symbol: dict[str, pd.DataFrame] = {}
+        for symbol in symbols:
+            df = self.store.load_daily(symbol)
+            if df is not None and not df.empty:
+                prices_by_symbol[symbol] = df
+
+        # Backtest-window calendar.  The daily_summary trade dates are the
+        # immutable trading-day calendar and are bounded to the backtest window.
+        # If unavailable, the manifest's explicit window is used to construct /
+        # clip a calendar.  We must NEVER fall back to the union of raw price
+        # dates un-clipped: the raw store can extend past the backtest end.
         calendar: list[str] | None = None
         daily_path = source.get("daily_path")
         if daily_path is not None and daily_path.exists():
@@ -917,13 +976,14 @@ class ResearchCockpitRepository:
                 )
             except Exception:
                 calendar = None
-
-        symbols = sorted({str(r.get("instrument") or r.get("symbol") or "") for r in rows if r.get("instrument") or r.get("symbol")})
-        prices_by_symbol: dict[str, pd.DataFrame] = {}
-        for symbol in symbols:
-            df = self.store.load_daily(symbol)
-            if df is not None and not df.empty:
-                prices_by_symbol[symbol] = df
+        if not calendar:
+            manifest_dates = manifest.get("trading_dates")
+            if isinstance(manifest_dates, list) and manifest_dates:
+                calendar = sorted(
+                    {self._normalize_trade_date_value(v) for v in manifest_dates if str(v).strip()}
+                )
+        if not calendar:
+            calendar = self._resolve_window_bounded_calendar(rows, manifest, prices_by_symbol, run_id)
 
         episodes = derive_episodes(rows, prices_by_symbol=prices_by_symbol, scores_frame=scores_frame, calendar=calendar)
         self._behavior_episodes_cache[run_id] = {"episodes": episodes, "summary": summarize_episodes(episodes)}

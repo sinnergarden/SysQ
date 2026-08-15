@@ -85,10 +85,11 @@ def derive_episodes(
     ``calendar`` is the backtest's trading-day calendar (YYYY-MM-DD strings).
     It defines ``holding_days``, the ``score_delta_*`` lookbacks, post-exit
     return horizons, and the window bound: excursions and open-episode
-    finalization never read prices after the last calendar date.  Callers pass
-    the immutable daily_summary trade dates so results stay deterministic and
-    inside the backtest window.  When omitted, the union of execution dates and
-    per-symbol price dates is used as a best-effort fallback.
+    finalization never read prices after the last calendar date.  Canonical
+    callers (the assembler) MUST pass a window-bounded calendar — the raw price
+    store can extend past the backtest end — or fail closed; the ``union``
+    fallback below exists only for pure-function tests where every price date is
+    deliberately in-scope.
     """
     rows = [r for r in executions_rows if _is_filled(r)]
     if not rows:
@@ -130,8 +131,9 @@ def derive_episodes(
             inst_vals = sf[inst_col].map(lambda v: str(v or ""))
             score_vals = pd.to_numeric(sf["score"], errors="coerce")
             for d, inst, sc in zip(raw_dates.map(_norm_date), inst_vals, score_vals):
-                if d and inst and sc is not None and not pd.isna(sc):
-                    score_map[(d, inst)] = float(sc)
+                f = _finite(sc)
+                if d and inst and f is not None:
+                    score_map[(d, inst)] = f
 
     def score_on(date: str, symbol: str) -> float | None:
         return score_map.get((date, symbol))
@@ -180,7 +182,8 @@ def _new_episode(symbol: str, entry_date: str, entry_score: float | None) -> dic
         "holding_days": None,
         # P1.8 — excursion-derived return diagnostics.
         "capture_ratio": None,
-        "giveback": None,
+        "giveback_return": None,
+        "giveback_ratio": None,
         "recovery_from_mae": None,
         "buy_cost": 0.0,
         "sell_proceeds": 0.0,
@@ -221,10 +224,17 @@ def _simulate_symbol(
             side = str(r.get("side") or "").lower()
             if side != "buy" and qty <= 0:
                 continue
-            fqty = float(r.get("filled_qty") or 0)
-            price = float(r.get("deal_price") or 0)
-            fee = float(r.get("total_fee") or 0)
-            if fqty <= 0:
+            fqty = _finite(r.get("filled_qty"))
+            price = _finite(r.get("deal_price"))
+            fee = _finite(r.get("total_fee"))
+            # Fee policy: the canonical executions contract always carries a
+            # total_fee column, so a NaN/missing fee reads as zero (one bad fee
+            # must not poison an episode).  A malformed fill (NaN/±inf/zero
+            # qty or price) is dropped outright — it never enters the state
+            # machine, so a corrupt row cannot corrupt the holding walk.
+            if fee is None:
+                fee = 0.0
+            if fqty is None or fqty <= 0 or price is None or price <= 0:
                 continue
             if side == "buy":
                 if qty == 0:
@@ -278,26 +288,29 @@ def _simulate_symbol(
     return episodes
 
 
-def _return_metrics(final_return: float | None, mfe: float | None, mae: float | None) -> tuple[float | None, float | None, float | None]:
+def _return_metrics(final_return: float | None, mfe: float | None, mae: float | None) -> tuple[float | None, float | None, float | None, float | None]:
     """Derive capture / giveback / recovery from a final return vs its excursions.
 
     - ``capture_ratio`` — final return as a fraction of peak favorable excursion
       (only defined when MFE > 0; >1 means the close beat the measured peak).
-    - ``giveback`` — fraction of the peak profit given back (1 - capture).
+    - ``giveback_return`` — absolute return points given back, ``MFE - final``
+      (negative when the close beat the peak: nothing was given back).
+    - ``giveback_ratio`` — fraction of the peak profit given back, ``1 - capture``.
     - ``recovery_from_mae`` — how far the position recovered above its worst
       drawdown, ``(1+final)/(1+MAE) - 1`` (only defined when MAE < 0).
     """
     final = _finite(final_return)
     mfe = _finite(mfe)
     mae = _finite(mae)
-    capture = giveback = recovery = None
+    capture = giveback_return = giveback_ratio = recovery = None
     if final is not None:
         if mfe is not None and mfe > 0:
             capture = final / mfe
-            giveback = 1.0 - capture
+            giveback_return = mfe - final
+            giveback_ratio = 1.0 - capture
         if mae is not None and mae < 0 and (1.0 + mae) > 0:
             recovery = (1.0 + final) / (1.0 + mae) - 1.0
-    return capture, giveback, recovery
+    return capture, giveback_return, giveback_ratio, recovery
 
 
 def _close_episode(
@@ -340,8 +353,8 @@ def _close_episode(
     ep["holding_days"] = (exit_i - entry_i + 1) if (entry_i is not None and exit_i is not None) else None
     ep["episode_end_date"] = exit_date
     ep["valuation_date"] = None
-    cap, gb, rec = _return_metrics(ep["realized_return"], ep["MFE"], ep["MAE"])
-    ep["capture_ratio"], ep["giveback"], ep["recovery_from_mae"] = cap, gb, rec
+    cap, gb_ret, gb_ratio, rec = _return_metrics(ep["realized_return"], ep["MFE"], ep["MAE"])
+    ep["capture_ratio"], ep["giveback_return"], ep["giveback_ratio"], ep["recovery_from_mae"] = cap, gb_ret, gb_ratio, rec
     ep.pop("buy_cost", None)
     ep.pop("sell_proceeds", None)
     ep.pop("peak_close", None)
@@ -391,8 +404,8 @@ def _finalize_open(
     entry_i = cal_index.get(ep["entry_date"])
     end_i = cal_index.get(ep["episode_end_date"]) if ep["episode_end_date"] else None
     ep["holding_days"] = (end_i - entry_i + 1) if (entry_i is not None and end_i is not None) else None
-    cap, gb, rec = _return_metrics(ep["unrealized_return"], ep["MFE"], ep["MAE"])
-    ep["capture_ratio"], ep["giveback"], ep["recovery_from_mae"] = cap, gb, rec
+    cap, gb_ret, gb_ratio, rec = _return_metrics(ep["unrealized_return"], ep["MFE"], ep["MAE"])
+    ep["capture_ratio"], ep["giveback_return"], ep["giveback_ratio"], ep["recovery_from_mae"] = cap, gb_ret, gb_ratio, rec
     ep.pop("buy_cost", None)
     ep.pop("sell_proceeds", None)
     ep.pop("peak_close", None)
@@ -466,13 +479,36 @@ CAPTURE_BUCKETS = [
     ("over_100%", 1.0, None),
 ]
 
+MFE_BUCKETS = [
+    ("10-20%", 0.10, 0.20),
+    ("20-40%", 0.20, 0.40),
+    ("40-80%", 0.40, 0.80),
+    ("80%+", 0.80, None),
+]
+
+# Maximum cumulative-curve points sent to the UI.  The full curve is always
+# computed first; only the *rendered* list is downsampled (see _pnl_concentration).
+CURVE_CAP = 500
+
+
+def _snap(value: float) -> float:
+    """Round to 9 decimals so bucket-boundary comparisons are fp-robust.
+
+    An MFE computed as ``12.0 / 10.0 - 1`` is ``0.19999999999999996``, which
+    would silently fall below the 0.20 lower bound of the 20-40% bucket and
+    land in 10-20%.  Snapping to the shared boundary grid (all bucket edges are
+    exact multiples of 0.01) restores the intended [lo, hi) semantics.
+    """
+    return round(value, 9)
+
 
 def _bucketed_exit_reason_summary(items: list[dict[str, Any]]) -> dict[str, Any]:
     """Aggregate diagnostics for one exit-reason bucket (None values excluded)."""
     returns = [v for e in items if (v := _finite(e.get("realized_return"))) is not None]
     mfes = [v for e in items if (v := _finite(e.get("MFE"))) is not None]
     maes = [v for e in items if (v := _finite(e.get("MAE"))) is not None]
-    gives = [v for e in items if (v := _finite(e.get("giveback"))) is not None]
+    gives_ret = [v for e in items if (v := _finite(e.get("giveback_return"))) is not None]
+    gives_ratio = [v for e in items if (v := _finite(e.get("giveback_ratio"))) is not None]
     caps = [v for e in items if (v := _finite(e.get("capture_ratio"))) is not None]
     pe20 = [v for e in items if (v := _finite(e.get("post_exit_return_20d"))) is not None]
     pe60 = [v for e in items if (v := _finite(e.get("post_exit_return_60d"))) is not None]
@@ -488,9 +524,12 @@ def _bucketed_exit_reason_summary(items: list[dict[str, Any]]) -> dict[str, Any]
         "mae_count": len(maes),
         "avg_mae": _safe_mean(maes),
         "median_mae": _median(maes),
-        "giveback_count": len(gives),
-        "avg_giveback": _safe_mean(gives),
-        "median_giveback": _median(gives),
+        "giveback_return_count": len(gives_ret),
+        "avg_giveback_return": _safe_mean(gives_ret),
+        "median_giveback_return": _median(gives_ret),
+        "giveback_ratio_count": len(gives_ratio),
+        "avg_giveback_ratio": _safe_mean(gives_ratio),
+        "median_giveback_ratio": _median(gives_ratio),
         "capture_count": len(caps),
         "avg_capture": _safe_mean(caps),
         "median_capture": _median(caps),
@@ -501,8 +540,26 @@ def _bucketed_exit_reason_summary(items: list[dict[str, Any]]) -> dict[str, Any]
     }
 
 
+def _final_return(e: dict[str, Any]) -> float | None:
+    """Realized return for closed episodes, unrealized for open ones."""
+    realized = _finite(e.get("realized_return"))
+    if realized is not None:
+        return realized
+    return _finite(e.get("unrealized_return"))
+
+
 def _holding_horizons(episodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    result = [{"bucket": name, "count": 0, "exit_reasons": {}} for name, _, _ in HOLDING_BUCKETS]
+    result = [
+        {
+            "bucket": name, "count": 0, "exit_reasons": {},
+            "win_rate": None, "median_return": None,
+            "median_mfe": None, "median_mae": None,
+        }
+        for name, _, _ in HOLDING_BUCKETS
+    ]
+    bucket_returns: dict[str, list[float]] = {name: [] for name, _, _ in HOLDING_BUCKETS}
+    bucket_mfes: dict[str, list[float]] = {name: [] for name, _, _ in HOLDING_BUCKETS}
+    bucket_maes: dict[str, list[float]] = {name: [] for name, _, _ in HOLDING_BUCKETS}
     for e in episodes:
         h = _finite(e.get("holding_days"))
         if h is None:
@@ -512,26 +569,38 @@ def _holding_horizons(episodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 result[i]["count"] += 1
                 reason = str(e.get("exit_reason") or "open")
                 result[i]["exit_reasons"][reason] = result[i]["exit_reasons"].get(reason, 0) + 1
+                if (r := _finite(e.get("realized_return"))) is not None:
+                    bucket_returns[name].append(r)
+                if (m := _finite(e.get("MFE"))) is not None:
+                    bucket_mfes[name].append(m)
+                if (m := _finite(e.get("MAE"))) is not None:
+                    bucket_maes[name].append(m)
                 break
+    for name, _, _ in HOLDING_BUCKETS:
+        row = next(r for r in result if r["bucket"] == name)
+        returns = bucket_returns[name]
+        row["win_rate"] = _fraction(sum(1 for v in returns if v > 0), len(returns))
+        row["median_return"] = _median(returns)
+        row["median_mfe"] = _median(bucket_mfes[name])
+        row["median_mae"] = _median(bucket_maes[name])
     return result
 
 
-def _winner_capture_buckets(episodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _capture_ratio_distribution(episodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Bucket winners (MFE > 10%) by how much of the peak they captured."""
     result = [{"bucket": name, "count": 0, "avg_return": None, "win_rate": None} for name, _, _ in CAPTURE_BUCKETS]
     bucket_returns: dict[str, list[float]] = {name: [] for name, _, _ in CAPTURE_BUCKETS}
     for e in episodes:
         mfe = _finite(e.get("MFE"))
-        if mfe is None or mfe <= 0.10:
+        if mfe is None or _snap(mfe) <= 0.10:
             continue
         capture = _finite(e.get("capture_ratio"))
         if capture is None:
             continue
-        final = _finite(e.get("realized_return"))
-        if final is None:
-            final = _finite(e.get("unrealized_return"))
+        cap = _snap(capture)
+        final = _final_return(e)
         for i, (name, lo, hi) in enumerate(CAPTURE_BUCKETS):
-            if (lo is None or capture >= lo) and (hi is None or capture < hi):
+            if (lo is None or cap >= lo) and (hi is None or cap < hi):
                 result[i]["count"] += 1
                 if final is not None:
                     bucket_returns[name].append(final)
@@ -540,6 +609,32 @@ def _winner_capture_buckets(episodes: list[dict[str, Any]]) -> list[dict[str, An
         vals = bucket_returns[name]
         row["avg_return"] = _safe_mean(vals)
         row["win_rate"] = _fraction(sum(1 for v in vals if v > 0), len(vals))
+    return result
+
+
+def _mfe_distribution(episodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Bucket episodes by peak favorable excursion (MFE), 10% and up.
+
+    Each bucket reports the median MFE, final return (realized for closed,
+    unrealized for open), giveback return, capture ratio and holding days, so a
+    downstream consumer can see how much of a winner's peak was held vs given back.
+    """
+    result: list[dict[str, Any]] = []
+    for name, lo, hi in MFE_BUCKETS:
+        items = [
+            e for e in episodes
+            if (m := _finite(e.get("MFE"))) is not None
+            and (s := _snap(m)) >= lo and (hi is None or s < hi)
+        ]
+        result.append({
+            "bucket": name,
+            "count": len(items),
+            "median_mfe": _median([v for e in items if (v := _finite(e.get("MFE"))) is not None]),
+            "median_final_return": _median([v for e in items if (v := _final_return(e)) is not None]),
+            "median_giveback_return": _median([v for e in items if (v := _finite(e.get("giveback_return"))) is not None]),
+            "median_capture_ratio": _median([v for e in items if (v := _finite(e.get("capture_ratio"))) is not None]),
+            "median_holding_days": _median([v for e in items if (v := _finite(e.get("holding_days"))) is not None]),
+        })
     return result
 
 
@@ -566,24 +661,69 @@ def _stop_quality(episodes: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _downsample_curve(curve: list[dict[str, Any]], cap: int = CURVE_CAP) -> list[dict[str, Any]]:
+    """Downsample a sorted curve to at most ``cap`` points for the UI.
+
+    Always keeps the first and last points (the last cumulative therefore
+    always equals total_pnl) and samples the interior approximately evenly.
+    A curve already at or under the cap is returned untouched.
+    """
+    n = len(curve)
+    if n <= cap:
+        return list(curve)
+    step = (n - 1) / (cap - 1)
+    indices = {0, n - 1}
+    for i in range(1, cap - 1):
+        indices.add(int(round(i * step)))
+    return [curve[i] for i in sorted(indices)]
+
+
 def _pnl_concentration(closed: list[dict[str, Any]]) -> dict[str, Any]:
     """Fat-tail PnL concentration over realized (closed) episodes.
 
     Episodes are sorted by episode_pnl descending; the cumulative curve tracks
     each rank's contribution to the total *positive* PnL (so a strategy whose
-    total is near zero still gets a meaningful tail curve).  The curve is
-    capped at 500 points for the UI.
+    total is near zero still gets a meaningful tail curve).
+
+    Denominator contract: every ``*_share`` value is
+    ``sum(top-k PnL) / positive_pnl_total``, where ``positive_pnl_total`` is the
+    sum of positive episode PnL — NOT ``total_pnl`` (losses are not part of the
+    share denominator; see the ``share_denominator`` field).  ``top_1pct_share`` /
+    ``top_5pct_share`` / ``top_10pct_share`` pick the top ``ceil(n*pct)``
+    episodes; ``top_1_episode_share`` / ``top_5_episode_share`` pick a fixed
+    count of episodes.  ``pnl_ex_top1`` / ``pnl_ex_top5`` / ``pnl_ex_top10pct``
+    are absolute ¥ of ``total_pnl`` remaining after removing those top ranks
+    (they run over ALL PnL, losses included).
+
+    The cumulative curve is computed in full, then downsampled to at most
+    ``CURVE_CAP`` points for the UI — the first and last points are always kept
+    and the last cumulative always equals ``total_pnl``.  ``curve_points``
+    reports the full (pre-downsample) length.
     """
     pnls = sorted((v for e in closed if (v := _finite(e.get("episode_pnl"))) is not None), reverse=True)
+    n = len(pnls)
     positive_total = sum(p for p in pnls if p > 0)
     total = sum(pnls) if pnls else None
 
-    def top_share(pct: float) -> float | None:
+    def top_pct_share(pct: float) -> float | None:
         if not pnls or positive_total <= 0:
             return None
-        k = max(1, math.ceil(len(pnls) * pct))
+        k = max(1, math.ceil(n * pct))
         return sum(pnls[:k]) / positive_total
 
+    def top_k_share(k: int) -> float | None:
+        if not pnls or positive_total <= 0:
+            return None
+        k = max(1, min(k, n))
+        return sum(pnls[:k]) / positive_total
+
+    def pnl_excluding(k: int) -> float | None:
+        if not pnls:
+            return None
+        k = max(1, min(k, n))
+        return total - sum(pnls[:k])
+
+    top10pct_k = max(1, math.ceil(n * 0.10)) if pnls else 0
     curve: list[dict[str, Any]] = []
     cum = 0.0
     for rank, p in enumerate(pnls, start=1):
@@ -596,13 +736,20 @@ def _pnl_concentration(closed: list[dict[str, Any]]) -> dict[str, Any]:
         })
     return {
         "scope": "closed_realized",
-        "n": len(pnls),
+        "n": n,
         "total_pnl": total,
         "positive_pnl_total": positive_total or None,
-        "top_1pct_share": top_share(0.01),
-        "top_5pct_share": top_share(0.05),
-        "top_10pct_share": top_share(0.10),
-        "cumulative_curve": curve[:500],
+        "share_denominator": "positive_pnl_total",
+        "top_1pct_share": top_pct_share(0.01),
+        "top_5pct_share": top_pct_share(0.05),
+        "top_10pct_share": top_pct_share(0.10),
+        "top_1_episode_share": top_k_share(1),
+        "top_5_episode_share": top_k_share(5),
+        "pnl_ex_top1": pnl_excluding(1),
+        "pnl_ex_top5": pnl_excluding(5),
+        "pnl_ex_top10pct": pnl_excluding(top10pct_k),
+        "curve_points": n,
+        "cumulative_curve": _downsample_curve(curve),
     }
 
 
@@ -637,7 +784,8 @@ def summarize_episodes(episodes: list[dict[str, Any]]) -> dict[str, Any]:
             for reason, items in sorted(by_reason.items())
         ],
         "holding_horizons": _holding_horizons(episodes),
-        "winner_capture_buckets": _winner_capture_buckets(episodes),
+        "capture_ratio_distribution": _capture_ratio_distribution(episodes),
+        "mfe_distribution": _mfe_distribution(episodes),
         "stop_quality": _stop_quality(episodes),
         "pnl_concentration": _pnl_concentration(closed),
     }

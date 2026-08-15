@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime
 import json
 from pathlib import Path
 from unittest.mock import patch
@@ -9,6 +10,41 @@ import pytest
 
 from qsys.research_ui.assembler import ResearchCockpitRepository
 from qsys.research_ui.behavior import derive_episodes
+
+
+def _weekdays_iso(start: str, end: str) -> list[str]:
+    """Mon–Fri ISO dates between two dates inclusive (trading-day stand-in)."""
+    out = []
+    day = datetime.date.fromisoformat(start)
+    last = datetime.date.fromisoformat(end)
+    while day <= last:
+        if day.weekday() < 5:
+            out.append(day.isoformat())
+        day += datetime.timedelta(days=1)
+    return out
+
+
+def _extended_raw_frame(window_end: str, past_end: str) -> pd.DataFrame:
+    """Weekday RAW daily bars 2021-01-04..past_end with a huge post-window spike.
+
+    The post-``window_end`` bars carry high=10000.0, so any code path that reads
+    past the window end would inflate MFE by ~100x — the P0.2 clipping tests
+    assert MFE stays at the in-window value.
+    """
+    dates = _weekdays_iso("2021-01-04", past_end)
+    rows = [
+        {
+            "trade_date": d, "open": 10.0, "high": 11.0, "low": 9.5,
+            "close": 10.5 + (i % 5) * 0.01, "volume": 1000.0, "factor": 1.0,
+        }
+        for i, d in enumerate(dates)
+    ]
+    df = pd.DataFrame(rows)
+    post = df["trade_date"] > window_end
+    df.loc[post, "high"] = 10000.0
+    df.loc[post, "low"] = 1.0
+    df.loc[post, "close"] = 9000.0
+    return df
 
 
 def _write_canonical_backtest(root: Path) -> str:
@@ -450,3 +486,93 @@ def test_behavior_episodes_404_unknown_run(tmp_path: Path) -> None:
     repo = ResearchCockpitRepository(project_root=tmp_path)
     with pytest.raises(FileNotFoundError, match="Unknown backtest run_id"):
         repo.get_behavior_episodes("canonical__zzz__zzz")
+
+
+def _write_canonical_backtest_open_episode(root: Path, *, end_date: str | None = "2026-07-31", write_daily_summary: bool = True) -> str:
+    """Canonical run with a single OPEN episode (buy, never sold).
+
+    ``write_daily_summary=False`` + ``end_date=None`` exercises the P0.2
+    fallback chain: no daily_summary trade dates, no manifest ``trading_dates``,
+    and no window end → the assembler must fail closed.
+    """
+    strategy_run_id = "posterior_confirmed_top5_financial_rc_50_50__stablehash"
+    backtest_id = "bt_2021-01-04_2026-07-31_stablehash"
+    run_dir = root / "data" / "research" / "backtests" / strategy_run_id / backtest_id
+    run_dir.mkdir(parents=True)
+    manifest = {
+        "artifact_type": "backtest_run",
+        "strategy_run_id": strategy_run_id,
+        "backtest_id": backtest_id,
+        "strategy_template_id": "posterior_confirmed_top5",
+        "signal_id": "financial_rc_60d_180d_50_50__daily_zscore",
+        "signal_run_id": "blend__stablehash",
+        "effective_start_date": "2021-01-04",
+        "effective_end_date": end_date,
+        "allocation_params": {"top_n": 5, "max_weight": None},
+        "rebalance_freq": "weekly",
+        "execution_price": "open",
+        "mtm_price": "close",
+        "use_adjusted_price": False,
+        "git_commit": "c9b3a514",
+        "initial_capital": 10_000_000,
+        "trading_day_count": 2,
+        "artifacts": {
+            "executions": {"path": "executions.csv", "complete": True, "schema_version": "backtest_executions_v1"},
+        },
+    }
+    (run_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    (run_dir / "metrics.json").write_text(
+        json.dumps({"total_return": 0.0, "trading_day_count": 2, "order_count_total": 1, "filled_count_total": 1, "trading_day_count_with_orders": 1}),
+        encoding="utf-8",
+    )
+    (run_dir / "backtest_result.json").write_text(json.dumps({"status": "completed", "backtest_id": backtest_id}), encoding="utf-8")
+    if write_daily_summary:
+        (run_dir / "daily_summary.csv").write_text(
+            "trade_date,total_value_after,turnover,order_count,status\n"
+            "2021-01-04,9000000,1000000,5,success\n"
+            f"{end_date},12500000,500000,2,success\n",
+            encoding="utf-8",
+        )
+    (run_dir / "executions.csv").write_text(
+        "execution_id,trade_date,sequence,instrument,side,execution_phase,trade_reason,"
+        "requested_qty,requested_price,execution_price_mode,reference_price,status,"
+        "filled_qty,deal_price,gross_amount,commission,tax,total_fee,rejection_reason\n"
+        "2021-01-04:000000:600000.SH:buy,2021-01-04,0,600000.SH,buy,entry,top_n_entry,100,10.0,open,10.0,filled,100,10.1,1010.0,0.303,0.0,0.303,\n",
+        encoding="utf-8",
+    )
+    return f"canonical__{strategy_run_id}__{backtest_id}"
+
+
+def test_behavior_episodes_calendar_fallback_clipped_to_window(tmp_path: Path) -> None:
+    """P0.2 — with no daily_summary and no manifest trading_dates, the calendar
+    is clipped to the manifest window.  A raw store extending past the backtest
+    end (high=10000 spike after 2026-07-31) must NOT leak into MFE or the open
+    episode's exit date / valuation."""
+    run_id = _write_canonical_backtest_open_episode(tmp_path, write_daily_summary=False)
+    repo = ResearchCockpitRepository(project_root=tmp_path)
+    extended = _extended_raw_frame(window_end="2026-07-31", past_end="2026-09-30")
+    with patch.object(repo.store, "load_daily", return_value=extended):
+        payload = repo.get_behavior_episodes(run_id)
+    assert payload["summary"]["total_episodes"] == 1
+    ep = payload["episodes"][0]
+    assert ep["exit_reason"] == "open"
+    # Bounded to the window end, never the raw store's last bar.
+    assert ep["exit_date"] == "2026-07-31"
+    assert ep["episode_end_date"] == "2026-07-31"
+    # MFE reflects only in-window highs (max 11.0); the post-window 10000.0
+    # spike would yield ~999 if read.
+    avg_cost = (100 * 10.1 + 0.303) / 100
+    assert ep["MFE"] == pytest.approx(11.0 / avg_cost - 1)
+
+
+def test_behavior_episodes_calendar_fallback_fails_closed_without_window_end(tmp_path: Path) -> None:
+    """P0.2 — when no daily_summary and no manifest window are available, the
+    assembler refuses to fall back to un-clipped raw price dates and raises a
+    diagnostic ValueError (→ 500 at the API layer) instead of reading future
+    prices."""
+    run_id = _write_canonical_backtest_open_episode(tmp_path, end_date=None, write_daily_summary=False)
+    repo = ResearchCockpitRepository(project_root=tmp_path)
+    extended = _extended_raw_frame(window_end="2026-07-31", past_end="2026-09-30")
+    with patch.object(repo.store, "load_daily", return_value=extended):
+        with pytest.raises(ValueError, match="Cannot determine backtest window end"):
+            repo.get_behavior_episodes(run_id)
