@@ -43,6 +43,7 @@ const state = {
     selectedDate: '',
     selectedInstrument: '',
     ordersByDate: new Map(),
+    positionsByDate: new Map(),
   },
   caseData: null,
   featureData: {
@@ -1592,6 +1593,58 @@ function renderBacktestOrdersTable(orders) {
   });
 }
 
+function renderBacktestPositionsTable(positions) {
+  const rows = positions || [];
+  renderDataTable('backtest-positions-table', rows, [
+    {
+      id: 'instrument',
+      key: 'instrument',
+      label: 'Instrument',
+      render: (row) => renderInstrumentLink(row.instrument, toDateLabel(state.backtest.selectedDate)),
+      sortValue: (row) => row.instrument,
+    },
+    {
+      key: 'qty',
+      label: 'Qty',
+      render: (row) => formatNumber(row.qty, 0),
+      sortValue: (row) => toNumber(row.qty),
+    },
+    {
+      key: 'avg_cost',
+      label: 'Avg Cost',
+      render: (row) => formatNumber(row.avg_cost, 3),
+      sortValue: (row) => toNumber(row.avg_cost),
+    },
+    {
+      key: 'last_close',
+      label: 'Last Close',
+      render: (row) => row.last_close != null ? formatNumber(row.last_close, 3) : '-',
+      sortValue: (row) => toNumber(row.last_close),
+    },
+    {
+      key: 'market_value',
+      label: 'Market Value',
+      render: (row) => row.market_value != null ? formatNumber(row.market_value, 0) : '-',
+      sortValue: (row) => toNumber(row.market_value),
+    },
+    {
+      key: 'unrealized_pnl',
+      label: 'Unrealized PnL',
+      render: (row) => row.unrealized_pnl != null ? formatNumber(row.unrealized_pnl, 0) : '-',
+      sortValue: (row) => toNumber(row.unrealized_pnl),
+    },
+    {
+      key: 'realized_pnl',
+      label: 'Realized PnL',
+      render: (row) => formatNumber(row.realized_pnl, 0),
+      sortValue: (row) => toNumber(row.realized_pnl),
+    },
+  ], {
+    tableKey: 'backtest-positions',
+    emptyMessage: 'No positions on this date',
+  });
+}
+
 function renderBacktestContextLinks() {
   const selectedDate = state.backtest.selectedDate;
   const orders = state.backtest.ordersByDate.get(selectedDate) || [];
@@ -1615,24 +1668,33 @@ async function loadBacktestOrders(tradeDate, { force = false } = {}) {
   if (!runId || !tradeDate) return [];
   if (!force && state.backtest.ordersByDate.has(tradeDate)) {
     const orders = state.backtest.ordersByDate.get(tradeDate) || [];
+    const positions = state.backtest.positionsByDate.get(tradeDate) || [];
     renderBacktestContextMeta(orders);
     renderBacktestOrdersTable(orders);
     renderBacktestContributors(orders);
     renderBacktestContextLinks();
+    renderBacktestPositionsTable(positions);
     return orders;
   }
   try {
-    const payload = await getJson(`/api/backtest-runs/${runId}/orders?trade_date=${tradeDate}`);
+    const [payload, positionsPayload] = await Promise.all([
+      getJson(`/api/backtest-runs/${runId}/orders?trade_date=${tradeDate}`),
+      getJson(`/api/backtest-runs/${runId}/positions?trade_date=${tradeDate}`).catch(() => null),
+    ]);
     const items = unwrapItems(payload);
+    const positions = positionsPayload ? unwrapItems(positionsPayload) : [];
     state.backtest.ordersByDate.set(tradeDate, items);
+    state.backtest.positionsByDate.set(tradeDate, positions);
     renderBacktestContextMeta(items);
     renderBacktestOrdersTable(items);
     renderBacktestContributors(items);
     renderBacktestContextLinks();
+    renderBacktestPositionsTable(positions);
     return items;
   } catch (error) {
     byId('backtest-orders-table').innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
     byId('backtest-contributors').innerHTML = '<div class="empty">Contributor list unavailable</div>';
+    byId('backtest-positions-table').innerHTML = '<div class="empty">Positions unavailable</div>';
     return [];
   }
 }
@@ -1689,6 +1751,7 @@ async function loadBacktest() {
     state.backtest.sections = [];
     state.backtest.sectionArtifacts = {};
     state.backtest.ordersByDate = new Map();
+    state.backtest.positionsByDate = new Map();
     renderParameterSummary(summary);
     renderBacktestRunContext();
     renderBacktestSignalMetrics(summary);
@@ -1930,10 +1993,10 @@ async function loadCase() {
       source: 'order',
     }));
     const tradeMarkers = [...backtestTrades.map((item) => ({
-      trade_date: item.date,
-      value: toNumber(item.price),
+      trade_date: item.date || item.trade_date,
+      value: toNumber(item.deal_price ?? item.price),
       side: item.side,
-      quantity: item.amount,
+      quantity: toNumber(item.filled_amount ?? item.amount ?? item.filled_qty),
       source: 'fill',
     })), ...replayOrderMarkers];
 
