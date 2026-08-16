@@ -237,7 +237,7 @@ def score_delta_check(l4_run: dict, run_dir: Path) -> None:
     print(f"\n  all: swap20 mean={_pct(_mean(all_sw20))} median={_pct(_median(all_sw20))} pos={_pct(_pos(all_sw20))} | "
           f"swap60 mean={_pct(_mean(all_sw60))} median={_pct(_median(all_sw60))} pos={_pct(_pos(all_sw60))}")
     # Replacement quality: does the new symbol outperform the old over the swap window?
-    print(f"  -> score_delta churn vs expectation deterioration: "
+    print(f"  -> score_delta has not demonstrated expectation-deterioration value: "
           f"swap_edge measures value added by replacement.")
 
 

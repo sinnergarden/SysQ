@@ -17,6 +17,12 @@ pairing is a greedy FIFO over chronologically-sorted fills, which mirrors the
 policy's slot-filling on rebalance days.  If no replacement exists, swap_edge
 is null.
 
+SwapEdge methodology (corrected): old and new forward returns share a common
+start = the replacement's entry date, over the same +20/+60 market-calendar
+horizon.  The exit->entry cash gap is reported separately as
+`replacement_gap_days`.  A forward return is null (never a stale close) when
+the symbol has no valid close on the exact reference or horizon-end date.
+
 Run from the MAIN repo cwd (qsys + data resolve there).
 """
 from __future__ import annotations
@@ -69,7 +75,13 @@ def forward_return(
     ref_date: str,
     horizon: int,
 ) -> float | None:
-    """Close-to-close return over `horizon` trading days after ref_date."""
+    """Close-to-close return over `horizon` trading days after ref_date.
+
+    Strict close lookup: the symbol must have a valid close on BOTH the exact
+    reference date and the exact horizon-end date.  If either is missing
+    (suspension / delist), the return is null — a stale prior close is never
+    substituted.
+    """
     if ref_date not in calendar:
         return None
     i = calendar.index(ref_date)
@@ -78,12 +90,7 @@ def forward_return(
         return None
     end_date = calendar[j]
     p0 = prices.get(ref_date)
-    # Last available close at or before end_date (handles suspensions/delists).
-    p1 = None
-    for k in range(j, i, -1):
-        p1 = prices.get(calendar[k])
-        if p1 is not None:
-            break
+    p1 = prices.get(end_date)
     if p0 is None or p1 is None or p0 <= 0:
         return None
     return p1 / p0 - 1.0
@@ -171,15 +178,20 @@ def _build_event(
     def _horizons(px: dict[str, float], ref_date: str) -> tuple[float | None, float | None]:
         return forward_return(px, calendar, ref_date, 20), forward_return(px, calendar, ref_date, 60)
 
-    old20, old60 = _horizons(old_px, exit_date)
+    # Common-start methodology: when a replacement exists, old and new forward
+    # returns are both measured from the replacement's entry date over the same
+    # +20/+60 horizon.  The exit->entry cash gap is reported separately.
+    common_start = entry_date if new_sym is not None else exit_date
+    old20, old60 = _horizons(old_px, common_start)
 
     new20 = new60 = None
     gap_days = None
     new_score = None
     if new_sym is not None:
+        assert common_start == entry_date
         if new_sym not in price_cache:
             price_cache[new_sym] = close_prices(store, new_sym)
-        new20, new60 = _horizons(price_cache[new_sym], entry_date)
+        new20, new60 = _horizons(price_cache[new_sym], common_start)
         if exit_date in calendar and entry_date in calendar:
             gap_days = calendar.index(entry_date) - calendar.index(exit_date)
         # entry score from the episode that started at entry_date

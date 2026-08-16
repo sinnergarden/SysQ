@@ -121,6 +121,10 @@ RUNS = {
         "winner_trailing_stop": NEVER["winner_trailing_stop"],
     },
     "A5_all": ORIG,
+    # E1 (pure score-refresh baseline): all four exit rules disabled, rank_exit
+    # on.  Only exit path is "dropped out of the current top-5 on rebalance";
+    # refill from current top-5, equal-weight entry + hold drift, no reweight.
+    "E1_rank_exit": {**NEVER, "rank_exit": True},
 }
 
 

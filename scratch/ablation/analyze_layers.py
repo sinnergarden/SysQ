@@ -131,9 +131,10 @@ def episode_behavior(eps_env: dict) -> dict:
     cl = _closed(eps)
     rr = [e.get("realized_return") for e in cl]
 
-    # PnL concentration: sum of realized_return as proxy PnL (equal entry weight
-    # makes per-episode return a valid unit-PnL measure).
-    pnl = sorted((e.get("realized_return") or 0.0) for e in cl)
+    # PnL concentration uses the episode's actual currency PnL (`episode_pnl`,
+    # i.e. sell proceeds - buy cashflow - fees), never realized_return summed
+    # as a PnL proxy.
+    pnl = sorted((e.get("episode_pnl") or 0.0) for e in cl)
     total_pnl = sum(pnl)
     n = len(pnl)
 
