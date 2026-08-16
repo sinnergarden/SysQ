@@ -290,3 +290,118 @@ RankIC60 每年 +0.017~+0.121；Top5 60d 超额中位每年 +1.6%~+14.5%；滚�
 
 Code: `scratch/ablation/diag_common.py` + `diag_track1..6.py`（从 MAIN repo cwd 运行）；
 输出 `/tmp/diag_track1..6.json`。P0 修正代码在 `analyze_layers.py` / `analyze_layer4.py`。
+
+---
+
+## 9. Refresh-Cadence + Structural Experiments (stable-alpha skeleton search, 2026-08-17)
+
+Scope: 在 E1（pure score-refresh, rank_exit）骨架上找 stable-alpha production skeleton。
+引擎新增两个结构能力（本 PR #242，分支 `research/backtest-execution-ledger`）：
+**N-trading-day cadence**（`"5d"/"20d"/"60d"`，engine 级）+ **exposure gate**（PIT schedule
+→ 门控日按比例降仓到 `exposure_gate_scale`）。不做 TopN/权重/参数 grid search。
+
+### 9.1 Refresh cadence（E1 blend，weekly / 5d / 20d / 60d）
+
+| metric | weekly | 5d | 20d | **60d** |
+|---|---|---|---|---|
+| Total return | +464% | +246% | +450% | **+580%** |
+| CAGR | 36.4% | 24.9% | 35.8% | **41.1%** |
+| MaxDD | −53.3% | −44.9% | −46.4% | **−38.5%** |
+| Active vs CSI800 | +4.71 | +2.52 | +4.56 | **+5.87** |
+| Turnover / orders | 6.14B / 1321 | 4.89B / 1243 | 2.31B / 471 | **1.39B / 194** |
+
+Yearly (P0.1): 60d **+54.9/−15.8/+149.5/+50.8/+44.3/−4.0**（2021–2026，60d 每项均不差）。
+
+**结论：60d 是"更高收益 + 更低风险 + 更低换手"的三重胜出**，rare。5d 换手是 60d 的 6.4 倍却
+收益只有一半。60d 23 次 rebalance，间隔全部精确 60 交易日（engine 回归测试锁定）。
+
+### 9.2 A. Horizon decomposition（60d cadence，S60 vs S180 vs Blend 50/50）
+
+| metric | S60 (60d label) | **S180 (180d label)** | Blend 50/50 |
+|---|---|---|---|
+| Total return | +718% | **+1103%** | +580% |
+| CAGR | 45.8% | **56.3%** | 41.1% |
+| MaxDD | **−34.8%** | −42.5% | −38.5% |
+| Active vs CSI800 | +7.24 | **+11.10** | +5.87 |
+| Turnover / orders | 1.57B / 211 | 1.48B / 173 | 1.39B / 194 |
+| RankIC@label | +0.060 | **+0.093** | +0.073@60 / +0.088@180 |
+| Top5 fwd excess@label | +0.134 | **+0.394** | +0.091@60 |
+
+Yearly (P0.1): S60 +48.1/+4.6/+155.7/+22.6/+61.3/+4.4 · **S180 +85.2/+5.8/+79.2/+32.1/+104.2/+27.0** ·
+Blend +54.9/−15.8/+149.5/+50.8/+44.3/−4.0（2021–2026）。
+
+- **S180 是 A 组胜者**：每年全正（含 2022 熊市 +5.8%），CAGR 56.3%，RankIC@180 最高 +0.093。
+- **50/50 z-score blend 被两个纯 horizon 同时支配（dominated）**：CAGR 最低且 2022 为负
+  （−15.8%，而 S60/S180 均正）。原因是 z-score 平均改变了 top-5 选择——blend 的 top-5
+  既不是 S60 的也不是 S180 的，2022 选出更差组合。naive 平均稀释是死路。
+- **S180 的收益高度右尾集中：002281.SZ（光模块）2025-09 以 64.36 建仓、2026-06 以 241.75
+  平仓（+275%，持 9 个月），单票贡献 realized +47.7M = 全组合 +110.3M NAV 增益的 43%**。
+  realized 集中度 top1 36% / top5 70%（vs blend top1 20%/top5 67%）。→ S180 的 CAGR 头部
+  脆弱；去掉 002281 后约 +660%（仍 > blend +580%，方向不变但幅度大幅缩水）。
+
+### 9.3 B. Exposure gate（gate_scale=0.5，PIT schedule）
+
+schedule 定义（复用现有 coarse regime，不调 threshold）：
+- **market_risk_bad** = CSI800 trailing 120d ≤ 0 AND breadth_20d ≤ 全样本 median。
+  门控日 399/1351（29.5%），2022/2023/2024 集中。
+- **model_health_bad** = 60d cadence cohorts 的 realized Top5-60d excess trailing 均值 ≤ 0
+  （严格 PIT：cohort 完全兑现后才可用，窗口 12 个、min 4）。门控日 300/1351（22.2%），
+  几乎全在 2022（+2023 初），2024+ 恢复后全关。
+
+**B 组（blend baseline，G0 = E1_refresh_60d）：**
+
+| metric | G0 | G1 market_risk | G2 model_health | G3 either |
+|---|---|---|---|---|
+| Total return | 5.80× | 2.70× | 3.46× | 2.53× |
+| CAGR | 41.1% | 26.5% | 30.8% | 25.4% |
+| MaxDD | −38.5% | **−27.5%** | −37.6% | **−27.5%** |
+| Active | +5.87 | +2.76 | +3.53 | +2.60 |
+
+Yearly (P0.1): G0 +54.9/−15.8/+149.5/+50.8/+44.3/−4.0 · G1 +39.9/−12.0/+74.6/+27.2/+38.8/−2.7 ·
+G2 +52.7/−7.5/+51.1/+50.8/+44.3/−4.0 · G3 +37.9/−7.5/+60.9/+27.2/+38.8/−2.7。
+
+**B 组（S180 baseline，gate 直接复用同一 schedule）：**
+
+| metric | A_S180 | G1_S180 | G2_S180 |
+|---|---|---|---|
+| Total return | 11.03× | 4.04× | 7.37× |
+| CAGR | 56.3% | 33.7% | 46.4% |
+| MaxDD | −42.5% | **−28.1%** | −41.6% |
+| Active | +11.10 | +4.10 | +7.43 |
+
+**结论：三个 gate 在 blend 和 S180 两个 baseline 上都失败（未达目标）。**
+
+- **market-risk gate（G1）**：MaxDD 显著下降（blend −38.5→−27.5，S180 −42.5→−28.1），
+  但**收益损失不成比例**——CAGR 砍 36%（blend）~63%（S180），active alpha 腰斩以上。
+  2023/2024 right-tail 只保留 ~50%（blend 2023 +149.5→+74.6；S180 2023 +79.2→+36.3）。
+  机制：§8 Track 5 已证模型在**所有** regime 都有 edge（四格 60d 超额全正），regime 降仓
+  是纯成本。且 de-risk 日级快、re-lever 只在 rebalance 日（不对称），regime 转好后仍长期
+  半仓，加剧损失。
+- **model-health gate（G2）**：只gate 2022（+2023 初），2024+ 完全不动（yearly 与 baseline
+  逐日相同）。2022 亏损改善（blend −15.8→−7.5），但 **MaxDD 几乎不降**（blend −0.9pp，
+  S180 −0.9pp）——因为最深的回撤在别处：blend 是 2021-07→10（model-health 未够 4 个
+  realized cohort、来不及开）；S180 是 2023-04→2024-02（此时 model-health 已恢复、不 gate）。
+  且 2023 right-tail 被砍（blend +149.5→+51.1，S180 +79.2→+28.9）。
+- **G3（either）** ≈ G1 的表现（market-risk 主导）。
+
+### 9.4 Stable-alpha skeleton 判断
+
+- **胜出骨架 = S180@60d pure rank-refresh**（rank_exit，4 规则全禁用，Top5 等权 entry +
+  hold-drift）。唯一每年全正、CAGR 56.3%、RankIC@180 最高、MaxDD −42.5% 且无杠杆/负现金。
+- **但该骨架两个结构风险**：① right-tail 脆弱——002281 单票 = 43% NAV 增益；② MaxDD
+  −42.5% 主要落在 2023-04→2024-02（180d momentum 在 2024-02 量化/小微盘 crash 中回撤），
+  **regime gate 无法在不破坏 alpha 的前提下降低它**（edge 在所有 regime 存在）。
+- **决策**：**不采用 exposure gate**（G0–G3 全否）。S180 替换 blend 是本次唯一被验证的
+  骨架改进（+580%→+1103%，且 2022 由负转正）。下一步（若继续）：① 验证 S180 的
+  002281 是否可归因于 180d label 的稳定选股（而非单票）；② 用 label-horizon 对齐的
+  持有期（S180 → 180d cadence 而非 60d）是否更稳定；③ 尾部集中度 cap 作为 MaxDD 的
+  替代手段（证据 §8 Q5 较弱，需先明确"削尾部 vs 留右尾"）。
+
+Code: `scratch/ablation/run_ablation.py`（A/B/S180-gate runs）、`build_gate_schedule.py`
+（PIT schedules）、`compare_cadence.py` / `compare_ab.py`（metrics）、
+`qsys/backtest/daily_kernel.py`（N-day cadence）、`posterior_policy.py` +
+`strategy_runner.py` + `scripts/research/backtest_from_signal.py`（exposure gate 引擎）。
+Engine 回归：`tests/backtest/test_rebalance_cadence.py`（3）+ `test_exposure_gate.py`（10），
+全量 `tests/backtest` 96 passed。artifacts: `execution_policy/{A_S60_60d,A_S180_60d,
+G1_market_risk,G2_model_health,G3_either,G1_S180_market_risk,G2_S180_model_health}` +
+`gate_schedules/*.json`。

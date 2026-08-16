@@ -27,6 +27,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]          # SysQ-execution-ledger
 RESEARCH_ROOT = Path("/home/liuming/.openclaw/workspace/SysQ/data/research")
 CLI = REPO / "scripts" / "research" / "backtest_from_signal.py"
+GATE_SCHED = REPO / "data" / "research" / "ablation" / "execution_policy" / "gate_schedules"
 
 SIGNAL_ID = "financial_rc_60d_180d_50_50__daily_zscore"
 SIGNAL_RUN_ID = "blend__007a93600f45de00"
@@ -125,6 +126,91 @@ RUNS = {
     # on.  Only exit path is "dropped out of the current top-5 on rebalance";
     # refill from current top-5, equal-weight entry + hold drift, no reweight.
     "E1_rank_exit": {**NEVER, "rank_exit": True},
+    # Refresh-cadence variants of E1 (pure score refresh, rank_exit).
+    # "<n>d" = refresh every n trading days (engine N-day cadence).
+    "E1_refresh_5d": {**NEVER, "rank_exit": True, "rebalance_freq": "5d"},
+    "E1_refresh_20d": {**NEVER, "rank_exit": True, "rebalance_freq": "20d"},
+    "E1_refresh_60d": {**NEVER, "rank_exit": True, "rebalance_freq": "60d"},
+    # A. Horizon decomposition at the winning cadence (60d): single-horizon
+    # components of the 50/50 blend.  Blend@60d == E1_refresh_60d above.
+    "A_S60_60d": {
+        **NEVER,
+        "rank_exit": True,
+        "rebalance_freq": "60d",
+        "signal_id": "fwd_ret_60d_raw__daily_zscore",
+        "signal_run_id": (
+            "rolling__financial_rc_60d_rolling_5y_to_202607_v3__"
+            "v3a_growth_financial_60d__fwd_ret_60d_raw__daily_zscore__"
+            "2021-01-01_2026-07-31"
+        ),
+    },
+    "A_S180_60d": {
+        **NEVER,
+        "rank_exit": True,
+        "rebalance_freq": "60d",
+        "signal_id": "fwd_ret_180d_raw__daily_zscore",
+        "signal_run_id": (
+            "rolling__financial_rc_180d_rolling_5y_to_202607_v3__"
+            "v3a_growth_financial_180d__fwd_ret_180d_raw__daily_zscore__"
+            "2021-01-01_2026-07-31"
+        ),
+    },
+    # B. Exposure gate at the winning cadence (60d).  G0 == E1_refresh_60d
+    # (no gate); G1/G2/G3 = same skeleton + a precomputed PIT schedule at
+    # gate_scale 0.5 (half exposure on gated days, proportional de-risk).
+    # G* on the S180 signal (A winner) reuse the same date-keyed schedules.
+    "G1_S180_market_risk": {
+        **NEVER,
+        "rank_exit": True,
+        "rebalance_freq": "60d",
+        "signal_id": "fwd_ret_180d_raw__daily_zscore",
+        "signal_run_id": (
+            "rolling__financial_rc_180d_rolling_5y_to_202607_v3__"
+            "v3a_growth_financial_180d__fwd_ret_180d_raw__daily_zscore__"
+            "2021-01-01_2026-07-31"
+        ),
+        "exposure_gate_mode": "market_risk",
+        "exposure_gate_scale": "0.5",
+        "exposure_gate_schedule": str(GATE_SCHED / "g1_market_risk.json"),
+    },
+    "G2_S180_model_health": {
+        **NEVER,
+        "rank_exit": True,
+        "rebalance_freq": "60d",
+        "signal_id": "fwd_ret_180d_raw__daily_zscore",
+        "signal_run_id": (
+            "rolling__financial_rc_180d_rolling_5y_to_202607_v3__"
+            "v3a_growth_financial_180d__fwd_ret_180d_raw__daily_zscore__"
+            "2021-01-01_2026-07-31"
+        ),
+        "exposure_gate_mode": "model_health",
+        "exposure_gate_scale": "0.5",
+        "exposure_gate_schedule": str(GATE_SCHED / "g2_model_health.json"),
+    },
+    "G1_market_risk": {
+        **NEVER,
+        "rank_exit": True,
+        "rebalance_freq": "60d",
+        "exposure_gate_mode": "market_risk",
+        "exposure_gate_scale": "0.5",
+        "exposure_gate_schedule": str(GATE_SCHED / "g1_market_risk.json"),
+    },
+    "G2_model_health": {
+        **NEVER,
+        "rank_exit": True,
+        "rebalance_freq": "60d",
+        "exposure_gate_mode": "model_health",
+        "exposure_gate_scale": "0.5",
+        "exposure_gate_schedule": str(GATE_SCHED / "g2_model_health.json"),
+    },
+    "G3_either": {
+        **NEVER,
+        "rank_exit": True,
+        "rebalance_freq": "60d",
+        "exposure_gate_mode": "either",
+        "exposure_gate_scale": "0.5",
+        "exposure_gate_schedule": str(GATE_SCHED / "g3_either.json"),
+    },
 }
 
 

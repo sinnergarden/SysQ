@@ -33,6 +33,12 @@ class PosteriorPolicyConfig:
     stale_max_return: float = 0.03
     replacement_rank_gap: int = 20
     rank_exit: bool = False
+    # Exposure gate: when active (per the precomputed PIT schedule passed to
+    # run_posterior_policy_day), target weights are scaled to
+    # exposure_gate_scale (e.g. 0.5 = 50% of equity invested).  The schedule
+    # itself is data, not config; the mode string is recorded for provenance.
+    exposure_gate_mode: str = "none"  # none | market_risk | model_health | either
+    exposure_gate_scale: float = 0.5
 
     def validate(self) -> None:
         if self.score_delta_lookback < 1:
@@ -54,6 +60,17 @@ class PosteriorPolicyConfig:
             raise ValueError("stale_after_days must be positive")
         if self.replacement_rank_gap < 1:
             raise ValueError("replacement_rank_gap must be positive")
+        if self.exposure_gate_mode not in {"none", "market_risk", "model_health", "either"}:
+            raise ValueError(
+                f"exposure_gate_mode must be one of "
+                "{none, market_risk, model_health, either}, got "
+                f"{self.exposure_gate_mode!r}"
+            )
+        if not 0.0 < self.exposure_gate_scale <= 1.0:
+            raise ValueError(
+                f"exposure_gate_scale must be within (0, 1], got "
+                f"{self.exposure_gate_scale}"
+            )
 
     def to_manifest(self) -> dict[str, Any]:
         manifest = asdict(self)
@@ -61,6 +78,10 @@ class PosteriorPolicyConfig:
         # excluding the default keeps already-published backtest hashes stable.
         if not self.rank_exit:
             manifest.pop("rank_exit", None)
+        # Same for the exposure gate: "none" is the pre-existing behaviour.
+        if self.exposure_gate_mode == "none":
+            manifest.pop("exposure_gate_mode", None)
+            manifest.pop("exposure_gate_scale", None)
         return manifest
 
 
@@ -197,6 +218,7 @@ def run_posterior_policy_day(
     execution_price_mode: str,
     market_snapshot_fn: Any,
     execution_collector: list[dict[str, Any]] | None = None,
+    exposure_gate_schedule: dict[str, bool] | None = None,
 ) -> tuple[dict[str, Any], pd.DataFrame, list[dict[str, Any]]]:
     """Advance the posterior policy by one execution date."""
     if day_signal.empty and "instrument" not in day_signal.columns:
@@ -313,6 +335,29 @@ def run_posterior_policy_day(
     for instrument in exit_reasons:
         sell_targets[instrument] = 0.0
 
+    # Exposure gate: when the PIT schedule marks this date active, scale the
+    # kept book down to exposure_gate_scale of equity.  We normalise the kept
+    # weights proportionally (preserving each position's drifted relative
+    # size) to an absolute total of scale * len(kept)/top_n — NOT a repeated
+    # "multiply by scale", which would compound down on consecutive gated
+    # days.  With the book already at the gated size the factor is ~1.0.
+    gate_active = bool(
+        exposure_gate_schedule is not None
+        and exposure_gate_schedule.get(trade_date, False)
+    )
+    if gate_active and config.exposure_gate_scale < 1.0:
+        scale = config.exposure_gate_scale
+        kept_weights = {
+            instrument: w for instrument, w in sell_targets.items() if w > 0
+        }
+        total_kept = sum(kept_weights.values())
+        if kept_weights and total_kept > 0:
+            budget = scale * len(kept_weights) / top_n
+            for instrument in kept_weights:
+                sell_targets[instrument] = (
+                    kept_weights[instrument] / total_kept * budget
+                )
+
     sell_orders, _, _, _, _, _ = build_order_intents(
         account, day_signal, sell_targets, exec_prices, trade_date
     )
@@ -363,8 +408,11 @@ def run_posterior_policy_day(
                 entries.append(instrument)
                 if len(entries) >= desired_slots:
                     break
+        entry_weight = (
+            config.exposure_gate_scale / top_n if gate_active else 1.0 / top_n
+        )
         for instrument in entries:
-            buy_targets[instrument] = 1.0 / top_n
+            buy_targets[instrument] = entry_weight
         generated, _, _, _, _, _ = build_order_intents(
             account, day_signal, buy_targets, exec_prices, trade_date
         )

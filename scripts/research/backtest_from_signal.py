@@ -146,7 +146,11 @@ def main() -> None:
     parser.add_argument("--stamp-duty", type=float, default=0.001)
     parser.add_argument("--min-commission", type=float, default=5.0)
     parser.add_argument("--slippage", type=float, default=0.001)
-    parser.add_argument("--rebalance-freq", choices=["daily", "weekly"], default="weekly")
+    parser.add_argument(
+        "--rebalance-freq",
+        default="weekly",
+        help="'weekly' (ISO-week), 'daily', or '<n>d' (refresh every n trading days)",
+    )
     parser.add_argument("--output-dir", type=Path, default=None)
     parser.add_argument("--artifact-mode", choices=["summary", "debug"], default="summary")
     parser.add_argument("--overwrite", action="store_true")
@@ -211,6 +215,22 @@ def main() -> None:
                         help="MaxDD calibrated prob threshold: skip candidates with prob >= this value")
     parser.add_argument("--maxdd-percentile", type=float, default=None,
                         help="MaxDD risk percentile: skip candidates in top-N%% risk (0-1, e.g. 0.80 = top 20%% risk)")
+    parser.add_argument(
+        "--exposure-gate-mode",
+        choices=["none", "market_risk", "model_health", "either"],
+        default="none",
+        help="Exposure gate: on gated dates, scale target weights to "
+             "--exposure-gate-scale of equity.",
+    )
+    parser.add_argument(
+        "--exposure-gate-scale", type=float, default=0.5,
+        help="Target exposure multiplier when the gate is active (0.5 = 50%).",
+    )
+    parser.add_argument(
+        "--exposure-gate-schedule", type=Path, default=None,
+        help="JSON file mapping trade_date (YYYY-MM-DD) -> bool (gate active). "
+             "Precomputed point-in-time schedule; data, not config.",
+    )
     args = parser.parse_args()
 
     if (args.signal_id_2 is None) != (args.signal_run_id_2 is None):
@@ -226,6 +246,13 @@ def main() -> None:
         )
     if (args.blend_output_signal_id or args.blend_output_signal_run_id) and not args.materialize_blend:
         parser.error("blend output identifiers require --materialize-blend")
+
+    exposure_gate_schedule: dict[str, bool] | None = None
+    if args.exposure_gate_schedule is not None:
+        raw = json.loads(args.exposure_gate_schedule.read_text())
+        exposure_gate_schedule = {str(d): bool(v) for d, v in raw.items()}
+        if not exposure_gate_schedule:
+            parser.error("--exposure-gate-schedule must be a non-empty JSON object")
 
     blend_manifest: Path | None = None
     if args.materialize_blend:
@@ -277,6 +304,9 @@ def main() -> None:
         maxdd_signal_run_id=args.maxdd_signal_run_id,
         maxdd_threshold=args.maxdd_threshold,
         maxdd_percentile=args.maxdd_percentile,
+        exposure_gate_mode=args.exposure_gate_mode,
+        exposure_gate_scale=args.exposure_gate_scale,
+        exposure_gate_schedule=exposure_gate_schedule,
     )
     if args.accumulate:
         result = runner.run_accumulate(**kwargs)

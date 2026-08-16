@@ -1060,6 +1060,9 @@ class BacktestRunner:
         stale_max_return: float = 0.03,
         replacement_rank_gap: int = 20,
         rank_exit: bool = False,
+        exposure_gate_mode: str = "none",
+        exposure_gate_scale: float = 0.5,
+        exposure_gate_schedule: dict[str, bool] | None = None,
     ) -> BacktestRunResult:
         """Backtest from a saved SignalRun (no model inference).
 
@@ -1160,6 +1163,8 @@ class BacktestRunner:
                 stale_max_return=stale_max_return,
                 replacement_rank_gap=replacement_rank_gap,
                 rank_exit=rank_exit,
+                exposure_gate_mode=exposure_gate_mode,
+                exposure_gate_scale=exposure_gate_scale,
             )
             posterior_config.validate()
 
@@ -1226,6 +1231,24 @@ class BacktestRunner:
         if posterior_config is not None:
             hash_payload["holding_policy"] = holding_policy
             hash_payload["posterior_policy"] = posterior_config.to_manifest()
+        schedule_digest: str | None = None
+        if exposure_gate_schedule is not None:
+            schedule_digest = hashlib.sha256(
+                json.dumps(
+                    exposure_gate_schedule, sort_keys=True, separators=(",", ":")
+                ).encode("utf-8")
+            ).hexdigest()
+            hash_payload["exposure_gate_schedule_sha256"] = schedule_digest
+            hash_payload["exposure_gate_days"] = sum(
+                1 for active in exposure_gate_schedule.values() if active
+            )
+            if not all(
+                isinstance(d, str) and isinstance(a, bool)
+                for d, a in exposure_gate_schedule.items()
+            ):
+                raise ValueError(
+                    "exposure_gate_schedule must map date (YYYY-MM-DD) -> bool"
+                )
         hash_input = json.dumps(
             hash_payload, sort_keys=True, separators=(",", ":")
         )
@@ -1258,6 +1281,7 @@ class BacktestRunner:
         daily_debug_dir = output_dir / "daily" if artifact_mode == "debug" else None
         self._last_prices = {}
         self._last_trade_date = None
+        self._last_rebalance_date: str | None = None
         self._position_peaks: dict[str, float] = {}
         posterior_state: PosteriorPolicyState | None = None
         posterior_views = None
@@ -1305,7 +1329,9 @@ class BacktestRunner:
                     if trading_index > 0 else None
                 )
                 is_rebalance = not should_skip_weekly_rebalance(
-                    rebalance_freq, trade_date, previous_trade_date
+                    rebalance_freq, trade_date, previous_trade_date,
+                    trading_dates=trading_dates,
+                    last_rebalance_date=self._last_rebalance_date,
                 )
                 day_result, targets, orders = run_posterior_policy_day(
                     account=account,
@@ -1324,7 +1350,12 @@ class BacktestRunner:
                     execution_price_mode=self._execution_price_mode,
                     market_snapshot_fn=fetch_market_snapshot,
                     execution_collector=execution_rows,
+                    exposure_gate_schedule=exposure_gate_schedule,
                 )
+                if is_rebalance:
+                    # Cadence anchor for "<n>d" refresh: the next rebalance
+                    # counts trading days strictly after this date.
+                    self._last_rebalance_date = trade_date
                 self._last_trade_date = trade_date
                 daily_summaries.append(day_result)
                 if daily_debug_dir:
@@ -1348,8 +1379,12 @@ class BacktestRunner:
                 except Exception:
                     pass
 
-            # 1. Weekly rebalance check
-            is_rebalance = not should_skip_weekly_rebalance(rebalance_freq, trade_date, self._last_trade_date)
+            # 1. Rebalance-cadence check (weekly, daily, or "<n>d" trading days)
+            is_rebalance = not should_skip_weekly_rebalance(
+                rebalance_freq, trade_date, self._last_trade_date,
+                trading_dates=trading_dates,
+                last_rebalance_date=self._last_rebalance_date,
+            )
 
             if not is_rebalance:
                 # Weekly skip — compute before, stop-loss, compute after
@@ -1533,6 +1568,7 @@ class BacktestRunner:
             )
             self._last_prices = mtm_prices
             self._last_trade_date = trade_date
+            self._last_rebalance_date = trade_date
 
             # 8. Stop-loss / trailing-stop (after MTM, same mtm_prices)
             sl_result = self._stop_loss_check(account, mtm_prices, stop_loss, trailing_stop,
@@ -1649,6 +1685,18 @@ class BacktestRunner:
         if posterior_config is not None:
             manifest["holding_policy"] = holding_policy
             manifest["posterior_policy"] = posterior_config.to_manifest()
+            manifest["exposure_gate"] = {
+                "mode": posterior_config.exposure_gate_mode,
+                "scale": posterior_config.exposure_gate_scale,
+            }
+            if schedule_digest is not None:
+                manifest["exposure_gate"]["schedule_sha256"] = schedule_digest
+                manifest["exposure_gate"]["gated_days"] = sum(
+                    1 for active in exposure_gate_schedule.values() if active
+                )
+                manifest["exposure_gate"]["total_days"] = len(
+                    exposure_gate_schedule
+                )
             manifest["allocation_method"] = "equal_weight_entry_hold_drift"
             manifest["allocation_params"] = {
                 "top_n": top_n,
