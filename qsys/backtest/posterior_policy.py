@@ -32,6 +32,7 @@ class PosteriorPolicyConfig:
     stale_after_days: int = 20
     stale_max_return: float = 0.03
     replacement_rank_gap: int = 20
+    rank_exit: bool = False
 
     def validate(self) -> None:
         if self.score_delta_lookback < 1:
@@ -55,7 +56,12 @@ class PosteriorPolicyConfig:
             raise ValueError("replacement_rank_gap must be positive")
 
     def to_manifest(self) -> dict[str, Any]:
-        return asdict(self)
+        manifest = asdict(self)
+        # rank_exit=False is the behaviourally identical pre-existing config;
+        # excluding the default keeps already-published backtest hashes stable.
+        if not self.rank_exit:
+            manifest.pop("rank_exit", None)
+        return manifest
 
 
 @dataclass
@@ -295,6 +301,13 @@ def run_posterior_policy_day(
             reserved_replacements.append((held, candidate))
             available.pop(0)
 
+    # Pure score-refresh: on rebalance, a held name that has dropped out of the
+    # current top_n is sold (its slot is refilled from top_candidates below).
+    if config.rank_exit and is_rebalance:
+        for instrument in sorted(account.positions):
+            if instrument not in exit_reasons and instrument not in top_candidates:
+                exit_reasons[instrument] = "rank_exit"
+
     keep = set(account.positions).difference(exit_reasons)
     sell_targets = _current_weight_targets(account, exec_prices, keep)
     for instrument in exit_reasons:
@@ -456,6 +469,7 @@ def _add_policy_audit(
             "score_delta_exit_count": sum(exit_reasons.get(x) == "score_delta" for x in actual_exits),
             "winner_trailing_exit_count": sum(exit_reasons.get(x) == "winner_trailing" for x in actual_exits),
             "stale_replacement_exit_count": sum(exit_reasons.get(x) == "stale_replacement" for x in actual_exits),
+            "rank_exit_exit_count": sum(exit_reasons.get(x) == "rank_exit" for x in actual_exits),
             "score_delta_threshold": delta_threshold,
             "score_delta_observation_count": views.delta_observations.get(trade_date, 0),
         }

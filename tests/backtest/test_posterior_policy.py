@@ -185,6 +185,36 @@ def test_score_delta_p10_exit(tmp_path: Path) -> None:
     assert result.daily_summary[2]["score_delta_exit_count"] == 1
 
 
+def test_rank_exit_sells_dropouts_and_refills_from_top_n(tmp_path: Path) -> None:
+    dates = _dates(2)
+    result = _run(
+        tmp_path,
+        dates,
+        [
+            {"A": 3.0, "B": 2.0, "C": 1.0},
+            {"C": 3.0, "B": 2.0, "A": 1.0},
+        ],
+        top_n=2,
+        rank_exit=True,
+        # Disable all four exit rules so rank_exit is the only exit path.
+        posterior_stop_loss=0.999,
+        score_delta_min_observations=10**9,
+        winner_activation_return=0.9999,
+        winner_trailing_stop=0.999,
+        stale_after_days=10000,
+        replacement_rank_gap=10**6,
+    )
+    assert result.daily_summary[0]["buy_count"] == 2  # A, B equal-weight
+    assert result.daily_summary[1]["sell_count"] == 1  # A dropped out of top2
+    assert result.daily_summary[1]["rank_exit_exit_count"] == 1
+    assert result.daily_summary[1]["hard_stop_exit_count"] == 0
+    assert result.daily_summary[1]["score_delta_exit_count"] == 0
+    assert result.daily_summary[1]["winner_trailing_exit_count"] == 0
+    assert result.daily_summary[1]["stale_replacement_exit_count"] == 0
+    assert result.daily_summary[1]["buy_count"] == 1  # refill with C
+    assert result.daily_summary[1]["position_count"] == 2
+
+
 def test_winner_must_activate_before_trailing_exit(tmp_path: Path) -> None:
     dates = _dates(3)
     prices = {

@@ -1059,6 +1059,7 @@ class BacktestRunner:
         stale_after_days: int = 20,
         stale_max_return: float = 0.03,
         replacement_rank_gap: int = 20,
+        rank_exit: bool = False,
     ) -> BacktestRunResult:
         """Backtest from a saved SignalRun (no model inference).
 
@@ -1158,6 +1159,7 @@ class BacktestRunner:
                 stale_after_days=stale_after_days,
                 stale_max_return=stale_max_return,
                 replacement_rank_gap=replacement_rank_gap,
+                rank_exit=rank_exit,
             )
             posterior_config.validate()
 
@@ -1662,7 +1664,11 @@ class BacktestRunner:
                 "price_decision": "previous_completed_close",
                 "execution": "next_execution_date_open",
                 "entry_allocation": "equal_weight_one_over_top_n",
-                "rank_exit": "disabled",
+                "rank_exit": (
+                    "enabled_sell_dropouts_refill_top_n"
+                    if posterior_config.rank_exit
+                    else "disabled"
+                ),
             }
         write_manifest(output_dir / "manifest.json", manifest)
 

@@ -187,6 +187,13 @@ def main() -> None:
     parser.add_argument("--stale-max-return", type=float, default=0.03)
     parser.add_argument("--replacement-rank-gap", type=int, default=20)
     parser.add_argument(
+        "--rank-exit",
+        action="store_true",
+        help="posterior_confirmed: on rebalance, sell any held name that has "
+             "dropped out of the current top_n (pure score-refresh baseline; "
+             "all four exit rules should be disabled to isolate it).",
+    )
+    parser.add_argument(
         "--materialize-blend",
         action="store_true",
         help=(
@@ -265,6 +272,7 @@ def main() -> None:
         stale_after_days=args.stale_after_days,
         stale_max_return=args.stale_max_return,
         replacement_rank_gap=args.replacement_rank_gap,
+        rank_exit=args.rank_exit,
         maxdd_signal_id=args.maxdd_signal_id,
         maxdd_signal_run_id=args.maxdd_signal_run_id,
         maxdd_threshold=args.maxdd_threshold,
