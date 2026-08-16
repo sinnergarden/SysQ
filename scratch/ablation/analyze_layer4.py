@@ -39,7 +39,9 @@ import pandas as pd
 
 from qsys.data.storage import StockDataStore
 
-SPECIAL_REASONS = {"hard_stop", "score_delta", "winner_trailing", "stale_replacement"}
+SPECIAL_REASONS = {
+    "hard_stop", "score_delta", "winner_trailing", "stale_replacement", "rank_exit"
+}
 ENTRY_REASONS = {"top_n_entry", "stale_replacement_entry"}
 
 
@@ -96,8 +98,27 @@ def forward_return(
     return p1 / p0 - 1.0
 
 
-def build_events(run_dir: Path, episodes_env: dict) -> list[dict]:
-    """Pair special exits with replacement entries via greedy FIFO simulation."""
+def build_events(run_dir: Path, episodes_env: dict) -> dict:
+    """Swap analysis.
+
+    Returns {"events": [per-event FIFO pairings, flagged], "day_baskets": [...],
+             "pairing_ambiguous_days": n, "n_days_with_exits": n}.
+
+    Two views are produced so FIFO pairing is never taken as a precise causal
+    mapping when a day swaps multiple names at once:
+
+      1. events[]   greedy FIFO per-event pairing (exit -> next not-held entry),
+                    each flagged multi_exit_day / multi_entry_day / pairing_ambiguous.
+      2. day_baskets[]  per exit-day, equal-weight baskets of the symbols exited
+                    (old_basket) vs the symbols entered as replacements that day
+                    (new_basket), with old_basket_return_20/60, new_basket_return_20/60
+                    and basket_swap_edge_20/60 from a common start (the entry
+                    day, i.e. same-day refresh means the exit day itself).
+
+    Per P0.2 convention, on multi-swap days the day-level basket outputs are the
+    preferred reading; the FIFO pairing is retained only for backward
+    compatibility and flagged ambiguous.
+    """
     execs = pd.read_csv(run_dir / "executions.csv", dtype={"trade_date": str})
     fills = execs.sort_values(["trade_date", "sequence"]).to_dict("records")
 
@@ -114,6 +135,22 @@ def build_events(run_dir: Path, episodes_env: dict) -> list[dict]:
     positions: dict[str, float] = {}
     pending_exits: list[dict] = []
     events: list[dict] = []
+    day_baskets: list[dict] = []
+
+    # Per-day accumulation for basket view.
+    day_state: dict[str, dict] = {}  # date -> {"exits": {sym: fill}, "entries": {sym: fill}, "consumed": int}
+    current_day: str | None = None
+
+    def _flush_day():
+        nonlocal current_day
+        if current_day is None:
+            return
+        ds = day_state.get(current_day)
+        if ds and ds["exits"]:
+            day_baskets.append(_build_day_basket(
+                current_day, ds, ep_by_exit, store, price_cache, calendar,
+            ))
+        current_day = None
 
     for f in fills:
         side = str(f.get("side") or "")
@@ -123,6 +160,10 @@ def build_events(run_dir: Path, episodes_env: dict) -> list[dict]:
         date = str(f.get("trade_date") or "")
         if not sym or qty <= 0:
             continue
+        if date != current_day:
+            _flush_day()
+            current_day = date
+            day_state[date] = {"exits": {}, "entries": {}, "consumed": 0}
 
         if side == "sell":
             positions[sym] = positions.get(sym, 0.0) - qty
@@ -130,23 +171,96 @@ def build_events(run_dir: Path, episodes_env: dict) -> list[dict]:
                 positions.pop(sym, None)
             if reason in SPECIAL_REASONS:
                 pending_exits.append(f)
+                day_state[date]["exits"][sym] = f
         elif side == "buy" and reason in ENTRY_REASONS:
-            # A genuinely new entry fills the oldest freed slot.
             if pending_exits and sym not in positions:
                 exit_fill = pending_exits.pop(0)
                 event = _build_event(exit_fill, f, ep_by_exit, store, price_cache, calendar)
                 events.append(event)
+                day_state[date]["consumed"] += 1
+                day_state[date]["entries"][sym] = f
             positions[sym] = positions.get(sym, 0.0) + qty
         else:
-            # non-entry buys (e.g. top-ups within holding) still update positions
             positions[sym] = positions.get(sym, 0.0) + qty
+
+    _flush_day()
 
     # Exits with no replacement found (e.g. window end) recorded with null new side.
     for exit_fill in pending_exits:
         events.append(_build_event(exit_fill, None, ep_by_exit, store, price_cache, calendar))
 
     events.sort(key=lambda e: e["exit_date"])
-    return events
+
+    # Ambiguity flags derived from per-day exit/entry counts: FIFO order is not
+    # a real slot map when a day swaps multiple names at once.
+    day_counts = {d: (len(ds["exits"]), len(ds["entries"])) for d, ds in day_state.items()}
+    for e in events:
+        nx, nnew = day_counts.get(e["exit_date"], (1, 1))
+        multi_exit, multi_entry = nx > 1, nnew > 1
+        e["multi_exit_day"] = multi_exit
+        e["multi_entry_day"] = multi_entry
+        e["pairing_ambiguous"] = multi_exit or multi_entry
+
+    n_days = len({b["exit_date"] for b in day_baskets})
+    n_ambig = sum(1 for b in day_baskets if b["pairing_ambiguous"])
+    return {
+        "events": events,
+        "day_baskets": day_baskets,
+        "n_days_with_exits": n_days,
+        "pairing_ambiguous_days": n_ambig,
+    }
+
+
+def _day_multi_flags(day: str, ds: dict) -> tuple[bool, bool]:
+    return (len(ds["exits"]) > 1, len(ds["entries"]) > 1)
+
+
+def _build_day_basket(
+    day: str,
+    ds: dict,
+    ep_by_exit: dict,
+    store: StockDataStore,
+    price_cache: dict,
+    calendar: list[str],
+) -> dict:
+    """Equal-weight day-level basket swap for an exit day."""
+    old_syms = sorted(ds["exits"].keys())
+    new_syms = sorted(ds["entries"].keys())
+    multi_exit, multi_entry = _day_multi_flags(day, ds)
+    common_start = day  # same-day refresh: exits and refill entries share the day
+    if not new_syms:
+        common_start = day  # unfilled: old side measured from exit day
+
+    for s in old_syms + new_syms:
+        if s not in price_cache:
+            price_cache[s] = close_prices(store, s)
+
+    def _basket_ret(syms: list[str], h: int) -> float | None:
+        vals = [forward_return(price_cache[s], calendar, common_start, h) for s in syms]
+        vals = [v for v in vals if v is not None]
+        if not vals:
+            return None
+        return sum(vals) / len(vals)
+
+    old20, old60 = _basket_ret(old_syms, 20), _basket_ret(old_syms, 60)
+    new20, new60 = _basket_ret(new_syms, 20), _basket_ret(new_syms, 60)
+    swap20 = (new20 - old20) if (new20 is not None and old20 is not None) else None
+    swap60 = (new60 - old60) if (new60 is not None and old60 is not None) else None
+    return {
+        "exit_date": day,
+        "old_basket": old_syms,
+        "new_basket": new_syms,
+        "multi_exit_day": multi_exit,
+        "multi_entry_day": multi_entry,
+        "pairing_ambiguous": multi_exit or multi_entry,
+        "unfilled_exits": len(old_syms) - len(new_syms),
+        "old_basket_return_20d": old20,
+        "old_basket_return_60d": old60,
+        "new_basket_return_20d": new20,
+        "new_basket_return_60d": new60,
+        "basket_swap_edge_20d": swap20,
+        "basket_swap_edge_60d": swap60,
+    }
 
 
 def _build_event(
@@ -240,13 +354,23 @@ def main() -> int:
     for name in [s.strip() for s in args.runs.split(",") if s.strip()]:
         run_dir = runs_root / name
         episodes_env = json.loads((ep_root / f"{name}.json").read_text())
-        events = build_events(run_dir, episodes_env)
+        res = build_events(run_dir, episodes_env)
+        events = res["events"]
         by_reason = {}
         for e in events:
             by_reason.setdefault(e["exit_reason"], []).append(e)
-        out[name] = {"n_events": len(events), "by_reason": by_reason}
+        out[name] = {
+            "n_events": len(events),
+            "by_reason": by_reason,
+            "day_baskets": res["day_baskets"],
+            "n_days_with_exits": res["n_days_with_exits"],
+            "pairing_ambiguous_days": res["pairing_ambiguous_days"],
+            "n_ambiguous_events": sum(1 for e in events if e["pairing_ambiguous"]),
+        }
         print(f"[layer4] {name}: {len(events)} special exits "
-              f"({ {k: len(v) for k, v in by_reason.items()} })", flush=True)
+              f"({ {k: len(v) for k, v in by_reason.items()} }), "
+              f"{len(res['day_baskets'])} day baskets, "
+              f"{res['pairing_ambiguous_days']} ambiguous days", flush=True)
 
     Path(args.out).write_text(json.dumps(out, indent=1, ensure_ascii=False))
     print(f"-> {args.out}", flush=True)

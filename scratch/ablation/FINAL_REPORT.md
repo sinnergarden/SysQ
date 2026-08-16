@@ -25,7 +25,7 @@ Baseline A0 = hold day-1 top-5 forever (no exits). A5 = full 4-rule posterior (c
 | Median episode ret | — | −10.4% | +1.1% | +17.5% | −7.9% | −0.8% |
 | **Realized PnL** | — | **−4.2M** | +13.5M | **+20.0M** | **−4.0M** | +24.2M |
 
-Yearly return: A0 +44/−28/−19/+49/+3/−22 · A1 +31/−31/+16/+56/+68/−9 · A2 −27/−17/+41/+47/+57/+15 · A3 +52/−16/+3/+16/+62/−19 · A4 −7/+17/+28/+42/+85/−17 · A5 −17/−5/+45/+53/+77/+12 (2021–2026).
+Yearly return (P0.1 convention, 2021 = ye/initial_capital − 1, 2022+ = ye/prev-ye − 1): A0 +46.2/−29.2/−17.2/+48.0/−2.5/−19.9 · A1 +32.6/−33.6/+19.7/+52.5/+73.6/−6.9 · A2 −26.2/−21.4/+45.3/+45.7/+52.4/+17.2 · A3 +54.1/−17.1/+4.3/+15.6/+57.7/−18.5 · A4 −6.3/+10.8/+32.7/+37.2/+86.4/−18.4 · A5 −16.2/−10.8/+49.0/+52.6/+72.4/+14.3 (2021–2026).
 
 ## 2. Rule-Effect Table (A1–A4 vs A0)
 
@@ -101,7 +101,7 @@ tuning. backtest_id `bt_2021-01-04_2026-07-31_f08dc9cf` (A5 = `3d695c20`).
 | Top5 share of POSITIVE PnL | 20.5% | — | 23.2% |
 | 41d+ winners (n / median ret) | 18 / +7.3% | 18 / +4.6% | 23 / +11.5% |
 
-Yearly return: E1 −5/−16/+136/+57/+88/+6 · RW −13/−11/+182/+61/+82/−2 · A5 −17/−5/+45/+53/+77/+12 (2021–2026).
+Yearly return (P0.1 convention): E1 −3.7/−20.9/+143.5/+55.6/+81.4/+7.7 · RW −12.3/−16.2/+189.1/+59.8/+75.9/−0.5 · A5 −16.2/−10.8/+49.0/+52.6/+72.4/+14.3 (2021–2026).
 
 *\*rank_weight_top5 is NOT a strategy-level benchmark:* it uses
 `allocation_method=rank_weight` on template `rank_weight_top5_financial_rc_50_50`
@@ -120,9 +120,9 @@ unaffected.
   equal-weight entry + hold-drift skeleton / weekly rebalance; **only the exit
   policy differs** (E1: rank_exit with all rules disabled; A5: 4 rules).
 - **The ~229pp magnitude is 2023-dominated and fragile.** Year gaps E1−A5 =
-  +12/−11/**+91**/+4/+11/−6pp (2021–2026). Zeroing 2023 in both arms collapses
-  the gap to ~8–10pp. **Direction (pure refresh > 4-rule policy) is robust; the
-  magnitude is not a stable structural finding.**
+  +12.5/−10.1/**+94.5**/+3.0/+9.0/−6.6pp (2021–2026, P0.1 convention). Zeroing
+  2023 in both arms collapses the gap to ~7pp (≈ 0). **Direction (pure refresh >
+  4-rule policy) is robust; the magnitude is not a stable structural finding.**
 - **Not exposure / not leverage:** exposure-adjusted A5 (+270%) is still ~194pp
   below E1; A4 has the HIGHEST exposure (99.7%) but only +188% → "high exposure
   wins" is refuted; the differentiator is **refresh frequency / turnover**
@@ -184,3 +184,109 @@ Robust, directional: **refresh into the current top-5 beats holding the day-1 po
 - **E3 (rule-on-common-skeleton):** Hold E1's refresh rate constant and overlay each exit rule (hard_stop / score_delta / stale) on top of rank-refresh. Answers "given identical refresh, does the exit rule matter at all?" — replaces the unidentifiable A1–A4 "vs A0" comparisons; E1 supplies the control. Also the natural place to test whether the 2023-dominated gap persists once refresh rate is matched.
 
 Artifacts: run dirs `SysQ-execution-ledger/data/research/ablation/execution_policy/{A0_none..A5_all,E1_rank_exit}` (metrics.json, daily_summary.csv, executions.csv, predictions), run_spec.json, run_manifest.json, /tmp/ablation_analysis.json, /tmp/ablation_layer4.json, /tmp/ablation_episodes/*.json, /tmp/e1_comparison.json, and the rank_weight_top5 canonical backtest under `SysQ/data/research/backtests/rank_weight_top5_*`. E1/A5 backtest_ids: `f08dc9cf` / `3d695c20`.
+
+---
+
+## 8. E1 Alpha-Stability Diagnostics (frozen baseline, 2026-08-17)
+
+Scope: **本轮只做 diagnostic，不实现 gate。** E1 = pure score refresh（`rank_exit`）
+冻结，不修改策略/参数/模型/feature/label；不研究 Top10/20；不做阈值 grid search；
+不继续 E2/E3；不再优化 hard_stop。研究目标已从 execution-rule optimization 转为：
+**E1 的收益是否存在稳定 alpha，以及什么情况下模型没有 edge、应该降低仓位。**
+
+### 8.1 P0 修正（两个分析口径）
+
+- **P0.1 yearly 口径**：2021 = 年末NAV/初始资金−1；2022+ = 年末/上年末−1（不是
+  年内首日锚）。修正后 E1 −3.7/−20.9/+143.5/+55.6/+81.4/+7.7；A5
+  −16.2/−10.8/+49.0/+52.6/+72.4/+14.3；RW −12.3/−16.2/+189.1/+59.8/+75.9/−0.5；
+  A0–A4 见 §1。旧口径把 2022 熊市损失低估约 5pp（E1 −16→−20.9；A5 −5→−10.8）。
+- **P0.2 Layer4 multi-swap**：同日多 exit/entry 不再做任意 FIFO 配对当作精确因果，
+  改按 day-level 等权 basket 输出 `old_basket_return_20/60`、`new_basket_return_20/60`、
+  `basket_swap_edge_20/60`，并加 `multi_exit_day` / `multi_entry_day` / `pairing_ambiguous`
+  标志。E1 的 day-basket 换仓 edge：20d 中位 **+0.35%**（pos 51.7%）、60d 中位
+  **+0.42%**（pos 51.0%）——按日换仓的增量价值边际，与 §4 结论一致（refresh 价值在
+  slot 周转，不在单笔换仓的定向因果）。
+
+### 8.2 六条 track 汇总
+
+| # | track | 核心发现 |
+|---|---|---|
+| 1 | Alpha/Beta 归因 (vs CSI800/300/universe-EW) | 2022 亏损≈beta（residual +7.6% 正 alpha）；2021 相对机会集大幅 miss（universe EW +21.4%，residual −24.5%）；2023–25 大额正 residual（+166/+35/+42%） |
+| 2 | Active-return 稳定性 | 60/120/250d 滚动超额为正占比 73/84/85%；中位 +7.5/+19.8/+49.7%；但有 401d 连续 active DD、最长连续跑输 72–112 个窗口 |
+| 3 | Signal Edge by Year (275 weekly snapshots) | RankIC60 每年正（+0.017/+0.077/+0.121/+0.069/+0.058）；Top5 60d 超额每年正（+1.6/+5.8/+4.7/+3.4/+14.5%）；20d edge 弱/2021 负 |
+| 4 | Model Confidence | 反直觉：低信心→更高 60d 超额（top5_min LOW +9.8%/pos90% vs HIGH +2.9%/pos62%）；"低信心=无edge"方向性拒绝 |
+| 5 | Market Regime 2×2 | edge 与 regime 无关（四格超额全正 +5.5~+8.9%）；风险与 regime 有关（down+bad-breadth 60d MaxDD −18.2% 最差） |
+| 6 | Audit 2023 | 少数赢家驱动：Top1=61% PnL、Top5=100% 净利润、胜率 53%；2023 全年 +143.5% 中 2 月单月 +127.8% |
+
+### 8.3 五个问题的回答
+
+**Q1 — E1 跨年是否存在稳定 alpha？**
+**是，但结构是"温和稳定的信号层"而非"每年复现的巨额收益"。** 信号层面 edge 每年为正：
+RankIC60 每年 +0.017~+0.121；Top5 60d 超额中位每年 +1.6%~+14.5%；滚动 60/120/250d
+超额为正占比 73/84/85%。但三个限定：① edge 只在 **label-horizon（60/180d）** 出现，
+20d 层面弱（2021 中位 −2.1%）——是模型 horizon 的反映，不是任意周期的 alpha；②
+头部年份的巨额收益来自极少数股票（2023 Top5=100% PnL），不是每年重复的宽基 alpha；
+③ 相对指数 CSI800 的正 alpha ≠ 相对机会集的 alpha——2021 相对"评分宇宙等权"残差
+−24.5%（那一年评分宇宙小盘普涨，E1 只拿 Top5 错过宽度）。稳定性评级：**方向稳定、
+幅度分布广**（q10 为负、有 401d 连续 active DD）。
+
+**Q2 — 2021/22 亏损是 beta 拖累还是 alpha 也失效？**
+**2022 纯 beta；2021 双因素（beta 小拖累 + 相对机会集真实 miss）。** 2022：CSI800
+−21.3%、E1 −20.9%，残差 **+7.6%**（正 alpha）——亏损 ≈ 市场下跌，选股仍贡献正残差。
+2021：市场 −0.8%、E1 −3.7%，残差 vs 指数仅 −2.7%，但 vs 机会集残差 **−24.5%**；
+这一年 20d RankIC 为负、Top5 超额 20d 中位 −2.1%——是唯一一年信号层 edge 真实偏弱。
+
+**Q3 — 2023 超额是宽基还是少数赢家？**
+**少数赢家，决定性。** 2023 共 117 笔退出、净 PnL +10.4M；**Top1（302132.SZ 航空，
+75d +370.5%，2022-11 建仓）贡献 +6.34M = 61%**；Top5 = 100% 净利润；胜率仅 53%
+（62/117）；Top10% 交易 = 125% 净利，其余 90% 交易合计 −25%。NAV 层面全年 +143.5%
+中 **2 月单月 +127.8%**——恰好是那只票的整段行情。行业上航空 n=1 占 61%。与 Track 3
+"2023 RankIC 最高 +0.121"并不矛盾：**信号甄别强，但组合收益由单一右尾主导**。
+警示：2023 的 +143.5% 是一次集中式尾部兑现，不可外推为稳定 alpha。
+
+**Q4 — 什么信息能提前刻画模型 edge？**
+**没有任何现有指标能事前区分"有/无 edge"；能事前度量的是风险环境，不是 alpha。**
+- *分数信心（Track 4）——不能，且方向反直觉。* 低信心组未来 60d 超额反而更高
+  （`top5_min_score` LOW +9.8%/pos90% vs HIGH +2.9%/pos62%；`cross_section_score_std`
+  LOW +15.8%/pos86% vs HIGH +2.0%）。横截面离散度逐年几乎不变（0.873–0.899），
+  "信心"主要是时间/regime 代理，不是模型对自身未来 edge 的校准。"低信心→无 edge→
+  降仓"被**方向性拒绝**（逐年中位数 split：`top5_min_score` 4/4 年反转、
+  `score_std` 3/4 年、`top5_mean` 3/4 年；2021 全部落在 HIGH、无可比 LOW）。
+- *市场 regime（Track 5）——不能预测 edge，能预测风险。* 2×2 四格 60d 超额全正
+  （+5.5%~+8.9%），edge 与 regime 无关；但 down+bad-breadth 格 60d MaxDD **−18.2%**
+  最差、up+good-breadth −12.8% 最好——**风险随 regime 变化**。
+- *组合——* 唯一可用的信息是 **horizon 对齐**：edge 只在 60/180d 出现、20d 没有，
+  支持"持有期应对齐 label horizon"，不支持更快周期的 alpha 假设。
+
+**Q5 — 证据是否足够支撑 exposure-gate 实验？最多两个假设。**
+**足够，但证据方向与初始直觉相反**：足以证明**不该做 edge-timing gate**（Track 4/5
+均未发现任何"无 edge"条件，切仓会砍掉好时期）；足以证明**该做 regime-risk gate**
+（风险随 regime 变化，且 2023 证明实现收益依赖极右尾）。两个假设，**不调参**：
+
+- **H1 — regime risk gate（推荐）**：当 CSI800 trailing 120d ≤ 0 且 20d breadth ≤
+  中位数时，目标仓位按固定比例降档（持有现金/缩减持仓）。依据：该格是 60d MaxDD
+  最差格（−18.2%）而超额仍正（+5.5%）——预期显著降 MaxDD，收益牺牲有限；接受的是
+  "牺牲相对跑赢"而非"绝对收益"（2021/2022 弱市恰落此格）。
+- **H2 — 尾部集中度 cap（可选，证据较弱）**：限制单票/单行业对组合收益的最大贡献
+  （如单票仓位上限或同行业暴露上限）。依据：2023 Top1=61% PnL、组合收益极右尾驱动，
+  限仓削平尾部依赖、降 active DD；但 2023 正是靠这右尾才 +143.5%，故 H2 证据强度
+  低于 H1，实验设计需先明确"保护什么"（削尾部 vs 留右尾）。
+
+两者都不实现 gate 参数；本轮交付到此为止。
+
+### 8.4 口径与可信度备注
+
+- **重叠窗口**：Track 3/4 的 60/180d 前向收益窗口高度重叠，不做 iid p-value 结论；
+  只看中位数/分位/年度一致性。
+- **2022 年 180d Top5 +61.5%**：该 60 日前的右尾是 2022→2023 反弹跨 horizon 的
+  产物，报告时已标注，不作为"熊市仍有 alpha"的证据。
+- **Track 6 归因口径**：按"退出年份"归因 realized PnL，不含年末仍持仓的未实现 PnL；
+  E1 持有中位 6d、换手高，误差可控。NAV 月度归因（2023-02 +127.8%）为权威视角，与
+  episode 归因互相印证。
+- **Track 4 的 bucket 时间聚集**：HIGH 多落在 2021–22、LOW 多落在 2024–25；逐年
+  中位数 split 在 10/12 个可用"年×指标"格子里反转（`top5_min_score` 4/4、`score_std`
+  3/4、`top5_mean` 3/4；2021 全 HIGH 不可比），削弱了纯时间混淆解释，但不消除
+  （60d 重叠→有效 n 小）。
+
+Code: `scratch/ablation/diag_common.py` + `diag_track1..6.py`（从 MAIN repo cwd 运行）；
+输出 `/tmp/diag_track1..6.json`。P0 修正代码在 `analyze_layers.py` / `analyze_layer4.py`。

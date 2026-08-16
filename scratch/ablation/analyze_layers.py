@@ -65,19 +65,32 @@ def portfolio_metrics(run_dir: Path) -> dict:
     exposure = daily["market_value_after"].astype(float) / eq
     avg_exposure = float(exposure.mean())
 
-    # Yearly return / MaxDD by calendar year.
-    daily["year"] = daily["trade_date"].str[:4]
+    # Yearly return by calendar year — P0.1 FIXED convention:
+    #   2021  = NAV(2021-12-31) / initial_capital - 1
+    #   2022+ = NAV(year_end)   / NAV(prev_year_end) - 1
+    # (NOT the old eq_y[-1]/eq_y[0]-1 which compared first vs last trading day.)
+    # Yearly MaxDD is still computed within the calendar year (peak-to-trough).
+    from diag_common import yearly_returns
+
+    nav = pd.Series(
+        daily["total_value_after"].astype(float).to_numpy() / init,
+        index=pd.DatetimeIndex(pd.to_datetime(daily["trade_date"])),
+    )
     yearly = {}
-    for yr, grp in daily.groupby("year"):
-        y = grp.sort_values("trade_date")
-        eq_y = y["total_value_after"].astype(float).to_numpy()
-        year_ret = eq_y[-1] / eq_y[0] - 1.0
+    for yr, v in yearly_returns(nav).items():
+        grp = daily[daily["trade_date"].str[:4] == yr].sort_values("trade_date")
+        eq_y = grp["total_value_after"].astype(float).to_numpy()
         p = eq_y[0]
         ydd = 0.0
-        for v in eq_y[1:]:
-            p = max(p, v)
-            ydd = min(ydd, v / p - 1.0)
-        yearly[yr] = {"return": year_ret, "maxdd": ydd, "n_days": len(eq_y)}
+        for val in eq_y[1:]:
+            p = max(p, val)
+            ydd = min(ydd, val / p - 1.0)
+        yearly[yr] = {
+            "return": v["return"],
+            "maxdd": ydd,
+            "n_days": v["n_days"],
+            "note": v.get("note"),
+        }
 
     turn = float(metrics["turnover_total"])
     fills = int(metrics["filled_count_total"])
