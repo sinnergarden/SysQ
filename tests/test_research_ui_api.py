@@ -183,6 +183,54 @@ class TestResearchUiApi(unittest.TestCase):
         self.assertEqual(response.status_code, 404)
         self.assertIn('Unknown backtest run_id', response.json()['detail'])
 
+    def test_behavior_episodes_endpoint_contract(self):
+        sample = {
+            "episodes": [{"symbol": "600000.SH", "exit_reason": "hard_stop", "realized_return": 0.1}],
+            "summary": {"total_episodes": 1, "closed_episodes": 1, "open_episodes": 0},
+        }
+        with patch.object(ResearchCockpitRepository, 'get_behavior_episodes', return_value=sample) as mocked:
+            response = self.client.get('/api/backtest-runs/some-run/behavior/episodes')
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload['api_version'], 'v1')
+        self.assertEqual(payload['meta']['resource'], 'behavior_episodes')
+        self.assertEqual(payload['run_id'], 'some-run')
+        self.assertEqual(payload['data']['summary']['total_episodes'], 1)
+        self.assertEqual(payload['data']['episodes'][0]['symbol'], '600000.SH')
+        # P0.4 — meta reports the truncation contract.
+        self.assertEqual(payload['meta']['total_episodes'], 1)
+        self.assertEqual(payload['meta']['returned_episodes'], 1)
+        self.assertIs(payload['meta']['truncated'], False)
+        mocked.assert_called_once()
+
+    def test_behavior_episodes_endpoint_meta_truncated_when_limit_slices(self):
+        sample = {
+            "episodes": [{"symbol": "600000.SH", "exit_reason": "hard_stop", "realized_return": 0.1}],
+            "summary": {"total_episodes": 5, "closed_episodes": 5, "open_episodes": 0},
+        }
+        with patch.object(ResearchCockpitRepository, 'get_behavior_episodes', return_value=sample):
+            response = self.client.get('/api/backtest-runs/some-run/behavior/episodes?limit=1')
+        payload = response.json()
+        self.assertEqual(payload['meta']['total_episodes'], 5)
+        self.assertEqual(payload['meta']['returned_episodes'], 1)
+        self.assertIs(payload['meta']['truncated'], True)
+
+    def test_behavior_episodes_endpoint_404_when_run_unknown(self):
+        with patch.object(ResearchCockpitRepository, 'get_behavior_episodes', side_effect=FileNotFoundError('Unknown backtest run_id: canonical__nope__nope')):
+            response = self.client.get('/api/backtest-runs/canonical__nope__nope/behavior/episodes')
+        self.assertEqual(response.status_code, 404)
+        self.assertIn('Unknown backtest run_id', response.json()['detail'])
+
+    def test_behavior_episodes_endpoint_500_when_calendar_fails_closed(self):
+        # P0.2 — a fail-closed calendar resolution (no daily_summary / manifest
+        # window) is surfaced as a diagnostic 500, never a silent fallback to
+        # un-clipped raw price dates.
+        err = ValueError('Cannot determine backtest window end for some-run: ...')
+        with patch.object(ResearchCockpitRepository, 'get_behavior_episodes', side_effect=err):
+            response = self.client.get('/api/backtest-runs/some-run/behavior/episodes')
+        self.assertEqual(response.status_code, 500)
+        self.assertIn('Cannot build episode diagnostics', response.json()['detail'])
+
 
 if __name__ == '__main__':
     unittest.main()
