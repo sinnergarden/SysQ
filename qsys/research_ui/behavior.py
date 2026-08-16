@@ -832,10 +832,12 @@ def summarize_episodes(episodes: list[dict[str, Any]]) -> dict[str, Any]:
         "total_episodes": len(episodes),
         "closed_episodes": len(closed),
         "open_episodes": len(episodes) - len(closed),
-        # Only simple round trips (no partial sell / re-add / never-closed) are
-        # eligible for the excursion-vs-cashflow capture/giveback/recovery
-        # fields.  Every *_count that feeds those aggregates is a subset of this
-        # count, so it makes the aggregate sample denominator explicit.
+        # Only one-buy / one-full-sell simple round trips (exactly one valid
+        # buy fill, exactly one full-close sell) are eligible for the
+        # excursion-vs-cashflow capture/giveback/recovery fields.  A second buy
+        # (any re-add / average-down) or a partial sell disqualifies.  Every
+        # *_count that feeds those aggregates is a subset of this count, so it
+        # makes the aggregate sample denominator explicit.
         "capture_eligible_count": sum(1 for e in episodes if e.get("capture_eligible")),
         "return_count": len(returns),
         "win_rate": _fraction(sum(1 for r in returns if r > 0), len(returns)),

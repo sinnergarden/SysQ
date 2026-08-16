@@ -1774,14 +1774,26 @@ function renderEpisodeSummaryRow(summary) {
   renderMetricCard('episode-avg-holding', summary.avg_holding_days != null ? formatNumber(summary.avg_holding_days, 1) : '-', 'episode-avg-holding-note', 'trading days');
 }
 
+// The MFE → Realized Capture scatter plots MFE vs realized_return and draws a
+// 100% capture (y=x) reference.  That comparison is only valid on
+// capture-eligible episodes — one-buy / one-full-sell simple round trips where
+// the cashflow return and the avg_cost excursion are directly comparable.
+// Complex episodes (any partial sell, any re-add, or an open position) must
+// never appear, so the filter is a pure predicate that the node unit test can
+// lock down.
+function isCaptureScatterEligible(item) {
+  return item.exit_reason !== 'open'
+    && item.capture_eligible === true
+    && item.MFE != null
+    && item.realized_return != null;
+}
+
 function renderEpisodeCaptureScatter(episodes) {
-  const closed = (episodes || []).filter((item) => item.exit_reason !== 'open');
-  const points = closed.filter((item) => item.MFE != null && (item.realized_return != null || item.unrealized_return != null));
+  const points = (episodes || []).filter(isCaptureScatterEligible);
   if (!points.length) {
-    renderChartError('backtest-episode-capture-scatter', 'No closed episodes with excursion data');
+    renderChartError('backtest-episode-capture-scatter', 'No capture-eligible closed episodes with excursion data');
     return;
   }
-  const finalReturn = (item) => Number(item.realized_return != null ? item.realized_return : item.unrealized_return);
   const palette = ['#4e79a7', '#f28e2b', '#e15759', '#76b7b2', '#59a14f', '#edc948', '#b07aa1', '#ff9da7', '#9c755f', '#bab0ac'];
   const reasons = [...new Set(points.map((p) => p.exit_reason || 'open'))];
   const color = (reason) => palette[reasons.indexOf(reason) % palette.length];
@@ -1800,7 +1812,7 @@ function renderEpisodeCaptureScatter(episodes) {
       mode: 'markers',
       name: reason,
       x: pts.map((p) => Number(p.MFE) * 100),
-      y: pts.map((p) => finalReturn(p) * 100),
+      y: pts.map((p) => Number(p.realized_return) * 100),
       customdata: pts.map((p) => [p.symbol, p.entry_date || '', p.exit_reason || 'open']),
       marker: { size: 8, color: color(reason), line: { color: 'rgba(31,41,51,0.35)', width: 0.5 }, opacity: 0.85 },
       hovertemplate: '%{customdata[0]}<br>MFE %{x:.1f}%<br>Final %{y:.1f}%<br>Reason %{customdata[2]}<extra></extra>',
@@ -1827,8 +1839,8 @@ function renderEpisodeCaptureScatter(episodes) {
 
 function renderEpisodeCaptureRatioDist(summary) {
   const buckets = summary.capture_ratio_distribution || [];
-  // Make the capture/giveback sample denominator explicit: only simple round
-  // trips (no partial sell / re-add) are eligible for the excursion-vs-cashflow
+  // Make the capture/giveback sample denominator explicit: only one-buy /
+  // one-full-sell simple round trips are eligible for the excursion-vs-cashflow
   // comparison, so these buckets are computed over `capture_eligible_count`.
   const eligible = summary.capture_eligible_count;
   const total = summary.total_episodes;

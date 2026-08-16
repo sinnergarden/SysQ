@@ -17,6 +17,12 @@ if (!m) {
 }
 const isEpisodeResponseStale = new Function(`${m[0]}; return isEpisodeResponseStale;`)();
 
+const sm = src.match(/function isCaptureScatterEligible\(item\) \{[^}]*\}/);
+if (!sm) {
+  throw new Error('isCaptureScatterEligible not found in app.js (Capture Scatter eligibility filter missing?)');
+}
+const isCaptureScatterEligible = new Function(`${sm[0]}; return isCaptureScatterEligible;`)();
+
 let passed = 0;
 const failures = [];
 function check(name, actual, expected) {
@@ -43,6 +49,19 @@ check('superseded request + switched run is stale', isEpisodeResponseStale({ seq
 
 // Same token, same run, different requestedRunId string — still fresh (no false positive on equality).
 check('run string equality is not confused', isEpisodeResponseStale({ seq: 1, requestedRunId: 'R1', requestSeq: 1, activeRunId: 'R1' }), false);
+
+// Capture Scatter eligibility — a complex episode (capture_eligible=false) must
+// NEVER enter the MFE→Realized-Capture scatter, even though it is closed and
+// has both MFE and realized_return.  The predicate must require all four gates:
+// closed, capture_eligible===true, MFE present, realized_return present.
+const baseEligible = { exit_reason: 'winner_trailing', capture_eligible: true, MFE: 0.2, realized_return: 0.1 };
+check('simple round trip enters scatter', isCaptureScatterEligible(baseEligible), true);
+check('capture_eligible=false excluded (complex episode)', isCaptureScatterEligible({ ...baseEligible, capture_eligible: false }), false);
+check('capture_eligible missing excluded', isCaptureScatterEligible({ ...baseEligible, capture_eligible: undefined }), false);
+check('open episode excluded', isCaptureScatterEligible({ ...baseEligible, exit_reason: 'open' }), false);
+check('missing MFE excluded', isCaptureScatterEligible({ ...baseEligible, MFE: null }), false);
+check('missing realized_return excluded', isCaptureScatterEligible({ ...baseEligible, realized_return: null }), false);
+check('unrealized-only excluded (no realized_return)', isCaptureScatterEligible({ ...baseEligible, realized_return: null, unrealized_return: 0.05 }), false);
 
 // Fix #4 — truncated-detail visibility: the response meta must be captured
 // (so the UI can tell the detail rows were truncated) and the render path must
