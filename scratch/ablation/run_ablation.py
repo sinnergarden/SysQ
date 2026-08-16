@@ -31,6 +31,12 @@ GATE_SCHED = REPO / "data" / "research" / "ablation" / "execution_policy" / "gat
 
 SIGNAL_ID = "financial_rc_60d_180d_50_50__daily_zscore"
 SIGNAL_RUN_ID = "blend__007a93600f45de00"
+S180_SIGNAL_ID = "fwd_ret_180d_raw__daily_zscore"
+S180_SIGNAL_RUN_ID = (
+    "rolling__financial_rc_180d_rolling_5y_to_202607_v3__"
+    "v3a_growth_financial_180d__fwd_ret_180d_raw__daily_zscore__"
+    "2021-01-01_2026-07-31"
+)
 START = "2021-01-04"
 END = "2026-07-31"
 
@@ -67,6 +73,15 @@ NEVER = {
     "stale_after_days": "10000",
     "replacement_rank_gap": "1000000",
 }
+
+def _s180_base(**extra):
+    """S180-signal E1 skeleton (pure score refresh, dead exit rules)."""
+    return {
+        **NEVER, "rank_exit": True,
+        "signal_id": S180_SIGNAL_ID, "signal_run_id": S180_SIGNAL_RUN_ID,
+        **extra,
+    }
+
 
 # Original run2 values (A5 reproduce).
 ORIG = {
@@ -144,48 +159,25 @@ RUNS = {
             "2021-01-01_2026-07-31"
         ),
     },
-    "A_S180_60d": {
-        **NEVER,
-        "rank_exit": True,
-        "rebalance_freq": "60d",
-        "signal_id": "fwd_ret_180d_raw__daily_zscore",
-        "signal_run_id": (
-            "rolling__financial_rc_180d_rolling_5y_to_202607_v3__"
-            "v3a_growth_financial_180d__fwd_ret_180d_raw__daily_zscore__"
-            "2021-01-01_2026-07-31"
-        ),
-    },
+    "A_S180_60d": _s180_base(rebalance_freq="60d"),  # 60d cadence, offset 0
     # B. Exposure gate at the winning cadence (60d).  G0 == E1_refresh_60d
     # (no gate); G1/G2/G3 = same skeleton + a precomputed PIT schedule at
     # gate_scale 0.5 (half exposure on gated days, proportional de-risk).
-    # G* on the S180 signal (A winner) reuse the same date-keyed schedules.
+    # G* on the S180 signal (A winner) reuse the same market-risk schedule
+    # (signal-common) but the model-health schedule is S180-specific
+    # (g2_model_health_s180.json built from the S180 run's own cohorts at the
+    # 180d label horizon — the blend-derived G2 is NOT a valid S180 readout).
     "G1_S180_market_risk": {
-        **NEVER,
-        "rank_exit": True,
-        "rebalance_freq": "60d",
-        "signal_id": "fwd_ret_180d_raw__daily_zscore",
-        "signal_run_id": (
-            "rolling__financial_rc_180d_rolling_5y_to_202607_v3__"
-            "v3a_growth_financial_180d__fwd_ret_180d_raw__daily_zscore__"
-            "2021-01-01_2026-07-31"
-        ),
+        **_s180_base(rebalance_freq="60d"),
         "exposure_gate_mode": "market_risk",
         "exposure_gate_scale": "0.5",
         "exposure_gate_schedule": str(GATE_SCHED / "g1_market_risk.json"),
     },
     "G2_S180_model_health": {
-        **NEVER,
-        "rank_exit": True,
-        "rebalance_freq": "60d",
-        "signal_id": "fwd_ret_180d_raw__daily_zscore",
-        "signal_run_id": (
-            "rolling__financial_rc_180d_rolling_5y_to_202607_v3__"
-            "v3a_growth_financial_180d__fwd_ret_180d_raw__daily_zscore__"
-            "2021-01-01_2026-07-31"
-        ),
+        **_s180_base(rebalance_freq="60d"),
         "exposure_gate_mode": "model_health",
         "exposure_gate_scale": "0.5",
-        "exposure_gate_schedule": str(GATE_SCHED / "g2_model_health.json"),
+        "exposure_gate_schedule": str(GATE_SCHED / "g2_model_health_s180.json"),
     },
     "G1_market_risk": {
         **NEVER,
@@ -211,6 +203,18 @@ RUNS = {
         "exposure_gate_scale": "0.5",
         "exposure_gate_schedule": str(GATE_SCHED / "g3_either.json"),
     },
+    # C. S180 cadence robustness (Experiment A): sweep cadence + phase offset
+    # on the winning S180 signal.  60d offset 0 == A_S180_60d above.
+    "S180_20d": _s180_base(rebalance_freq="20d"),
+    "S180_60d_off20": _s180_base(rebalance_freq="60d", rebalance_offset=20),
+    "S180_60d_off40": _s180_base(rebalance_freq="60d", rebalance_offset=40),
+    "S180_180d": _s180_base(rebalance_freq="180d"),
+    # D. S180 rank-hysteresis (Experiment B): weekly evaluation, entry from
+    # current Top5, keep while rank <= 10, exit when rank > 10, refill to
+    # exactly 5 holdings, hold drift.  All four exit rules stay disabled.
+    "S180_band_weekly": _s180_base(
+        rebalance_freq="weekly", rank_exit_hold_top=10,
+    ),
 }
 
 

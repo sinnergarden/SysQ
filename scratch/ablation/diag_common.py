@@ -83,11 +83,21 @@ def load_benchmark(index_code: str = "000906.SH", window: bool = True) -> pd.Ser
 
 
 def load_rebalance_dates(run_dir: Path) -> list[pd.Timestamp]:
-    """Weekly refresh dates from daily_summary (policy_entry_count > 0)."""
+    """Actual rebalance dates from daily_summary.
+
+    Keys on the execution-level ``is_rebalance`` flag (a rebalance actually
+    ran), NOT ``policy_entry_count > 0``: a scheduled rebalance day may
+    legitimately trade nothing (all top_n already held, or gated to zero
+    entries), and would be silently dropped by the entry-count proxy.  Older
+    artifacts without the flag fall back to ``policy_entry_count > 0``.
+    """
     daily = pd.read_csv(run_dir / "daily_summary.csv")
     daily["trade_date"] = pd.to_datetime(daily["trade_date"])
-    reb = daily.loc[daily["policy_entry_count"] > 0, "trade_date"].tolist()
-    return [pd.Timestamp(d) for d in reb]
+    if "is_rebalance" in daily.columns:
+        reb = daily.loc[daily["is_rebalance"].fillna(False) > 0, "trade_date"]
+    else:
+        reb = daily.loc[daily["policy_entry_count"] > 0, "trade_date"]
+    return [pd.Timestamp(d) for d in reb.tolist()]
 
 
 def load_trading_dates(run_dir: Path) -> list[pd.Timestamp]:

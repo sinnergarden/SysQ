@@ -17,6 +17,8 @@ def should_skip_weekly_rebalance(
     last_trade_date: str | None,
     trading_dates: list[str] | None = None,
     last_rebalance_date: str | None = None,
+    *,
+    offset: int = 0,
 ) -> bool:
     """Decide whether *trade_date* should skip execution under a rebalance cadence.
 
@@ -32,8 +34,15 @@ def should_skip_weekly_rebalance(
       ``n <= 1`` behaves as daily (never skip).
     - anything else: never skip (daily / legacy passthrough).
 
+    ``offset`` phase-shifts the cadence grid in trading days: the first
+    rebalance happens on the ``offset``-th trading day (0-indexed) of the
+    window, then every *n* trading days after that anchor.  ``offset=0`` is
+    the historical behaviour (first day always rebalances).  ``offset=20``
+    with ``n=60`` puts rebalances on trading days 20, 80, 140, ... — a
+    different phase of the same 60-day grid, for phase-robustness studies.
+
     Returns ``False`` if *last_trade_date* / *last_rebalance_date* is ``None``
-    (first day always trades).
+    (first day always trades) and *offset* is 0.
 
     Parameters
     ----------
@@ -50,6 +59,9 @@ def should_skip_weekly_rebalance(
     last_rebalance_date:
         The most recent date on which a rebalance actually executed
         (``YYYY-MM-DD``).  ``None`` on the very first day of the backtest.
+    offset:
+        Trading-day phase offset of the cadence grid (default 0 = first day
+        rebalances, matching pre-offset behaviour).
 
     Returns
     -------
@@ -65,12 +77,20 @@ def should_skip_weekly_rebalance(
         n = int(rebalance_freq[:-1])
         if n <= 1:
             return False  # every-trading-day refresh
-        if last_rebalance_date is None:
-            return False  # first day always rebalances
+        if offset < 0:
+            raise ValueError(f"rebalance offset must be >= 0, got {offset}")
         if trading_dates is None:
             raise ValueError(
                 f"N-day rebalance '{rebalance_freq}' requires trading_dates"
             )
+        if trade_date not in trading_dates:
+            return False  # date outside the window — be safe and rebalance
+        trade_idx = trading_dates.index(trade_date)
+        if trade_idx < offset:
+            return True  # before the phase-shifted first rebalance
+        if last_rebalance_date is None:
+            # First rebalance sits on the offset-th trading day.
+            return trade_idx > offset
         try:
             idx = trading_dates.index(last_rebalance_date)
         except ValueError:

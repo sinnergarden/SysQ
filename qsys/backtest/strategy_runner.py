@@ -499,6 +499,8 @@ class BacktestRunner:
 
     def _empty_day(
         self, trade_date: str, data_date: str, account: Account, reason: str,
+        *,
+        rebalance_due: bool = False, is_rebalance: bool = False,
     ) -> dict[str, Any]:
         """Record a non-trading day.
 
@@ -535,6 +537,8 @@ class BacktestRunner:
             "turnover": 0.0,
             "position_count": len(account.positions),
             "status": status_reason,
+            "rebalance_due": rebalance_due,
+            "is_rebalance": is_rebalance,
         }
 
     def _return_not_implemented(
@@ -575,6 +579,7 @@ class BacktestRunner:
         min_commission: float = 5.0,
         slippage: float = 0.001,
         rebalance_freq: str = "weekly",
+        rebalance_offset: int = 0,
         strategy_template_id: str = "rank_weight_top20",
         output_dir: Path | None = None,
         artifact_mode: str = "summary",
@@ -1037,6 +1042,7 @@ class BacktestRunner:
         min_commission: float = 5.0,
         slippage: float = 0.001,
         rebalance_freq: str = "weekly",
+        rebalance_offset: int = 0,
         strategy_template_id: str = "rank_weight_top20",
         output_dir: Path | None = None,
         artifact_mode: str = "summary",
@@ -1060,6 +1066,7 @@ class BacktestRunner:
         stale_max_return: float = 0.03,
         replacement_rank_gap: int = 20,
         rank_exit: bool = False,
+        rank_exit_hold_top: int | None = None,
         exposure_gate_mode: str = "none",
         exposure_gate_scale: float = 0.5,
         exposure_gate_schedule: dict[str, bool] | None = None,
@@ -1163,6 +1170,7 @@ class BacktestRunner:
                 stale_max_return=stale_max_return,
                 replacement_rank_gap=replacement_rank_gap,
                 rank_exit=rank_exit,
+                rank_exit_hold_top=rank_exit_hold_top,
                 exposure_gate_mode=exposure_gate_mode,
                 exposure_gate_scale=exposure_gate_scale,
             )
@@ -1228,6 +1236,12 @@ class BacktestRunner:
             "primary_signal": primary_identity,
             "secondary_signal": secondary_identity,
         }
+        if rebalance_offset:
+            # Default (offset=0) is the pre-offset behaviour; only non-zero
+            # offsets change the identity, keeping prior backtest hashes stable.
+            hash_payload["rebalance_offset"] = rebalance_offset
+        if rebalance_offset < 0:
+            raise ValueError("rebalance_offset must be >= 0")
         if posterior_config is not None:
             hash_payload["holding_policy"] = holding_policy
             hash_payload["posterior_policy"] = posterior_config.to_manifest()
@@ -1328,11 +1342,13 @@ class BacktestRunner:
                     trading_dates[trading_index - 1]
                     if trading_index > 0 else None
                 )
-                is_rebalance = not should_skip_weekly_rebalance(
+                rebalance_due = not should_skip_weekly_rebalance(
                     rebalance_freq, trade_date, previous_trade_date,
                     trading_dates=trading_dates,
                     last_rebalance_date=self._last_rebalance_date,
+                    offset=rebalance_offset,
                 )
+                is_rebalance = rebalance_due
                 day_result, targets, orders = run_posterior_policy_day(
                     account=account,
                     state=posterior_state,
@@ -1380,11 +1396,13 @@ class BacktestRunner:
                     pass
 
             # 1. Rebalance-cadence check (weekly, daily, or "<n>d" trading days)
-            is_rebalance = not should_skip_weekly_rebalance(
+            rebalance_due = not should_skip_weekly_rebalance(
                 rebalance_freq, trade_date, self._last_trade_date,
                 trading_dates=trading_dates,
                 last_rebalance_date=self._last_rebalance_date,
+                offset=rebalance_offset,
             )
+            is_rebalance = rebalance_due
 
             if not is_rebalance:
                 # Weekly skip — compute before, stop-loss, compute after
@@ -1421,6 +1439,8 @@ class BacktestRunner:
                     "position_count": len(account.positions),
                     "stop_events": int(sl_result["stop_events"]),
                     "status": "weekly_rebalance_skip",
+                    "rebalance_due": False,
+                    "is_rebalance": False,
                 })
                 continue
 
@@ -1460,6 +1480,8 @@ class BacktestRunner:
                     "position_count": len(account.positions),
                     "stop_events": int(sl_result["stop_events"]),
                     "status": "no_signal_data",
+                    "rebalance_due": True,
+                    "is_rebalance": False,
                 })
                 continue
 
@@ -1536,7 +1558,8 @@ class BacktestRunner:
                 exec_prices, mtm_prices = exec_prices_raw, mtm_prices_raw
             except Exception as exc:
                 daily_summaries.append(self._empty_day(
-                    trade_date, trade_date, account, f"no_market_data: {exc}"
+                    trade_date, trade_date, account, f"no_market_data: {exc}",
+                    rebalance_due=True, is_rebalance=False,
                 ))
                 continue
 
@@ -1584,6 +1607,8 @@ class BacktestRunner:
             day_result["sell_count"] = day_result.get("sell_count", 0) + stop_events
             day_result["filled_count"] = day_result.get("filled_count", 0) + stop_events
             day_result["turnover"] = day_result.get("turnover", 0.0) + sl_result["stop_turnover"]
+            day_result["rebalance_due"] = True
+            day_result["is_rebalance"] = True
             daily_summaries.append(day_result)
 
             # 9. Debug artifacts
@@ -1671,6 +1696,7 @@ class BacktestRunner:
             "min_commission": min_commission,
             "slippage": slippage,
             "rebalance_freq": rebalance_freq,
+            "rebalance_offset": rebalance_offset,
             "data_cutoff_policy": "preopen_previous",
             "artifacts": {
                 "executions": {
@@ -1713,7 +1739,13 @@ class BacktestRunner:
                 "execution": "next_execution_date_open",
                 "entry_allocation": "equal_weight_one_over_top_n",
                 "rank_exit": (
-                    "enabled_sell_dropouts_refill_top_n"
+                    (
+                        "enabled_hold_band_top_"
+                        f"{posterior_config.rank_exit_hold_top}"
+                        "_exit_above_refill_top_n"
+                        if posterior_config.rank_exit_hold_top is not None
+                        else "enabled_sell_dropouts_refill_top_n"
+                    )
                     if posterior_config.rank_exit
                     else "disabled"
                 ),
@@ -1732,6 +1764,8 @@ class BacktestRunner:
         _rt = sum(d.get("rejected_count", 0) for d in daily_summaries)
         _tt = sum(d.get("turnover", 0) for d in daily_summaries)
         _td = len([d for d in daily_summaries if d.get("order_count", 0) > 0])
+        _reb_due = sum(1 for d in daily_summaries if d.get("rebalance_due", False))
+        _reb_done = sum(1 for d in daily_summaries if d.get("is_rebalance", False))
         _m = {
             "initial_capital": initial_capital, "final_value": final_value,
             "total_return": total_return, "trading_day_count": len(trading_dates),
@@ -1739,6 +1773,8 @@ class BacktestRunner:
             "order_count_total": _ot, "filled_count_total": _ft,
             "rejected_count_total": _rt, "avg_order_per_day": round(_ot / max(len(trading_dates), 1), 2),
             "turnover_total": round(_tt, 2), "avg_turnover": round(_tt / max(_td, 1), 2),
+            "rebalance_due_day_count": _reb_due,
+            "rebalance_executed_day_count": _reb_done,
         }
         if posterior_config is not None:
             _m["policy_exit_count_total"] = sum(

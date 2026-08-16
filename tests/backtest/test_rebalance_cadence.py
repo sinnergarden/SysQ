@@ -61,6 +61,51 @@ def test_nd_requires_calendar():
                                      last_rebalance_date="2021-01-04")
 
 
+# ── Offset: phase shift of the "<n>d" cadence grid ─────────────────────────
+# offset=k puts the FIRST rebalance on the k-th trading day (0-indexed), then
+# every n trading days after that anchor.  offset=0 is the historical grid.
+
+
+def test_offset_shifts_first_rebalance_and_keeps_grid():
+    # "3d" cadence, offset=2 over the 10-day CAL: rebalances on idx 2, 5, 8.
+    assert should_skip_weekly_rebalance("3d", CAL[0], None,
+                                        trading_dates=CAL, last_rebalance_date=None, offset=2)
+    assert should_skip_weekly_rebalance("3d", CAL[1], None,
+                                        trading_dates=CAL, last_rebalance_date=None, offset=2)
+    assert not should_skip_weekly_rebalance("3d", CAL[2], None,
+                                            trading_dates=CAL, last_rebalance_date=None, offset=2)
+    # Anchor at idx 2 (01-06); 3 trading days later is idx 5 (01-11).
+    assert should_skip_weekly_rebalance("3d", CAL[3], CAL[2],
+                                        trading_dates=CAL, last_rebalance_date=CAL[2], offset=2)
+    assert should_skip_weekly_rebalance("3d", CAL[4], CAL[3],
+                                        trading_dates=CAL, last_rebalance_date=CAL[2], offset=2)
+    assert not should_skip_weekly_rebalance("3d", CAL[5], CAL[4],
+                                            trading_dates=CAL, last_rebalance_date=CAL[2], offset=2)
+
+
+def test_offset_zero_is_historical_grid():
+    # offset=0: first day rebalances (idx 0), then every n trading days.
+    assert not should_skip_weekly_rebalance("3d", CAL[0], None,
+                                            trading_dates=CAL, last_rebalance_date=None, offset=0)
+    assert should_skip_weekly_rebalance("3d", CAL[1], CAL[0],
+                                        trading_dates=CAL, last_rebalance_date=CAL[0], offset=0)
+    assert not should_skip_weekly_rebalance("3d", CAL[3], CAL[2],
+                                            trading_dates=CAL, last_rebalance_date=CAL[0], offset=0)
+
+
+def test_offset_defaults_to_zero():
+    # Callers that omit offset keep the pre-offset behaviour (backward compat).
+    assert not should_skip_weekly_rebalance("3d", CAL[0], None,
+                                            trading_dates=CAL, last_rebalance_date=None)
+
+
+def test_negative_offset_rejected():
+    import pytest
+    with pytest.raises(ValueError, match="offset"):
+        should_skip_weekly_rebalance("3d", CAL[0], None,
+                                     trading_dates=CAL, last_rebalance_date=None, offset=-1)
+
+
 # ── Integration: posterior_confirmed + "<n>d" cadence ───────────────────────
 # Regression: the posterior branch of run_from_signal_cache previously never
 # passed trading_dates/last_rebalance_date to should_skip_weekly_rebalance, so
@@ -94,7 +139,7 @@ def _rotating_signal_store(tmp_path) -> None:
     )
 
 
-def _run_posterior_cadence(tmp_path, rebalance_freq: str):
+def _run_posterior_cadence(tmp_path, rebalance_freq: str, offset: int = 0):
     """Run the rotating-signal backtest under a posterior_confirmed skeleton with
     only rank_exit enabled (all other exit rules dead) at the given cadence."""
     from unittest.mock import patch
@@ -131,6 +176,7 @@ def _run_posterior_cadence(tmp_path, rebalance_freq: str):
             top_n=5,
             holding_policy="posterior_confirmed",
             rebalance_freq=rebalance_freq,
+            rebalance_offset=offset,
             rank_exit=True,
             # Dead rules (same dummy thresholds as the E1 ablation baseline).
             score_delta_min_observations=1_000_000_000,
@@ -177,3 +223,35 @@ def test_posterior_daily_cadence_refreshes_every_day(tmp_path):
     assert result.status == "completed"
     orders = [d["order_count"] for d in result.daily_summary]
     assert all(o > 0 for o in orders)
+
+
+def test_posterior_offset_phase_shifts_cadence_grid(tmp_path):
+    """offset=1 with 2d cadence: first rebalance on the 2nd trading day, then
+    every 2 trading days (idx 1, 3).  idx 0 is before the phase-shifted grid."""
+    result = _run_posterior_cadence(tmp_path, "2d", offset=1)
+    assert result.status == "completed"
+    orders = [d["order_count"] for d in result.daily_summary]
+    assert orders[0] == 0  # idx 0 before the offset grid
+    assert orders[1] > 0   # idx 1: first rebalance
+    assert orders[2] == 0
+    assert orders[3] > 0   # idx 3: 2 trading days after anchor
+    assert orders[4] == 0
+
+
+def test_daily_summary_carries_rebalance_flags(tmp_path):
+    """Every posterior daily_summary row records rebalance_due (schedule) and
+    is_rebalance (execution).  On a 2d cadence the grid days carry both True;
+    skip days carry both False.  The flags are execution truth, not an
+    entry-count proxy."""
+    result = _run_posterior_cadence(tmp_path, "2d")
+    rows = result.daily_summary
+    assert len(rows) == 5
+    for i, d in enumerate(rows):
+        assert "rebalance_due" in d and "is_rebalance" in d
+        expect_reb = (i in (0, 2, 4))  # 2d cadence over 5 days: idx 0, 2, 4
+        assert bool(d["rebalance_due"]) == expect_reb
+        assert bool(d["is_rebalance"]) == expect_reb
+    # Execution truth is independent of entry count: on a 2d cadence the
+    # rebalance days may have entries, but the flags must not depend on it.
+    reb_rows = [d for d in rows if d["is_rebalance"]]
+    assert all(d["rebalance_due"] for d in reb_rows)

@@ -151,6 +151,11 @@ def main() -> None:
         default="weekly",
         help="'weekly' (ISO-week), 'daily', or '<n>d' (refresh every n trading days)",
     )
+    parser.add_argument(
+        "--rebalance-offset", type=int, default=0,
+        help="Trading-day phase offset of the '<n>d' cadence grid (0 = first day "
+             "rebalances; 20 with 60d puts rebalances on trading days 20, 80, ...).",
+    )
     parser.add_argument("--output-dir", type=Path, default=None)
     parser.add_argument("--artifact-mode", choices=["summary", "debug"], default="summary")
     parser.add_argument("--overwrite", action="store_true")
@@ -196,6 +201,12 @@ def main() -> None:
         help="posterior_confirmed: on rebalance, sell any held name that has "
              "dropped out of the current top_n (pure score-refresh baseline; "
              "all four exit rules should be disabled to isolate it).",
+    )
+    parser.add_argument(
+        "--rank-exit-hold-top", type=int, default=None,
+        help="posterior_confirmed + --rank-exit: rank-hysteresis band.  Keep a "
+             "held name while its current rank is <= this value (wider than "
+             "top_n); exit only when rank > band.  None = plain top_n dropout.",
     )
     parser.add_argument(
         "--materialize-blend",
@@ -277,6 +288,7 @@ def main() -> None:
         min_commission=args.min_commission,
         slippage=args.slippage,
         rebalance_freq=args.rebalance_freq,
+        rebalance_offset=args.rebalance_offset,
         strategy_template_id=args.strategy_template_id,
         output_dir=args.output_dir,
         artifact_mode=args.artifact_mode,
@@ -300,6 +312,7 @@ def main() -> None:
         stale_max_return=args.stale_max_return,
         replacement_rank_gap=args.replacement_rank_gap,
         rank_exit=args.rank_exit,
+        rank_exit_hold_top=args.rank_exit_hold_top,
         maxdd_signal_id=args.maxdd_signal_id,
         maxdd_signal_run_id=args.maxdd_signal_run_id,
         maxdd_threshold=args.maxdd_threshold,

@@ -33,6 +33,13 @@ class PosteriorPolicyConfig:
     stale_max_return: float = 0.03
     replacement_rank_gap: int = 20
     rank_exit: bool = False
+    # Rank-hysteresis band: when rank_exit is enabled AND rank_exit_hold_top is
+    # set (>= top_n), a held name is NOT sold while its current rank is
+    # <= rank_exit_hold_top (wider band than the entry top_n).  It exits only
+    # when it falls to rank > rank_exit_hold_top; slots are refilled from the
+    # current top_n at equal weight.  Keep semantics are otherwise identical to
+    # plain rank_exit (hold drift, no reweight).  None = plain top_n dropout.
+    rank_exit_hold_top: int | None = None
     # Exposure gate: when active (per the precomputed PIT schedule passed to
     # run_posterior_policy_day), target weights are scaled to
     # exposure_gate_scale (e.g. 0.5 = 50% of equity invested).  The schedule
@@ -60,6 +67,8 @@ class PosteriorPolicyConfig:
             raise ValueError("stale_after_days must be positive")
         if self.replacement_rank_gap < 1:
             raise ValueError("replacement_rank_gap must be positive")
+        if self.rank_exit_hold_top is not None and self.rank_exit_hold_top < 1:
+            raise ValueError("rank_exit_hold_top must be positive when set")
         if self.exposure_gate_mode not in {"none", "market_risk", "model_health", "either"}:
             raise ValueError(
                 f"exposure_gate_mode must be one of "
@@ -78,6 +87,10 @@ class PosteriorPolicyConfig:
         # excluding the default keeps already-published backtest hashes stable.
         if not self.rank_exit:
             manifest.pop("rank_exit", None)
+        # Same for the hysteresis band: None is the pre-existing plain rank_exit
+        # behaviour, excluded so prior rank_exit hashes stay stable.
+        if self.rank_exit_hold_top is None:
+            manifest.pop("rank_exit_hold_top", None)
         # Same for the exposure gate: "none" is the pre-existing behaviour.
         if self.exposure_gate_mode == "none":
             manifest.pop("exposure_gate_mode", None)
@@ -250,7 +263,10 @@ def run_posterior_policy_day(
             "position_count": 0,
             "status": "no_signal_data",
         }
-        _add_policy_audit(result, {}, set(), delta_threshold, views, trade_date)
+        _add_policy_audit(
+            result, {}, set(), delta_threshold, views, trade_date,
+            is_rebalance=is_rebalance,
+        )
         return result, pd.DataFrame(), []
 
     if execution_price_mode != "open":
@@ -325,9 +341,19 @@ def run_posterior_policy_day(
 
     # Pure score-refresh: on rebalance, a held name that has dropped out of the
     # current top_n is sold (its slot is refilled from top_candidates below).
+    # Rank-hysteresis band: with rank_exit_hold_top set, keep while the current
+    # rank is <= the (wider) hold band; a missing rank counts as rank > band.
     if config.rank_exit and is_rebalance:
+        hold_top = config.rank_exit_hold_top
         for instrument in sorted(account.positions):
-            if instrument not in exit_reasons and instrument not in top_candidates:
+            if instrument in exit_reasons:
+                continue
+            if hold_top is not None:
+                rank = rank_map.get(instrument)
+                if rank is not None and rank <= hold_top:
+                    continue  # still inside the hold band — keep
+                exit_reasons[instrument] = "rank_exit"
+            elif instrument not in top_candidates:
                 exit_reasons[instrument] = "rank_exit"
 
     keep = set(account.positions).difference(exit_reasons)
@@ -468,6 +494,7 @@ def run_posterior_policy_day(
     _add_policy_audit(
         result, exit_reasons, actual_exits, delta_threshold, views, trade_date,
         actual_entries=actual_entries,
+        is_rebalance=is_rebalance,
     )
     target_weights = dict(sell_targets)
     target_weights.update(buy_targets)
@@ -506,11 +533,22 @@ def _add_policy_audit(
     trade_date: str,
     *,
     actual_entries: set[str] | None = None,
+    is_rebalance: bool = False,
 ) -> None:
     actual_entries = actual_entries or set()
     result.update(
         {
             "holding_policy": "posterior_confirmed",
+            # Cadence provenance on every daily_summary row: rebalance_due is the
+            # schedule-level flag (this date is on the cadence grid);
+            # is_rebalance is the execution-level truth (a rebalance actually
+            # ran — schedule due AND the day carried score data).  Downstream
+            # cohort/signal diagnostics must key on is_rebalance, never on
+            # policy_entry_count > 0 (a due day may legitimately trade nothing).
+            "rebalance_due": bool(is_rebalance),
+            "is_rebalance": bool(
+                is_rebalance and bool(views.scores.get(trade_date))
+            ),
             "policy_exit_count": len(actual_exits),
             "policy_entry_count": len(actual_entries),
             "hard_stop_exit_count": sum(exit_reasons.get(x) == "hard_stop" for x in actual_exits),
