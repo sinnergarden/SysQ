@@ -41,7 +41,7 @@ Yearly return: A0 +44/−28/−19/+49/+3/−22 · A1 +31/−31/+16/+56/+68/−9 
 
 ## 3. Differential-Return Results (Layer 4) — CORRECTED METHODOLOGY
 
-SwapEdge is now measured with a **common start at the replacement's entry date** for both old and new, over the same +20/+60 market-calendar horizon; the exit→entry cash gap is reported separately; forward returns are **null (never a stale prior close)** when the symbol has no close on the exact reference or horizon-end date. All swap edges show **no statistically clear evidence of a nonzero effect** (paired Wilcoxon / sign test p = 0.16–1.00; n = 26–265). Report as directional point estimates only; do not read them as "proven noise".
+SwapEdge is now measured with a **common start at the replacement's entry date** for both old and new, over the same +20/+60 market-calendar horizon; the exit→entry cash gap is reported separately; forward returns are **null (never a stale prior close)** when the symbol has no close on the exact reference or horizon-end date. All swap edges show **no statistically clear evidence of a nonzero effect** (paired Wilcoxon / sign test p = 0.16–1.00; n = 26–265). Report as directional point estimates only; do not read them as "proven noise". Strict-close null cost: 23/380 events (6.1%) have a null old-return, concentrated in hard_stop (17/129 = 13.2%) — suspension/delist/beyond-calendar cases are dropped, not stitched with stale closes.
 
 **hard_stop** (A5 n=129; A1-pure n=30)
 - 94% (121/129) fire on **score-OK** stocks — price fell, long-term score did NOT deteriorate. ✓
