@@ -53,6 +53,9 @@ GROUP_RUNS = {
     ],
     "D2": ["S180_20d", "S180_20d_off5", "S180_20d_off10", "S180_20d_off15"],
     "F": ["S180_20d", "C1_consensus", "C2_confirmed"],
+    "R": [
+        "RR_P0_capped", "RR_P0_raw", "RR_P5_raw", "RR_P10_raw", "RR_P15_raw",
+    ],
 }
 
 
