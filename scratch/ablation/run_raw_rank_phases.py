@@ -69,8 +69,9 @@ BASE = {
 }
 
 
-def _raw_run_id(phase: str) -> str:
-    return f"{S180_SIGNAL_ID}__rr_{phase}__rawrank__{EXPERIMENT}"
+def _raw_run_id(phase: str, ens: bool = False) -> str:
+    tag = "ens3" if ens else "rawrank"
+    return f"{S180_SIGNAL_ID}__rr_{phase}__{tag}__{EXPERIMENT}"
 
 
 RUNS = {
@@ -79,6 +80,16 @@ RUNS = {
     "RR_P5_raw": {"signal_run_id": _raw_run_id("p5"), "rebalance_offset": "5"},
     "RR_P10_raw": {"signal_run_id": _raw_run_id("p10"), "rebalance_offset": "10"},
     "RR_P15_raw": {"signal_run_id": _raw_run_id("p15"), "rebalance_offset": "15"},
+}
+
+# Sec 7 conditional E1 (3-seed mean ensemble).  Only built/run when the cohort
+# edge clearly splits across phases (never by CAGR alone).  Uses the same
+# offsets/rows as the raw phases; only the signal_run_id changes.
+ENS_RUNS = {
+    "RR_P0_ens3": {"signal_run_id": _raw_run_id("p0", ens=True), "rebalance_offset": "0"},
+    "RR_P5_ens3": {"signal_run_id": _raw_run_id("p5", ens=True), "rebalance_offset": "5"},
+    "RR_P10_ens3": {"signal_run_id": _raw_run_id("p10", ens=True), "rebalance_offset": "10"},
+    "RR_P15_ens3": {"signal_run_id": _raw_run_id("p15", ens=True), "rebalance_offset": "15"},
 }
 
 

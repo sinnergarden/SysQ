@@ -82,12 +82,9 @@ GEN_KWARGS = dict(
 PHASES = {"p0": 0, "p5": 5, "p10": 10, "p15": 15}
 SHIFT_CAL_START, SHIFT_CAL_END = "2017-01-01", "2026-12-31"
 
-RUN_ID = {
-    "p0": f"{SIG_ID}__rr_p0__rawrank__{EXPERIMENT}",
-    "p5": f"{SIG_ID}__rr_p5__rawrank__{EXPERIMENT}",
-    "p10": f"{SIG_ID}__rr_p10__rawrank__{EXPERIMENT}",
-    "p15": f"{SIG_ID}__rr_p15__rawrank__{EXPERIMENT}",
-}
+def run_id_for(phase: str, seeds: list[int]) -> str:
+    tag = "ens3" if len(seeds) > 1 else "rawrank"
+    return f"{SIG_ID}__rr_{phase}__{tag}__{EXPERIMENT}"
 
 
 def zscore_no_clip(s: pd.Series) -> pd.Series:
@@ -137,10 +134,13 @@ def train_shifted_model(
     shift_lookup: dict[str, str],
     gen: LightGBMSingleLabelGenerator,
     label_df: pd.DataFrame,
+    seeds: list[int] | None = None,
 ):
-    """Train the SHIFTED window's model by slicing the ORIGINAL cache frame.
+    """Train the SHIFTED window's model(s) by slicing the ORIGINAL cache frame.
 
-    Returns (frame, clean, model, center, scale, shifted_win).
+    Returns (frame, clean, models, shifted_win) where models = [(model, center,
+    scale), ...] — one per seed (E1 3-seed ensemble averages raw predictions
+    downstream; single-model uses seeds=[42]).
     """
     shifted = {
         key: shift_date(win[key], shift_lookup, win["window_id"])
@@ -174,20 +174,26 @@ def train_shifted_model(
             f"({shifted['train_start']}..{shifted['train_end']})"
         )
     tag = f"{win['window_id']}_{shifted['train_start']}_{shifted['train_end']}"
-    model, center, scale = train_model(
-        X_tr.loc[y_tr.index], y_tr, tag,
-        n_estimators=gen.n_estimators, lgb_params=gen.lgb_params,
-    )
-    return frame, clean, model, center, scale, shifted
+    models = []
+    for sd in (seeds or [42]):
+        params = dict(gen.lgb_params or {})
+        params["seed"] = sd
+        model, center, scale = train_model(
+            X_tr.loc[y_tr.index], y_tr, f"{tag}_s{sd}",
+            n_estimators=gen.n_estimators, lgb_params=params,
+        )
+        models.append((model, center, scale))
+    return frame, clean, models, shifted
 
 
 def infer_shifted_span(
     frame: pd.DataFrame,
     clean: list[str],
-    model, center, scale,
+    models: list,
     shifted: dict,
 ) -> pd.DataFrame:
-    """Raw inference over the shifted predict span, cross-sectional raw zscore."""
+    """Inference over the shifted predict span; cross-sectional zscore of the
+    mean raw prediction across seeds."""
     window_cal = get_trading_calendar(shifted["predict_start"], shifted["predict_end"])
     if not window_cal:
         return pd.DataFrame()
@@ -198,10 +204,13 @@ def infer_shifted_span(
     pred = frame[frame["trade_date"].isin(feature_dates)].copy()
     if pred.empty:
         return pd.DataFrame()
-    raw = predict_model(
-        model, center, scale, pred[clean].fillna(0.0).astype(np.float32)
+    X = pred[clean].fillna(0.0).astype(np.float32)
+    raw = np.mean(
+        [predict_model(model, center, scale, X).values
+         for model, center, scale in models],
+        axis=0,
     )
-    pred["_raw"] = raw.values
+    pred["_raw"] = raw
     pred["_score"] = pred.groupby("trade_date")["_raw"].transform(zscore_no_clip)
     pred["_score_raw"] = pred["_score"].clip(-3.0, 3.0)
     # F01: data_date = feature date (strictly before trade_date)
@@ -223,13 +232,17 @@ def build_phase(
     label_df: pd.DataFrame,
     tmp_dir: Path,
     idxs: list[int] | None,
+    seeds: list[int],
 ) -> pd.DataFrame:
     k = PHASES[phase]
     shift_lookup = build_shift_lookup(k)
     records: list[pd.DataFrame] = []
     t0 = time.time()
     for i in idxs if idxs is not None else range(len(windows)):
-        ckpt = tmp_dir / f"rr_{phase}_{i:04d}.parquet"
+        if seeds == [42]:
+            ckpt = tmp_dir / f"rr_{phase}_{i:04d}.parquet"   # single-model runs
+        else:
+            ckpt = tmp_dir / f"rr_{phase}_{'_'.join(map(str,seeds))}_{i:04d}.parquet"
         if ckpt.exists():
             records.append(pd.read_parquet(ckpt))
             print(f"[{phase} {i:2d}] {windows[i]['window_id']}: ckpt exists, skip",
@@ -237,10 +250,10 @@ def build_phase(
             continue
         w = windows[i]
         w0 = time.time()
-        frame, clean, model, center, scale, shifted = train_shifted_model(
-            w, shift_lookup, gen, label_df
+        frame, clean, models, shifted = train_shifted_model(
+            w, shift_lookup, gen, label_df, seeds
         )
-        out = infer_shifted_span(frame, clean, model, center, scale, shifted)
+        out = infer_shifted_span(frame, clean, models, shifted)
         if out.empty:
             print(f"[{phase} {i:2d}] {w['window_id']}: empty shifted predict span "
                   f"({shifted['predict_start']}..{shifted['predict_end']}), skip",
@@ -262,15 +275,16 @@ def build_phase(
     return df
 
 
-def save_run(phase: str, df: pd.DataFrame) -> Path:
+def save_run(phase: str, df: pd.DataFrame, seeds: list[int]) -> Path:
+    rid = run_id_for(phase, seeds)
     df = df.copy()
     df["signal_id"] = SIG_ID
-    df["signal_run_id"] = RUN_ID[phase]
+    df["signal_run_id"] = rid
     df["trade_date"] = df["trade_date"].astype(str).str[:10]
     df["data_date"] = df["data_date"].astype(str).str[:10]
     store = SignalStore(str(ROOT / "data/research"))
     p = store.save_signal_run(
-        SIG_ID, RUN_ID[phase], df,
+        SIG_ID, rid, df,
         manifest={
             "artifact_type": "rawrank_shifted_phase_signal_run",
             "rawrank_of": SRID,
@@ -280,8 +294,11 @@ def save_run(phase: str, df: pd.DataFrame) -> Path:
             "experiment": EXPERIMENT,
             "train_window_trading_days": 504,
             "label_id": LABEL_ID,
+            "seeds": seeds,
+            "ensemble": "mean_of_seed_raw_predictions" if len(seeds) > 1 else "single_model",
             "description": "independent shifted rolling S180 pipeline with "
-                           "raw(pre-cap)-ranking Top5",
+                           "raw(pre-cap)-ranking Top5"
+                           + (f"; {len(seeds)}-seed mean ensemble" if len(seeds) > 1 else ""),
         },
         overwrite=True,
     )
@@ -363,6 +380,9 @@ def main() -> int:
                     help="which phase to build")
     ap.add_argument("--windows", default=None,
                     help="comma-separated window indices (smoke test)")
+    ap.add_argument("--seeds", default="42",
+                    help="comma-separated seeds; >1 seed -> 3-seed mean ensemble "
+                         "(E1), raw preds averaged before cross-sectional zscore")
     ap.add_argument("--validate", action="store_true",
                     help="after build, run P0 raw-vs-stored per-day validation")
     ap.add_argument("--tmp", default="/home/liuming/.openclaw/workspace/SysQ-execution-ledger/scratch/ablation/phase_tmp")
@@ -372,16 +392,17 @@ def main() -> int:
     gen = LightGBMSingleLabelGenerator(**GEN_KWARGS)
     label_df = load_labels_once()
     idxs = [int(s.strip()) for s in args.windows.split(",")] if args.windows else None
+    seeds = [int(s.strip()) for s in args.seeds.split(",") if s.strip()]
 
-    df = build_phase(args.phase, windows, gen, label_df, Path(args.tmp), idxs)
-    path = save_run(args.phase, df)
+    df = build_phase(args.phase, windows, gen, label_df, Path(args.tmp), idxs, seeds)
+    path = save_run(args.phase, df, seeds)
 
     if args.validate:
         stored = pd.read_parquet(PREDS_PARQUET)
         stored = stored[["trade_date", "data_date", "instrument", "score_raw", "score"]]
         mine = pd.read_parquet(path)
         rc = validate_p0(stored, mine, windows)
-        print(f"signal_run_id = {RUN_ID[args.phase]}")
+        print(f"signal_run_id = {run_id_for(args.phase, seeds)}")
         return rc
     return 0
 

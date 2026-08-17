@@ -289,10 +289,23 @@ def cap_tie_regression() -> None:
 
 
 def main() -> None:
+    import argparse
+
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--phases", default="p0,p5,p10,p15",
+                    help="comma-separated phases to analyze")
+    args = ap.parse_args()
+    want = [p.strip() for p in args.phases.split(",") if p.strip()]
+
     cm = load_close_matrix()
     bench_close = load_bench_fwd(cm.index)
     panels = {}
     for ph, k in PHASES.items():
+        if ph not in want:
+            continue
+        if not run_parquet(ph).exists():
+            print(f"[skip] {ph}: run parquet missing", file=sys.stderr)
+            continue
         retrain_days = load_shifted_predict_starts(k)
         panel = build_panel(ph, cm, bench_close, retrain_days)
         panels[ph] = panel
@@ -307,15 +320,15 @@ def main() -> None:
     print("\n### Phase-robustness read ###")
     for h in (60, 180):
         meds = {ph: panels[ph][f"edgeA_{h}"].dropna().median()
-                for ph in PHASES}
+                for ph in panels}
         iqrs = {ph: panels[ph][f"edgeA_{h}"].dropna().quantile(0.75)
                 - panels[ph][f"edgeA_{h}"].dropna().quantile(0.25)
-                for ph in PHASES}
+                for ph in panels}
         med_vals = np.array(list(meds.values()))
         print(f"  @{h} median edgeA per phase: "
-              + ", ".join(f"{ph}={meds[ph]:+.2f}" for ph in PHASES))
+              + ", ".join(f"{ph}={meds[ph]:+.2f}" for ph in panels))
         print(f"      between-phase median spread = {med_vals.max()-med_vals.min():+.2f}pp; "
-              f"within-phase IQR = " + ", ".join(f"{ph}={iqrs[ph]:.2f}" for ph in PHASES))
+              f"within-phase IQR = " + ", ".join(f"{ph}={iqrs[ph]:.2f}" for ph in panels))
 
 
 if __name__ == "__main__":
