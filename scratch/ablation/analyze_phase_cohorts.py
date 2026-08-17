@@ -61,8 +61,15 @@ STORED_PARQUET = SIGNS_DIR / SRID / "predictions.parquet"
 
 
 def run_parquet(phase: str) -> Path:
+    if phase == "stored":
+        return STORED_PARQUET
     rid = f"{SIG_ID}__rr_{phase}__rawrank__{EXPERIMENT}"
     return SIGNS_DIR / rid / "predictions.parquet"
+
+
+def score_col(phase: str) -> str:
+    """stored ranks by score_raw (capped); raw phases by score (zscore(raw))."""
+    return "score_raw" if phase == "stored" else "score"
 
 
 def load_shifted_predict_starts(k: int) -> list[str]:
@@ -126,7 +133,8 @@ def build_panel(
         day = df[df["trade_date"] == t]
         if day.empty:
             continue
-        sc = day.set_index("instrument")["score"]
+        col = score_col(phase)
+        sc = day.set_index("instrument")[col]
         sc = sc[sc.notna()]
         if len(sc) < 30:
             continue
@@ -170,12 +178,10 @@ def build_panel(
                 row["n_ltm20"] = float((f180 < -0.20).sum())
                 row["n_ltm40"] = float((f180 < -0.40).sum())
                 row["top1_180"] = float(f180.max()) if len(f180) else np.nan
+                # cohort median-edge input: top5 mean with the cohort's largest
+                # 180d winner removed (big-winner dependence, Sec 6)
                 row["top5excl_top1_180"] = (
                     float(f180.sort_values(ascending=False).iloc[1:].mean()) if len(f180) >= 2 else np.nan
-                )
-                # excl cohort's 5 biggest 180d winners entirely
-                row["top5excl_all_180"] = (
-                    float(f180.mean()) if len(f180) else np.nan
                 )
         rows.append(row)
     return pd.DataFrame(rows)
@@ -238,16 +244,20 @@ def sec6_buckets(panels: dict) -> None:
 
 
 def sec6_bigwinner(panels: dict) -> None:
-    print("\n### Sec 6 big-winner cross-phase presence ###")
-    print(f"  {'phase':<6}{'cohorts':>8}{'any >+100%':>13}{'frac':>7}{'top1med':>9}"
-          f"{'excl_top1_med':>14}{'excl_all_med':>13}")
+    print("\n### Sec 6 big-winner presence + single-cohort dependence @180 ###")
+    print(f"  {'phase':<6}{'cohorts':>8}{'any>+100%':>11}{'frac':>7}{'top1med':>9}"
+          f"{'excl_top1med':>13}{'exclTop5Coh':>12}")
     for ph, p in panels.items():
         d = p.dropna(subset=["n_gt100"])
         frac = (d["n_gt100"] > 0).mean()
-        print(f"  {ph.upper():<6}{len(d):>8}{int((d['n_gt100']>0).sum()):>13}"
+        # excl_top5cohorts: drop the 5 cohorts with the largest top5 180d mean,
+        # recompute cohort median edgeA — single-cohort dependence read
+        e = p.dropna(subset=["edgeA_180"])
+        exc = e.sort_values("top5fwd_180", ascending=False).iloc[5:]
+        print(f"  {ph.upper():<6}{len(d):>8}{int((d['n_gt100']>0).sum()):>11}"
               f"{frac:>7.2f}{d['top1_180'].median():>9.1%}"
-              f"{d['top5excl_top1_180'].median():>14.1%}"
-              f"{d['top5excl_all_180'].median():>13.1%}")
+              f"{d['top5excl_top1_180'].median():>13.1%}"
+              f"{exc['edgeA_180'].median():>+11.1f}pp")
 
 
 def cap_tie_regression() -> None:
@@ -270,6 +280,8 @@ def cap_tie_regression() -> None:
         common = sorted(set(sd.index) & set(rd.index))
         sd = sd.loc[common]
         rd = rd.loc[common]
+        if len(sd) < 5 or len(rd) < 5:
+            continue
         s5 = set(sd.sort_values("score_raw", ascending=False).head(5).index)
         r5 = set(rd.sort_values("score", ascending=False).head(5).index)
         capped = bool((sd["score_raw"].sort_values(ascending=False).iloc[4]) >= 2.999)
@@ -293,42 +305,73 @@ def main() -> None:
 
     ap = argparse.ArgumentParser()
     ap.add_argument("--phases", default="p0,p5,p10,p15",
-                    help="comma-separated phases to analyze")
+                    help="comma-separated phases to analyze (stored = capped "
+                         "baseline run on original retrain days)")
     args = ap.parse_args()
     want = [p.strip() for p in args.phases.split(",") if p.strip()]
 
     cm = load_close_matrix()
     bench_close = load_bench_fwd(cm.index)
     panels = {}
-    for ph, k in PHASES.items():
-        if ph not in want:
+    for ph in want:
+        if ph not in PHASES and ph != "stored":
+            print(f"[skip] {ph}: unknown phase", file=sys.stderr)
             continue
         if not run_parquet(ph).exists():
             print(f"[skip] {ph}: run parquet missing", file=sys.stderr)
             continue
+        k = 0 if ph == "stored" else PHASES[ph]
         retrain_days = load_shifted_predict_starts(k)
         panel = build_panel(ph, cm, bench_close, retrain_days)
         panels[ph] = panel
         print_phase(ph, panel)
 
+    if "stored" in panels and "p0" in panels:
+        sec1_regression(panels["stored"], panels["p0"])
     cap_tie_regression()
+
+    sec6_panels = {k: v for k, v in panels.items() if k != "stored"}
     sec6_buckets(panels)
-    sec6_bigwinner(panels)
+    sec6_bigwinner(sec6_panels)
 
     # phase-robustness read: between-phase median spread vs within-phase
-    # dispersion at @60 and @180 (edgeA)
+    # dispersion at @60 and @180 (edgeA).  Compares the 4 raw phases only.
+    rob_panels = {k: v for k, v in panels.items() if k != "stored"}
     print("\n### Phase-robustness read ###")
     for h in (60, 180):
-        meds = {ph: panels[ph][f"edgeA_{h}"].dropna().median()
-                for ph in panels}
-        iqrs = {ph: panels[ph][f"edgeA_{h}"].dropna().quantile(0.75)
-                - panels[ph][f"edgeA_{h}"].dropna().quantile(0.25)
-                for ph in panels}
+        meds = {ph: rob_panels[ph][f"edgeA_{h}"].dropna().median()
+                for ph in rob_panels}
+        iqrs = {ph: rob_panels[ph][f"edgeA_{h}"].dropna().quantile(0.75)
+                - rob_panels[ph][f"edgeA_{h}"].dropna().quantile(0.25)
+                for ph in rob_panels}
         med_vals = np.array(list(meds.values()))
         print(f"  @{h} median edgeA per phase: "
-              + ", ".join(f"{ph}={meds[ph]:+.2f}" for ph in panels))
+              + ", ".join(f"{ph}={meds[ph]:+.2f}" for ph in rob_panels))
         print(f"      between-phase median spread = {med_vals.max()-med_vals.min():+.2f}pp; "
-              f"within-phase IQR = " + ", ".join(f"{ph}={iqrs[ph]:.2f}" for ph in panels))
+              f"within-phase IQR = " + ", ".join(f"{ph}={iqrs[ph]:.2f}" for ph in rob_panels))
+
+
+def sec1_regression(stored_panel: pd.DataFrame, p0_panel: pd.DataFrame) -> None:
+    """Sec 1 regression: stored(capped) vs P0 raw selection on the SAME retrain
+    days — isolates the ranking-fix effect on cohort forward selection edge."""
+    m = stored_panel.merge(
+        p0_panel[["trade_date", "top5fwd_60", "univfwd_60", "edgeA_60",
+                  "top5fwd_180", "univfwd_180", "edgeA_180", "edgeB_60", "edgeB_180"]],
+        on="trade_date", suffixes=("_capped", "_raw"))
+    m = m.dropna(subset=["edgeA_180_raw", "edgeA_180_capped"])
+    print(f"\n### Sec 1 regression: stored(capped) vs P0 raw, SAME {len(m)} retrain days ###")
+    for h in (60, 180):
+        ec = m[f"edgeA_{h}_capped"].median()
+        er = m[f"edgeA_{h}_raw"].median()
+        mc = m[f"edgeA_{h}_capped"].mean()
+        mr = m[f"edgeA_{h}_raw"].mean()
+        pc = (m[f"edgeA_{h}_capped"] > 0).mean()
+        pr = (m[f"edgeA_{h}_raw"] > 0).mean()
+        bc = m[f"edgeB_{h}_capped"].median()
+        br = m[f"edgeB_{h}_raw"].median()
+        print(f"  @{h}: capped med {ec:+.2f}pp -> raw med {er:+.2f}pp "
+              f"(Δ{er-ec:+.2f}); mean {mc:+.2f}->{mr:+.2f} (Δ{mr-mc:+.2f}); "
+              f"pos {pc:.2f}->{pr:.2f}; edgeB med {bc:+.2f}->{br:+.2f} (Δ{br-bc:+.2f})")
 
 
 if __name__ == "__main__":
