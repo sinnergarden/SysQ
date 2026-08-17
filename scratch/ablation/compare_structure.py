@@ -51,6 +51,7 @@ GROUP_RUNS = {
         "E1_refresh_60d", "G1_market_risk", "G2_model_health", "G3_either",
         "A_S180_60d", "G1_S180_market_risk", "G2_S180_model_health",
     ],
+    "D2": ["S180_20d", "S180_20d_off5", "S180_20d_off10", "S180_20d_off15"],
 }
 
 

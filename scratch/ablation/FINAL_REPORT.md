@@ -481,3 +481,51 @@ G1_S180 `227c0f7e` · G2_S180 `31fe1781`。
 artifacts: `execution_policy/{S180_20d,A_S180_60d,S180_60d_off20,S180_60d_off40,S180_180d,
 S180_band_weekly,G1_market_risk,G2_model_health,G3_either,G1_S180_market_risk,
 G2_S180_model_health}` + `gate_schedules/*.json`。
+
+### 9.6 S180@20d phase robustness（2026-08-17）
+
+把 20d cadence 网格相位平移 0/5/10/15 个交易日，其余**完全冻结**（S180 信号、E1 skeleton、
+top-5、hold drift、dead rules、同一 1351 天窗口）。目的：判断 20d skeleton 是否对 phase 稳健
+——**不是找最佳 offset**（不做 offset 调参）。offset 0 == §9.5 的 `S180_20d`。
+
+**Q3: S180@20d 是否对 rebalance phase 稳健？——NO。**
+
+| metric | 20d off0 | 20d off5 | 20d off10 | 20d off15 |
+|---|---|---|---|---|
+| Total return | **+953%** | +401% | +372% | +116% |
+| CAGR | **52.6%** | 33.5% | 32.1% | 14.8% |
+| MaxDD | −43.5% | **−40.0%** | −45.8% | −50.0% |
+| Active vs CSI800 | **+9.60** | +4.07 | +3.79 | +1.23 |
+| Turnover / orders | 3.58B / 442 | 2.15B / 452 | 2.62B / 444 | 1.31B / 425 |
+| 每年全正 | no | no | no | no |
+| Top1 share | 302132.SZ 14.4% | 302132.SZ 28.7% | 302132.SZ 38.0% | 300570.SZ 26.7% |
+| Top5 share | 60.4% | 82.4% | 82.7% | 105.5% |
+| excl-top1 | +816.1% | +285.4% | +230.8% | +85.0% |
+
+Yearly (P0.1)：off0 +98.5/−11.5/+73.8/+44.1/+125.3/+6.2 · off5 +9.1/+3.5/+105.6/+21.0/+85.6/−4.0 ·
+off10 +51.1/+9.9/+74.0/+31.8/+33.1/−6.9 · off15 −3.9/+36.4/+12.7/+21.1/+40.9/−14.4。
+
+- **CAGR 跨相位摆动 14.8%→52.6%（3.55×）**：只把 20d 网格相位平移 5/10/15 个交易日（约 ±3 周），
+  总收益 +116%→+953%。off0 是 phase-lucky 最大值——4 个相位里 3 个落在 +116%~+401%，只有 off0
+  超过 +500%。相对摆幅比 60d 实验（2.17×）**还大**。
+- **off0 的优势不是单票运气**：off0 的 top1 集中度反而是 4 相位里最低（14.4% vs 28.7%/38.0%/26.7%），
+  top5 也只有 60.4%（vs 82~83%）；剔除最大赢家后 excl-top1 仍 +816%（vs 下一名 +285%）。edge 是
+  广谱的，却被 phase 完全翻盘。
+- **相位平移不止损收益，还损风控**：MaxDD 从 −43.5% 恶化到 off15 的 −50.0%；集中度从 60.4% 升到
+  82.7%，off15 的 top5 PnL 达 NAV 增益的 105.5%（5 只赢家赚回全部，其余 traded 名净亏）。相位越偏，
+  edge 越坍缩进更少的名字。
+- **每个相位都有亏损年**：off0 2022 −11.5%、off5 2026 −4.0%、off10 2026 −6.9%、off15 2021 −3.9%
+  + 2026 −14.4%。相位不同，亏损的年份与幅度完全不同——20d 无任何相位提供"每年全正"。
+- **与 60d 结论收敛**：两个独立 cadence（60d 3 相位、20d 4 相位）在 ±一个相位窗口内都出现多倍
+  CAGR 摆动 → 相位敏感性是**固定 cadence skeleton 的结构属性**，不是某次实验的偶然。20d skeleton
+  与 60d 一样不具备相位稳健性。两轮实验共同排除固定 cadence 路线（无论相位），剩余候选只剩
+  不依赖 rebalance 网格的结构（尾部集中度 cap、单票归因后重验 S180 骨架）。
+
+**Verification（对抗复核 workflow，3 路独立）**：offset 网格 firing 精确（off0/5/10/15 首轮 rebalance
+位于交易日 idx 0/5/10/15，各 ~68 轮、间距 20）；avg-cost PnL 重建 recon_gap = 买入佣金精确吻合
+（0.56%~1.70% of gain，≤1M 绝对）；top1/top5/excl-top1 与订单数全部复现（±1e-3 内）；off15
+top5>100% 算术有效（72/141 名亏损对冲）；独立重算指标仅差参考值 2 位小数舍入 → **CONFIRMED_NOT_ROBUST**。
+backtest_ids: S180_20d `ba710797`（=off0）· S180_20d_off5 `146e9661` · S180_20d_off10 `c038a0a2` ·
+S180_20d_off15 `0c893584`。
+artifacts: `execution_policy/{S180_20d,S180_20d_off5,S180_20d_off10,S180_20d_off15}`。
+Code: `run_ablation.py`（D2 组 runs）、`compare_structure.py`（group D2：4 相位对比 + avg-cost 重建）。

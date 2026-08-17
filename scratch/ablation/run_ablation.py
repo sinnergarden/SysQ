@@ -209,6 +209,13 @@ RUNS = {
     "S180_60d_off20": _s180_base(rebalance_freq="60d", rebalance_offset=20),
     "S180_60d_off40": _s180_base(rebalance_freq="60d", rebalance_offset=40),
     "S180_180d": _s180_base(rebalance_freq="180d"),
+    # C2. S180@20d phase robustness (Experiment A2): identical 20d skeleton,
+    # grid phase-shifted by 5/10/15 trading days.  offset 0 == S180_20d above.
+    # Purpose is to judge whether the 20d skeleton is phase-robust, NOT to pick
+    # a best phase (no offset tuning).
+    "S180_20d_off5": _s180_base(rebalance_freq="20d", rebalance_offset=5),
+    "S180_20d_off10": _s180_base(rebalance_freq="20d", rebalance_offset=10),
+    "S180_20d_off15": _s180_base(rebalance_freq="20d", rebalance_offset=15),
     # D. S180 rank-hysteresis (Experiment B): weekly evaluation, entry from
     # current Top5, keep while rank <= 10, exit when rank > 10, refill to
     # exactly 5 holdings, hold drift.  All four exit rules stay disabled.
