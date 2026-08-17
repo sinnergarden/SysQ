@@ -1,0 +1,345 @@
+#!/usr/bin/env python3
+"""A0-A5 execution-policy ablation launcher.
+
+Causal ablation of the four posterior exit rules against a fixed
+equal_weight entry + hold-drift skeleton (rank_exit disabled).
+
+Each run uses IDENTICAL signal / universe / window / cost / execution /
+rebalance / top_n / weighting / initial-entry.  ONLY exit rules differ.
+
+Disabled rules use "never-trigger" dummy thresholds so the engine's own
+validate() passes without code changes:
+  hard_stop            -> posterior_stop_loss = 0.999  (needs -99.9%)
+  score_delta          -> min_observations = 1e9       (threshold stays None)
+  winner_trailing      -> activation_return = 0.9999   (needs +9999%)
+  stale_replacement    -> stale_after_days = 10000     (never reached)
+
+A5 uses the original run2 values (repro check).
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parents[2]          # SysQ-execution-ledger
+RESEARCH_ROOT = Path("/home/liuming/.openclaw/workspace/SysQ/data/research")
+CLI = REPO / "scripts" / "research" / "backtest_from_signal.py"
+GATE_SCHED = REPO / "data" / "research" / "ablation" / "execution_policy" / "gate_schedules"
+
+SIGNAL_ID = "financial_rc_60d_180d_50_50__daily_zscore"
+SIGNAL_RUN_ID = "blend__007a93600f45de00"
+S180_SIGNAL_ID = "fwd_ret_180d_raw__daily_zscore"
+S180_SIGNAL_RUN_ID = (
+    "rolling__financial_rc_180d_rolling_5y_to_202607_v3__"
+    "v3a_growth_financial_180d__fwd_ret_180d_raw__daily_zscore__"
+    "2021-01-01_2026-07-31"
+)
+START = "2021-01-04"
+END = "2026-07-31"
+
+BASE = {
+    "signal_id": SIGNAL_ID,
+    "signal_run_id": SIGNAL_RUN_ID,
+    "research_root": str(RESEARCH_ROOT),
+    "score_column": "score",
+    "top_n": "5",
+    "commission": "0.0003",
+    "stamp_duty": "0.001",
+    "min_commission": "5.0",
+    "slippage": "0.001",
+    "rebalance_freq": "weekly",
+    "holding_policy": "posterior_confirmed",
+    "strategy_template_id": "posterior_confirmed_top5_financial_rc_50_50_v1",
+    "start_date": START,
+    "end_date": END,
+    "initial_capital": "10000000",
+    "overwrite": True,
+}
+
+# Never-trigger dummy values (documented above).
+# winner_trailing is disabled via winner_trailing_stop=0.999 (exit needs a
+# -99.9% drawdown from peak -> mathematically impossible), NOT via the
+# activation threshold: validate() forces activation_return < 1.0, and genuine
+# A-share multi-baggers (e.g. 300487 44.69->peak>89) exceed any activation
+# threshold below 100%.  Activation with a dead trailing-stop is harmless.
+NEVER = {
+    "score_delta_min_observations": "1000000000",
+    "posterior_stop_loss": "0.999",
+    "winner_activation_return": "0.9999",
+    "winner_trailing_stop": "0.999",
+    "stale_after_days": "10000",
+    "replacement_rank_gap": "1000000",
+}
+
+def _s180_base(**extra):
+    """S180-signal E1 skeleton (pure score refresh, dead exit rules)."""
+    return {
+        **NEVER, "rank_exit": True,
+        "signal_id": S180_SIGNAL_ID, "signal_run_id": S180_SIGNAL_RUN_ID,
+        **extra,
+    }
+
+
+# Original run2 values (A5 reproduce).
+ORIG = {
+    "score_delta_lookback": "20",
+    "score_delta_quantile": "0.10",
+    "score_delta_history_days": "504",
+    "score_delta_min_observations": "500",
+    "posterior_stop_loss": "0.09",
+    "winner_activation_return": "0.20",
+    "winner_trailing_stop": "0.125",
+    "stale_after_days": "20",
+    "stale_max_return": "0.03",
+    "replacement_rank_gap": "20",
+}
+
+# Each run: (name, {param: value}) overlay on BASE.
+RUNS = {
+    "A0_none": NEVER,
+    "A1_hard_stop": {
+        "posterior_stop_loss": "0.09",
+        "score_delta_min_observations": NEVER["score_delta_min_observations"],
+        "winner_activation_return": NEVER["winner_activation_return"],
+        "winner_trailing_stop": NEVER["winner_trailing_stop"],
+        "stale_after_days": NEVER["stale_after_days"],
+        "replacement_rank_gap": NEVER["replacement_rank_gap"],
+    },
+    "A2_score_delta": {
+        "score_delta_lookback": "20",
+        "score_delta_quantile": "0.10",
+        "score_delta_history_days": "504",
+        "score_delta_min_observations": "500",
+        "posterior_stop_loss": NEVER["posterior_stop_loss"],
+        "winner_activation_return": NEVER["winner_activation_return"],
+        "winner_trailing_stop": NEVER["winner_trailing_stop"],
+        "stale_after_days": NEVER["stale_after_days"],
+        "replacement_rank_gap": NEVER["replacement_rank_gap"],
+    },
+    "A3_winner_trailing": {
+        "winner_activation_return": "0.20",
+        "winner_trailing_stop": "0.125",
+        "score_delta_min_observations": NEVER["score_delta_min_observations"],
+        "posterior_stop_loss": NEVER["posterior_stop_loss"],
+        "stale_after_days": NEVER["stale_after_days"],
+        "replacement_rank_gap": NEVER["replacement_rank_gap"],
+    },
+    "A4_stale": {
+        "stale_after_days": "20",
+        "stale_max_return": "0.03",
+        "replacement_rank_gap": "20",
+        "score_delta_min_observations": NEVER["score_delta_min_observations"],
+        "posterior_stop_loss": NEVER["posterior_stop_loss"],
+        "winner_activation_return": NEVER["winner_activation_return"],
+        "winner_trailing_stop": NEVER["winner_trailing_stop"],
+    },
+    "A5_all": ORIG,
+    # E1 (pure score-refresh baseline): all four exit rules disabled, rank_exit
+    # on.  Only exit path is "dropped out of the current top-5 on rebalance";
+    # refill from current top-5, equal-weight entry + hold drift, no reweight.
+    "E1_rank_exit": {**NEVER, "rank_exit": True},
+    # Refresh-cadence variants of E1 (pure score refresh, rank_exit).
+    # "<n>d" = refresh every n trading days (engine N-day cadence).
+    "E1_refresh_5d": {**NEVER, "rank_exit": True, "rebalance_freq": "5d"},
+    "E1_refresh_20d": {**NEVER, "rank_exit": True, "rebalance_freq": "20d"},
+    "E1_refresh_60d": {**NEVER, "rank_exit": True, "rebalance_freq": "60d"},
+    # A. Horizon decomposition at the winning cadence (60d): single-horizon
+    # components of the 50/50 blend.  Blend@60d == E1_refresh_60d above.
+    "A_S60_60d": {
+        **NEVER,
+        "rank_exit": True,
+        "rebalance_freq": "60d",
+        "signal_id": "fwd_ret_60d_raw__daily_zscore",
+        "signal_run_id": (
+            "rolling__financial_rc_60d_rolling_5y_to_202607_v3__"
+            "v3a_growth_financial_60d__fwd_ret_60d_raw__daily_zscore__"
+            "2021-01-01_2026-07-31"
+        ),
+    },
+    "A_S180_60d": _s180_base(rebalance_freq="60d"),  # 60d cadence, offset 0
+    # B. Exposure gate at the winning cadence (60d).  G0 == E1_refresh_60d
+    # (no gate); G1/G2/G3 = same skeleton + a precomputed PIT schedule at
+    # gate_scale 0.5 (half exposure on gated days, proportional de-risk).
+    # G* on the S180 signal (A winner) reuse the same market-risk schedule
+    # (signal-common) but the model-health schedule is S180-specific
+    # (g2_model_health_s180.json built from the S180 run's own cohorts at the
+    # 180d label horizon — the blend-derived G2 is NOT a valid S180 readout).
+    "G1_S180_market_risk": {
+        **_s180_base(rebalance_freq="60d"),
+        "exposure_gate_mode": "market_risk",
+        "exposure_gate_scale": "0.5",
+        "exposure_gate_schedule": str(GATE_SCHED / "g1_market_risk.json"),
+    },
+    "G2_S180_model_health": {
+        **_s180_base(rebalance_freq="60d"),
+        "exposure_gate_mode": "model_health",
+        "exposure_gate_scale": "0.5",
+        "exposure_gate_schedule": str(GATE_SCHED / "g2_model_health_s180.json"),
+    },
+    "G1_market_risk": {
+        **NEVER,
+        "rank_exit": True,
+        "rebalance_freq": "60d",
+        "exposure_gate_mode": "market_risk",
+        "exposure_gate_scale": "0.5",
+        "exposure_gate_schedule": str(GATE_SCHED / "g1_market_risk.json"),
+    },
+    "G2_model_health": {
+        **NEVER,
+        "rank_exit": True,
+        "rebalance_freq": "60d",
+        "exposure_gate_mode": "model_health",
+        "exposure_gate_scale": "0.5",
+        "exposure_gate_schedule": str(GATE_SCHED / "g2_model_health.json"),
+    },
+    "G3_either": {
+        **NEVER,
+        "rank_exit": True,
+        "rebalance_freq": "60d",
+        "exposure_gate_mode": "either",
+        "exposure_gate_scale": "0.5",
+        "exposure_gate_schedule": str(GATE_SCHED / "g3_either.json"),
+    },
+    # C. S180 cadence robustness (Experiment A): sweep cadence + phase offset
+    # on the winning S180 signal.  60d offset 0 == A_S180_60d above.
+    "S180_20d": _s180_base(rebalance_freq="20d"),
+    "S180_60d_off20": _s180_base(rebalance_freq="60d", rebalance_offset=20),
+    "S180_60d_off40": _s180_base(rebalance_freq="60d", rebalance_offset=40),
+    "S180_180d": _s180_base(rebalance_freq="180d"),
+    # C2. S180@20d phase robustness (Experiment A2): identical 20d skeleton,
+    # grid phase-shifted by 5/10/15 trading days.  offset 0 == S180_20d above.
+    # Purpose is to judge whether the 20d skeleton is phase-robust, NOT to pick
+    # a best phase (no offset tuning).
+    "S180_20d_off5": _s180_base(rebalance_freq="20d", rebalance_offset=5),
+    "S180_20d_off10": _s180_base(rebalance_freq="20d", rebalance_offset=10),
+    "S180_20d_off15": _s180_base(rebalance_freq="20d", rebalance_offset=15),
+    # D. S180 rank-hysteresis (Experiment B): weekly evaluation, entry from
+    # current Top5, keep while rank <= 10, exit when rank > 10, refill to
+    # exactly 5 holdings, hold drift.  All four exit rules stay disabled.
+    "S180_band_weekly": _s180_base(
+        rebalance_freq="weekly", rank_exit_hold_top=10,
+    ),
+    # F. Retrain-day selection counterfactuals (old-vs-new model).  C0 ==
+    # S180_20d (rebalance at retrain activation, new-model Top5).  C1 swaps the
+    # score on retrain days for mean-rank consensus (old+new models); C2 =
+    # confirmed-first (BOTH names first, fill by new-model rank) which is
+    # set-identical to C0 (BOTH ∪ NEW_IN == new Top5).
+    "C1_consensus": _s180_base(
+        rebalance_freq="20d",
+        signal_run_id=(
+            "fwd_ret_180d_raw__daily_zscore__cf__c1_consensus__"
+            "rolling__financial_rc_180d_rolling_5y_to_202607_v3__"
+            "v3a_growth_f"
+        ),
+    ),
+    "C2_confirmed": _s180_base(
+        rebalance_freq="20d",
+        signal_run_id=(
+            "fwd_ret_180d_raw__daily_zscore__cf__c2_confirmed__"
+            "rolling__financial_rc_180d_rolling_5y_to_202607_v3__"
+            "v3a_growth_f"
+        ),
+    ),
+}
+
+
+def build_cmd(name: str, overlay: dict, output_dir: Path) -> list[str]:
+    params = dict(BASE)
+    params.update(overlay)
+    cmd = [sys.executable, str(CLI)]
+    for k, v in params.items():
+        flag = f"--{k.replace('_', '-')}"
+        if isinstance(v, bool):
+            if v:
+                cmd.append(flag)
+            continue
+        cmd.append(flag)
+        cmd.append(str(v))
+    cmd.extend(["--output-dir", str(output_dir)])
+    return cmd
+
+
+def _finish_one(
+    name: str, proc: subprocess.Popen, manifest: dict, out_root: Path
+) -> None:
+    log_path = out_root / f"{name}.log"
+    text = log_path.read_text(errors="replace") if log_path.exists() else ""
+    tail = text.strip().splitlines()[-12:]
+    print(f"\n=== {name} (exit {proc.returncode}) ===")
+    print("\n".join(tail))
+    if proc.returncode != 0:
+        print("STDERR tail:", text.strip().splitlines()[-8:])
+        manifest[name] = {"status": "failed", "log": str(log_path)}
+    else:
+        try:
+            last = text.strip().splitlines()[-1]
+            res = json.loads(last)
+            manifest[name] = {"status": "completed", **res}
+        except Exception:
+            manifest[name] = {"status": "completed", "log": str(log_path)}
+    (out_root / "run_manifest.json").write_text(
+        json.dumps(manifest, indent=1, ensure_ascii=False)
+    )
+
+
+def main() -> int:
+    import time
+
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--run", default="all", help="all, or comma-separated run names e.g. A1_hard_stop,A2_score_delta")
+    ap.add_argument("--parallel", type=int, default=1, help="max concurrent backtests")
+    ap.add_argument("--dry-run", action="store_true")
+    args = ap.parse_args()
+
+    out_root = REPO / "data" / "research" / "ablation" / "execution_policy"
+    out_root.mkdir(parents=True, exist_ok=True)
+
+    selected = list(RUNS) if args.run == "all" else [s.strip() for s in args.run.split(",") if s.strip()]
+    spec_path = out_root / "run_spec.json"
+    if args.dry_run:
+        spec = {name: build_cmd(name, ov, out_root / name) for name, ov in RUNS.items()}
+        spec_path.write_text(json.dumps(spec, indent=1))
+        print(f"dry-run spec -> {spec_path}")
+        print(json.dumps({k: v for k, v in spec.items()}, indent=1)[:3000])
+        return 0
+
+    manifest = {}
+    running: dict[subprocess.Popen, str] = {}
+    max_par = max(1, min(args.parallel, len(selected)))
+    done = 0
+    idx = 0
+
+    while idx < len(selected) or running:
+        while idx < len(selected) and len(running) < max_par:
+            name = selected[idx]
+            overlay = RUNS[name]
+            out = out_root / name
+            cmd = build_cmd(name, overlay, out)
+            idx += 1
+            print(f"[start] {name} (slot {len(running)+1}/{max_par})", flush=True)
+            logf = open(out_root / f"{name}.log", "w")
+            p = subprocess.Popen(
+                cmd, cwd=REPO, stdout=logf, stderr=subprocess.STDOUT, text=True
+            )
+            p._logf = logf  # type: ignore[attr-defined]
+            running[p] = name
+
+        for p in list(running):
+            if p.poll() is not None:
+                p._logf.close()  # type: ignore[attr-defined]
+                name = running.pop(p)
+                _finish_one(name, p, manifest, out_root)
+                done += 1
+        if running:
+            time.sleep(2)
+
+    print(f"\nall done: {done}/{len(selected)} runs", flush=True)
+    print(f"manifest -> {out_root / 'run_manifest.json'}", flush=True)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

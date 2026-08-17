@@ -57,6 +57,16 @@ import pandas as pd
 
 from qsys.backtest.result import BacktestRunResult
 from qsys.backtest.daily_kernel import should_skip_weekly_rebalance
+from qsys.backtest._execution import (
+    EXECUTION_ARTIFACT_COLUMNS,
+    EXECUTION_ARTIFACT_SCHEMA_VERSION,
+)
+from qsys.backtest.posterior_policy import (
+    PosteriorPolicyConfig,
+    PosteriorPolicyState,
+    prepare_posterior_signal_views,
+    run_posterior_policy_day,
+)
 from qsys.ops.market_snapshot import fetch_market_snapshot
 from qsys.ops.plan_builder import build_order_intents
 from qsys.ops.shadow_execution import positions_frame
@@ -489,6 +499,8 @@ class BacktestRunner:
 
     def _empty_day(
         self, trade_date: str, data_date: str, account: Account, reason: str,
+        *,
+        rebalance_due: bool = False, is_rebalance: bool = False,
     ) -> dict[str, Any]:
         """Record a non-trading day.
 
@@ -525,6 +537,8 @@ class BacktestRunner:
             "turnover": 0.0,
             "position_count": len(account.positions),
             "status": status_reason,
+            "rebalance_due": rebalance_due,
+            "is_rebalance": is_rebalance,
         }
 
     def _return_not_implemented(
@@ -565,6 +579,7 @@ class BacktestRunner:
         min_commission: float = 5.0,
         slippage: float = 0.001,
         rebalance_freq: str = "weekly",
+        rebalance_offset: int = 0,
         strategy_template_id: str = "rank_weight_top20",
         output_dir: Path | None = None,
         artifact_mode: str = "summary",
@@ -1027,6 +1042,7 @@ class BacktestRunner:
         min_commission: float = 5.0,
         slippage: float = 0.001,
         rebalance_freq: str = "weekly",
+        rebalance_offset: int = 0,
         strategy_template_id: str = "rank_weight_top20",
         output_dir: Path | None = None,
         artifact_mode: str = "summary",
@@ -1038,6 +1054,22 @@ class BacktestRunner:
         signal_id_2: str | None = None,
         signal_run_id_2: str | None = None,
         blend_weight: float = 1.0,
+        holding_policy: str = "target_rebalance",
+        score_delta_lookback: int = 20,
+        score_delta_quantile: float = 0.10,
+        score_delta_history_days: int = 504,
+        score_delta_min_observations: int = 500,
+        posterior_stop_loss: float = 0.09,
+        winner_activation_return: float = 0.20,
+        winner_trailing_stop: float = 0.125,
+        stale_after_days: int = 20,
+        stale_max_return: float = 0.03,
+        replacement_rank_gap: int = 20,
+        rank_exit: bool = False,
+        rank_exit_hold_top: int | None = None,
+        exposure_gate_mode: str = "none",
+        exposure_gate_scale: float = 0.5,
+        exposure_gate_schedule: dict[str, bool] | None = None,
     ) -> BacktestRunResult:
         """Backtest from a saved SignalRun (no model inference).
 
@@ -1107,13 +1139,52 @@ class BacktestRunner:
                 "fees. Use raw execution prices; corporate actions remain an "
                 "explicit research limitation."
             )
+        if holding_policy not in {"target_rebalance", "posterior_confirmed"}:
+            raise ValueError(
+                "holding_policy must be 'target_rebalance' or "
+                "'posterior_confirmed'"
+            )
+        if top_n < 1:
+            raise ValueError("top_n must be positive")
+        posterior_config: PosteriorPolicyConfig | None = None
+        if holding_policy == "posterior_confirmed":
+            if signal_id_2 is not None:
+                raise ValueError(
+                    "posterior_confirmed requires a materialized single "
+                    "SignalRun; combine inputs before backtesting"
+                )
+            if stop_loss is not None or trailing_stop is not None:
+                raise ValueError(
+                    "legacy stop_loss/trailing_stop cannot be combined with "
+                    "posterior_confirmed policy controls"
+                )
+            posterior_config = PosteriorPolicyConfig(
+                score_delta_lookback=score_delta_lookback,
+                score_delta_quantile=score_delta_quantile,
+                score_delta_history_days=score_delta_history_days,
+                score_delta_min_observations=score_delta_min_observations,
+                posterior_stop_loss=posterior_stop_loss,
+                winner_activation_return=winner_activation_return,
+                winner_trailing_stop=winner_trailing_stop,
+                stale_after_days=stale_after_days,
+                stale_max_return=stale_max_return,
+                replacement_rank_gap=replacement_rank_gap,
+                rank_exit=rank_exit,
+                rank_exit_hold_top=rank_exit_hold_top,
+                exposure_gate_mode=exposure_gate_mode,
+                exposure_gate_scale=exposure_gate_scale,
+            )
+            posterior_config.validate()
 
         signal_store = SignalStore(str(research_root))
         primary_identity = signal_store.validate_backtest_source(
             signal_id, signal_run_id
         )
         primary_signal = signal_store.load_signal_run(
-            signal_id, signal_run_id, start_date=start_date, end_date=end_date
+            signal_id,
+            signal_run_id,
+            start_date=None if posterior_config is not None else start_date,
+            end_date=end_date,
         )
         primary_by_date = {
             str(date): frame.reset_index(drop=True)
@@ -1165,6 +1236,33 @@ class BacktestRunner:
             "primary_signal": primary_identity,
             "secondary_signal": secondary_identity,
         }
+        if rebalance_offset:
+            # Default (offset=0) is the pre-offset behaviour; only non-zero
+            # offsets change the identity, keeping prior backtest hashes stable.
+            hash_payload["rebalance_offset"] = rebalance_offset
+        if rebalance_offset < 0:
+            raise ValueError("rebalance_offset must be >= 0")
+        if posterior_config is not None:
+            hash_payload["holding_policy"] = holding_policy
+            hash_payload["posterior_policy"] = posterior_config.to_manifest()
+        schedule_digest: str | None = None
+        if exposure_gate_schedule is not None:
+            schedule_digest = hashlib.sha256(
+                json.dumps(
+                    exposure_gate_schedule, sort_keys=True, separators=(",", ":")
+                ).encode("utf-8")
+            ).hexdigest()
+            hash_payload["exposure_gate_schedule_sha256"] = schedule_digest
+            hash_payload["exposure_gate_days"] = sum(
+                1 for active in exposure_gate_schedule.values() if active
+            )
+            if not all(
+                isinstance(d, str) and isinstance(a, bool)
+                for d, a in exposure_gate_schedule.items()
+            ):
+                raise ValueError(
+                    "exposure_gate_schedule must map date (YYYY-MM-DD) -> bool"
+                )
         hash_input = json.dumps(
             hash_payload, sort_keys=True, separators=(",", ":")
         )
@@ -1193,12 +1291,99 @@ class BacktestRunner:
 
         # ── Daily loop ────────────────────────────────────────────────────
         daily_summaries: list[dict[str, Any]] = []
+        execution_rows: list[dict[str, Any]] = []
         daily_debug_dir = output_dir / "daily" if artifact_mode == "debug" else None
         self._last_prices = {}
         self._last_trade_date = None
+        self._last_rebalance_date: str | None = None
         self._position_peaks: dict[str, float] = {}
+        posterior_state: PosteriorPolicyState | None = None
+        posterior_views = None
+        if posterior_config is not None:
+            if "data_date" in primary_signal.columns:
+                signal_trade_dates = pd.to_datetime(
+                    primary_signal["trade_date"], errors="coerce"
+                )
+                signal_data_dates = pd.to_datetime(
+                    primary_signal["data_date"], errors="coerce"
+                )
+                invalid = (
+                    signal_trade_dates.isna()
+                    | signal_data_dates.isna()
+                    | signal_data_dates.ge(signal_trade_dates)
+                )
+                if invalid.any():
+                    sample = primary_signal.loc[
+                        invalid, ["trade_date", "data_date"]
+                    ].head(3).to_dict(orient="records")
+                    raise ValueError(
+                        "Signal lookahead violation in posterior policy; "
+                        f"examples: {sample}"
+                    )
+            posterior_state = PosteriorPolicyState()
+            posterior_view_dates = sorted(
+                date for date in primary_by_date if date <= end_date
+            )
+            posterior_views = prepare_posterior_signal_views(
+                primary_by_date,
+                posterior_view_dates,
+                score_column=score_column,
+                config=posterior_config,
+            )
 
-        for trade_date in trading_dates:
+        for trading_index, trade_date in enumerate(trading_dates):
+            if posterior_config is not None:
+                assert posterior_state is not None
+                assert posterior_views is not None
+                day_signal = primary_by_date.get(
+                    trade_date, pd.DataFrame()
+                ).copy()
+                previous_trade_date = (
+                    trading_dates[trading_index - 1]
+                    if trading_index > 0 else None
+                )
+                rebalance_due = not should_skip_weekly_rebalance(
+                    rebalance_freq, trade_date, previous_trade_date,
+                    trading_dates=trading_dates,
+                    last_rebalance_date=self._last_rebalance_date,
+                    offset=rebalance_offset,
+                )
+                is_rebalance = rebalance_due
+                day_result, targets, orders = run_posterior_policy_day(
+                    account=account,
+                    state=posterior_state,
+                    config=posterior_config,
+                    views=posterior_views,
+                    day_signal=day_signal,
+                    trade_date=trade_date,
+                    trading_index=trading_index,
+                    is_rebalance=is_rebalance,
+                    top_n=top_n,
+                    commission=commission,
+                    stamp_duty=stamp_duty,
+                    min_commission=min_commission,
+                    slippage=slippage,
+                    execution_price_mode=self._execution_price_mode,
+                    market_snapshot_fn=fetch_market_snapshot,
+                    execution_collector=execution_rows,
+                    exposure_gate_schedule=exposure_gate_schedule,
+                )
+                if is_rebalance:
+                    # Cadence anchor for "<n>d" refresh: the next rebalance
+                    # counts trading days strictly after this date.
+                    self._last_rebalance_date = trade_date
+                self._last_trade_date = trade_date
+                daily_summaries.append(day_result)
+                if daily_debug_dir:
+                    day_dir = daily_debug_dir / trade_date
+                    day_dir.mkdir(parents=True, exist_ok=True)
+                    day_signal.to_csv(day_dir / "signal.csv", index=False)
+                    targets.to_csv(day_dir / "target_weights.csv", index=False)
+                    if orders:
+                        pd.DataFrame(orders).to_csv(
+                            day_dir / "order_intents.csv", index=False
+                        )
+                continue
             # ── Shared: fetch MTM prices for any existing positions ──
             mtm_prices: dict[str, float] = {}
             if account.positions:
@@ -1210,8 +1395,14 @@ class BacktestRunner:
                 except Exception:
                     pass
 
-            # 1. Weekly rebalance check
-            is_rebalance = not should_skip_weekly_rebalance(rebalance_freq, trade_date, self._last_trade_date)
+            # 1. Rebalance-cadence check (weekly, daily, or "<n>d" trading days)
+            rebalance_due = not should_skip_weekly_rebalance(
+                rebalance_freq, trade_date, self._last_trade_date,
+                trading_dates=trading_dates,
+                last_rebalance_date=self._last_rebalance_date,
+                offset=rebalance_offset,
+            )
+            is_rebalance = rebalance_due
 
             if not is_rebalance:
                 # Weekly skip — compute before, stop-loss, compute after
@@ -1248,6 +1439,8 @@ class BacktestRunner:
                     "position_count": len(account.positions),
                     "stop_events": int(sl_result["stop_events"]),
                     "status": "weekly_rebalance_skip",
+                    "rebalance_due": False,
+                    "is_rebalance": False,
                 })
                 continue
 
@@ -1287,6 +1480,8 @@ class BacktestRunner:
                     "position_count": len(account.positions),
                     "stop_events": int(sl_result["stop_events"]),
                     "status": "no_signal_data",
+                    "rebalance_due": True,
+                    "is_rebalance": False,
                 })
                 continue
 
@@ -1363,7 +1558,8 @@ class BacktestRunner:
                 exec_prices, mtm_prices = exec_prices_raw, mtm_prices_raw
             except Exception as exc:
                 daily_summaries.append(self._empty_day(
-                    trade_date, trade_date, account, f"no_market_data: {exc}"
+                    trade_date, trade_date, account, f"no_market_data: {exc}",
+                    rebalance_due=True, is_rebalance=False,
                 ))
                 continue
 
@@ -1380,6 +1576,9 @@ class BacktestRunner:
                 account, day_signal, targets.set_index("instrument")["target_weight"].to_dict(),
                 exec_prices, trade_date,
             )
+            for order in orders:
+                order["execution_phase"] = "rebalance"
+                order["trade_reason"] = "rebalance_to_target_weight"
 
             # 7. Execute, settle, MTM
             from qsys.backtest._execution import execute_trade_day
@@ -1388,9 +1587,11 @@ class BacktestRunner:
                 commission=commission, stamp_duty=stamp_duty,
                 min_commission=min_commission, slippage=slippage,
                 execution_price_mode=self._execution_price_mode,
+                execution_collector=execution_rows,
             )
             self._last_prices = mtm_prices
             self._last_trade_date = trade_date
+            self._last_rebalance_date = trade_date
 
             # 8. Stop-loss / trailing-stop (after MTM, same mtm_prices)
             sl_result = self._stop_loss_check(account, mtm_prices, stop_loss, trailing_stop,
@@ -1406,6 +1607,8 @@ class BacktestRunner:
             day_result["sell_count"] = day_result.get("sell_count", 0) + stop_events
             day_result["filled_count"] = day_result.get("filled_count", 0) + stop_events
             day_result["turnover"] = day_result.get("turnover", 0.0) + sl_result["stop_turnover"]
+            day_result["rebalance_due"] = True
+            day_result["is_rebalance"] = True
             daily_summaries.append(day_result)
 
             # 9. Debug artifacts
@@ -1432,6 +1635,14 @@ class BacktestRunner:
             final_value = account.cash + final_mv
 
         total_return = (final_value / initial_capital) - 1.0 if initial_capital > 0 else 0.0
+
+        executions_path = output_dir / "executions.csv"
+        pd.DataFrame(
+            execution_rows, columns=EXECUTION_ARTIFACT_COLUMNS
+        ).to_csv(executions_path, index=False)
+        executions_sha256 = hashlib.sha256(
+            executions_path.read_bytes()
+        ).hexdigest()
 
         # ── Write manifest ────────────────────────────────────────────────
         from qsys.research.manifest import with_standard_metadata, write_manifest
@@ -1485,8 +1696,60 @@ class BacktestRunner:
             "min_commission": min_commission,
             "slippage": slippage,
             "rebalance_freq": rebalance_freq,
+            "rebalance_offset": rebalance_offset,
             "data_cutoff_policy": "preopen_previous",
+            "artifacts": {
+                "executions": {
+                    "path": "executions.csv",
+                    "schema_version": EXECUTION_ARTIFACT_SCHEMA_VERSION,
+                    "sha256": executions_sha256,
+                    "row_count": len(execution_rows),
+                    "complete": stop_loss is None and trailing_stop is None,
+                }
+            },
         })
+        if posterior_config is not None:
+            manifest["holding_policy"] = holding_policy
+            manifest["posterior_policy"] = posterior_config.to_manifest()
+            manifest["exposure_gate"] = {
+                "mode": posterior_config.exposure_gate_mode,
+                "scale": posterior_config.exposure_gate_scale,
+            }
+            if schedule_digest is not None:
+                manifest["exposure_gate"]["schedule_sha256"] = schedule_digest
+                manifest["exposure_gate"]["gated_days"] = sum(
+                    1 for active in exposure_gate_schedule.values() if active
+                )
+                manifest["exposure_gate"]["total_days"] = len(
+                    exposure_gate_schedule
+                )
+            manifest["allocation_method"] = "equal_weight_entry_hold_drift"
+            manifest["allocation_params"] = {
+                "top_n": top_n,
+                "initial_entry_weight": 1.0 / top_n,
+                "periodic_reweight": False,
+                "max_weight": None,
+            }
+            manifest["posterior_policy_contract"] = {
+                "score_delta": "score_t_minus_score_t_minus_N_trading_days",
+                "delta_threshold": (
+                    "pooled_quantile_from_strictly_prior_execution_dates"
+                ),
+                "price_decision": "previous_completed_close",
+                "execution": "next_execution_date_open",
+                "entry_allocation": "equal_weight_one_over_top_n",
+                "rank_exit": (
+                    (
+                        "enabled_hold_band_top_"
+                        f"{posterior_config.rank_exit_hold_top}"
+                        "_exit_above_refill_top_n"
+                        if posterior_config.rank_exit_hold_top is not None
+                        else "enabled_sell_dropouts_refill_top_n"
+                    )
+                    if posterior_config.rank_exit
+                    else "disabled"
+                ),
+            }
         write_manifest(output_dir / "manifest.json", manifest)
 
         # ── Write daily_summary + metrics ─────────────────────────────────
@@ -1501,6 +1764,8 @@ class BacktestRunner:
         _rt = sum(d.get("rejected_count", 0) for d in daily_summaries)
         _tt = sum(d.get("turnover", 0) for d in daily_summaries)
         _td = len([d for d in daily_summaries if d.get("order_count", 0) > 0])
+        _reb_due = sum(1 for d in daily_summaries if d.get("rebalance_due", False))
+        _reb_done = sum(1 for d in daily_summaries if d.get("is_rebalance", False))
         _m = {
             "initial_capital": initial_capital, "final_value": final_value,
             "total_return": total_return, "trading_day_count": len(trading_dates),
@@ -1508,7 +1773,24 @@ class BacktestRunner:
             "order_count_total": _ot, "filled_count_total": _ft,
             "rejected_count_total": _rt, "avg_order_per_day": round(_ot / max(len(trading_dates), 1), 2),
             "turnover_total": round(_tt, 2), "avg_turnover": round(_tt / max(_td, 1), 2),
+            "rebalance_due_day_count": _reb_due,
+            "rebalance_executed_day_count": _reb_done,
         }
+        if posterior_config is not None:
+            _m["policy_exit_count_total"] = sum(
+                d.get("policy_exit_count", 0) for d in daily_summaries
+            )
+            _m["policy_entry_count_total"] = sum(
+                d.get("policy_entry_count", 0) for d in daily_summaries
+            )
+            for reason in (
+                "hard_stop", "score_delta", "winner_trailing",
+                "stale_replacement",
+            ):
+                _m[f"{reason}_exit_count_total"] = sum(
+                    d.get(f"{reason}_exit_count", 0)
+                    for d in daily_summaries
+                )
         write_manifest(output_dir / "metrics.json", with_standard_metadata(_m))
 
         result = BacktestRunResult(
@@ -1528,11 +1810,16 @@ class BacktestRunner:
                 "daily_summary": str(output_dir / "daily_summary.csv") if daily_summaries else "",
                 "metrics": str(output_dir / "metrics.json"),
             },
-            notes=f"cached-signal backtest over {len(trading_dates)} trading dates; "
-                  f"signal_id={signal_id}; signal_run_id={signal_run_id}; "
-                  f"top_n={top_n}; max_weight={max_weight}; "
-                  f"rebalance_freq={rebalance_freq}; "
-                  f"slippage={slippage}",
+            notes=(
+                f"cached-signal backtest over {len(trading_dates)} trading dates; "
+                f"signal_id={signal_id}; signal_run_id={signal_run_id}; "
+                f"top_n={top_n}; max_weight={max_weight}; "
+                f"rebalance_freq={rebalance_freq}; slippage={slippage}"
+                + (
+                    f"; holding_policy={holding_policy}"
+                    if posterior_config is not None else ""
+                )
+            ),
         )
 
         self._write_summary(result, output_dir)

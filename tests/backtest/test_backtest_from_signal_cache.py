@@ -406,6 +406,39 @@ class TestRunFromSignalCache:
                          top_n=5)
         assert result.status == "completed"
 
+    def test_summary_mode_writes_hashed_execution_artifact(
+        self, tmp_path: Path
+    ) -> None:
+        import hashlib
+        import json
+
+        out = tmp_path / "bt_executions"
+        _run_bt(
+            tmp_path,
+            fixture_dates=1,
+            fixture_inst=5,
+            signal_id="test_sig",
+            signal_run_id="test_run",
+            start_date="2026-06-15",
+            end_date="2026-06-15",
+            top_n=2,
+            output_dir=out,
+        )
+        executions_path = out / "executions.csv"
+        rows = pd.read_csv(executions_path)
+        manifest = json.loads((out / "manifest.json").read_text())
+        artifact = manifest["artifacts"]["executions"]
+
+        assert len(rows) == 2
+        assert set(rows["status"]) == {"filled"}
+        assert set(rows["trade_reason"]) == {"rebalance_to_target_weight"}
+        assert artifact["schema_version"] == "backtest_executions_v1"
+        assert artifact["row_count"] == len(rows)
+        assert artifact["complete"] is True
+        assert artifact["sha256"] == hashlib.sha256(
+            executions_path.read_bytes()
+        ).hexdigest()
+
 
 class TestRunFromSignalCacheGolden:
     """Golden tests: lock exact daily_summary and metrics.
