@@ -222,6 +222,27 @@ RUNS = {
     "S180_band_weekly": _s180_base(
         rebalance_freq="weekly", rank_exit_hold_top=10,
     ),
+    # F. Retrain-day selection counterfactuals (old-vs-new model).  C0 ==
+    # S180_20d (rebalance at retrain activation, new-model Top5).  C1 swaps the
+    # score on retrain days for mean-rank consensus (old+new models); C2 =
+    # confirmed-first (BOTH names first, fill by new-model rank) which is
+    # set-identical to C0 (BOTH ∪ NEW_IN == new Top5).
+    "C1_consensus": _s180_base(
+        rebalance_freq="20d",
+        signal_run_id=(
+            "fwd_ret_180d_raw__daily_zscore__cf__c1_consensus__"
+            "rolling__financial_rc_180d_rolling_5y_to_202607_v3__"
+            "v3a_growth_f"
+        ),
+    ),
+    "C2_confirmed": _s180_base(
+        rebalance_freq="20d",
+        signal_run_id=(
+            "fwd_ret_180d_raw__daily_zscore__cf__c2_confirmed__"
+            "rolling__financial_rc_180d_rolling_5y_to_202607_v3__"
+            "v3a_growth_f"
+        ),
+    ),
 }
 
 

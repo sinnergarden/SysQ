@@ -552,3 +552,122 @@ backtest_ids: S180_20d `ba710797`（=off0）· S180_20d_off5 `146e9661` · S180_
 S180_20d_off15 `0c893584`。
 artifacts: `execution_policy/{S180_20d,S180_20d_off5,S180_20d_off10,S180_20d_off15}`。
 Code: `run_ablation.py`（D2 组 runs）、`compare_structure.py`（group D2：4 相位对比 + avg-cost 重建）。
+
+### 9.7 S180 selection alpha: old-vs-new model at retrain day（2026-08-17）
+
+研究问题（沿用上一轮定下的方向）：S180 的**选中 alpha 到底来自哪里**——是 retrain 日"新模型
+新提拔的名字"（NEW_IN），还是"新旧模型一致的老名字"（BOTH）？是否应该改用**跨模型共识**
+（consensus）来选？本轮冻结所有其他结构（20d off0 retrain-triggered、Top5、等权、hold drift、
+dead rules），只允许改 retrain 日的打分口径。
+
+**方法（Section A）**：对每个 retrain 边界 t（68 window → 67 个边界，w0000→w1340），把上一版模型
+M_{t-1} 重新训练（seed 42 确定性）并在**同一份 t 日 PIT feature snapshot**（data_date == prev_td(t)
+== 旧 window 最后 feature 日）上重新 inference，与已存储的新模型 score 配对 → 得到同一份特征下
+score_old / score_new、rank_old / rank_new。唯一变化变量 = model version。重训可复现（per-day
+Spearman median 0.99999），M_old 重建可信。
+
+- **Score-cap 顶层退化（机制性发现）**：score_raw 在 ±3.0 winsorize。67 个 retrain 日里 **47 天
+  （70%）超过 5 个名字顶在 cap** → 这些天 top-5 是 tiebreak 抽签，不是模型判别；只有 20 天（30%）
+  "干净"（≤5 名顶在 cap）。
+- **BOTH / NEW_IN / DROPPED 前瞻超额**（vs 同日 scored-universe EW，pp）：
+
+| bucket | ex20 | ex60 | ex180 |
+|---|---|---|---|
+| both | +3.2 | +21.6 | +54.9 |
+| new_in | +2.5 | +5.5 | +24.6 |
+| dropped | +1.5 | +5.9 | +19.6 |
+
+replacement_edge_H = mean(R_NEW_IN) − mean(R_DROPPED)：20d **+1.0pp** · 60d **−0.4pp** ·
+180d **+5.0pp**。
+
+- **干净日 vs 顶 cap 日（机制拆分）**：
+
+| 场景 | 天数 | NEW_IN ex180 | DROPPED ex180 | edge 180d | NEW_IN>+50% | DROPPED>+50% |
+|---|---|---|---|---|---|---|
+| 干净 | 20 | +34.7 | +13.3 | **+21.4pp** | 29.1% | 20.0% |
+| 顶 cap | 47 | +19.3 | +22.8 | **−3.5pp** | 16.0% | 15.1% |
+
+retrain 只在模型真能区分 top-5 的那 ~30% 天创造选中 alpha（+21pp @180d）；70% 的天是抽签
+（−3.5pp）。**选中 alpha 的来源是"新模型把名字顶进 cap/前 5"这个动作，且只在未被 cap 抹平的日子
+有效。**
+
+- **年度一致性（Section C）**：NEW_IN−DROPPED 180d edge = 2021 −5.1 · 2022 −1.2 · 2023 −4.9 ·
+  2024 −18.2 · 2025 **+66.2** · 2026 n/a。5 个完整年份里 4 年为负、只有 2025 大幅为正 →
+  **年际不一致，不稳健**。
+- **模型版本稳定性（Section D）**：全市场 Spearman rho 0.91；Top5 Jaccard 0.34（med 0.43）；
+  new5_from_old5 0.48、new5_from_old10 0.67、new5_from_old20 0.84；|rank_delta| 中位数 48.4/780。
+  每轮 retrain 约 2.4/5 名字保留，但 top 区重排剧烈——churn 主要是 top 的排序噪声。
+- **右尾归因（Section E，双向）**：
+  - *前瞻收益*：BOTH 的 180d 右尾最肥（>+50% 29.1%、>+100% 20.9% vs NEW_IN 20.5/10.6 vs
+    DROPPED 16.8/8.7），但**左尾也肥**（<−40% 4.5% vs 1.9%），180d 中位数 −0.3pp、正收益率仅 49%
+    → BOTH 是 p90 +211pp 的高方差分布。
+  - *已实现 PnL（first-entry bucket，S180_20d executions）*：top-40 PnL 贡献者里 **26 只（其 PnL
+    的 72%）首次入场是 NEW_IN**，12 只（28%）是 BOTH。大赢家（302132 除外：001696、002281、
+    000988、688220、300548、603119...）几乎都以 NEW_IN 首次进入、随后持续成为 BOTH。
+    **对账**：赢家的 PnL 记在首次入场（NEW_IN 时点买入便宜），前瞻收益统计则把它们在后续窗口记为
+    BOTH——两者不矛盾：NEW_IN 是"入场事件"，BOTH 是"持有状态"。
+
+**Section F 反事实**（retrain-triggered、Top5、等权新入、hold drift、同成本；只改 retrain 日打分）：
+
+| metric | C0 新模型 Top5 | C1 mean-rank consensus | C2 confirmed-first |
+|---|---|---|---|
+| Total return | +953% | +636% | **+953%** |
+| CAGR | 52.6% | 43.1% | **52.6%** |
+| MaxDD | −43.5% | −44.5% | **−43.5%** |
+| Active vs CSI800 | +9.60 | +6.43 | **+9.60** |
+| Turnover / orders | 3.58B / 442 | 2.60B / 406 | **3.58B / 442** |
+| Top1 share | 302132 14.4% | 603256 31.2% | **302132 14.4%** |
+| Top5 share | 60.4% | 81.9% | **60.4%** |
+| excl-top1 | +816% | +438% | **+816%** |
+
+Yearly：C0 **+98.5/−11.5/+73.8/+44.1/+125.3/+6.2** · C1 +38.5/+4.1/+85.4/+31.9/+78.8/+16.8 ·
+C2 = C0（逐年逐项一致）。
+
+- **C1（consensus）明显更差**：总收益 9.53x→6.36x（−33%）、MaxDD 没改善（−44.5% vs −43.5%）、
+  右尾更集中（top1 31.2%、top5 81.9% vs 14.4/60.4%）。唯一改善是年度波动（std ~30 vs ~49，
+  且 2022 由 −11.5% 转 +4.1%、无亏损年）——但这是用 1/3 收益换来的。
+- **C1 为何差（机制）**：consensus = mean(pct_rank_old, pct_rank_new) 把高分给"两个模型都在中间
+  名次靠前"的名字（如 2021-02-01 的 603920/600600：新模型只给 2.53/2.78，但旧模型 rank 高），
+  系统性**牺牲新模型刚提拔的 NEW_IN**——而 Section E 显示大赢家恰恰是 NEW_IN 首次入场。共识把
+  右尾源头丢掉了。
+- **C2（confirmed-first）的构造陷阱（三层，已逐一修复）**：confirmed-first 想做的只是"组内重排
+  （BOTH 优先）、集合与 C0 恒等"。但三版构造都踩坑：(1) 第一版用 `1e6*band + rank` 且 rank 取反
+  （ascending=False）→ 非 BOTH 空位填成**新模型 rank 最差**的名字；(2) 第二版 `rank(ascending=True)`
+  后仍因 rank Series 是**行整数索引**、`reindex(instrument)` 静默返回 NaN → 每个 override 日分数
+  塌成 ~0，存储 parquet 退化为"top-5 保留原始分、其余全 0"；(3) 第三版 forced set 用对 base 信号
+  的**朴素排序** head-5，而引擎在 70% 顶 cap 日的实际选择是**另一场 tiebreak 抽签**——与 C0 的
+  真实持仓集并不相等。**修复**：forced set 直接从 C0 的 executions 推导（当日再平衡后持仓 ∪ 当日
+  买单，含 2025-08-18 被 Limit-Up 拒掉的 603256），band 2.0/1.0 用 instrument 索引的 pct-rank
+  打 tiebreak；写盘后对**存储 parquet**（回测真正读的产物）验证 top5 == forced set **67/67**。
+- **C2 最终结果 = 结构性 no-op**：重跑后 C2 与 C0 **逐日持仓 67/67 天完全一致**、442 单、全部
+  指标逐项相等（上表）。原因：等权 Top5 + rank_exit 引擎持的是 top-5 **集合**，不看组内排序；
+  confirmed-first 只是组内重排，**没有任何机制改变持仓或 PnL**。任何"C2 ≠ C0"的数值（早前那版
+  CAGR 35%/48%）都是构造 bug 的产物，不是策略差异。
+
+**Q1–Q4 回答**：
+- **Q1（retrain 是否创造 alpha，NEW_IN vs DROPPED）**：**微弱且不稳健**。180d edge 全样本 +5pp，
+  但 4/5 年为负、只在 30% 干净日 +21pp；60d ≈0。retrain 的"换血"本身不是稳定的 alpha 来源。
+- **Q2（BOTH 是否值得当共识依据）**：BOTH 的平均 180d 超额更高（+54.9 vs +24.6），是持久 alpha；
+  但**把共识做成选股规则（C1）反而亏**，因为它把 NEW_IN 右尾挤掉了。新模型 Top5 本来就包含 BOTH
+  （≈2.4/5），不需要单独的共识重排。
+- **Q3（右尾赢家来自 BOTH 还是 NEW_IN）**：**已实现 PnL 层面来自 NEW_IN 首次入场**（top-40 贡献
+  者 72% PnL）；前瞻条件层面 BOTH 右尾更肥。对账：赢家以 NEW_IN 便宜入场、随后持续为 BOTH。
+- **Q4（C1/C2 能否"收益不显著丢失但更稳"）**：**不能**。C1 收益显著丢失（−33%）且 MaxDD/集中度
+  更差，只换来年度平滑；C2 与 C0 逐日路径恒等（67/67 持仓、442 单、指标全同），confirmed-first
+  与 trust-new-model 无差别。
+
+**裁决：A. Trust-new-model。** 保留 retrain-triggered + 新模型 Top5（= C0）。共识（C1）被淘汰：
+收益 −33% 换来的是年度平滑而非风控/右尾改善。confirmed-first（C2）集合恒等于 C0，不存在独立
+价值。真正的机制短板不是选股结构而是 **score cap 顶层退化**（70% 天 top-5 是 tiebreak 抽签）——
+那属于数据/打分管线问题，本轮冻结范围之外，留作下轮。
+
+Verification：reinfer 可复现（w0000/w0660/w1320 Spearman ≥0.99999）；panel new5 == base top5
+67/67（string 日期逐日核对）；C2 修正后对**存储 parquet** 校验 top5 == C0 forced set **67/67**，
+且重跑回测逐日持仓 == C0 **67/67**、指标逐项相等（422/442 单、turnover、top1/top5/excl-top1 全同）；
+C1 构造在干净日 2021-02-01/2024-09-19 手工核对（consensus 正确偏向 agreement）。
+backtest_ids：C0 = S180_20d `ba710797` · C1 `707b88e7` · C2 `47e5e509`。
+artifacts：`execution_policy/{S180_20d,C1_consensus,C2_confirmed}` + signal runs
+`…__cf__c1_consensus__…` / `…__cf__c2_confirmed__…`。
+Code：`reinfer_old_new.py`（A）、`analyze_old_new.py`（B–E）、`build_counterfactual_signals.py`
+（F 信号）、`run_ablation.py`/`compare_structure.py`（F 回测与对比，group F）、
+`verify_c2_vs_c0.py`（C2≡C0 逐日路径校验）。
