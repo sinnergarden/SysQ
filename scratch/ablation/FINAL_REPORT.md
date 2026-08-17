@@ -521,10 +521,33 @@ off10 +51.1/+9.9/+74.0/+31.8/+33.1/−6.9 · off15 −3.9/+36.4/+12.7/+21.1/+40.
   与 60d 一样不具备相位稳健性。两轮实验共同排除固定 cadence 路线（无论相位），剩余候选只剩
   不依赖 rebalance 网格的结构（尾部集中度 cap、单票归因后重验 S180 骨架）。
 
+**机制定位（重要）：off0 == 模型 retrain 激活日，68/68 精确重合。** S180 信号管线
+`financial_rc_180d_rolling_5y_to_202607_v3`（`rolling_windows.csv`）每 20 个交易日 retrain 一次
+（68 个 window，各在 `predict_start` 启用新模型；每模型训练过去 504 交易日 ≈756 日历天；
+train_end→predict_start 间隔 ~273 天 ≈ 180d label horizon + 缓冲，maturity-gate 合规无 lookahead）。
+对照各 run 的 rebalance 日期落在 retrain 日的比例：
+
+| run | rebalances | on-retrain-day |
+|---|---|---|
+| **S180_20d (off0)** | 68 | **68 (100%)** |
+| S180_20d_off5 / off10 / off15 | 68/68/67 | **0 (0%)** |
+| A_S180_60d · off20 · off40 | 23/23/22 | 23/23/22 (100%) |
+| S180_180d | 8 | 8 (100%) |
+| band_weekly | 285 | 23 (8%) |
+
+- **off0 的优势是"rebalance 与 retrain 同步"这一机制**，不是任意相位运气：每次 off0 重排序都发生在
+  新模型预测生效当天；off5/10/15 落在窗口中间（模型未刷新）即崩塌。20d 骨架的稳健锚点 = **retrain
+  日历**——生产中可做成确定性规则：**rebalance 由 retrain 事件触发**（而非独立网格上的自由相位）。
+- **两个保留**：(1) 循环性——retrain 网格本身从 2021-01-04（=回测窗口起点）起算，off0 同步是
+  "相对于研究管线自己的 rolling 网格"，绝对相位仍由实验配置设定，非内禀日历；(2) 60d 三个 offset
+  因 20\|60 全部 100% 落在 retrain 日、CAGR 仍摆 32→69.5% → retrain 对齐是**必要不充分**，残余
+  摆动是"在哪些 retrain 日入场"的 entry-timing（002281 主升段），与模型新鲜度无关。
+
 **Verification（对抗复核 workflow，3 路独立）**：offset 网格 firing 精确（off0/5/10/15 首轮 rebalance
 位于交易日 idx 0/5/10/15，各 ~68 轮、间距 20）；avg-cost PnL 重建 recon_gap = 买入佣金精确吻合
 （0.56%~1.70% of gain，≤1M 绝对）；top1/top5/excl-top1 与订单数全部复现（±1e-3 内）；off15
-top5>100% 算术有效（72/141 名亏损对冲）；独立重算指标仅差参考值 2 位小数舍入 → **CONFIRMED_NOT_ROBUST**。
+top5>100% 算术有效（72/141 名亏损对冲）；独立重算指标仅差参考值 2 位小数舍入 → **CONFIRMED_NOT_ROBUST**；
+retrain 对齐由 `rolling_windows.csv` predict_start ↔ daily_summary is_rebalance 逐日核对（68/68）。
 backtest_ids: S180_20d `ba710797`（=off0）· S180_20d_off5 `146e9661` · S180_20d_off10 `c038a0a2` ·
 S180_20d_off15 `0c893584`。
 artifacts: `execution_policy/{S180_20d,S180_20d_off5,S180_20d_off10,S180_20d_off15}`。
