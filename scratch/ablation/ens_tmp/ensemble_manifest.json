@@ -1,0 +1,46 @@
+{
+ "p0": {
+  "phase": "p0",
+  "days": 1351,
+  "median_rho": 1.0,
+  "min_rho": 0.9999981164486126,
+  "top5_identical_days": 1351,
+  "top5_mismatch_days": 0,
+  "fail": true,
+  "ens3": "/home/liuming/.openclaw/workspace/SysQ/data/research/signals/fwd_ret_180d_raw__daily_zscore/fwd_ret_180d_raw__daily_zscore__rr_p0__ens3__financial_rc_180d_rolling_5y_to_202607_v3/predictions.parquet",
+  "ens5": "/home/liuming/.openclaw/workspace/SysQ/data/research/signals/fwd_ret_180d_raw__daily_zscore/fwd_ret_180d_raw__daily_zscore__rr_p0__ens5__financial_rc_180d_rolling_5y_to_202607_v3/predictions.parquet"
+ },
+ "p5": {
+  "phase": "p5",
+  "days": 1351,
+  "median_rho": 0.8038327274937961,
+  "min_rho": 0.4901942348489393,
+  "top5_identical_days": 20,
+  "top5_mismatch_days": 1331,
+  "fail": true,
+  "ens3": "/home/liuming/.openclaw/workspace/SysQ/data/research/signals/fwd_ret_180d_raw__daily_zscore/fwd_ret_180d_raw__daily_zscore__rr_p5__ens3__financial_rc_180d_rolling_5y_to_202607_v3/predictions.parquet",
+  "ens5": "/home/liuming/.openclaw/workspace/SysQ/data/research/signals/fwd_ret_180d_raw__daily_zscore/fwd_ret_180d_raw__daily_zscore__rr_p5__ens5__financial_rc_180d_rolling_5y_to_202607_v3/predictions.parquet"
+ },
+ "p10": {
+  "phase": "p10",
+  "days": 1351,
+  "median_rho": 0.8001213448768938,
+  "min_rho": 0.5916242801679483,
+  "top5_identical_days": 21,
+  "top5_mismatch_days": 1330,
+  "fail": true,
+  "ens3": "/home/liuming/.openclaw/workspace/SysQ/data/research/signals/fwd_ret_180d_raw__daily_zscore/fwd_ret_180d_raw__daily_zscore__rr_p10__ens3__financial_rc_180d_rolling_5y_to_202607_v3/predictions.parquet",
+  "ens5": "/home/liuming/.openclaw/workspace/SysQ/data/research/signals/fwd_ret_180d_raw__daily_zscore/fwd_ret_180d_raw__daily_zscore__rr_p10__ens5__financial_rc_180d_rolling_5y_to_202607_v3/predictions.parquet"
+ },
+ "p15": {
+  "phase": "p15",
+  "days": 1340,
+  "median_rho": 0.8087578480061383,
+  "min_rho": 0.5430756705029334,
+  "top5_identical_days": 20,
+  "top5_mismatch_days": 1320,
+  "fail": true,
+  "ens3": "/home/liuming/.openclaw/workspace/SysQ/data/research/signals/fwd_ret_180d_raw__daily_zscore/fwd_ret_180d_raw__daily_zscore__rr_p15__ens3__financial_rc_180d_rolling_5y_to_202607_v3/predictions.parquet",
+  "ens5": "/home/liuming/.openclaw/workspace/SysQ/data/research/signals/fwd_ret_180d_raw__daily_zscore/fwd_ret_180d_raw__daily_zscore__rr_p15__ens5__financial_rc_180d_rolling_5y_to_202607_v3/predictions.parquet"
+ }
+}
