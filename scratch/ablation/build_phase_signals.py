@@ -238,10 +238,11 @@ def build_phase(
     tmp_dir: Path,
     idxs: list[int] | None,
     seeds: list[int],
-) -> pd.DataFrame:
+) -> tuple[pd.DataFrame, list[dict]]:
     k = PHASES[phase]
     shift_lookup = build_shift_lookup(k)
     records: list[pd.DataFrame] = []
+    kept: list[dict] = []  # windows whose shifted predict span was actually built
     t0 = time.time()
     for i in idxs if idxs is not None else range(len(windows)):
         if seeds == [42]:
@@ -250,6 +251,7 @@ def build_phase(
             ckpt = tmp_dir / f"rr_{phase}_{'_'.join(map(str,seeds))}_{i:04d}.parquet"
         if ckpt.exists():
             records.append(pd.read_parquet(ckpt))
+            kept.append(windows[i])
             print(f"[{phase} {i:2d}] {windows[i]['window_id']}: ckpt exists, skip",
                   flush=True)
             continue
@@ -267,6 +269,7 @@ def build_phase(
         ckpt.parent.mkdir(parents=True, exist_ok=True)
         out.to_parquet(ckpt, index=False)
         records.append(out)
+        kept.append(w)
         print(f"[{phase} {i:2d}] {w['window_id']} span={shifted['predict_start']}"
               f"..{shifted['predict_end']} rows={len(out)} "
               f"({time.time()-w0:.0f}s)", flush=True)
@@ -276,8 +279,9 @@ def build_phase(
     df = pd.concat(records, ignore_index=True)
     df = df.drop_duplicates(["trade_date", "instrument"]).reset_index(drop=True)
     print(f"[{phase}] {len(df)} rows, {df['trade_date'].nunique()} days, "
+          f"built {len(kept)}/{len(windows)} windows "
           f"({time.time()-t0:.0f}s total)")
-    return df
+    return df, kept
 
 
 def _effective_model_params(gen: LightGBMSingleLabelGenerator) -> dict:
@@ -311,6 +315,12 @@ def _research_invariants(
       * seed runs (seed42/7/77/123/456): identical fingerprints AND identical
         date ranges/shift; only the top-level `seeds` field differs.
 
+    ``windows`` MUST be the EFFECTIVE window list (the ones actually built;
+    build_phase drops windows whose shifted predict span falls outside the
+    trading calendar). Recording the nominal full schedule instead would lie
+    about what was produced at the calendar edge — e.g. p15's last window,
+    whose +15d shift inverts out of bounds and is skipped.
+
     Naming is deliberately honest: ``*_id_hash`` fields hash the ID string
     only (NOT the underlying data); content-level fingerprints carry an
     explicit ``*_snapshot_hash`` / ``*_manifest_hash`` name and cite their
@@ -331,6 +341,14 @@ def _research_invariants(
 
     def _sh(win: dict, key: str) -> str:
         return shift_date(win[key], shift_lookup, win["window_id"])
+
+    # fail loudly rather than record an inverted schedule (caller bug if hit)
+    if _sh(windows[0], "predict_start") > _sh(windows[-1], "predict_end"):
+        raise RuntimeError(
+            f"{phase}: effective predict span inverted "
+            f"{_sh(windows[0], 'predict_start')}..{_sh(windows[-1], 'predict_end')} "
+            f"— windows passed must be the built (kept) windows"
+        )
 
     # label artifact provenance from the LabelStore manifest: real recorded
     # fingerprint; unavailable -> None, recorded honestly (metadata must not
@@ -376,6 +394,10 @@ def _research_invariants(
 
 def save_run(phase: str, df: pd.DataFrame, seeds: list[int],
              gen: LightGBMSingleLabelGenerator, windows: list[dict]) -> Path:
+    """Persist the built signal. ``windows`` MUST be the EFFECTIVE window list
+    (the ones actually built after build_phase drops out-of-calendar shifted
+    spans) — research_invariants fingerprints must reflect what was produced,
+    not the nominal full schedule."""
     rid = run_id_for(phase, seeds)
     df = df.copy()
     df["signal_id"] = SIG_ID
@@ -495,8 +517,8 @@ def main() -> int:
     idxs = [int(s.strip()) for s in args.windows.split(",")] if args.windows else None
     seeds = [int(s.strip()) for s in args.seeds.split(",") if s.strip()]
 
-    df = build_phase(args.phase, windows, gen, label_df, Path(args.tmp), idxs, seeds)
-    path = save_run(args.phase, df, seeds, gen, windows)
+    df, kept = build_phase(args.phase, windows, gen, label_df, Path(args.tmp), idxs, seeds)
+    path = save_run(args.phase, df, seeds, gen, kept)
 
     if args.validate:
         stored = pd.read_parquet(PREDS_PARQUET)
