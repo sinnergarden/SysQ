@@ -60,10 +60,17 @@ SIGNS_DIR = ROOT / "data/research/signals" / SIG_ID
 STORED_PARQUET = SIGNS_DIR / SRID / "predictions.parquet"
 
 
+SUFFIX = "rawrank"  # overridden by --suffix; shifted phases resolve to
+#     rr_<phase>__<SUFFIX>__<EXPERIMENT>.  p0 ALWAYS uses rawrank (it IS the
+#     corrected P0 baseline — no rawrank_correct variant exists for p0; the
+#     stored rr_p0__rawrank was rebuilt post-fix with tuned defaults).
+
+
 def run_parquet(phase: str) -> Path:
     if phase == "stored":
         return STORED_PARQUET
-    rid = f"{SIG_ID}__rr_{phase}__rawrank__{EXPERIMENT}"
+    suffix = "rawrank" if phase == "p0" else SUFFIX
+    rid = f"{SIG_ID}__rr_{phase}__{suffix}__{EXPERIMENT}"
     return SIGNS_DIR / rid / "predictions.parquet"
 
 
@@ -307,7 +314,13 @@ def main() -> None:
     ap.add_argument("--phases", default="p0,p5,p10,p15",
                     help="comma-separated phases to analyze (stored = capped "
                          "baseline run on original retrain days)")
+    ap.add_argument("--suffix", default="rawrank",
+                    help="signal-dir suffix for SHIFTED phases (p5/p10/p15); "
+                         "p0 always resolves to rawrank.  Use rawrank_correct "
+                         "for the post-fix canonical baseline.")
     args = ap.parse_args()
+    global SUFFIX
+    SUFFIX = args.suffix
     want = [p.strip() for p in args.phases.split(",") if p.strip()]
 
     cm = load_close_matrix()
