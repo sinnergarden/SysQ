@@ -1,0 +1,116 @@
+[3266123:MainThread](2026-08-20 01:31:57,952) INFO - qlib.Initialization - [config.py:452] - default_conf: client.
+[3266123:MainThread](2026-08-20 01:31:57,953) INFO - qlib.Initialization - [__init__.py:75] - qlib successfully initialized based on client settings.
+[3266123:MainThread](2026-08-20 01:31:57,953) INFO - qlib.Initialization - [__init__.py:77] - data_path={'__DEFAULT_FREQ': PosixPath('/home/liuming/.openclaw/workspace/SysQ/data/qlib_bin')}
+[3266123:MainThread](2026-08-20 01:31:58,399) INFO - qlib.Initialization - [config.py:452] - default_conf: client.
+[3266123:MainThread](2026-08-20 01:31:58,400) INFO - qlib.Initialization - [__init__.py:75] - qlib successfully initialized based on client settings.
+[3266123:MainThread](2026-08-20 01:31:58,400) INFO - qlib.Initialization - [__init__.py:77] - data_path={'__DEFAULT_FREQ': PosixPath('/home/liuming/.openclaw/workspace/SysQ/data/qlib_bin')}
+[3266123:MainThread](2026-08-20 01:31:58,803) INFO - qlib.Initialization - [config.py:452] - default_conf: client.
+[3266123:MainThread](2026-08-20 01:31:58,803) INFO - qlib.Initialization - [__init__.py:75] - qlib successfully initialized based on client settings.
+[3266123:MainThread](2026-08-20 01:31:58,804) INFO - qlib.Initialization - [__init__.py:77] - data_path={'__DEFAULT_FREQ': PosixPath('/home/liuming/.openclaw/workspace/SysQ/data/qlib_bin')}
+[3266123:MainThread](2026-08-20 01:31:59,198) INFO - qlib.Initialization - [config.py:452] - default_conf: client.
+[3266123:MainThread](2026-08-20 01:31:59,199) INFO - qlib.Initialization - [__init__.py:75] - qlib successfully initialized based on client settings.
+[3266123:MainThread](2026-08-20 01:31:59,199) INFO - qlib.Initialization - [__init__.py:77] - data_path={'__DEFAULT_FREQ': PosixPath('/home/liuming/.openclaw/workspace/SysQ/data/qlib_bin')}
+
+########## Phase P0 ##########
+retrain cohorts: 68  days 2021-01-04..2026-07-17
+  @60 edgeA: n= 66 mean=+12.71pp med= +8.15 q25= -4.24 q75=+19.37 pos_rate=0.70 worst= -17.13 p90= +35.71 max= +98.50
+  @60 edgeB: n= 66 mean=+15.14pp med= +8.43 q25= +0.09 q75=+21.81 pos_rate=0.74 worst= -19.79 p90= +40.63 max=+105.26
+  --- yearly (median / pos_rate) ---
+    2021: n=13 med= +5.34pp pos=0.69
+    2022: n=12 med= +7.02pp pos=0.75
+    2023: n=12 med= +1.71pp pos=0.67
+    2024: n=12 med= +6.49pp pos=0.67
+    2025: n=12 med=+11.58pp pos=0.75
+    2026: n=5 med=+24.37pp pos=0.60
+  @180 edgeA: n= 60 mean=+36.37pp med=+19.66 q25= -1.00 q75=+60.51 pos_rate=0.72 worst= -23.01 p90=+100.14 max=+234.38
+  @180 edgeB: n= 60 mean=+44.02pp med=+28.02 q25= +8.03 q75=+68.17 pos_rate=0.85 worst= -18.37 p90=+104.16 max=+247.73
+  --- yearly (median / pos_rate) ---
+    2021: n=13 med= +4.83pp pos=0.62
+    2022: n=12 med=+42.11pp pos=0.83
+    2023: n=12 med= +2.39pp pos=0.50
+    2024: n=12 med=+52.91pp pos=0.75
+    2025: n=11 med=+40.29pp pos=0.91
+
+########## Phase P5 ##########
+retrain cohorts: 68  days 2021-01-11..2026-07-24
+  @60 edgeA: n= 65 mean=+13.66pp med= +5.62 q25= -2.10 q75=+20.54 pos_rate=0.65 worst= -14.60 p90= +45.83 max=+102.83
+  @60 edgeB: n= 65 mean=+16.24pp med= +6.53 q25= +1.49 q75=+21.16 pos_rate=0.75 worst= -15.13 p90= +48.44 max=+110.15
+  --- yearly (median / pos_rate) ---
+    2021: n=12 med= -1.45pp pos=0.42
+    2022: n=12 med=+10.55pp pos=0.58
+    2023: n=13 med= +5.62pp pos=0.77
+    2024: n=12 med= +2.69pp pos=0.58
+    2025: n=12 med=+10.49pp pos=0.83
+    2026: n=4 med=+26.25pp pos=0.75
+  @180 edgeA: n= 59 mean=+41.54pp med=+15.73 q25= -3.26 q75=+64.13 pos_rate=0.69 worst= -23.52 p90=+119.30 max=+269.50
+  @180 edgeB: n= 59 mean=+49.39pp med=+23.33 q25= +3.25 q75=+73.20 pos_rate=0.80 worst= -24.68 p90=+131.33 max=+284.49
+  --- yearly (median / pos_rate) ---
+    2021: n=12 med= +7.29pp pos=0.58
+    2022: n=12 med=+31.71pp pos=0.83
+    2023: n=13 med= +2.95pp pos=0.54
+    2024: n=12 med=+76.73pp pos=0.83
+    2025: n=10 med=+41.06pp pos=0.70
+
+########## Phase P10 ##########
+retrain cohorts: 68  days 2021-01-18..2026-07-31
+  @60 edgeA: n= 65 mean=+11.59pp med= +5.83 q25= -1.36 q75=+18.58 pos_rate=0.72 worst= -18.94 p90= +41.64 max=+100.77
+  @60 edgeB: n= 65 mean=+14.07pp med= +7.58 q25= +0.49 q75=+19.45 pos_rate=0.75 worst= -18.02 p90= +41.02 max=+110.45
+  --- yearly (median / pos_rate) ---
+    2021: n=12 med= +2.14pp pos=0.58
+    2022: n=12 med= +6.75pp pos=0.75
+    2023: n=12 med= +5.51pp pos=0.75
+    2024: n=12 med= +3.51pp pos=0.75
+    2025: n=13 med= +7.59pp pos=0.77
+    2026: n=4 med=+21.66pp pos=0.75
+  @180 edgeA: n= 59 mean=+28.77pp med=+10.33 q25= -3.49 q75=+49.63 pos_rate=0.69 worst= -33.29 p90=+108.53 max=+138.57
+  @180 edgeB: n= 59 mean=+36.38pp med=+20.06 q25= +4.49 q75=+57.41 pos_rate=0.78 worst= -29.27 p90=+116.90 max=+149.78
+  --- yearly (median / pos_rate) ---
+    2021: n=12 med= +3.28pp pos=0.50
+    2022: n=12 med=+18.87pp pos=0.75
+    2023: n=12 med= -0.11pp pos=0.50
+    2024: n=12 med=+37.89pp pos=0.92
+    2025: n=11 med=+35.48pp pos=0.82
+
+########## Phase P15 ##########
+retrain cohorts: 67  days 2021-01-25..2026-07-10
+  @60 edgeA: n= 65 mean=+12.21pp med= +6.97 q25= -0.88 q75=+15.32 pos_rate=0.69 worst= -21.33 p90= +35.34 max= +80.81
+  @60 edgeB: n= 65 mean=+14.73pp med= +9.74 q25= +0.83 q75=+20.02 pos_rate=0.77 worst= -22.33 p90= +42.27 max= +86.94
+  --- yearly (median / pos_rate) ---
+    2021: n=12 med= +3.29pp pos=0.50
+    2022: n=12 med= +4.44pp pos=0.67
+    2023: n=12 med= +4.89pp pos=0.75
+    2024: n=12 med= +3.75pp pos=0.58
+    2025: n=12 med=+12.12pp pos=0.92
+    2026: n=5 med= +5.99pp pos=0.80
+  @180 edgeA: n= 59 mean=+39.95pp med=+17.78 q25= -1.32 q75=+72.27 pos_rate=0.73 worst= -23.57 p90=+104.05 max=+249.58
+  @180 edgeB: n= 59 mean=+47.52pp med=+26.06 q25= +4.06 q75=+83.12 pos_rate=0.81 worst= -18.84 p90=+110.63 max=+262.76
+  --- yearly (median / pos_rate) ---
+    2021: n=12 med= +6.04pp pos=0.67
+    2022: n=12 med=+24.63pp pos=0.67
+    2023: n=12 med= +2.70pp pos=0.58
+    2024: n=12 med=+80.38pp pos=0.83
+    2025: n=11 med=+61.50pp pos=0.91
+
+### Sec 1 cap-tie regression (stored capped vs P0 raw, 68 retrain days) ###
+  cap-tie days (>=5 names at +3.0): 52/68
+  top5 identical: 21/68;  differ: 47/68
+  top5 slots that flip vs tiebreak lottery: 226/340 (66%)
+
+### Sec 6 right tail @180 (per-cohort mean over measured top5 names) ###
+  P0: >+20%=41.7% >+50%=24.3% >+100%=15.3% <-20%=17.3% <-40%= 3.0% 
+  P5: >+20%=43.5% >+50%=26.9% >+100%=16.7% <-20%=15.3% <-40%= 3.1% 
+  P10: >+20%=40.8% >+50%=23.8% >+100%=13.6% <-20%=18.0% <-40%= 2.0% 
+  P15: >+20%=46.1% >+50%=27.1% >+100%=17.6% <-20%=16.6% <-40%= 3.4% 
+
+### Sec 6 big-winner presence + single-cohort dependence @180 ###
+  phase  cohorts  any>+100%   frac  top1med excl_top1med exclTop5Coh
+  P0          60         29   0.48    90.6%         6.0%      +12.0pp
+  P5          59         27   0.46    88.4%         7.0%      +10.6pp
+  P10         59         26   0.44    84.0%         2.2%       +9.8pp
+  P15         59         29   0.49    99.0%         9.6%      +12.4pp
+
+### Phase-robustness read ###
+  @60 median edgeA per phase: p0=+8.15, p5=+5.62, p10=+5.83, p15=+6.97
+      between-phase median spread = +2.53pp; within-phase IQR = p0=23.61, p5=22.64, p10=19.93, p15=16.20
+  @180 median edgeA per phase: p0=+19.66, p5=+15.73, p10=+10.33, p15=+17.78
+      between-phase median spread = +9.32pp; within-phase IQR = p0=61.52, p5=67.39, p10=53.12, p15=73.59
