@@ -54,7 +54,11 @@ from qsys.research.generators.utils import (  # noqa: E402
     check_training_label_maturity,
     horizon_from_label_id,
 )
-from qsys.signal.alpha_v1.training import train_model, predict_model  # noqa: E402
+from qsys.signal.alpha_v1.training import (  # noqa: E402
+    _DEFAULT_LGB_PARAMS,
+    train_model,
+    predict_model,
+)
 from qsys.signal.store import SignalStore  # noqa: E402
 
 EXPERIMENT = "financial_rc_180d_rolling_5y_to_202607_v3"
@@ -176,7 +180,8 @@ def train_shifted_model(
     tag = f"{win['window_id']}_{shifted['train_start']}_{shifted['train_end']}"
     models = []
     for sd in (seeds or [42]):
-        params = dict(gen.lgb_params or {})
+        params = (dict(gen.lgb_params) if gen.lgb_params
+                  else dict(_DEFAULT_LGB_PARAMS))  # db539d6a fix: never bare {}
         params["seed"] = sd
         model, center, scale = train_model(
             X_tr.loc[y_tr.index], y_tr, f"{tag}_s{sd}",
