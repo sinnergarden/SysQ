@@ -280,7 +280,53 @@ def build_phase(
     return df
 
 
-def save_run(phase: str, df: pd.DataFrame, seeds: list[int]) -> Path:
+def _research_invariants(
+    gen: LightGBMSingleLabelGenerator,
+    windows: list[dict],
+) -> dict[str, object]:
+    """Content hashes of the dimensions that MUST stay constant across
+    phase/seed experiments of the same research line (Task 4 invariant).
+
+    Verification contract:
+      * phase runs (P0/P5/P10/P15): universe/feature/label/model_config
+        hashes identical; only `shift_trading_days` and the shifted date
+        ranges (train/predict) differ.
+      * seed runs (seed42/7/77/123/456): identical hashes AND identical
+        date ranges/shift; only the top-level `seeds` field differs.
+
+    ``model_config_hash`` deliberately EXCLUDES the seed, so seed runs
+    compare equal.  ``code_version`` == git_commit (also stamped top-level
+    by ``with_standard_metadata``).
+    """
+    from qsys.research.manifest import _get_git_commit
+
+    model_config = {
+        "n_estimators": gen.n_estimators,
+        "lgb_params": dict(_DEFAULT_LGB_PARAMS),  # seed excluded on purpose
+    }
+    return {
+        "universe": gen.universe,
+        "universe_hash": hashlib.sha256(
+            gen.universe.encode("utf-8")).hexdigest(),
+        "feature_list_id": gen.feature_list_id,
+        "feature_hash": gen.source_manifest_hash,  # canonical feature snapshot
+        "label_id": LABEL_ID,
+        "label_hash": hashlib.sha256(
+            LABEL_ID.encode("utf-8")).hexdigest(),
+        "model_config_hash": hashlib.sha256(
+            json.dumps(model_config, sort_keys=True).encode("utf-8")
+        ).hexdigest(),
+        "train_window_trading_days": 504,
+        "train_date_range": {
+            "start": windows[0]["train_start"],
+            "end": windows[0]["train_end"],
+        },
+        "code_version": _get_git_commit() or "",
+    }
+
+
+def save_run(phase: str, df: pd.DataFrame, seeds: list[int],
+             gen: LightGBMSingleLabelGenerator, windows: list[dict]) -> Path:
     rid = run_id_for(phase, seeds)
     df = df.copy()
     df["signal_id"] = SIG_ID
@@ -292,6 +338,7 @@ def save_run(phase: str, df: pd.DataFrame, seeds: list[int]) -> Path:
         SIG_ID, rid, df,
         manifest={
             "artifact_type": "rawrank_shifted_phase_signal_run",
+            "research_invariants": _research_invariants(gen, windows),
             "rawrank_of": SRID,
             "shift_trading_days": PHASES[phase],
             "ranking_score": "daily_zscore(raw_prediction)  # no cap, order-preserving",
@@ -400,7 +447,7 @@ def main() -> int:
     seeds = [int(s.strip()) for s in args.seeds.split(",") if s.strip()]
 
     df = build_phase(args.phase, windows, gen, label_df, Path(args.tmp), idxs, seeds)
-    path = save_run(args.phase, df, seeds)
+    path = save_run(args.phase, df, seeds, gen, windows)
 
     if args.validate:
         stored = pd.read_parquet(PREDS_PARQUET)
