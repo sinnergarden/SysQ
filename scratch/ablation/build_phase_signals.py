@@ -180,8 +180,8 @@ def train_shifted_model(
     tag = f"{win['window_id']}_{shifted['train_start']}_{shifted['train_end']}"
     models = []
     for sd in (seeds or [42]):
-        params = (dict(gen.lgb_params) if gen.lgb_params
-                  else dict(_DEFAULT_LGB_PARAMS))  # db539d6a fix: never bare {}
+        params = (dict(gen.lgb_params) if gen.lgb_params is not None
+                  else dict(_DEFAULT_LGB_PARAMS))  # None -> defaults; explicit {} kept bare
         params["seed"] = sd
         model, center, scale = train_model(
             X_tr.loc[y_tr.index], y_tr, f"{tag}_s{sd}",
