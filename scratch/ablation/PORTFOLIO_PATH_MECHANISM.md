@@ -7,7 +7,7 @@ Date: 2026-08-18 · **⚠️ 2026-08-20: P5/P10/P15 证据作废（params-fallba
 **本文档的全部 P5/P10/P15 数值基于 VOID bare-params runs**：`rr_{p5,p10,p15}__rawrank` 在 params-fallback 回归（commit `db539d6a`，`dict(gen.lgb_params or {})`）期间用 LightGBM 原生默认参数训练（2026-08-18 01:11–01:20 +0800），Spearman ≈ 0.80 vs corrected。因此：
 
 1. **CAGR 差异叙事失效**：旧数字 "P0 57.9% vs P5 15.8% / P10 22.4% / P15 18.2%"（跨 tuned-P0 vs bare-shifted 的**跨 config 比较**）**不是** entry-timing/phase 效应。Corrected backtests（`RR_p{5,10,15}_single_correct` = `848f2b47`/`13892a75`/`7a73b7fa`，`data/research/ablation/ensemble_pf/`，配置与旧 backtest 逐字段相同、仅 signal 为 `rawrank_correct`）给出 **P5 +44.2% · P10 +55.0% · P15 +29.3%** vs P0 +57.9% —— P10 ≈ P0，P5 落后 13.7pp，**仅 P15 是明显弱尾**（+29.3%，MaxDD −49.1% 也是四相最深）。
-2. **"巨大路径差异"作废**：差异的**量级**大幅缩水，不是 3–4× CAGR 摆动。"名字级排名实现分歧"作为机制仍部分成立（见 Sec 5），但它是 **P15 特定滞后 + P15 日历边缘 clamp**，不是四相普遍的彩票差异。
+2. **"巨大路径差异"作废**：差异的**量级**大幅缩水，不是 3–4× CAGR 摆动。"名字级排名实现分歧"作为机制仍部分成立（见 Sec 5），但差异**集中在 P15（corrected baseline 中唯一明显弱尾，CAGR 29.3%、MaxDD −49.1% 也是四相最深）**，不是四相普遍的彩票差异。**P15 弱尾的原因目前未知**：P15 的 67/68 有效窗口是日历尾部研究覆盖问题，由于缺失窗口不影响截至 2026-07-31 的组合回测，**不能用它解释 P15 的低 CAGR / 深回撤**。
 3. **KEEP_CURRENT 决策的证据基础作废**：该决策建立在其上的是 bare-vs-tuned 假象。需在 corrected 相位上重估（P15 弱尾是否值得投入规则）。指向 corrected 基线：`RAW_RANKING_PHASE_REPORT.md`（Sec 5 + Four-answers #3，2026-08-20 修正）。
 4. 本文档 **Sec 2 同日跨 phase rank 表、Sec 6 consensus 反事实** 均基于 VOID 信号 rank —— 保留为历史机制分析，但**不可引用为当前证据**。
 
@@ -114,9 +114,10 @@ Consensus 稀释 P0（16.06→11.94），稳定性不比 P5/P10 好。唯一 PIT
 **Corrected 结论（2026-08-20）**：**相位差异远小于原报告** —— corrected backtests 给出 P5 +44.2% /
 P10 +55.0% / P15 +29.3% vs P0 +57.9%（`RR_p{5,10,15}_single_correct`，`848f2b47`/`13892a75`/`7a73b7fa`）。
 P10 ≈ P0，P5 落后 13.7pp，仅 P15 明显偏弱（+29.3%，MaxDD −49.1% 也是最深）。"名字级排名实现分歧"
-作为机制仍部分成立（corrected 下 P0 仍是四相最强），但**不是** 3–4× CAGR 摆动；P15 的弱尾与其
-日历-edge clamp（67 vs 68 有效窗口）相关。KEEP_CURRENT 决策需在 corrected 相位上重估：**P15 弱尾
-是否值得投入规则（而非"路径差异不可事前识别"）**。
+作为机制仍部分成立（corrected 下 P0 仍是四相最强），但**不是** 3–4× CAGR 摆动。**P15 弱尾的原因目前未知**：
+P15 的 67/68 有效窗口是日历尾部研究覆盖问题，由于缺失窗口不影响截至 2026-07-31 的组合回测，
+**不能用它解释 P15 的低 CAGR / 深回撤**。KEEP_CURRENT 决策需在 corrected 相位上重估：**P15 弱尾
+是否值得投入规则（而非"路径差异不可事前识别"）**。**P15 归因暂缓：先做 PIT audit（PIT 本身可能改变各 phase 的 portfolio path），PIT 之后再决定是否归因 P15。**
 
 ## Artifacts
 
