@@ -243,12 +243,16 @@ def build_phase(
     shift_lookup = build_shift_lookup(k)
     records: list[pd.DataFrame] = []
     kept: list[dict] = []  # windows whose shifted predict span was actually built
+    seeds = seeds or [42]  # match train_shifted_model's fallback, so the fp
+                           # never labels a seed-42 ckpt as seed-batch []
+    # provenance-bound cache key: the filename carries the experiment
+    # fingerprint, so a checkpoint is reused ONLY when produced by the exact
+    # same feature/label/model/code/calendar state (see _checkpoint_fingerprint).
+    fp = _checkpoint_fingerprint(phase, seeds, gen)
+    seeds_tag = f"s{seeds[0]}" if len(seeds) == 1 else "_".join(f"s{s}" for s in seeds)
     t0 = time.time()
     for i in idxs if idxs is not None else range(len(windows)):
-        if seeds == [42]:
-            ckpt = tmp_dir / f"rr_{phase}_{i:04d}.parquet"   # single-model runs
-        else:
-            ckpt = tmp_dir / f"rr_{phase}_{'_'.join(map(str,seeds))}_{i:04d}.parquet"
+        ckpt = tmp_dir / f"rr_{phase}_{seeds_tag}_{fp}_{i:04d}.parquet"
         if ckpt.exists():
             records.append(pd.read_parquet(ckpt))
             kept.append(windows[i])
@@ -298,6 +302,86 @@ def _effective_model_params(gen: LightGBMSingleLabelGenerator) -> dict:
     )
     params.pop("seed", None)
     return params
+
+
+def _label_manifest() -> tuple[dict, str | None]:
+    """(label manifest dict, sha256 of manifest file bytes) from LabelStore.
+    Unavailable -> ({}, None), recorded honestly; never crashes the run."""
+    label_store = LabelStore(str(ROOT / "data/research"))
+    try:
+        label_mf = label_store.load_manifest(LABEL_ID)
+        label_manifest_path = label_store.paths.label_manifest(LABEL_ID)
+        if label_manifest_path.exists():
+            return label_mf, hashlib.sha256(
+                label_manifest_path.read_bytes()).hexdigest()
+        return label_mf, None
+    except Exception:
+        return {}, None
+
+
+# modules that directly determine a checkpoint's produced rows. The ckpt
+# fingerprint hashes ALL of them, so an edit anywhere in the row-producing
+# pipeline (not just this script) orphans stale checkpoints instead of
+# silently reusing them under new code.
+_CODE_FILES = [
+    Path(__file__).resolve(),
+    ROOT / "qsys/signal/alpha_v1/training.py",
+    ROOT / "qsys/research/generators/lightgbm_single_label.py",
+    ROOT / "qsys/research/generators/utils.py",
+    ROOT / "qsys/data/calendar.py",
+    ROOT / "qsys/label/store.py",
+]
+
+
+def _shift_calendar_hash() -> str:
+    """Fingerprint of the trading-calendar DATA over the shift range. Every
+    shifted train/predict span (and thus every produced row) comes from this
+    calendar, so a calendar snapshot change must orphan checkpoints built on
+    the old one."""
+    cal = get_trading_calendar(SHIFT_CAL_START, SHIFT_CAL_END)
+    return hashlib.sha256("\n".join(sorted(cal)).encode("utf-8")).hexdigest()
+
+
+def _checkpoint_fingerprint(
+    phase: str, seeds: list[int], gen: LightGBMSingleLabelGenerator
+) -> str:
+    """Per-batch cache key that binds a checkpoint to its exact provenance.
+
+    A checkpoint holds the mean-raw output of a SPECIFIC (phase, seed-batch)
+    under a SPECIFIC feature/label/model/code/calendar state. Unlike
+    model_config_hash (seed stripped, so seed experiments compare equal), this
+    fingerprint MUST include the seed — changing seeds must orphan the old
+    ckpt. Any change in effective params (e.g. the #245 None->defaults fix),
+    feature/label snapshot, universe, the windows file, the trading calendar,
+    or ANY row-producing pipeline code (see _CODE_FILES) yields a different
+    filename, so build_phase can never reuse a checkpoint produced by
+    different provenance; stale checkpoints simply stop matching.
+    """
+    seeds = seeds or [42]  # match train_shifted_model's fallback: never label
+                           # a seed-42 ckpt as seed-batch []
+    _, label_manifest_hash = _label_manifest()
+
+    def _sha_file(p: Path) -> str:
+        return hashlib.sha256(p.read_bytes()).hexdigest()
+
+    src = {
+        "phase": phase,
+        "shift_trading_days": PHASES[phase],
+        "universe": gen.universe,
+        "feature_list_id": gen.feature_list_id,
+        "feature_hash": gen.source_manifest_hash,
+        "label_id": LABEL_ID,
+        "label_manifest_hash": label_manifest_hash,
+        "n_estimators": gen.n_estimators,
+        "lgb_params": _effective_model_params(gen),  # seed-stripped effective
+        "seeds": sorted(seeds),  # ckpt binds the seed batch
+        "windows_hash": _sha_file(WINDOWS_CSV),
+        "shift_calendar": _shift_calendar_hash(),  # trading-calendar data
+        "code": {str(p.relative_to(ROOT)): _sha_file(p) for p in _CODE_FILES},
+    }
+    return hashlib.sha256(
+        json.dumps(src, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    ).hexdigest()[:16]
 
 
 def _research_invariants(
@@ -353,17 +437,7 @@ def _research_invariants(
     # label artifact provenance from the LabelStore manifest: real recorded
     # fingerprint; unavailable -> None, recorded honestly (metadata must not
     # crash the signal save)
-    label_store = LabelStore(str(ROOT / "data/research"))
-    label_mf: dict = {}
-    label_manifest_hash: str | None = None
-    try:
-        label_mf = label_store.load_manifest(LABEL_ID)
-        label_manifest_path = label_store.paths.label_manifest(LABEL_ID)
-        if label_manifest_path.exists():
-            label_manifest_hash = hashlib.sha256(
-                label_manifest_path.read_bytes()).hexdigest()
-    except Exception:
-        pass
+    label_mf, label_manifest_hash = _label_manifest()
 
     return {
         "universe": gen.universe,
