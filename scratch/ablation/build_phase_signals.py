@@ -280,46 +280,95 @@ def build_phase(
     return df
 
 
+def _effective_model_params(gen: LightGBMSingleLabelGenerator) -> dict:
+    """Params train_model actually receives, WITHOUT the per-seed override.
+
+    Mirrors the train_shifted_model call site: None -> _DEFAULT_LGB_PARAMS,
+    an explicit override -> the override itself ({} stays bare), then the
+    seed is stripped so seed experiments compare equal.
+    """
+    params = (
+        dict(_DEFAULT_LGB_PARAMS)
+        if gen.lgb_params is None
+        else dict(gen.lgb_params)
+    )
+    params.pop("seed", None)
+    return params
+
+
 def _research_invariants(
     gen: LightGBMSingleLabelGenerator,
     windows: list[dict],
+    phase: str,
 ) -> dict[str, object]:
-    """Content hashes of the dimensions that MUST stay constant across
+    """Fingerprints of the dimensions that MUST stay constant across
     phase/seed experiments of the same research line (Task 4 invariant).
 
     Verification contract:
       * phase runs (P0/P5/P10/P15): universe/feature/label/model_config
-        hashes identical; only `shift_trading_days` and the shifted date
-        ranges (train/predict) differ.
-      * seed runs (seed42/7/77/123/456): identical hashes AND identical
+        fingerprints identical; only `shift_trading_days` and the EFFECTIVE
+        shifted train/predict date ranges differ.
+      * seed runs (seed42/7/77/123/456): identical fingerprints AND identical
         date ranges/shift; only the top-level `seeds` field differs.
 
-    ``model_config_hash`` deliberately EXCLUDES the seed, so seed runs
-    compare equal.  ``code_version`` == git_commit (also stamped top-level
-    by ``with_standard_metadata``).
+    Naming is deliberately honest: ``*_id_hash`` fields hash the ID string
+    only (NOT the underlying data); content-level fingerprints carry an
+    explicit ``*_snapshot_hash`` / ``*_manifest_hash`` name and cite their
+    source artifact.  ``model_config_hash`` is computed from the EFFECTIVE
+    params (what train_model receives) with the seed stripped, so seed runs
+    compare equal.  ``code_version`` == git_commit (also stamped top-level by
+    ``with_standard_metadata``).
     """
     from qsys.research.manifest import _get_git_commit
 
     model_config = {
         "n_estimators": gen.n_estimators,
-        "lgb_params": dict(_DEFAULT_LGB_PARAMS),  # seed excluded on purpose
+        "lgb_params": _effective_model_params(gen),
     }
+    # effective schedule span: shift applied to the first/last window exactly
+    # as train_shifted_model does per-window (same lookup + shift_date)
+    shift_lookup = build_shift_lookup(PHASES[phase])
+
+    def _sh(win: dict, key: str) -> str:
+        return shift_date(win[key], shift_lookup, win["window_id"])
+
+    # label artifact provenance from the LabelStore manifest: real recorded
+    # fingerprint; unavailable -> None, recorded honestly (metadata must not
+    # crash the signal save)
+    label_store = LabelStore(str(ROOT / "data/research"))
+    label_mf: dict = {}
+    label_manifest_hash: str | None = None
+    try:
+        label_mf = label_store.load_manifest(LABEL_ID)
+        label_manifest_path = label_store.paths.label_manifest(LABEL_ID)
+        if label_manifest_path.exists():
+            label_manifest_hash = hashlib.sha256(
+                label_manifest_path.read_bytes()).hexdigest()
+    except Exception:
+        pass
+
     return {
         "universe": gen.universe,
-        "universe_hash": hashlib.sha256(
-            gen.universe.encode("utf-8")).hexdigest(),
+        "universe_id_hash": hashlib.sha256(
+            gen.universe.encode("utf-8")).hexdigest(),  # ID only
+        "universe_snapshot_hash": label_mf.get("universe_hash"),  # label manifest's recorded csi800 snapshot
         "feature_list_id": gen.feature_list_id,
-        "feature_hash": gen.source_manifest_hash,  # canonical feature snapshot
+        "feature_hash": gen.source_manifest_hash,  # feature snapshot content hash
         "label_id": LABEL_ID,
-        "label_hash": hashlib.sha256(
-            LABEL_ID.encode("utf-8")).hexdigest(),
+        "label_id_hash": hashlib.sha256(
+            LABEL_ID.encode("utf-8")).hexdigest(),  # ID only
+        "label_manifest_hash": label_manifest_hash,  # sha256 of label manifest file
         "model_config_hash": hashlib.sha256(
             json.dumps(model_config, sort_keys=True).encode("utf-8")
         ).hexdigest(),
         "train_window_trading_days": 504,
         "train_date_range": {
-            "start": windows[0]["train_start"],
-            "end": windows[0]["train_end"],
+            "start": _sh(windows[0], "train_start"),
+            "end": _sh(windows[-1], "train_end"),
+        },
+        "predict_date_range": {
+            "start": _sh(windows[0], "predict_start"),
+            "end": _sh(windows[-1], "predict_end"),
         },
         "code_version": _get_git_commit() or "",
     }
@@ -338,7 +387,7 @@ def save_run(phase: str, df: pd.DataFrame, seeds: list[int],
         SIG_ID, rid, df,
         manifest={
             "artifact_type": "rawrank_shifted_phase_signal_run",
-            "research_invariants": _research_invariants(gen, windows),
+            "research_invariants": _research_invariants(gen, windows, phase),
             "rawrank_of": SRID,
             "shift_trading_days": PHASES[phase],
             "ranking_score": "daily_zscore(raw_prediction)  # no cap, order-preserving",
