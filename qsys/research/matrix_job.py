@@ -207,15 +207,22 @@ def expand_multi_label_generators(generators: list[dict]) -> list[dict]:
         for entry in labels:
             label_id = entry["label_id"]
             label_signal_id = entry.get("signal_id", label_id)
+            expanded_params = {
+                "label_id": label_id,
+                "universe": params.get("universe", "csi300"),
+                "n_estimators": params.get("n_estimators", 200),
+                "lgb_params": params.get("lgb_params"),
+            }
+            # Forward every other multi-label param (pit_membership,
+            # feature_list_id, and future keys) instead of silently dropping
+            # them — a dropped param would silently change experiment semantics.
+            for key, value in params.items():
+                if key not in ("labels", "label_id") and key not in expanded_params:
+                    expanded_params[key] = value
             expanded.append({
                 "generator_id": _slugify_id(f"{base_id}__{label_id}"),
                 "type": "single_label_lightgbm",
-                "params": {
-                    "label_id": label_id,
-                    "universe": params.get("universe", "csi300"),
-                    "n_estimators": params.get("n_estimators", 200),
-                    "lgb_params": params.get("lgb_params"),
-                },
+                "params": expanded_params,
                 "label_signal_id": label_signal_id,
             })
     return expanded
@@ -279,6 +286,17 @@ def _create_generator_from_config(
             label_ids=tuple(params.get("label_ids", ("fwd_ret_5d_xsz_clip3", "fwd_ret_20d_xsz_clip3"))),
         )
     if gen_type == "single_label_lightgbm":
+        _CONSUMED_PARAMS = {
+            "label_id", "universe", "n_estimators", "lgb_params",
+            "feature_list_id", "pit_membership",
+        }
+        unknown = set(params) - _CONSUMED_PARAMS
+        if unknown:
+            raise ValueError(
+                "single_label_lightgbm params contains unknown keys that would "
+                f"be silently dropped: {sorted(unknown)}.  Known keys: "
+                f"{sorted(_CONSUMED_PARAMS)}."
+            )
         from qsys.research.generators.lightgbm_single_label import LightGBMSingleLabelGenerator
         return LightGBMSingleLabelGenerator(
             label_id=params["label_id"],
@@ -286,6 +304,7 @@ def _create_generator_from_config(
             n_estimators=params.get("n_estimators", 200),
             feature_list_id=feature_list_id or params.get("feature_list_id"),
             lgb_params=params.get("lgb_params"),
+            pit_membership=params.get("pit_membership", False),
             use_feature_cache=use_feature_cache,
             write_through=write_through,
             feature_cache_root=feature_cache_root,

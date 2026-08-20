@@ -1,0 +1,16 @@
+label_id: fwd_ret_180d_raw_pit
+formula:
+  type: forward_return
+  horizon: 180
+  price: close
+  price_basis: adjusted_close
+  adjustment_factor: factor
+universe: csi800_pit_union
+# PIT audit 9B: same raw forward-return formula as fwd_ret_180d_raw, but
+# namespaced label_id so the union label store does not clobber the baseline.
+# The fetch range starts 2018-01-01 (registry start, before the earliest
+# feature date 2018-03-13) and ends 2026-08-10 to match the baseline label's
+# tail coverage (last observable label ~2025-11-12 > last train_end 2025-10-17).
+date_range:
+  start_date: "2018-01-01"
+  end_date: "2026-08-10"

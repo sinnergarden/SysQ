@@ -34,8 +34,8 @@ from qsys.research.generators.utils import (
 from qsys.utils.logger import log
 
 
-_WINDOW_CACHE_SCHEMA_VERSION = 2
-_WINDOW_CACHE_BUILDER_ID = "lightgbm_single_label_qlib_frame_v2"
+_WINDOW_CACHE_SCHEMA_VERSION = 3
+_WINDOW_CACHE_BUILDER_ID = "lightgbm_single_label_qlib_frame_v3"
 FEATURE_VISIBILITY_CONTRACT = (
     "actual_feature_date_strictly_before_trade_date_v1"
 )
@@ -60,8 +60,16 @@ class LightGBMSingleLabelGenerator:
     write_through: bool = False  # save per-window cache on first use
     feature_cache_root: str = "data/feature_cache"
     source_manifest_hash: str = ""
+    # ── Point-in-Time universe restriction (opt-in) ──
+    # When True, rows are restricted to csi800_pit_v1 membership at the row's
+    # feature date (trade_date), applied AFTER _load_data so train and predict
+    # subsets of the shared frame are filtered identically.  Membership is read
+    # from the per-interval artifact spans, never from the qlib registry's
+    # collapsed min/max ranges (a stock may leave and re-enter).
+    pit_membership: bool = False
 
     _qlib_inited: bool = field(default=False, repr=False)
+    _pit_store: object | None = field(default=None, repr=False, init=False)
     _clean_features: list[str] = field(default_factory=list, repr=False)
     _call_count: int = field(default=0, repr=False)
 
@@ -82,6 +90,7 @@ class LightGBMSingleLabelGenerator:
             "universe": self.universe,
             "feature_list_id": self.feature_list_id,
             "features": features,
+            "pit_membership": self.pit_membership,
             "start": start,
             "end": end,
         }
@@ -219,6 +228,49 @@ class LightGBMSingleLabelGenerator:
 
         return frame, clean
 
+    def _apply_pit_membership(self, frame: pd.DataFrame) -> pd.DataFrame:
+        """Restrict rows to csi800 PIT membership at each row's feature date.
+
+        Membership is read from the csi800_pit_v1 artifact spans (per-interval,
+        gapped), never from the qlib registry's collapsed min/max ranges — a
+        stock that left the index and re-entered must be excluded during its
+        non-member gap.  Applied once, right after _load_data, so the train and
+        predict subsets of the shared frame see identical rows (PIT semantics
+        apply to training data too, per audit Section 17).
+        """
+        if self._pit_store is None:
+            from qsys.research.pit_universe import PitUniverseStore
+            self._pit_store = PitUniverseStore()
+
+        spans = self._pit_store.spans[
+            ["instrument", "effective_from", "effective_to"]
+        ].rename(
+            columns={"effective_from": "_eff_from", "effective_to": "_eff_to"}
+        )
+        spans["_eff_from"] = spans["_eff_from"].astype(int)
+        spans["_eff_to"] = spans["_eff_to"].astype(int)
+
+        merged = frame.merge(spans, on="instrument", how="inner")
+        if merged.empty:
+            raise ValueError(
+                "pit_membership: no rows matched any membership span — "
+                "check universe registry vs PIT artifact symbol format"
+            )
+        date_int = (
+            merged["trade_date"].astype(str).str.replace("-", "", regex=False).astype(int)
+        )
+        in_span = (date_int >= merged["_eff_from"]) & (date_int <= merged["_eff_to"])
+        keep = merged.loc[in_span, frame.columns].drop_duplicates()
+
+        n_dropped = len(frame) - len(keep)
+        log.info(
+            "pit_membership filter: %d -> %d rows (dropped %d non-members)",
+            len(frame), len(keep), n_dropped,
+        )
+        if keep.empty:
+            raise ValueError("pit_membership: no rows remain after membership filter")
+        return keep
+
     # ═══════════════════════════════════════════════════════════════
     # Training + prediction
     # ═══════════════════════════════════════════════════════════════
@@ -241,6 +293,11 @@ class LightGBMSingleLabelGenerator:
 
         log.info("Loading data [%s, %s]", train_start, extended_end)
         frame, clean_features = self._load_data(train_start, extended_end)
+
+        # PIT restriction: filter once on the shared frame so training and
+        # prediction use the same membership semantics (feature-date PIT).
+        if self.pit_membership:
+            frame = self._apply_pit_membership(frame)
 
         from qsys.label.store import LabelStore
         from qsys.signal.alpha_v1.training import train_model, predict_model

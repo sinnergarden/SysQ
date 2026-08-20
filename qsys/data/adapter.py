@@ -248,7 +248,14 @@ class QlibAdapter:
     def normalize_instruments(self, instruments):
         if isinstance(instruments, str):
             low = instruments.lower()
-            if low in ("all", "csi300", "csi500", "csi800"):
+            # Resolve any qlib instrument registry file (csi300/csi500/csi800,
+            # plus PIT universe registries such as csi800_pit_union).  The
+            # canonical index names keep their legacy fallback to "all" when
+            # the registry file is missing; a PIT registry is only resolved
+            # when its instruments/<name>.txt actually exists.
+            if low in ("all", "csi300", "csi500", "csi800") or (
+                self.qlib_dir / "instruments" / f"{low}.txt"
+            ).exists():
                 inst_path = self.qlib_dir / "instruments" / f"{low}.txt"
                 if low != "all" and not inst_path.exists():
                     low = "all"
