@@ -1,0 +1,39 @@
+# PIT audit — 60d label-horizon sensitivity (P0 only). NOT strategy tuning.
+# Baseline: financial_rc_60d_rolling_5y_to_202607_v3.yaml (static-800, 60d label).
+# PIT counterpart: financial_rc_180d_rolling_5y_to_202607_v3_pit.yaml (180d label),
+# with the ONLY difference being the label horizon (60 vs 180):
+#   - experiment_id / signal_id / generator_id: distinct `_pit` ids (no clobber).
+#   - universe: csi800 -> csi800_pit_union (PIT union registry).
+#   - +pit_membership: true -> per-row filter to csi800_pit_v1 membership at
+#     each row's feature date, applied once post-load so train and predict see
+#     identical PIT rows (Section 17: PIT applies to training, not just prediction).
+#   - label: fwd_ret_60d_raw -> fwd_ret_60d_raw_pit (union label store).
+# Frozen from baseline: calendar, train_window_days, step_days, feature_list_id,
+# n_estimators, signal transform, label_maturity_lag (= horizon + 1).  Costs/T+1
+# frozen at the backtest step (not in this config).
+experiment_id: financial_rc_60d_rolling_5y_to_202607_v3_pit
+calendar:
+  start_date: "2021-01-01"
+  end_date: "2026-07-31"
+  train_window_days: 504
+  step_days: 20
+signal:
+  signal_id: v3a_growth_financial_60d_pit
+  score_column: score
+feature_list_id: v3a_plus_liquidity_financial_rc
+generators:
+  - generator_id: v3a_growth_financial_60d_pit
+    type: multi_label_lightgbm
+    params:
+      universe: csi800_pit_union
+      n_estimators: 300
+      feature_list_id: v3a_plus_liquidity_financial_rc
+      pit_membership: true
+      labels:
+        - label_id: fwd_ret_60d_raw_pit
+signal_transforms:
+  - transform_id: daily_zscore
+    type: daily_zscore
+labels:
+  - label_id: fwd_ret_60d_raw_pit
+    label_maturity_lag_trading_days: 61
