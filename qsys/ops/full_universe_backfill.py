@@ -86,14 +86,21 @@ def build_full_universe_backfill_plan(
     missing_start_date: str = "2010-01-01",
     stale_lookback_days: int = 20,
     max_batches: int | None = None,
+    symbols: list[str] | None = None,
+    full_backfill: bool = False,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    # Optional explicit symbol set (e.g. a PIT universe registry) restricts the
+    # plan to exactly those symbols; otherwise the full stock list is used.
     stock_df = store.get_stock_list()
-    if stock_df is None or stock_df.empty or "ts_code" not in stock_df.columns:
-        return [], []
+    if symbols is not None:
+        symbols = sorted({str(s).strip().upper() for s in symbols if str(s).strip()})
+    else:
+        if stock_df is None or stock_df.empty or "ts_code" not in stock_df.columns:
+            return [], []
+        symbols = sorted(stock_df["ts_code"].dropna().astype(str).unique().tolist())
 
-    symbols = sorted(stock_df["ts_code"].dropna().astype(str).unique().tolist())
     list_date_map = {}
-    if "list_date" in stock_df.columns:
+    if stock_df is not None and not stock_df.empty and "list_date" in stock_df.columns:
         list_date_map = {
             str(row["ts_code"]): _normalize_date(row.get("list_date"))
             for _, row in stock_df[["ts_code", "list_date"]].drop_duplicates(subset=["ts_code"]).iterrows()
@@ -103,18 +110,25 @@ def build_full_universe_backfill_plan(
     missing_rows = [row for row in status_rows if row["backfill_reason"] == "raw_missing"]
     stale_rows = [row for row in status_rows if row["backfill_reason"] == "raw_stale"]
 
+    # full_backfill: every symbol (missing OR stale) is fetched from
+    # missing_start_date and written non-incrementally — used when the
+    # existing "raw" is a stub/placeholder (e.g. a single sync row) rather
+    # than genuine history that only needs a short catch-up.
+    backfill_rows = status_rows if full_backfill else missing_rows
+    stale_shortfall_rows = [] if full_backfill else stale_rows
+
     plan_rows: list[dict[str, Any]] = []
     batch_id = 0
 
-    for start in range(0, len(missing_rows), batch_size):
-        chunk = missing_rows[start : start + batch_size]
+    for start in range(0, len(backfill_rows), batch_size):
+        chunk = backfill_rows[start : start + batch_size]
         if not chunk:
             continue
         batch_id += 1
         plan_rows.append(
             {
                 "batch_id": batch_id,
-                "batch_type": "missing_raw",
+                "batch_type": "full_backfill" if full_backfill else "missing_raw",
                 "symbol_count": len(chunk),
                 "start_date": missing_start_date,
                 "end_date": target_date,
@@ -127,8 +141,8 @@ def build_full_universe_backfill_plan(
             return status_rows, plan_rows
 
     target_ts = pd.Timestamp(target_date)
-    for start in range(0, len(stale_rows), batch_size):
-        chunk = stale_rows[start : start + batch_size]
+    for start in range(0, len(stale_shortfall_rows), batch_size):
+        chunk = stale_shortfall_rows[start : start + batch_size]
         if not chunk:
             continue
         batch_id += 1
@@ -170,6 +184,8 @@ def run_full_universe_backfill(
     apply: bool = False,
     refresh_qlib: bool = True,
     triggered_by: str = "manual",
+    symbols: list[str] | None = None,
+    full_backfill: bool = False,
 ) -> dict[str, Any]:
     base_dir = Path(base_dir)
     now = datetime.now().replace(microsecond=0)
@@ -192,6 +208,8 @@ def run_full_universe_backfill(
         missing_start_date=missing_start_date,
         stale_lookback_days=stale_lookback_days,
         max_batches=max_batches,
+        symbols=symbols,
+        full_backfill=full_backfill,
     )
 
     status_path = write_csv(output_dir / "raw_status.csv", status_rows, RAW_STATUS_COLUMNS)
@@ -209,6 +227,7 @@ def run_full_universe_backfill(
                     universe=str(row["symbols"]),
                     start_date=str(row["start_date"]).replace("-", ""),
                     end_date=str(row["end_date"]).replace("-", ""),
+                    incremental=not full_backfill,
                 )
                 row["status"] = "success"
                 affected_symbols.extend([item for item in str(row["symbols"]).split(",") if item])

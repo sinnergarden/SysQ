@@ -19,6 +19,8 @@ def main() -> None:
     parser.add_argument("--target-date", default=None, help="Target trade date (YYYY-MM-DD); defaults to current qlib latest date")
     parser.add_argument("--batch-size", type=int, default=50, help="Symbols per collector batch")
     parser.add_argument("--max-batches", type=int, default=None, help="Only plan/apply the first N batches")
+    parser.add_argument("--symbols-file", default=None, help="File with one symbol per line; restricts backfill to exactly these symbols (e.g. a PIT universe registry)")
+    parser.add_argument("--full-backfill", action="store_true", help="Fetch every symbol from missing-start-date and write non-incrementally (for stub/placeholder raw that lacks genuine history)")
     parser.add_argument("--missing-start-date", default="2010-01-01", help="Backfill start date for symbols missing raw files")
     parser.add_argument("--stale-lookback-days", type=int, default=20, help="Backfill lookback for stale raw symbols")
     parser.add_argument("--triggered-by", default="manual", help="Trigger source label")
@@ -26,6 +28,15 @@ def main() -> None:
     parser.add_argument("--dry-run", dest="apply", action="store_false", default=False, help="Plan only, do not mutate raw/qlib")
     parser.add_argument("--apply", dest="apply", action="store_true", help="Apply raw backfill batches and qlib repair")
     args = parser.parse_args()
+
+    symbols = None
+    if args.symbols_file:
+        symbols = [
+            line.strip()
+            for line in Path(args.symbols_file).read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        print(f"Restricting backfill to {len(symbols)} symbols from {args.symbols_file}")
 
     result = run_full_universe_backfill(
         args.base_dir,
@@ -37,6 +48,8 @@ def main() -> None:
         apply=args.apply,
         refresh_qlib=not args.skip_qlib_refresh,
         triggered_by=args.triggered_by,
+        symbols=symbols,
+        full_backfill=args.full_backfill,
     )
     print(json.dumps(result, indent=2, sort_keys=True))
 
