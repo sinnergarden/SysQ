@@ -241,6 +241,9 @@ class LabelStore:
             result = compute_forward_return(
                 universe=universe, horizon=horizon, start=start, end=end,
                 price_field=price_field, norm_type=norm_type, clip_val=clip_val,
+                # A config label_id (e.g. fwd_ret_180d_raw_pit) is used
+                # verbatim so the store row label_id matches save_labels.
+                label_id_override=label_id,
             )
         else:
             raise ValueError(f"Unsupported formula type: {ftype}")

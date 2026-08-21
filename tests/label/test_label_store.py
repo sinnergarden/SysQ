@@ -119,3 +119,40 @@ class TestLabelStoreList:
         store = LabelStore(str(tmp_path))
         df = store.list_labels()
         assert len(df) == 0
+
+
+class TestComputeFromConfigLabelIdOverride:
+    """label_id in a label config must flow through to stored rows verbatim
+    (Stage 9B needs fwd_ret_180d_raw_pit under universe csi800_pit_union)."""
+
+    def test_label_id_override_flows_through_config(self, tmp_path: Path, monkeypatch) -> None:
+        import qsys.label.compute as compute_mod
+
+        def fake_compute_forward_return(universe, horizon, start, end, *,
+                                        price_field="close", norm_type="cs_zscore",
+                                        clip_val=3.0, label_id_override=None):
+            return pd.DataFrame({
+                "trade_date": ["2020-01-02"],
+                "instrument": ["000001.SZ"],
+                "label_id": [label_id_override or f"fwd_ret_{horizon}d_raw"],
+                "horizon": [horizon],
+                "label_value": [0.01],
+            })
+
+        monkeypatch.setattr(compute_mod, "compute_forward_return", fake_compute_forward_return)
+
+        store = LabelStore(root=str(tmp_path / "research"))
+        config = {
+            "label_id": "fwd_ret_180d_raw_pit",
+            "universe": "csi800_pit_union",
+            "formula": {"type": "forward_return", "horizon": 180, "price": "close"},
+            "normalization": {"type": ""},
+            "date_range": {"start_date": "2018-03-13", "end_date": "2026-08-10"},
+        }
+        store.compute_and_save_from_config(config, overwrite=True)
+
+        loaded = store.load_labels("fwd_ret_180d_raw_pit")
+        assert (loaded["label_id"] == "fwd_ret_180d_raw_pit").all()
+        mf = store.load_manifest("fwd_ret_180d_raw_pit")
+        assert mf["universe"] == "csi800_pit_union"
+        assert mf["horizon"] == 180

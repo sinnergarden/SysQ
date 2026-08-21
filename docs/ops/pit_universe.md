@@ -73,6 +73,33 @@ store.to_registry_frame(start, end)            # 生成 qlib instrument registry
 
 `tests/ops/test_pit_universe.py`（synthetic fixture + 真实 artifact 集成测试，artifact 缺失时 skip）。
 
+## Stage 9B：完整 PIT retrain 用法（correctness audit）
+
+Full-PIT retrain 把 PIT 语义同时应用到训练与预测，而不是只过滤 prediction universe
+（audit Section 17 禁止「只修 prediction universe 而不修 training」）。
+
+### 三个改动点
+
+1. **qlib 注册表**：`csi800_pit_union`（`data/qlib_bin/instruments/csi800_pit_union.txt`）
+   由 `to_registry_frame('2018-01-01', '2026-07-31')` 生成，保留**逐 span** 行（不 collapse），
+   qlib 0.9.7 原生支持每符号多行 span；只决定 feature 物化哪些股票。
+2. **行级 PIT 过滤**：`LightGBMSingleLabelGenerator(pit_membership=True)`。`generate()`
+   在 `_load_data` 之后对共享 frame 按行应用
+   `is_member(instrument, feature_date)`，train 与 predict 是同一次过滤（同一 frame 的子集）。
+   **过滤读的是 artifact 的 gapped spans，不是注册表的 min/max** —— 离场再回归的股票
+   在 gap 期间不会被当成成员。缓存 identity 含 `pit_membership`，PIT 与非 PIT 永不共用
+   per-window cache。
+3. **PIT label**：`configs/labels/fwd_ret_180d_raw_pit.yaml`（`universe: csi800_pit_union`，
+   `label_id_override` 使 store 行 label_id 与配置一致），避免覆盖 baseline 的
+   `fwd_ret_180d_raw` store。
+
+### 已知 PIT 边界语义
+
+- 成员资格按 **feature date**（数据日）判定；某月首个执行日的 feature date 是上月末
+  交易日，因此该一次调仓日使用上月的成员表（与按执行日过滤的 Stage 6 诊断有一个
+  rebalance 的月界差异）。不要在同一 run 混用两种过滤。
+- 9B 回测仍需 0 个非成员买入的验证门（Stage 6 的 filter-only 诊断有 ~3% 买入泄漏）。
+
 ## 使用约束
 
 - 研究结论引用 PIT 结果时必须绑定 `membership_sha256`（artifact 不入 git，hash 是唯一锚点）。

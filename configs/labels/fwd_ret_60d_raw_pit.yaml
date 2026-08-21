@@ -1,0 +1,16 @@
+label_id: fwd_ret_60d_raw_pit
+formula:
+  type: forward_return
+  horizon: 60
+  price: close
+  price_basis: adjusted_close
+  adjustment_factor: factor
+universe: csi800_pit_union
+# PIT audit 60d sensitivity: same raw forward-return formula as
+# fwd_ret_60d_raw, but namespaced label_id so the union label store does not
+# clobber the baseline. Same fetch range as fwd_ret_180d_raw_pit for
+# consistency (registry start before earliest feature date 2018-03-13, tail
+# covering last train_end + 60d horizon).
+date_range:
+  start_date: "2018-01-01"
+  end_date: "2026-08-10"

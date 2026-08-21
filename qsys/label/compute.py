@@ -29,6 +29,7 @@ def compute_forward_return(
     price_field: str = "close",
     norm_type: str = "cs_zscore",
     clip_val: float | None = 3.0,
+    label_id_override: str | None = None,
 ) -> pd.DataFrame:
     """Compute forward return label.
 
@@ -52,7 +53,9 @@ def compute_forward_return(
     clip_val: clip threshold (None = no clip).
 
     Returns DataFrame(trade_date, instrument, label_id, horizon, label_value).
-    label_id = ``fwd_ret_{horizon}d_{suffix}``.
+    label_id = ``fwd_ret_{horizon}d_{suffix}`` unless ``label_id_override``
+    is given (used for PIT-namespaced label stores, e.g.
+    ``fwd_ret_180d_raw_pit``).
     """
     from qsys.data.adapter import QlibAdapter
 
@@ -86,7 +89,7 @@ def compute_forward_return(
         label_value = valid["label_value"].astype(np.float32)
         frame = valid
 
-    label_id = f"fwd_ret_{horizon}d_{suffix}"
+    label_id = label_id_override or f"fwd_ret_{horizon}d_{suffix}"
     result = pd.DataFrame({
         "trade_date": frame["trade_date"],
         "instrument": frame["instrument"],
@@ -103,11 +106,16 @@ def compute_raw_forward_return(
     start: str,
     end: str,
     price_field: str = "close",
+    label_id_override: str | None = None,
 ) -> pd.DataFrame:
     """Compute raw (un-normalized) forward return label.
     Delegates to ``compute_forward_return`` with no normalization.
     """
-    return compute_forward_return(universe, horizon, start, end, price_field=price_field, norm_type="", clip_val=None)
+    return compute_forward_return(
+        universe, horizon, start, end,
+        price_field=price_field, norm_type="", clip_val=None,
+        label_id_override=label_id_override,
+    )
 
 
 def compute_future_max_drawdown(
