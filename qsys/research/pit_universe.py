@@ -87,7 +87,14 @@ class PitUniverseStore:
         *,
         verify_hash: bool = True,
     ) -> None:
-        self.artifact_dir = Path(artifact_dir)
+        # Accept a bare dirname ("csi1800_pit_v1") as well as an explicit
+        # path; resolve bare names under data/research/universes/.
+        raw = Path(artifact_dir)
+        if not raw.is_absolute() and not (raw / "manifest.json").is_file():
+            candidate = Path("data") / "research" / "universes" / artifact_dir
+            if (candidate / "manifest.json").is_file():
+                raw = candidate
+        self.artifact_dir = raw
         self._manifest = self._load_manifest()
         self._spans = self._load_membership(verify_hash=verify_hash)
         self._validate()
@@ -184,6 +191,20 @@ class PitUniverseStore:
         end = self._spans["effective_to"].astype(int)
         mask = (start <= date_int) & (date_int <= end)
         return sorted(self._spans.loc[mask, "instrument"].unique().tolist())
+
+    def ever_membership_as_of(self, as_of_date: str | pd.Timestamp) -> list[str]:
+        """Ever-member instruments whose first membership started by a date.
+
+        ``instrument`` is included iff at least one span has
+        ``effective_from <= as_of_date`` (i.e. the stock had already entered
+        the index at or before ``as_of_date``).  Unlike :meth:`membership_as_of`
+        this ignores ``effective_to`` — a stock that entered, left and stayed
+        out is still in the ever-member set.  Monotonic and idempotent: the set
+        only grows with ``as_of_date``.
+        """
+        date_int = int(_normalize_date(as_of_date))
+        eff_from = self._spans["effective_from"].astype(int)
+        return sorted(self._spans.loc[eff_from <= date_int, "instrument"].unique().tolist())
 
     def membership_window(self, start_date: str, end_date: str) -> list[str]:
         """PIT union of constituents over the inclusive window ``[start, end]``.

@@ -66,7 +66,16 @@ class LightGBMSingleLabelGenerator:
     # subsets of the shared frame are filtered identically.  Membership is read
     # from the per-interval artifact spans, never from the qlib registry's
     # collapsed min/max ranges (a stock may leave and re-enter).
+    #
+    # pit_membership is the LEGACY flag: True → member_as_of on the default
+    # artifact (csi800_pit_v1).  For other universes use the new fields:
+    #   pit_filter_mode        = "", "member_as_of", "ever_member_as_of"
+    #   pit_universe_artifact  = dirname under data/research/universes/
+    #   liquidity_exclusion_path = parquet (trade_date, instrument) anti-join
     pit_membership: bool = False
+    pit_filter_mode: str = ""
+    pit_universe_artifact: str = "csi800_pit_v1"
+    liquidity_exclusion_path: str = ""
 
     _qlib_inited: bool = field(default=False, repr=False)
     _pit_store: object | None = field(default=None, repr=False, init=False)
@@ -228,19 +237,46 @@ class LightGBMSingleLabelGenerator:
 
         return frame, clean
 
-    def _apply_pit_membership(self, frame: pd.DataFrame) -> pd.DataFrame:
-        """Restrict rows to csi800 PIT membership at each row's feature date.
+    def _effective_pit_filter_mode(self) -> str:
+        """Resolve the active filter mode from the new + legacy fields.
 
-        Membership is read from the csi800_pit_v1 artifact spans (per-interval,
-        gapped), never from the qlib registry's collapsed min/max ranges — a
-        stock that left the index and re-entered must be excluded during its
-        non-member gap.  Applied once, right after _load_data, so the train and
-        predict subsets of the shared frame see identical rows (PIT semantics
-        apply to training data too, per audit Section 17).
+        ``pit_filter_mode`` wins; otherwise the legacy ``pit_membership``
+        boolean maps to member_as_of.  Empty means no PIT restriction.
         """
+        if self.pit_filter_mode:
+            return self.pit_filter_mode
+        return "member_as_of" if self.pit_membership else ""
+
+    def _apply_pit_membership(self, frame: pd.DataFrame) -> pd.DataFrame:
+        """Restrict rows to a PIT membership artifact at each row's feature date.
+
+        Dispatch on ``pit_filter_mode`` (defaults to member_as_of when the
+        legacy ``pit_membership`` flag is set, preserving old behaviour):
+
+        - ``member_as_of``: keep rows whose trade_date falls inside a span of
+          the artifact (``PitUniverseStore(pit_universe_artifact)``).
+        - ``ever_member_as_of``: keep rows whose trade_date >= the earliest
+          span effective_from (ever-member monotonic; idempotent, ignores
+          effective_to).
+        - ``""``: no membership filter.
+
+        After the span filter, if ``liquidity_exclusion_path`` is set, its
+        ``(trade_date, instrument)`` rows are anti-joined (U3 diagnostic).
+
+        Membership is read from the per-interval artifact spans, never from
+        the qlib registry's collapsed min/max ranges — a stock that left the
+        index and re-entered must be excluded during its non-member gap.
+        Applied once, right after _load_data, so the train and predict
+        subsets of the shared frame see identical rows (PIT semantics apply
+        to training data too, per audit Section 17).
+        """
+        mode = self._effective_pit_filter_mode()
+        if mode == "":
+            return frame
+
         if self._pit_store is None:
             from qsys.research.pit_universe import PitUniverseStore
-            self._pit_store = PitUniverseStore()
+            self._pit_store = PitUniverseStore(self.pit_universe_artifact)
 
         spans = self._pit_store.spans[
             ["instrument", "effective_from", "effective_to"]
@@ -259,13 +295,33 @@ class LightGBMSingleLabelGenerator:
         date_int = (
             merged["trade_date"].astype(str).str.replace("-", "", regex=False).astype(int)
         )
-        in_span = (date_int >= merged["_eff_from"]) & (date_int <= merged["_eff_to"])
-        keep = merged.loc[in_span, frame.columns].drop_duplicates()
+        if mode == "ever_member_as_of":
+            keep_mask = date_int >= merged["_eff_from"]
+        else:  # member_as_of
+            keep_mask = (date_int >= merged["_eff_from"]) & (date_int <= merged["_eff_to"])
+        keep = merged.loc[keep_mask, frame.columns].drop_duplicates()
+
+        if self.liquidity_exclusion_path and not keep.empty:
+            exclusions = pd.read_parquet(self.liquidity_exclusion_path)
+            exclusions["trade_date"] = exclusions["trade_date"].astype(str).str[:10]
+            exclusions["instrument"] = exclusions["instrument"].astype(str).str.upper()
+            key = pd.MultiIndex.from_arrays(
+                [keep["trade_date"].astype(str).str[:10], keep["instrument"]]
+            )
+            excl = pd.MultiIndex.from_arrays(
+                [exclusions["trade_date"], exclusions["instrument"]]
+            )
+            keep = keep[~key.isin(excl)]
+            log.info(
+                "liquidity exclusion anti-join: %d -> %d rows",
+                len(key), len(keep),
+            )
 
         n_dropped = len(frame) - len(keep)
         log.info(
-            "pit_membership filter: %d -> %d rows (dropped %d non-members)",
-            len(frame), len(keep), n_dropped,
+            "pit_membership filter [mode=%s, artifact=%s]: %d -> %d rows "
+            "(dropped %d)",
+            mode, self.pit_universe_artifact, len(frame), len(keep), n_dropped,
         )
         if keep.empty:
             raise ValueError("pit_membership: no rows remain after membership filter")
@@ -296,7 +352,7 @@ class LightGBMSingleLabelGenerator:
 
         # PIT restriction: filter once on the shared frame so training and
         # prediction use the same membership semantics (feature-date PIT).
-        if self.pit_membership:
+        if self._effective_pit_filter_mode():
             frame = self._apply_pit_membership(frame)
 
         from qsys.label.store import LabelStore
