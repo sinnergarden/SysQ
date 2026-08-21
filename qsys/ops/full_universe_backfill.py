@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -186,10 +187,17 @@ def run_full_universe_backfill(
     triggered_by: str = "manual",
     symbols: list[str] | None = None,
     full_backfill: bool = False,
+    include_basic: bool = True,
+    include_limit: bool = True,
+    include_moneyflow: bool = True,
+    include_margin: bool = True,
 ) -> dict[str, Any]:
     base_dir = Path(base_dir)
     now = datetime.now().replace(microsecond=0)
-    run_id = now.strftime("full_backfill_%Y%m%d_%H%M%S")
+    # pid suffix keeps run dirs unique when several backfill processes run in
+    # parallel over disjoint symbol shards (Tushare rate-limit headroom allows
+    # concurrent fetchers; a shared run_id would clobber batch_plan/summary).
+    run_id = f"{now.strftime('full_backfill_%Y%m%d_%H%M%S')}_{os.getpid()}"
     output_dir = base_dir / "runs" / "full_universe_backfill" / run_id
 
     adapter = QlibAdapter()
@@ -228,6 +236,10 @@ def run_full_universe_backfill(
                     start_date=str(row["start_date"]).replace("-", ""),
                     end_date=str(row["end_date"]).replace("-", ""),
                     incremental=not full_backfill,
+                    include_basic=include_basic,
+                    include_limit=include_limit,
+                    include_moneyflow=include_moneyflow,
+                    include_margin=include_margin,
                 )
                 row["status"] = "success"
                 affected_symbols.extend([item for item in str(row["symbols"]).split(",") if item])

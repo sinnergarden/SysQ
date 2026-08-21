@@ -25,6 +25,11 @@ def main() -> None:
     parser.add_argument("--stale-lookback-days", type=int, default=20, help="Backfill lookback for stale raw symbols")
     parser.add_argument("--triggered-by", default="manual", help="Trigger source label")
     parser.add_argument("--skip-qlib-refresh", action="store_true", help="Skip qlib selected-symbol refresh after raw batches")
+    parser.add_argument("--skip-basic", action="store_true", help="Skip daily_basic fetch (pe/pb/market-cap fields)")
+    parser.add_argument("--skip-limit", action="store_true", help="Skip stk_limit fetch (high_limit/low_limit)")
+    parser.add_argument("--skip-moneyflow", action="store_true", help="Skip moneyflow fetch (buy/sell amounts, net inflow)")
+    parser.add_argument("--skip-margin", action="store_true", help="Skip margin fetch (margin_balance / rzye / rqye)")
+    parser.add_argument("--refresh-only", action="store_true", help="Only rebuild qlib bins for --symbols-file symbols; skip raw fetch")
     parser.add_argument("--dry-run", dest="apply", action="store_false", default=False, help="Plan only, do not mutate raw/qlib")
     parser.add_argument("--apply", dest="apply", action="store_true", help="Apply raw backfill batches and qlib repair")
     args = parser.parse_args()
@@ -38,6 +43,19 @@ def main() -> None:
         ]
         print(f"Restricting backfill to {len(symbols)} symbols from {args.symbols_file}")
 
+    if args.refresh_only:
+        from qsys.ops.qlib_sync import refresh_selected_symbols_from_raw
+        if not symbols:
+            raise SystemExit("--refresh-only requires --symbols-file")
+        target = args.target_date or "2026-08-21"
+        out_dir = Path(args.base_dir) / "runs" / "full_universe_backfill" / "refresh_only"
+        result = refresh_selected_symbols_from_raw(
+            Path(args.base_dir), symbols,
+            target_date=target, apply=args.apply, output_dir=out_dir,
+        )
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return
+
     result = run_full_universe_backfill(
         args.base_dir,
         target_date=args.target_date,
@@ -50,6 +68,10 @@ def main() -> None:
         triggered_by=args.triggered_by,
         symbols=symbols,
         full_backfill=args.full_backfill,
+        include_basic=not args.skip_basic,
+        include_limit=not args.skip_limit,
+        include_moneyflow=not args.skip_moneyflow,
+        include_margin=not args.skip_margin,
     )
     print(json.dumps(result, indent=2, sort_keys=True))
 
