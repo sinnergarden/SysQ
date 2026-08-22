@@ -11,6 +11,10 @@ signal:
   signal_id: v3a_growth_financial_180d_pit_csi1800
   score_column: score
 feature_list_id: v3a_plus_liquidity_financial_rc
+# Full qlib_bin tree fingerprint at rebuild time:
+# sorted-relative-path-size-content-sha256-v1, 215137 files, 1367884408 bytes.
+source_manifest_hash: 780ba40ec5ce8a5f5b5c88b02e1e171e0d67c3c2b02639b22ed0a2b889abc237
+window_checkpoints: true
 generators:
   - generator_id: v3a_growth_financial_180d_pit_csi1800
     type: multi_label_lightgbm

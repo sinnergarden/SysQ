@@ -109,6 +109,9 @@ class RollingResearchConfig:
     feature_cache_root: str = "data/feature_cache"
     source_manifest_hash: str = ""
 
+    # Transactional raw-prediction checkpoints for long rolling runs.
+    window_checkpoints: bool = False
+
     # ── v2 signal combinations ──────────────────────────────────────────
     signal_combinations: list[dict[str, Any]] = field(default_factory=list)
     # each combination: combine_id, type, inputs
@@ -156,6 +159,7 @@ class RollingResearchConfig:
             write_through=payload.get("write_through", False),
             feature_cache_root=payload.get("feature_cache_root", "data/feature_cache"),
             source_manifest_hash=payload.get("source_manifest_hash", ""),
+            window_checkpoints=payload.get("window_checkpoints", False),
         )
 
 

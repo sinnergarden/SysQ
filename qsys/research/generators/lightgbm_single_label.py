@@ -15,6 +15,7 @@ Guarantee: a cache hit is accepted only for the exact declared input identity.
 """
 from __future__ import annotations
 
+import gc
 import hashlib
 import json
 from dataclasses import dataclass, field
@@ -435,6 +436,14 @@ class LightGBMSingleLabelGenerator:
         pred["pred"] = predict_model(
             model, center, scale, pred[clean_features].fillna(0.0).astype(np.float32)
         ).values
+        # A Booster retains native Dataset handles beyond ordinary DataFrame
+        # lifetimes.  Release them as soon as prediction is complete so long
+        # rolling runs do not grow until the kernel OOM killer intervenes.
+        free_dataset = getattr(model, "free_dataset", None)
+        if callable(free_dataset):
+            free_dataset()
+        del model, center, scale, X_tr, y_tr, train, label_df
+        gc.collect()
 
         # feature date f -> execution day d (prev_td is a bijection on calendar)
         f_to_d = {prev_td.get(d, d): d for d in window_cal}
@@ -458,4 +467,6 @@ class LightGBMSingleLabelGenerator:
 
         result = pd.DataFrame(rows)
         log.info("Generated %d rows across %d trade dates", len(result), result["trade_date"].nunique())
+        del pred, frame, rows
+        gc.collect()
         return result

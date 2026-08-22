@@ -198,6 +198,44 @@ class TestSignalResearchPipelineMatrix:
                 == FEATURE_VISIBILITY_CONTRACT_V1
             )
 
+    @patch("qsys.label.store.LabelStore.load_labels")
+    def test_matrix_resumes_from_validated_window_checkpoints(
+        self, mock_labels, tmp_path: Path
+    ) -> None:
+        from qsys.research.generators.fixture import FixtureSignalGenerator
+
+        mock_labels.return_value = _make_fake_labels()
+        config = self._matrix_config()
+        config.window_checkpoints = True
+        config.source_manifest_hash = "source-v1"
+        generator = FixtureSignalGenerator(n_instruments=10)
+        pipeline = SignalResearchPipeline(str(tmp_path))
+
+        with patch.object(
+            generator, "generate", wraps=generator.generate
+        ) as generate:
+            first = pipeline.run(
+                config,
+                signal_generator=generator,
+                overwrite_signal=True,
+                overwrite_eval=True,
+            )
+            first_call_count = generate.call_count
+            assert first_call_count > 0
+            pipeline.run(
+                config,
+                signal_generator=generator,
+                overwrite_signal=True,
+                overwrite_eval=True,
+            )
+            assert generate.call_count == first_call_count
+
+        for ref in first.signal_runs:
+            manifest = pipeline._signal_store.load_manifest(
+                ref.signal_id, ref.signal_run_id
+            )
+            assert len(manifest["window_checkpoint_set_sha256"]) == 64
+
 
 class TestSignalResearchPipelineMultiHead:
     """Multi-head generator support."""
@@ -258,7 +296,14 @@ class TestSignalResearchPipelineMultiHead:
 
 
 class TestSignalResearchPipelineConfigValidation:
-    """Verify config validation rejects backtest/strategy configs."""
+    """Verify config validation rejects unsafe or out-of-scope configs."""
+
+    def test_window_checkpoints_require_source_manifest_hash(self, tmp_path):
+        pipeline = SignalResearchPipeline(str(tmp_path))
+        config = _make_minimal_config()
+        config.window_checkpoints = True
+        with pytest.raises(ValueError, match="source_manifest_hash"):
+            pipeline.run(config)
 
     def test_rejects_strategies(self, tmp_path: Path) -> None:
         pipeline = SignalResearchPipeline(str(tmp_path))
