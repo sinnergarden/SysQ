@@ -5,6 +5,27 @@
 - **Governing discipline (Section 17)**: this task attacks the existing conclusion, not defends it. If PIT correction drops CAGR from 50% to 20%, accept it honestly. Prohibited: tuning membership lag / constituent source / model to recover CAGR, deleting historical losers, fixing only the prediction universe without fixing training, using current-CSI800 historical union as PIT, presenting a filter-only diagnostic as a corrected backtest.
 - **Result**: **PIT correction cuts portfolio CAGR from 57.93% to 14.54% (survival 25.1%)**. 53.0% of the baseline's gross PnL came from positions held at dates when the stock was **not** a CSI800 constituent — the survivorship/selection-bias channel, made concrete and quantified.
 
+> ## ⚠️ 2026-08-22 Label lookahead correction (supersedes headline PIT results)
+>
+> **A label-generation lookahead bug was found in `fwd_ret_180d_raw_pit` (and all multi-span PIT labels), and the PIT P0 baseline has been re-run on corrected labels.**
+>
+> **Root cause**: `compute_forward_return` fetched the universe as a qlib registry **string**, which span-clips rows to membership *before* `groupby("instrument").shift(-horizon)`. `shift` then operates on the clipped rows, so a member date near the end of a membership span would shift past the membership gap and reference a **future** price in the next span — a cross-span lookahead (e.g. 603256.SH label +25.2% vs true −9.85%).
+>
+> **Fix** (`qsys/label/compute.py`): multi-span PIT registries are detected and fetched as a **continuous instrument list**; `shift(-horizon)` becomes a true trading-day offset on uninterrupted history; PIT membership filtering is applied **only after** the label has matured. Single-span registries (csi800, all) are untouched (zero regression, verified by full-store diff = 0.0). Regression tests in `tests/label/test_label_compute_pit_continuity.py`.
+>
+> **Corrected PIT P0** (68 windows, raw-rank Top5, frozen Stage-6 flags, same universe `csi800_pit_union` / `source_manifest_hash=2d8ff143…`, only the label changed):
+>
+> | metric | OLD (buggy label) | CORRECTED | Δ |
+> |---|---|---|---|
+> | **CAGR** | 14.54% | **6.39%** | −8.15pt |
+> | Sharpe | 0.58 | 0.35 | −0.23 |
+> | MaxDD | −37.50% | −40.62% | −3.11pt |
+> | Total return | +112.9% | +41.2% | −71.7pt |
+>
+> Backtest: `bt_2021-01-04_2026-07-31_ac9e826d` (`data/research/ablation/pit_audit/RR_P0_raw__pitv1_corrected_label/`), signal = `fwd_ret_180d_raw_pit__daily_zscore__rr_p0__rawrank__financial_rc_180d_rolling_5y_to_202607_v3_pit` (rebuilt on corrected label; 1,069,938 rows, 68/68 windows).
+>
+> **Interpretation**: the label lookahead was inflating the PIT P0 baseline by ~8pt CAGR. The corrected P0 is **6.39%** — the S180-alpha-after-PIT conclusion is *stronger*, not rescued. **All §9 phase results and the ladder conclusions below must be re-derived on corrected labels before any U2/U3 continuation** (P5/P10/P15 phases, and the U1/U2/U3 ladder, are currently **VOID pending rebuild on corrected labels**).
+
 ---
 
 ## 1. Executive summary / verdict
