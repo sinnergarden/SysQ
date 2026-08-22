@@ -135,6 +135,14 @@ def main() -> None:
     parser.add_argument("--signal-id", required=True)
     parser.add_argument("--signal-run-id", required=True)
     parser.add_argument("--research-root", default="data/research")
+    parser.add_argument(
+        "--pit-universe-artifact",
+        default=None,
+        help=(
+            "Bare PIT universe artifact name under research-root/universes; "
+            "filters signal candidates on their execution trade date"
+        ),
+    )
     parser.add_argument("--start-date", required=True)
     parser.add_argument("--end-date", required=True)
     parser.add_argument("--strategy-template-id", default="rank_weight_top20")
@@ -162,9 +170,9 @@ def main() -> None:
     parser.add_argument("--accumulate", action="store_true",
                         help="Accumulate mode: never sell based on signal; only buy to fill top_n")
     parser.add_argument("--stop-loss", type=float, default=None,
-                        help="Stop-loss threshold e.g. 0.07 = sell at -7%%")
+                        help="Stop-loss threshold as a fraction; e.g. 0.07")
     parser.add_argument("--trailing-stop", type=float, default=None,
-                        help="Trailing stop e.g. 0.10 = sell if -10%% from peak")
+                        help="Trailing-stop drawdown as a fraction; e.g. 0.10")
     parser.add_argument(
         "--use-adjusted-price",
         action=argparse.BooleanOptionalAction,
@@ -225,7 +233,7 @@ def main() -> None:
     parser.add_argument("--maxdd-threshold", type=float, default=None,
                         help="MaxDD calibrated prob threshold: skip candidates with prob >= this value")
     parser.add_argument("--maxdd-percentile", type=float, default=None,
-                        help="MaxDD risk percentile: skip candidates in top-N%% risk (0-1, e.g. 0.80 = top 20%% risk)")
+                        help="MaxDD risk percentile: skip the highest-risk candidates (0-1; e.g. 0.80 keeps the lower 80th percentile)")
     parser.add_argument(
         "--exposure-gate-mode",
         choices=["none", "market_risk", "model_health", "either"],
@@ -235,7 +243,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--exposure-gate-scale", type=float, default=0.5,
-        help="Target exposure multiplier when the gate is active (0.5 = 50%).",
+        help="Target exposure multiplier when the gate is active (e.g. 0.5).",
     )
     parser.add_argument(
         "--exposure-gate-schedule", type=Path, default=None,
@@ -320,8 +328,12 @@ def main() -> None:
         exposure_gate_mode=args.exposure_gate_mode,
         exposure_gate_scale=args.exposure_gate_scale,
         exposure_gate_schedule=exposure_gate_schedule,
+        pit_universe_artifact=args.pit_universe_artifact,
     )
     if args.accumulate:
+        if args.pit_universe_artifact is not None:
+            parser.error("--pit-universe-artifact is not supported with --accumulate")
+        kwargs.pop("pit_universe_artifact", None)
         result = runner.run_accumulate(**kwargs)
     else:
         kwargs.pop("maxdd_signal_id", None)
