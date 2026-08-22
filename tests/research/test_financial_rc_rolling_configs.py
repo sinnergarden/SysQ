@@ -61,3 +61,31 @@ def test_financial_rc_rolling_5y_configs_are_independent_and_mature(
         )
         assert windows[0].predict_start == "2021-01-04"
         assert windows[-1].predict_end == "2026-07-31"
+
+
+def test_csi1800_pit_config_only_changes_universe_lineage() -> None:
+    csi800 = RollingResearchConfig.from_file(
+        REPO_ROOT
+        / "configs/research/60d/financial_rc_180d_rolling_5y_to_202607_v3_pit.yaml"
+    )
+    csi1800 = RollingResearchConfig.from_file(
+        REPO_ROOT
+        / "configs/research/60d/financial_rc_180d_rolling_5y_to_202607_v3_pit_csi1800.yaml"
+    )
+
+    assert csi1800.calendar == csi800.calendar
+    assert csi1800.feature_list_id == csi800.feature_list_id
+    assert csi1800.transforms == csi800.transforms
+    assert csi1800.generators[0]["params"]["n_estimators"] == 300
+    assert csi1800.generators[0]["params"]["universe"] == "csi1800_pit_union"
+    assert csi1800.generators[0]["params"]["pit_membership"] is True
+    assert (
+        csi1800.generators[0]["params"]["pit_universe_artifact"]
+        == "csi1800_pit_v2"
+    )
+    assert csi1800.labels == [
+        {
+            "label_id": "fwd_ret_180d_raw_pit_csi1800",
+            "label_maturity_lag_trading_days": 181,
+        }
+    ]
