@@ -1,4 +1,4 @@
-# Point-in-Time Universe Store（csi800_pit_v1）
+# Point-in-Time Universe Store（csi800_pit_v2 / csi1800_pit_v2）
 
 > PIT universe audit（Stage 8）交付：历史成分股 Point-In-Time 成员查询的 canonical 入口。
 
@@ -8,7 +8,12 @@
 （`STATIC_CURRENT` 语义）。要衡量「真正的 PIT 成分股集合」与当前实现的差异
 （constituent survivorship / selection bias），需要一份按时间切片可查询的历史成分股表。
 
-`csi800_pit_v1` 是从 Tushare `index_weight` 月度快照重建的 PIT 成员表：
+`csi800_pit_v2` 与 `csi1800_pit_v2` 从已冻结的 Tushare `index_weight`
+月度快照重建。v2 修复了 v1 的区间结束语义：成分在相邻快照之间持续有效；首次在
+下一快照缺席时，`effective_to` 是该快照前一个日历日。v1 把结束日写成最后一次
+仍出现的快照日，导致月间人工成员死区，已禁止用于新研究。
+
+CSI800 v1 原始快照概况（v2 复用原始字节，不重新拉取）：
 - 235 个月度快照（2007-01-31 … 2026-07-31）
 - 2013 只历史出现过成分股，2848 条成员期间
 - 每条 span 是闭区间 `[effective_from, effective_to]`，表示该股票是成分股的**连续期间**
@@ -19,7 +24,7 @@
 位置（`data/` 不入 git）：
 
 ```
-data/research/universes/csi800_pit_v1/
+data/research/universes/csi800_pit_v2/
 ├── manifest.json                     # 元数据 + provenance hash
 ├── membership.parquet                # spans 表
 └── raw/
@@ -51,7 +56,7 @@ data/research/universes/csi800_pit_v1/
 ```python
 from qsys.research.pit_universe import PitUniverseStore
 
-store = PitUniverseStore()                     # 默认读 csi800_pit_v1
+store = PitUniverseStore()                     # 默认读 csi800_pit_v2
 
 store.provenance.to_dict()                     # provenance（含 membership_sha256）
 store.membership_as_of("2018-06-15")           # 该日成分股（PIT），sorted list
@@ -72,6 +77,22 @@ store.to_registry_frame(start, end)            # 生成 qlib instrument registry
 ## 测试
 
 `tests/ops/test_pit_universe.py`（synthetic fixture + 真实 artifact 集成测试，artifact 缺失时 skip）。
+
+## 可复现构建
+
+构建只读取 v1 artifact 内冻结的 `raw/index_weight_snapshots.parquet`，先在同目录
+staging 中生成并验证两个 v2 artifact，全部通过后再原子发布。构建代码与 label
+配置必须已提交，scoped worktree 不能有未提交改动。
+
+```bash
+python scripts/data_sync.py --rebuild-pit-universes-v2
+```
+
+每个 v2 manifest 绑定 `raw_source_hash`、`membership_sha256`、
+`registry_sha256`、`builder_code_sha256`、完整 git commit，并记录逐 index 快照
+数量、研究窗口逐交易日成员数验证与精确快照集合验证。逻辑 registry 仍使用
+`csi800_pit_union` / `csi1800_pit_union`，但其文件 hash 必须等于 v2 manifest，
+label manifest 也必须再次绑定该 hash。
 
 ## Stage 9B：完整 PIT retrain 用法（correctness audit）
 

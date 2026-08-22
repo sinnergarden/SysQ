@@ -4,7 +4,7 @@
 # with the ONLY difference being the label horizon (60 vs 180):
 #   - experiment_id / signal_id / generator_id: distinct `_pit` ids (no clobber).
 #   - universe: csi800 -> csi800_pit_union (PIT union registry).
-#   - +pit_membership: true -> per-row filter to csi800_pit_v1 membership at
+#   - +pit_membership: true -> per-row filter to csi800_pit_v2 membership at
 #     each row's feature date, applied once post-load so train and predict see
 #     identical PIT rows (Section 17: PIT applies to training, not just prediction).
 #   - label: fwd_ret_60d_raw -> fwd_ret_60d_raw_pit (union label store).
@@ -29,6 +29,7 @@ generators:
       n_estimators: 300
       feature_list_id: v3a_plus_liquidity_financial_rc
       pit_membership: true
+      pit_universe_artifact: csi800_pit_v2
       labels:
         - label_id: fwd_ret_60d_raw_pit
 signal_transforms:

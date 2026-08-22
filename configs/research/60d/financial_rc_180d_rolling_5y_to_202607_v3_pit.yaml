@@ -4,7 +4,7 @@
 #   - experiment_id / signal_id / generator_id: distinct `_pit` ids so the
 #     signal_run_id (rolling__{experiment_id}__...) cannot clobber the baseline.
 #   - universe: csi800 -> csi800_pit_union (qlib registry, PIT union spans).
-#   - +pit_membership: true  -> per-row filter to csi800_pit_v1 membership at
+#   - +pit_membership: true  -> per-row filter to csi800_pit_v2 membership at
 #     each row's feature date, applied once post-load so train and predict see
 #     identical PIT rows (Section 17: PIT must apply to training, not just the
 #     prediction universe).
@@ -30,6 +30,7 @@ generators:
       n_estimators: 300
       feature_list_id: v3a_plus_liquidity_financial_rc
       pit_membership: true
+      pit_universe_artifact: csi800_pit_v2
       labels:
         - label_id: fwd_ret_180d_raw_pit
 signal_transforms:
