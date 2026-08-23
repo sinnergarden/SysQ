@@ -17,6 +17,7 @@ from typing import Any
 
 import pandas as pd
 
+from qsys.feature.registry import FeatureListRegistry
 from qsys.research.generators.base import RollingSignalGenerator
 from qsys.research.generators.fixture import FixtureSignalGenerator
 from qsys.research.manifest import write_manifest, with_standard_metadata
@@ -221,7 +222,7 @@ class SignalResearchPipeline:
 
         generator_source = inspect.getsourcefile(generator.__class__)
         generator_source_path = Path(generator_source) if generator_source else Path("")
-        return {
+        identity = {
             "experiment_id": config.experiment_id,
             "research_config": asdict(config),
             "generator_config": generator_config,
@@ -233,6 +234,12 @@ class SignalResearchPipeline:
             "source_manifest_hash": config.source_manifest_hash,
             "label_artifacts": label_artifacts,
         }
+        if config.feature_list_id:
+            contract = FeatureListRegistry.contract(config.feature_list_id)
+            identity["feature_list_contract"] = {
+                key: value for key, value in contract.items() if key != "features"
+            }
+        return identity
 
     # ------------------------------------------------------------------
     # Single-signal path (v1 compatibility)
@@ -362,6 +369,14 @@ class SignalResearchPipeline:
 
         evaluator = SignalEvaluator(str(self.root))
         exp_dir = self._paths.experiment_dir(config.experiment_id)
+        feature_list_contract: dict[str, Any] | None = None
+        if config.feature_list_id:
+            loaded_contract = FeatureListRegistry.contract(config.feature_list_id)
+            feature_list_contract = {
+                key: value
+                for key, value in loaded_contract.items()
+                if key != "features"
+            }
 
         # ── 1. Expand multi-label → per-label entries ──
         effective_generators = expand_multi_label_generators(config.generators)
@@ -479,6 +494,8 @@ class SignalResearchPipeline:
                 signal_manifest["source_manifest_hash"] = (
                     config.source_manifest_hash
                 )
+            if feature_list_contract is not None:
+                signal_manifest["feature_list_contract"] = feature_list_contract
             checkpoint_hash = generator_checkpoint_hashes.get(job.generator_id)
             if checkpoint_hash:
                 signal_manifest["window_checkpoint_set_sha256"] = checkpoint_hash

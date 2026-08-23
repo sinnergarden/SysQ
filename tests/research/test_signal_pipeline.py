@@ -15,6 +15,7 @@ from qsys.research.signal_pipeline import (
     SignalResearchResult,
     SignalRunRef,
 )
+from qsys.research.window_checkpoint import WindowPredictionCheckpointStore
 
 
 def _make_minimal_config(**overrides) -> RollingResearchConfig:
@@ -197,6 +198,68 @@ class TestSignalResearchPipelineMatrix:
                 manifest["feature_visibility_contract"]
                 == FEATURE_VISIBILITY_CONTRACT_V1
             )
+
+    @patch("qsys.label.store.LabelStore.load_labels")
+    @patch("qsys.research.signal_pipeline.FeatureListRegistry.contract")
+    def test_matrix_binds_feature_content_in_checkpoint_and_signal_manifest(
+        self, mock_contract, mock_labels, tmp_path: Path
+    ) -> None:
+        from qsys.research.generators.fixture import FixtureSignalGenerator
+
+        mock_labels.return_value = _make_fake_labels()
+        feature_contract = {
+            "feature_list_id": "frozen_features",
+            "feature_count": 2,
+            "features_sha256": "a" * 64,
+            "contract": "immutable_v1",
+            "source_artifact": "features.json",
+            "source_artifact_sha256": "a" * 64,
+            "features": ["$close", "$volume"],
+        }
+        mock_contract.return_value = feature_contract
+        config = self._matrix_config()
+        config.feature_list_id = "frozen_features"
+        config.window_checkpoints = True
+        config.source_manifest_hash = "source-v1"
+        generator = FixtureSignalGenerator(n_instruments=10)
+        pipeline = SignalResearchPipeline(str(tmp_path))
+
+        identity = pipeline._window_checkpoint_base_identity(
+            config, config.generators[0], generator
+        )
+        expected = {
+            key: value for key, value in feature_contract.items() if key != "features"
+        }
+        assert identity["feature_list_contract"] == expected
+
+        first_store = WindowPredictionCheckpointStore(
+            tmp_path / "first", identity
+        )
+        changed_contract = {**feature_contract, "features_sha256": "b" * 64}
+        mock_contract.return_value = changed_contract
+        changed_identity = pipeline._window_checkpoint_base_identity(
+            config, config.generators[0], generator
+        )
+        changed_store = WindowPredictionCheckpointStore(
+            tmp_path / "changed", changed_identity
+        )
+        assert (
+            first_store.base_identity_sha256
+            != changed_store.base_identity_sha256
+        )
+        mock_contract.return_value = feature_contract
+
+        result = pipeline.run(
+            config,
+            signal_generator=generator,
+            overwrite_signal=True,
+            overwrite_eval=True,
+        )
+        for ref in result.signal_runs:
+            manifest = pipeline._signal_store.load_manifest(
+                ref.signal_id, ref.signal_run_id
+            )
+            assert manifest["feature_list_contract"] == expected
 
     @patch("qsys.label.store.LabelStore.load_labels")
     def test_matrix_resumes_from_validated_window_checkpoints(

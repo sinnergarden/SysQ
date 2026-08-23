@@ -4,6 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 
+import pytest
 import yaml
 
 from qsys.feature.registry import FeatureListRegistry
@@ -30,6 +31,78 @@ def test_alpha_v1_feature_contract_is_frozen_to_historical_132() -> None:
     assert payload["source_artifact_sha256"] == HISTORICAL_FEATURE_SHA256
     canonical = json.dumps(features, indent=2).encode("utf-8")
     assert hashlib.sha256(canonical).hexdigest() == HISTORICAL_FEATURE_SHA256
+    contract = FeatureListRegistry.contract("alpha_v1_clean_132")
+    assert contract["feature_count"] == 132
+    assert contract["features_sha256"] == HISTORICAL_FEATURE_SHA256
+    assert contract["source_artifact_sha256"] == HISTORICAL_FEATURE_SHA256
+
+
+@pytest.mark.parametrize(
+    ("override", "error"),
+    [
+        ({"feature_count": 3}, "count mismatch"),
+        ({"source_artifact_sha256": "0" * 64}, "SHA-256 mismatch"),
+    ],
+)
+def test_feature_contract_rejects_tampered_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    override: dict[str, object],
+    error: str,
+) -> None:
+    payload: dict[str, object] = {
+        "feature_list_id": "frozen",
+        "feature_count": 2,
+        "features": ["$close", "$volume"],
+    }
+    payload.update(override)
+    (tmp_path / "frozen.yaml").write_text(
+        yaml.safe_dump(payload), encoding="utf-8"
+    )
+    monkeypatch.setattr(FeatureListRegistry, "_CONFIG_DIR", tmp_path)
+
+    with pytest.raises(ValueError, match=error):
+        FeatureListRegistry.load("frozen")
+
+
+@pytest.mark.parametrize(
+    "invalid_count", ["2", 2.0, True]
+)
+def test_feature_contract_rejects_non_integer_declared_count(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    invalid_count: object,
+) -> None:
+    payload = {
+        "feature_list_id": "frozen",
+        "feature_count": invalid_count,
+        "features": ["$close", "$volume"],
+    }
+    (tmp_path / "frozen.yaml").write_text(
+        yaml.safe_dump(payload), encoding="utf-8"
+    )
+    monkeypatch.setattr(FeatureListRegistry, "_CONFIG_DIR", tmp_path)
+
+    with pytest.raises(TypeError, match="feature_count must be int"):
+        FeatureListRegistry.load("frozen")
+
+
+def test_legacy_feature_list_without_declared_hash_is_still_content_bound(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = {
+        "feature_list_id": "legacy",
+        "features": ["$close", "$volume"],
+    }
+    (tmp_path / "legacy.yaml").write_text(
+        yaml.safe_dump(payload), encoding="utf-8"
+    )
+    monkeypatch.setattr(FeatureListRegistry, "_CONFIG_DIR", tmp_path)
+
+    contract = FeatureListRegistry.contract("legacy")
+    assert contract["source_artifact_sha256"] is None
+    assert contract["source_artifact_sha256_declared"] is False
+    assert len(contract["features_sha256"]) == 64
 
 
 def test_alpha_v1_20d_pit_label_contract() -> None:
