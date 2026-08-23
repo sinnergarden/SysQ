@@ -1,43 +1,29 @@
-# Modified AlphaV1 comparison requested by the PIT audit:
-# - preserve the immutable historical 132-feature model input and LightGBM
-#   hyperparameters;
-# - intentionally train only the 20d target (no legacy 5d/20d blend);
-# - enforce CSI800 PIT-v2 membership for training and prediction;
-# - use a strict PIT label and restart-safe per-window checkpoints.
-experiment_id: alpha_v1_20d_rolling_2y_to_202607_pit
+# Short-horizon feature_254 signal comparison requested by the PIT audit.
+# "AlphaV1" refers ONLY to the historical 254-feature semantic/price-volume
+# input contract.  Training cadence, LightGBM settings, PIT universe, signal
+# transform, and downstream phase-0 strategy stay aligned with the 90+ feature
+# PIT comparison.  Deliberate signal differences: feature list and 20d label.
+experiment_id: feature254_20d_rolling_2y_to_202607_pit
 calendar:
   start_date: "2021-01-01"
   end_date: "2026-07-31"
   train_window_days: 504
-  step_days: 5
+  step_days: 20
 signal:
-  signal_id: alpha_v1_historical132_20d_pit
+  signal_id: feature254_20d_pit
   score_column: score
-feature_list_id: alpha_v1_clean_132
+feature_list_id: semantic_all_features_254_frozen
 source_manifest_hash: 780ba40ec5ce8a5f5b5c88b02e1e171e0d67c3c2b02639b22ed0a2b889abc237
 window_checkpoints: true
 generators:
-  - generator_id: alpha_v1_historical132_20d_pit
+  - generator_id: feature254_20d_pit
     type: multi_label_lightgbm
     params:
       universe: csi800_pit_union
-      n_estimators: 200
-      feature_list_id: alpha_v1_clean_132
+      n_estimators: 300
+      feature_list_id: semantic_all_features_254_frozen
       pit_membership: true
       pit_universe_artifact: csi800_pit_v2
-      lgb_params:
-        objective: regression
-        metric: mse
-        colsample_bytree: 0.8879
-        learning_rate: 0.0421
-        subsample: 0.8789
-        lambda_l1: 205.6999
-        lambda_l2: 580.9768
-        max_depth: 8
-        num_leaves: 210
-        num_threads: 8
-        verbosity: -1
-        seed: 42
       labels:
         - label_id: fwd_ret_20d_raw_pit
 signal_transforms:

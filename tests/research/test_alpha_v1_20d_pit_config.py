@@ -13,28 +13,28 @@ from qsys.research.rolling_window import build_rolling_windows
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-HISTORICAL_FEATURE_SHA256 = (
-    "f058d84f60d9845730a56c170cf68f5fb450513e27b2550ed0f0b5afa26eeccc"
+HISTORICAL_FEATURE254_SHA256 = (
+    "78cbabb3f6d4ea38417c8164d77eba357c46f727ff7cc32e16ca9425e574e218"
 )
 QLIB_SOURCE_SHA256 = (
     "780ba40ec5ce8a5f5b5c88b02e1e171e0d67c3c2b02639b22ed0a2b889abc237"
 )
 
 
-def test_alpha_v1_feature_contract_is_frozen_to_historical_132() -> None:
-    path = REPO_ROOT / "configs/features/alpha_v1_clean_132.yaml"
+def test_feature254_contract_is_frozen_to_historical_model_bundle() -> None:
+    path = REPO_ROOT / "configs/features/semantic_all_features_254_frozen.yaml"
     payload = yaml.safe_load(path.read_text(encoding="utf-8"))
-    features = FeatureListRegistry.load("alpha_v1_clean_132")
+    features = FeatureListRegistry.load("semantic_all_features_254_frozen")
 
-    assert payload["feature_count"] == 132
-    assert len(features) == len(set(features)) == 132
-    assert payload["source_artifact_sha256"] == HISTORICAL_FEATURE_SHA256
+    assert payload["feature_count"] == 254
+    assert len(features) == len(set(features)) == 254
+    assert payload["source_artifact_sha256"] == HISTORICAL_FEATURE254_SHA256
     canonical = json.dumps(features, indent=2).encode("utf-8")
-    assert hashlib.sha256(canonical).hexdigest() == HISTORICAL_FEATURE_SHA256
-    contract = FeatureListRegistry.contract("alpha_v1_clean_132")
-    assert contract["feature_count"] == 132
-    assert contract["features_sha256"] == HISTORICAL_FEATURE_SHA256
-    assert contract["source_artifact_sha256"] == HISTORICAL_FEATURE_SHA256
+    assert hashlib.sha256(canonical).hexdigest() == HISTORICAL_FEATURE254_SHA256
+    contract = FeatureListRegistry.contract("semantic_all_features_254_frozen")
+    assert contract["feature_count"] == 254
+    assert contract["features_sha256"] == HISTORICAL_FEATURE254_SHA256
+    assert contract["source_artifact_sha256"] == HISTORICAL_FEATURE254_SHA256
 
 
 @pytest.mark.parametrize(
@@ -122,7 +122,7 @@ def test_alpha_v1_20d_pit_label_contract() -> None:
     assert payload["require_clean_provenance"] is True
 
 
-def test_alpha_v1_20d_research_config_is_single_label_and_strict_pit() -> None:
+def test_feature254_20d_research_config_changes_only_signal_contract() -> None:
     path = (
         REPO_ROOT
         / "configs/research/alpha_v1_20d_rolling_2y_to_202607_pit.yaml"
@@ -134,13 +134,14 @@ def test_alpha_v1_20d_research_config_is_single_label_and_strict_pit() -> None:
         "start_date": "2021-01-01",
         "end_date": "2026-07-31",
         "train_window_days": 504,
-        "step_days": 5,
+        "step_days": 20,
     }
-    assert config.feature_list_id == "alpha_v1_clean_132"
+    assert config.experiment_id == "feature254_20d_rolling_2y_to_202607_pit"
+    assert config.feature_list_id == "semantic_all_features_254_frozen"
     assert config.source_manifest_hash == QLIB_SOURCE_SHA256
     assert config.window_checkpoints is True
     assert params["universe"] == "csi800_pit_union"
-    assert params["feature_list_id"] == "alpha_v1_clean_132"
+    assert params["feature_list_id"] == "semantic_all_features_254_frozen"
     assert params["pit_membership"] is True
     assert params["pit_universe_artifact"] == "csi800_pit_v2"
     assert params["labels"] == [{"label_id": "fwd_ret_20d_raw_pit"}]
@@ -151,21 +152,8 @@ def test_alpha_v1_20d_research_config_is_single_label_and_strict_pit() -> None:
             "label_maturity_lag_trading_days": 21,
         }
     ]
-    assert params["n_estimators"] == 200
-    assert params["lgb_params"] == {
-        "objective": "regression",
-        "metric": "mse",
-        "colsample_bytree": 0.8879,
-        "learning_rate": 0.0421,
-        "subsample": 0.8789,
-        "lambda_l1": 205.6999,
-        "lambda_l2": 580.9768,
-        "max_depth": 8,
-        "num_leaves": 210,
-        "num_threads": 8,
-        "verbosity": -1,
-        "seed": 42,
-    }
+    assert params["n_estimators"] == 300
+    assert "lgb_params" not in params
 
     windows = build_rolling_windows(
         config.calendar["start_date"],
@@ -176,3 +164,32 @@ def test_alpha_v1_20d_research_config_is_single_label_and_strict_pit() -> None:
     )
     assert windows[0].predict_start == "2021-01-04"
     assert windows[-1].predict_end == "2026-07-31"
+    assert len(windows) == 68
+
+
+def test_feature254_20d_matches_pit_phase0_training_pipeline_except_signal() -> None:
+    feature254 = RollingResearchConfig.from_file(
+        REPO_ROOT
+        / "configs/research/alpha_v1_20d_rolling_2y_to_202607_pit.yaml"
+    )
+    baseline = RollingResearchConfig.from_file(
+        REPO_ROOT
+        / "configs/research/60d/financial_rc_180d_rolling_5y_to_202607_v3_pit.yaml"
+    )
+
+    assert feature254.calendar == baseline.calendar
+    assert feature254.signal["score_column"] == baseline.signal["score_column"]
+    assert feature254.transforms == baseline.transforms
+
+    feature254_params = dict(feature254.generators[0]["params"])
+    baseline_params = dict(baseline.generators[0]["params"])
+    assert set(feature254_params) == set(baseline_params)
+    for key in set(feature254_params) - {"feature_list_id", "labels"}:
+        assert feature254_params[key] == baseline_params[key]
+
+    assert feature254_params["feature_list_id"] == (
+        "semantic_all_features_254_frozen"
+    )
+    assert feature254_params["labels"] == [
+        {"label_id": "fwd_ret_20d_raw_pit"}
+    ]
