@@ -80,6 +80,36 @@ def test_snapshot_is_immutable_and_idempotently_reused(tmp_path: Path):
     assert manifest["semantic_sha256"] == first.semantic_sha256
 
 
+def test_snapshot_can_publish_under_explicit_data_root(tmp_path: Path):
+    data_root = tmp_path / "shared-data"
+    result = resolve_csi1800_pit_snapshot(
+        _Collector(),
+        as_of_date="20260821",
+        data_root=data_root,
+        apply=True,
+    )
+
+    assert result.artifact_dir == (
+        data_root
+        / "research"
+        / "universes"
+        / "csi1800_pit_daily"
+        / "20260821"
+    )
+    assert result.artifact_dir.is_dir()
+
+
+def test_snapshot_rejects_ambiguous_root_arguments(tmp_path: Path):
+    with pytest.raises(ValueError, match="not both"):
+        resolve_csi1800_pit_snapshot(
+            _Collector(),
+            as_of_date="20260821",
+            project_root=tmp_path,
+            data_root=tmp_path / "data",
+            apply=False,
+        )
+
+
 def test_snapshot_fails_closed_without_asof_source():
     with pytest.raises(ValueError, match="on or before target"):
         resolve_csi1800_pit_snapshot(

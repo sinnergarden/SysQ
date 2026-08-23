@@ -192,7 +192,7 @@ def _update_index_daily(collector: TushareCollector, target_dt: str) -> dict:
     Writes/updates CSV in ``data/raw/index/<ts_code>.csv``.
     Returns a summary dict per index.
     """
-    index_dir = cfg.project_root / "data" / "raw" / "index"
+    index_dir = Path(cfg.get_path("root")) / "raw" / "index"
     index_dir.mkdir(parents=True, exist_ok=True)
 
     results = {}
@@ -472,6 +472,7 @@ def main() -> None:
         "steps": {},
         "overall_status": "unknown",
     }
+    audit_dir = Path(cfg.get_path("root")) / "audit"
 
     # Step 0: Initialize Qlib
     t0 = time.time()
@@ -495,7 +496,7 @@ def main() -> None:
         pit_snapshot = resolve_csi1800_pit_snapshot(
             collector,
             as_of_date=target_dt,
-            project_root=PROJECT_ROOT,
+            data_root=Path(cfg.get_path("root")),
             apply=do_apply,
         )
         codes = list(pit_snapshot.instruments)
@@ -517,7 +518,7 @@ def main() -> None:
         log.error("Empty %s universe, aborting.", universe)
         report["overall_status"] = "failed"
         report["ended_at"] = datetime.now().isoformat()
-        _write_audit(Path("data/audit"), report)
+        _write_audit(audit_dir, report)
         sys.exit(1)
 
     # Step 2: Pre-check — which stocks already have target date?
@@ -563,6 +564,7 @@ def main() -> None:
         stage="raw_fetch",
         summary=raw_summary,
         do_apply=do_apply,
+        audit_dir=audit_dir,
     )
 
     # Step 4: Index daily update (always applies when do_apply, no separate dry-run for this)
@@ -603,6 +605,7 @@ def main() -> None:
         stage="qlib_convert",
         summary=qlib_summary,
         do_apply=do_apply,
+        audit_dir=audit_dir,
     )
 
     # Step 5: Refresh instrument files
@@ -641,6 +644,7 @@ def main() -> None:
         stage="refresh_instruments",
         summary=refresh_summary,
         do_apply=do_apply,
+        audit_dir=audit_dir,
     )
 
     # Step 6: Readiness check
@@ -667,7 +671,7 @@ def main() -> None:
 
     # Write audit
     if do_apply:
-        _write_audit(Path("data/audit"), report)
+        _write_audit(audit_dir, report)
 
     # Step 7: Telegram notification (non-blocking, apply only)
     if do_apply:

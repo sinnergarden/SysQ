@@ -162,3 +162,30 @@ def test_registry_only_catchup_does_not_call_remote_collector(tmp_path: Path) ->
     assert result["status"] == "success"
     assert result["before"]["canonical_deficient_symbols"] == []
     assert adapter.calls == [(["LATE.SZ"], [])]
+
+
+def test_explicit_data_root_ignores_clean_runtime_data(tmp_path: Path) -> None:
+    runtime_root = tmp_path / "runtime"
+    data_root = tmp_path / "production" / "data"
+    _write(
+        data_root / "canonical" / "daily" / "BOUND.SZ.feather",
+        ["20220810", "20260807"],
+    )
+    _write_registry(
+        data_root / "qlib_bin" / "instruments" / "all.txt",
+        [("BOUND.SZ", "2022-08-10", "2026-08-07")],
+    )
+    _write(
+        runtime_root / "data" / "canonical" / "daily" / "BOUND.SZ.feather",
+        ["20260807"],
+    )
+
+    result = inspect_universe_history(
+        data_root=data_root,
+        symbols=["BOUND.SZ"],
+        as_of_date="2026-08-07",
+        lookback_calendar_days=1461,
+    )
+
+    assert result["status"] == "pass"
+    assert result["details"][0]["first_date"] == "2022-08-10"

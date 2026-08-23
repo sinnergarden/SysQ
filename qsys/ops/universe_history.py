@@ -12,6 +12,18 @@ from typing import Any, Iterable
 import pandas as pd
 
 
+def _resolve_data_root(
+    *, project_root: Path | None = None, data_root: Path | None = None
+) -> Path:
+    if data_root is not None and project_root is not None:
+        raise ValueError("pass data_root or project_root, not both")
+    if data_root is not None:
+        return Path(data_root)
+    if project_root is not None:
+        return Path(project_root) / "data"
+    raise ValueError("data_root or project_root is required")
+
+
 def _read_registry(path: Path) -> pd.DataFrame:
     columns = ["instrument", "start_date", "end_date"]
     if not path.is_file():
@@ -37,12 +49,17 @@ def _atomic_write_registry(frame: pd.DataFrame, path: Path) -> None:
 
 
 def repair_qlib_instrument_history_spans(
-    *, project_root: Path, symbols: Iterable[str]
+    *,
+    symbols: Iterable[str],
+    project_root: Path | None = None,
+    data_root: Path | None = None,
 ) -> dict[str, Any]:
     """Align Qlib registry spans to canonical data availability."""
 
-    root = Path(project_root)
-    canonical = root / "data" / "canonical" / "daily"
+    resolved_data_root = _resolve_data_root(
+        project_root=project_root, data_root=data_root
+    )
+    canonical = resolved_data_root / "canonical" / "daily"
     spans: dict[str, tuple[str, str]] = {}
     for symbol in sorted({str(value).strip().upper() for value in symbols}):
         path = canonical / f"{symbol}.feather"
@@ -59,7 +76,7 @@ def repair_qlib_instrument_history_spans(
             )
 
     changed: dict[str, int] = {}
-    registry_dir = root / "data" / "qlib_bin" / "instruments"
+    registry_dir = resolved_data_root / "qlib_bin" / "instruments"
     for name in ("all", "csi800", "csi300"):
         path = registry_dir / f"{name}.txt"
         frame = _read_registry(path)
@@ -90,14 +107,17 @@ def repair_qlib_instrument_history_spans(
 
 def inspect_universe_history(
     *,
-    project_root: Path,
     symbols: Iterable[str],
     as_of_date: str,
     lookback_calendar_days: int,
+    project_root: Path | None = None,
+    data_root: Path | None = None,
 ) -> dict[str, Any]:
     """Find members whose canonical price history starts after required lookback."""
 
-    root = Path(project_root)
+    resolved_data_root = _resolve_data_root(
+        project_root=project_root, data_root=data_root
+    )
     required_start = pd.Timestamp(as_of_date) - pd.Timedelta(
         days=lookback_calendar_days
     )
@@ -119,16 +139,16 @@ def inspect_universe_history(
 
     details: list[dict[str, Any]] = []
     deficient: list[str] = []
-    canonical = root / "data" / "canonical" / "daily"
+    canonical = resolved_data_root / "canonical" / "daily"
     all_registry = _read_registry(
-        root / "data" / "qlib_bin" / "instruments" / "all.txt"
+        resolved_data_root / "qlib_bin" / "instruments" / "all.txt"
     )
     registry_starts = (
         all_registry.groupby("instrument")["start_date"].min().to_dict()
         if not all_registry.empty
         else {}
     )
-    calendar_path = root / "data" / "qlib_bin" / "calendars" / "day.txt"
+    calendar_path = resolved_data_root / "qlib_bin" / "calendars" / "day.txt"
     if calendar_path.is_file():
         calendar = pd.to_datetime(
             [
@@ -231,20 +251,23 @@ def inspect_universe_history(
 
 def run_universe_history_catchup(
     *,
-    project_root: Path,
     symbols: Iterable[str],
     as_of_date: str,
     lookback_calendar_days: int,
     output_dir: Path,
     apply: bool,
+    project_root: Path | None = None,
+    data_root: Path | None = None,
     collector: Any | None = None,
     adapter: Any | None = None,
 ) -> dict[str, Any]:
     """Backfill only deficient current members, rebuild Qlib, and verify."""
 
-    root = Path(project_root)
+    resolved_data_root = _resolve_data_root(
+        project_root=project_root, data_root=data_root
+    )
     before = inspect_universe_history(
-        project_root=root,
+        data_root=resolved_data_root,
         symbols=symbols,
         as_of_date=as_of_date,
         lookback_calendar_days=lookback_calendar_days,
@@ -259,7 +282,7 @@ def run_universe_history_catchup(
     if apply and before["deficient_symbols"]:
         backup_dir = output_dir / "before"
         backup_dir.mkdir(parents=True, exist_ok=True)
-        canonical = root / "data" / "canonical" / "daily"
+        canonical = resolved_data_root / "canonical" / "daily"
         for symbol in before["canonical_deficient_symbols"]:
             source = canonical / f"{symbol}.feather"
             if source.is_file():
@@ -282,20 +305,20 @@ def run_universe_history_catchup(
             from qsys.data.adapter import QlibAdapter
 
             adapter = QlibAdapter(
-                qlib_dir=root / "data" / "qlib_bin",
+                qlib_dir=resolved_data_root / "qlib_bin",
                 raw_dir=canonical,
             )
         result["qlib_rebuild"] = adapter.convert_fix_symbols(
             before["deficient_symbols"], refresh_universes=[]
         )
         result["registry_repair"] = repair_qlib_instrument_history_spans(
-            project_root=root,
+            data_root=resolved_data_root,
             symbols=before["deficient_symbols"],
         )
         result["backup_dir"] = str(backup_dir)
 
     after = inspect_universe_history(
-        project_root=root,
+        data_root=resolved_data_root,
         symbols=symbols,
         as_of_date=as_of_date,
         lookback_calendar_days=lookback_calendar_days,

@@ -33,6 +33,12 @@ def _require_exact_sync_target(
     return actual
 
 
+def _data_sync_run_root(data_root: Path, run_id: str) -> Path:
+    """Keep repair summaries and backups beside the configured data SOT."""
+
+    return Path(data_root) / "audit" / "data_sync" / run_id
+
+
 def main():
     p = argparse.ArgumentParser(description="Data Sync — UC-1")
     p.add_argument("--config", default=None)
@@ -168,6 +174,7 @@ def main():
     )
 
     from qsys.data.adapter import QlibAdapter
+    from qsys.config import cfg
     from qsys.ops.instrument_coverage import read_instrument_file
     from qsys.data.storage import StockDataStore
     from qsys.ops.raw_sync import (
@@ -197,17 +204,19 @@ def main():
     ]
     symbols = sorted(active["instrument"].astype(str).unique().tolist())
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    data_root = Path(cfg.get_path("root"))
+    audit_run_root = _data_sync_run_root(data_root, run_id)
     report = {}
     if not args.skip_universe_history_catchup:
         from qsys.ops.universe_history import run_universe_history_catchup
 
         history_result = run_universe_history_catchup(
-            project_root=PROJ,
+            data_root=data_root,
             symbols=symbols,
             as_of_date=resolved_target,
             lookback_calendar_days=args.universe_history_lookback_days,
             output_dir=(
-                PROJ / "runs" / "data_sync" / run_id / "universe_history"
+                audit_run_root / "universe_history"
             ),
             apply=True,
         )
@@ -244,7 +253,7 @@ def main():
             min_active=margin_min_active,
             min_exchange_coverage=margin_min_exchange_coverage,
             apply=True,
-            output_dir=PROJ / "runs" / "data_sync" / run_id / "margin_repair",
+            output_dir=audit_run_root / "margin_repair",
             store=store,
             signal_date=resolved_target,
             availability_lag_sessions=args.margin_lag_sessions,
@@ -273,13 +282,13 @@ def main():
             financial_config.get("feature_freshness", {}).get("shareholder")
         )
         shareholder_result = run_shareholder_history_repair(
-            project_root=PROJ,
+            data_root=data_root,
             symbols=symbols,
             end_date=resolved_target,
             contract=freshness,
             apply=True,
             output_dir=(
-                PROJ / "runs" / "data_sync" / run_id / "shareholder_repair"
+                audit_run_root / "shareholder_repair"
             ),
             start_date=args.shareholder_start_date,
         )

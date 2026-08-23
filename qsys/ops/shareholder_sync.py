@@ -32,6 +32,22 @@ SHAREHOLDER_FEATURES = {
 }
 
 
+def _resolve_data_root(
+    *, project_root: Path | None = None, data_root: Path | None = None
+) -> tuple[Path, Path]:
+    """Return the canonical data root and a stable provenance path base."""
+
+    if data_root is not None and project_root is not None:
+        raise ValueError("pass data_root or project_root, not both")
+    if data_root is not None:
+        resolved = Path(data_root)
+        return resolved, resolved.parent
+    if project_root is not None:
+        root = Path(project_root)
+        return root / "data", root
+    raise ValueError("data_root or project_root is required")
+
+
 def _normalise_date(value: Any) -> str | None:
     if value is None or pd.isna(value):
         return None
@@ -243,15 +259,18 @@ def _source_health(
 
 def inspect_shareholder_sidecar_health(
     *,
-    project_root: Path,
     symbols: Iterable[str],
     as_of_date: str,
     contract: dict[str, Any],
+    project_root: Path | None = None,
+    data_root: Path | None = None,
 ) -> dict[str, Any]:
     """Inspect current PIT source coverage without trusting feature non-nullness."""
 
-    root = Path(project_root)
-    canonical = root / "data" / "canonical"
+    resolved_data_root, provenance_root = _resolve_data_root(
+        project_root=project_root, data_root=data_root
+    )
+    canonical = resolved_data_root / "canonical"
     holder_path = canonical / HOLDER_FILENAME
     top10_path = canonical / TOP10_FILENAME
     holder = normalise_holder_rows(
@@ -289,7 +308,7 @@ def inspect_shareholder_sidecar_health(
             max_median_stale_days=limits["max_median_days"],
             max_row_stale_days=limits["max_row_days"],
         )
-        health["path"] = str(path.relative_to(root))
+        health["path"] = str(path.relative_to(provenance_root))
         health["file_sha256"] = _file_sha256(path)
         subset = frame[
             frame["inst"].isin(symbol_set)
@@ -636,19 +655,22 @@ def fetch_shareholder_incremental(
 
 def run_shareholder_history_repair(
     *,
-    project_root: Path,
     symbols: Iterable[str],
     end_date: str,
     contract: dict[str, Any],
     apply: bool,
     output_dir: Path,
+    project_root: Path | None = None,
+    data_root: Path | None = None,
     collector: Any | None = None,
     start_date: str | None = None,
 ) -> dict[str, Any]:
     """Repair canonical shareholder PIT sidecars and emit an immutable audit."""
 
-    root = Path(project_root)
-    canonical = root / "data" / "canonical"
+    resolved_data_root, _ = _resolve_data_root(
+        project_root=project_root, data_root=data_root
+    )
+    canonical = resolved_data_root / "canonical"
     holder_path = canonical / HOLDER_FILENAME
     top10_path = canonical / TOP10_FILENAME
     state_path = canonical / STATE_FILENAME
@@ -659,7 +681,7 @@ def run_shareholder_history_repair(
         pd.read_parquet(top10_path) if top10_path.is_file() else None
     )
     before = inspect_shareholder_sidecar_health(
-        project_root=root,
+        data_root=resolved_data_root,
         symbols=symbols,
         as_of_date=end_date,
         contract=contract,
@@ -758,7 +780,7 @@ def run_shareholder_history_repair(
             summary["error"] = str(exc)
 
     after = inspect_shareholder_sidecar_health(
-        project_root=root,
+        data_root=resolved_data_root,
         symbols=symbols,
         as_of_date=resolved_end,
         contract=contract,

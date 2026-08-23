@@ -47,6 +47,16 @@ def test_sync_target_rejects_fallback_date():
         )
 
 
+def test_repair_audits_follow_external_data_root(tmp_path: Path):
+    runtime = tmp_path / "runtime"
+    data_root = tmp_path / "production" / "data"
+
+    result = data_sync._data_sync_run_root(data_root, "20260823_210000")
+
+    assert result == data_root / "audit" / "data_sync" / "20260823_210000"
+    assert runtime not in result.parents
+
+
 def test_failed_raw_stage_is_audited_and_blocks(tmp_path: Path):
     report = {"universe": "csi1800", "target_date": "20260821"}
     with pytest.raises(RuntimeError, match="raw_fetch failed"):

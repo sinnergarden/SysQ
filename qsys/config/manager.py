@@ -25,7 +25,12 @@ class ConfigManager:
     def _load_config(self):
         # Determine project root (assuming this file is in qsys/config/)
         self.project_root = Path(__file__).resolve().parent.parent.parent
-        config_path = self.project_root / "config" / "settings.yaml"
+        settings_override = os.environ.get("QSYS_SETTINGS_FILE", "").strip()
+        config_path = (
+            Path(settings_override).expanduser()
+            if settings_override
+            else self.project_root / "config" / "settings.yaml"
+        )
         example_path = self.project_root / "config" / "settings.example.yaml"
 
         if not config_path.exists():
@@ -40,7 +45,13 @@ class ConfigManager:
 
     def _init_directories(self):
         config = self._config or {}
-        data_root = self.project_root / config.get("data_root", "data")
+        data_root_override = os.environ.get("QSYS_DATA_ROOT", "").strip()
+        if data_root_override:
+            data_root = Path(data_root_override).expanduser()
+            if not data_root.is_absolute():
+                data_root = (self.project_root / data_root).resolve()
+        else:
+            data_root = self.project_root / config.get("data_root", "data")
 
         # canonical_dir from settings.yaml takes priority over hardcoded default
         config_canonical = config.get("canonical_dir")
