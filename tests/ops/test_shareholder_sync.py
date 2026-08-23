@@ -10,6 +10,7 @@ from qsys.ops.shareholder_sync import (
     inspect_shareholder_sidecar_health,
     normalise_holder_rows,
     normalise_top10_rows,
+    run_shareholder_history_repair,
 )
 
 
@@ -75,6 +76,52 @@ def test_health_uses_announcement_date_asof_and_fails_stale_rows(tmp_path: Path)
     assert health["sources"]["holder_num"]["latest_ann_date"] == "2026-08-08"
     assert health["sources"]["holder_num"]["median_stale_days"] > 365
     assert health["snapshot_hash"]
+
+
+def test_health_uses_explicit_data_root_not_runtime_checkout(tmp_path: Path) -> None:
+    data_root = tmp_path / "production" / "data"
+    canonical = data_root / "canonical"
+    canonical.mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "inst": ["A", "B"],
+            "ann_date": ["2026-08-01", "2026-08-01"],
+            "end_date": ["2026-06-30", "2026-06-30"],
+            "holder_num": [10, 20],
+        }
+    ).to_parquet(canonical / "holder_num.parquet", index=False)
+    pd.DataFrame(
+        {
+            "inst": ["A", "B"],
+            "ann_date": ["2026-08-01", "2026-08-01"],
+            "end_date": ["2026-06-30", "2026-06-30"],
+            "top10_ratio": [30.0, 40.0],
+        }
+    ).to_parquet(canonical / "top10_holder_ratio.parquet", index=False)
+
+    health = inspect_shareholder_sidecar_health(
+        data_root=data_root,
+        symbols=["A", "B"],
+        as_of_date="2026-08-07",
+        contract=CONTRACT,
+    )
+
+    assert health["status"] == "pass"
+    assert health["sources"]["holder_num"]["path"].startswith("data/canonical/")
+
+    output_dir = data_root / "audit" / "data_sync" / "run" / "shareholder"
+    repair = run_shareholder_history_repair(
+        data_root=data_root,
+        symbols=["A", "B"],
+        end_date="2026-08-07",
+        contract=CONTRACT,
+        apply=False,
+        output_dir=output_dir,
+    )
+    assert repair["status"] == "healthy"
+    assert Path(repair["summary_path"]) == (
+        output_dir / "shareholder_repair_summary.json"
+    )
 
 
 def test_pagination_rejects_repeated_full_page() -> None:

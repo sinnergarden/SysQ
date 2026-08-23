@@ -1,0 +1,24 @@
+[Unit]
+Description=Qsys CSI1800 PIT Daily Data Sync
+Documentation=https://github.com/sinnergarden/SysQ
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/liuming/.openclaw/workspace/SysQ-runtime
+Environment=PYTHONPATH=/home/liuming/.openclaw/workspace/SysQ-runtime
+Environment=PYTHONUNBUFFERED=1
+Environment=QSYS_SETTINGS_FILE=/home/liuming/.openclaw/workspace/SysQ/config/settings.yaml
+Environment=QSYS_DATA_ROOT=/home/liuming/.openclaw/workspace/SysQ/data
+Environment=HTTP_PROXY=http://172.31.144.1:12334
+Environment=HTTPS_PROXY=http://172.31.144.1:12334
+EnvironmentFile=/home/liuming/.openclaw/.env
+ExecStart=/home/liuming/.openclaw/workspace/.mamba/envs/dl/bin/python \
+    /home/liuming/.openclaw/workspace/SysQ-runtime/scripts/data_sync.py \
+    --universe csi1800 --apply
+StandardOutput=append:/home/liuming/.openclaw/logs/sync_csi1800_pit_daily.log
+StandardError=append:/home/liuming/.openclaw/logs/sync_csi1800_pit_daily.log
+
+[Install]
+WantedBy=default.target

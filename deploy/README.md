@@ -8,14 +8,20 @@
 
 | Timer | 时间(CST) | ExecStart | 说明 |
 |-------|----------|-----------|------|
+| `qsys-csi1800-pit-daily-sync.timer` | 交易日 19:00 | `scripts/data_sync.py --universe csi1800 --apply` | PIT CSI1800（CSI800+CSI1000）T 日同步；独立于推理 |
 | `qsys-csi800-daily-sync.timer` | 交易日 19:00 | `scripts/data_sync.py --universe csi800 --apply`，随后 `financial_rc infer` | T 日同步 + T-1 两融回补 + Top200 |
 | `qsys-candidate-preopen.timer` | 交易日 08:00 | `run_daily_batch.py --stage candidate --mode preopen --trade-date auto` | 盘前：信号→计划→shadow |
 | `qsys-candidate-postclose.timer` | 交易日 21:00 | `run_daily_batch.py --stage candidate --mode postclose --trade-date auto` | 盘后：对账→归档→摘要 |
 | `qsys-candidate-train.timer` | 周一 07:00 | `run_daily_batch.py --stage candidate --mode train` | 周模型训练 |
 
-所有 service 文件使用 `--trade-date auto`（取机器本地当天日期，无需 shell 展开）。
+CSI1800 PIT service 固定运行于干净 runtime
+`/home/liuming/.openclaw/workspace/SysQ-runtime`，只执行数据同步，不串联
+`run_daily.py` 推理。service 通过 `QSYS_SETTINGS_FILE` 和 `QSYS_DATA_ROOT`
+显式绑定现有生产配置与唯一数据 SOT，不依赖软链接。其他 service 文件使用
+`--trade-date auto`（取机器本地当天日期，无需 shell 展开）。
 
-Timer 依赖 systemd 默认规则：`foo.timer` 激活同名 `foo.service`，无需显式 `Unit=`。
+Timer 默认会激活同名 service；CSI1800 PIT timer 还显式声明了
+`Unit=qsys-csi1800-pit-daily-sync.service`，以便部署审计时能验证绑定关系。
 
 ### 实际运行验证
 
@@ -25,6 +31,10 @@ Timer 依赖 systemd 默认规则：`foo.timer` 激活同名 `foo.service`，无
 | `qsys-candidate-postclose.service` | 2026-05-29 21:00 | ✅ exit=0 |
 | `qsys-csi800-daily-sync.service` | 2026-05-29 19:00 | ✅ exit=0 |
 | `qsys-candidate-train.service` | next Mon 07:00 | ⏳ timer active; first scheduled success pending next Monday |
+
+CSI1800 切换后，以 `qsys-csi1800-pit-daily-sync.service` 的 journal、日志和
+`data/audit/sync_csi1800_YYYYMMDD.json` 为准；不要将旧 CSI800 service 的成功
+状态当作 CSI1800 PIT 数据已更新的证据。
 
 ### 安装步骤
 
@@ -42,6 +52,8 @@ chmod 600 /home/liuming/.openclaw/.env
 # 2. 复制 systemd 文件到 user 目录
 cp deploy/systemd/qsys-csi800-daily-sync.service ~/.config/systemd/user/
 cp deploy/systemd/qsys-csi800-daily-sync.timer ~/.config/systemd/user/
+cp deploy/systemd/qsys-csi1800-pit-daily-sync.service ~/.config/systemd/user/
+cp deploy/systemd/qsys-csi1800-pit-daily-sync.timer ~/.config/systemd/user/
 cp deploy/systemd/qsys-candidate-preopen.service ~/.config/systemd/user/
 cp deploy/systemd/qsys-candidate-preopen.timer ~/.config/systemd/user/
 cp deploy/systemd/qsys-candidate-postclose.service ~/.config/systemd/user/
@@ -50,13 +62,19 @@ cp deploy/systemd/qsys-candidate-train.service ~/.config/systemd/user/
 cp deploy/systemd/qsys-candidate-train.timer ~/.config/systemd/user/
 systemctl --user daemon-reload
 
-# 3. 启用 timer
-systemctl --user enable --now qsys-csi800-daily-sync.timer
+# 3. 切换到 CSI1800 PIT timer（不要与旧 CSI800 daily timer 并行）
+systemctl --user disable --now qsys-csi800-daily-sync.timer
+systemctl --user stop qsys-csi800-daily-sync.service
+systemctl --user show qsys-csi800-daily-sync.service -p ActiveState -p SubState
+# 仅在旧 service 显示 ActiveState=inactive 后继续
+systemctl --user enable --now qsys-csi1800-pit-daily-sync.timer
+
+# 4. 启用其余 timer
 systemctl --user enable --now qsys-candidate-preopen.timer
 systemctl --user enable --now qsys-candidate-postclose.timer
 systemctl --user enable --now qsys-candidate-train.timer
 
-# 4. 确认状态
+# 5. 确认状态
 systemctl --user list-timers --all | grep qsys
 ```
 
@@ -64,6 +82,7 @@ systemctl --user list-timers --all | grep qsys
 
 ```
 /home/liuming/.openclaw/logs/
+├── sync_csi1800_pit_daily.log # PIT CSI1800 数据同步
 ├── sync_csi800_daily.log         # 数据同步
 ├── candidate-preopen.log         # 盘前流程
 ├── candidate-postclose.log       # 盘后流程
@@ -73,7 +92,13 @@ systemctl --user list-timers --all | grep qsys
 ### 手动测试
 
 ```bash
-# 数据同步
+# PIT CSI1800 数据同步（生产 service 使用此命令）
+PYTHONPATH=/home/liuming/.openclaw/workspace/SysQ-runtime \
+  /home/liuming/.openclaw/workspace/.mamba/envs/dl/bin/python \
+  /home/liuming/.openclaw/workspace/SysQ-runtime/scripts/data_sync.py \
+  --universe csi1800 --apply
+
+# 旧 CSI800 数据同步（仅兼容/回滚）
 python scripts/data_sync.py --universe csi800 --apply
 python scripts/run_daily.py --strategy financial_rc --mode infer --signal-date auto --top-k 200
 

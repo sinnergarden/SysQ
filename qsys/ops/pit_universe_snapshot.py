@@ -124,10 +124,18 @@ def resolve_csi1800_pit_snapshot(
     collector: Any,
     *,
     as_of_date: str,
-    project_root: Path,
+    project_root: Path | None = None,
+    data_root: Path | None = None,
     apply: bool,
 ) -> OperationalPitSnapshot:
     """Resolve and optionally publish an immutable target-date CSI1800 snapshot."""
+
+    if data_root is None:
+        if project_root is None:
+            raise ValueError("data_root or project_root is required")
+        data_root = Path(project_root) / "data"
+    elif project_root is not None:
+        raise ValueError("pass data_root or project_root, not both")
 
     target = _normalise_date(as_of_date)
     legs = []
@@ -171,13 +179,7 @@ def resolve_csi1800_pit_snapshot(
             reused=False,
         )
 
-    root = (
-        Path(project_root)
-        / "data"
-        / "research"
-        / "universes"
-        / "csi1800_pit_daily"
-    )
+    root = Path(data_root) / "research" / "universes" / "csi1800_pit_daily"
     artifact_dir = root / target
     membership_path = artifact_dir / "membership.parquet"
     manifest_path = artifact_dir / "manifest.json"
@@ -236,7 +238,7 @@ def resolve_csi1800_pit_snapshot(
             return resolve_csi1800_pit_snapshot(
                 collector,
                 as_of_date=target,
-                project_root=project_root,
+                data_root=data_root,
                 apply=True,
             )
     finally:
