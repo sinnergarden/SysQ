@@ -11,7 +11,9 @@ import hashlib
 import json
 import math
 import os
+import re
 import sqlite3
+import stat
 import subprocess
 import uuid
 from collections.abc import Iterable, Sequence
@@ -107,8 +109,26 @@ def load_universe_snapshot_members(
     project_root: Path,
     universe: str,
     signal_date: str,
+    *,
+    universe_snapshot_semantics: str = "current_constituents_snapshot",
+    universe_snapshot_path: str | None = None,
 ) -> list[str]:
     """Load the exact Qlib universe membership active on *signal_date*."""
+
+    if universe_snapshot_semantics == "dated_pit_membership_snapshot":
+        path = _validate_dated_snapshot_path(project_root, universe_snapshot_path)
+        snapshot_date = _snapshot_path_date(path)
+        resolved_signal = _normalise_date(signal_date)
+        if snapshot_date != resolved_signal:
+            raise InferenceContractError(
+                "universe snapshot path date must equal the expected snapshot date: "
+                f"expected={resolved_signal}, got={snapshot_date}"
+            )
+        return _read_membership_parquet(path)
+    if universe_snapshot_semantics != "current_constituents_snapshot":
+        raise InferenceContractError(
+            f"unsupported universe_snapshot_semantics={universe_snapshot_semantics!r}"
+        )
 
     snapshot_path = (
         Path(project_root) / "data" / "qlib_bin" / "instruments" / f"{universe}.txt"
@@ -147,6 +167,129 @@ def load_universe_snapshot_members(
             f"universe snapshot has no active members for {resolved_signal}: {snapshot_path}"
         )
     compute_universe_hash(members)
+    return sorted(members)
+
+
+_SNAPSHOT_DATE_RE = re.compile(r"(?<!\d)(20\d{2})[-_]?([01]\d)[-_]?([0-3]\d)(?!\d)")
+
+
+def _snapshot_path_date(path: Path) -> str:
+    """Extract the sole explicit ISO/compact date component from a snapshot path."""
+
+    matches = _SNAPSHOT_DATE_RE.findall(str(path))
+    if len(matches) != 1:
+        raise InferenceContractError(
+            "inference.universe_snapshot_path must contain exactly one explicit "
+            "YYYY-MM-DD date"
+        )
+    year, month, day = matches[0]
+    return _normalise_date(f"{year}-{month}-{day}")
+
+
+def _validate_dated_snapshot_path(
+    project_root: Path, configured_path: str | None
+) -> Path:
+    """Validate a project-local, immutable, dated membership parquet path."""
+
+    if configured_path is None:
+        raise InferenceContractError(
+            "dated_pit_membership_snapshot requires inference.universe_snapshot_path"
+        )
+    raw = str(configured_path).strip()
+    if not raw or raw.lower() in {"null", "none", "latest"}:
+        raise InferenceContractError(
+            "inference.universe_snapshot_path must be an explicit dated path"
+        )
+    configured = Path(raw)
+    if configured.is_absolute():
+        root = Path(project_root).resolve()
+        candidate = configured
+        try:
+            relative = candidate.relative_to(root)
+        except ValueError as exc:
+            raise InferenceContractError(
+                "inference.universe_snapshot_path must resolve inside project root"
+            ) from exc
+    else:
+        relative = configured
+        candidate = Path(project_root) / relative
+    if ".." in relative.parts:
+        raise InferenceContractError(
+            "inference.universe_snapshot_path must not traverse outside project root"
+        )
+    if any(
+        token in part.lower()
+        for part in relative.parts
+        for token in ("latest", "null", "none")
+    ):
+        raise InferenceContractError(
+            "inference.universe_snapshot_path must not use latest/null resolution"
+        )
+    current = Path(project_root)
+    for part in relative.parts:
+        current /= part
+        if current.is_symlink():
+            raise InferenceContractError(
+                f"inference.universe_snapshot_path must not contain symlinks: {current}"
+            )
+    if not candidate.exists() or candidate.is_symlink():
+        raise InferenceContractError(
+            f"inference.universe_snapshot_path must be an ordinary file: {candidate}"
+        )
+    try:
+        resolved = candidate.resolve(strict=True)
+    except OSError as exc:
+        raise InferenceContractError(
+            f"cannot resolve inference.universe_snapshot_path: {candidate}"
+        ) from exc
+    root = Path(project_root).resolve()
+    if resolved != root and root not in resolved.parents:
+        raise InferenceContractError(
+            "inference.universe_snapshot_path resolves outside project root"
+        )
+    if not stat.S_ISREG(candidate.stat().st_mode):
+        raise InferenceContractError(
+            f"inference.universe_snapshot_path must be an ordinary file: {candidate}"
+        )
+    if candidate.suffix.lower() != ".parquet":
+        raise InferenceContractError(
+            "inference.universe_snapshot_path must point to a parquet file"
+        )
+    _snapshot_path_date(relative)
+    return candidate
+
+
+def _read_membership_parquet(path: Path) -> list[str]:
+    """Read and validate one immutable membership parquet snapshot."""
+
+    try:
+        import pandas as pd
+
+        frame = pd.read_parquet(path)
+    except Exception as exc:  # pragma: no cover - backend errors vary by install
+        raise InferenceContractError(
+            f"cannot read universe membership parquet: {path}: {exc}"
+        ) from exc
+    columns = [name for name in ("instrument", "ts_code", "symbol") if name in frame]
+    if len(columns) != 1:
+        raise InferenceContractError(
+            "universe membership parquet must contain exactly one of "
+            "instrument, ts_code, or symbol"
+        )
+    values = frame[columns[0]]
+    if values.isna().any():
+        raise InferenceContractError(
+            f"universe membership parquet contains null {columns[0]} values"
+        )
+    members = [str(value).strip() for value in values.tolist()]
+    if any(not member for member in members):
+        raise InferenceContractError(
+            "universe membership parquet contains empty instrument values"
+        )
+    if len(members) != len(set(members)):
+        raise InferenceContractError(
+            "universe membership parquet contains duplicate instruments"
+        )
     return sorted(members)
 
 
@@ -419,10 +562,13 @@ def resolve_inference_dates(
             f"decision_date={expected_completed}, "
             f"feature_snapshot_lag_sessions={feature_snapshot_lag_sessions}"
         )
-    if universe_snapshot_semantics != "current_constituents_snapshot":
+    if universe_snapshot_semantics not in {
+        "current_constituents_snapshot",
+        "dated_pit_membership_snapshot",
+    }:
         raise InferenceContractError(
-            "historical PIT inference is unavailable: no "
-            "pit_constituents_snapshot provider is implemented"
+            "historical PIT inference is unavailable: unsupported "
+            f"universe_snapshot_semantics={universe_snapshot_semantics!r}"
         )
 
     expected_execution = resolve_next_open_session(expected_completed, sessions)
@@ -494,9 +640,9 @@ def validate_inference_config(
         raise InferenceContractError(str(exc)) from exc
 
     raw_models = bundle.get("models")
-    if not isinstance(raw_models, list) or len(raw_models) < 2:
+    if not isinstance(raw_models, list) or not raw_models:
         raise InferenceContractError(
-            "inference.model_bundle.models must contain at least two models"
+            "inference.model_bundle.models must contain at least one model"
         )
 
     models: list[dict[str, Any]] = []
@@ -665,6 +811,10 @@ def validate_inference_config(
         "score_transform": str(
             inference.get("score_transform", "daily_cs_zscore_unclipped_ddof0")
         ),
+        "idempotent_reuse": inference.get("idempotent_reuse", False),
+        "require_complete_universe_features": inference.get(
+            "require_complete_universe_features", True
+        ),
         "min_universe_size": int(inference.get("min_universe_size", 500)),
         "min_eligible_size": int(inference.get("min_eligible_size", 450)),
         "min_feature_coverage": float(inference.get("min_feature_coverage", 0.75)),
@@ -688,22 +838,54 @@ def validate_inference_config(
                 "universe_snapshot_semantics", "current_constituents_snapshot"
             )
         ),
+        "universe_snapshot_path": (
+            str(inference.get("universe_snapshot_path"))
+            if inference.get("universe_snapshot_path") is not None
+            else None
+        ),
         "feature_availability": feature_availability,
         "shareholder_freshness": shareholder_freshness,
     }
     if settings["top_k"] <= 0:
         raise InferenceContractError("inference.top_k must be positive")
-    if settings["score_transform"] != "daily_cs_zscore_unclipped_ddof0":
+    if settings["score_transform"] not in {
+        "daily_cs_zscore_unclipped_ddof0",
+        "raw_model_prediction",
+    }:
         raise InferenceContractError(
-            "inference.score_transform must be daily_cs_zscore_unclipped_ddof0"
+            "inference.score_transform must be daily_cs_zscore_unclipped_ddof0 "
+            "or raw_model_prediction"
+        )
+    if settings["score_transform"] == "raw_model_prediction" and (
+        len(models) != 1 or abs(models[0]["weight"] - 1.0) > 1e-9
+    ):
+        raise InferenceContractError(
+            "raw_model_prediction requires exactly one model with weight=1"
         )
     if settings["output_root"] != "outputs":
         raise InferenceContractError("inference.output_root must be canonical outputs")
-    if settings["universe_snapshot_semantics"] != "current_constituents_snapshot":
+    if settings["universe_snapshot_semantics"] not in {
+        "current_constituents_snapshot",
+        "dated_pit_membership_snapshot",
+    }:
         raise InferenceContractError(
-            "pinned_model_blend_v1 only supports current_constituents_snapshot; "
-            "the PIT universe provider is not implemented"
+            "pinned_model_blend_v1 only supports current_constituents_snapshot or "
+            "dated_pit_membership_snapshot; provider is not implemented for "
+            f"{settings['universe_snapshot_semantics']!r}"
         )
+    if settings["universe_snapshot_semantics"] == "dated_pit_membership_snapshot":
+        snapshot_path = _validate_dated_snapshot_path(
+            project_root, settings["universe_snapshot_path"]
+        )
+        _read_membership_parquet(snapshot_path)
+    elif settings["universe_snapshot_path"] is not None:
+        raise InferenceContractError(
+            "inference.universe_snapshot_path is only valid with "
+            "dated_pit_membership_snapshot"
+        )
+    for key in ("idempotent_reuse", "require_complete_universe_features"):
+        if not isinstance(settings[key], bool):
+            raise InferenceContractError(f"inference.{key} must be boolean")
     for key in (
         "min_universe_size",
         "min_eligible_size",
@@ -1194,8 +1376,16 @@ def run_candidate_inference(
         project_root,
         settings["universe"],
         dates.decision_date,
+        universe_snapshot_semantics=settings["universe_snapshot_semantics"],
+        universe_snapshot_path=settings["universe_snapshot_path"],
     )
     universe_hash = compute_universe_hash(universe_members)
+    universe_snapshot_sha256 = None
+    if settings["universe_snapshot_semantics"] == "dated_pit_membership_snapshot":
+        snapshot_path = _validate_dated_snapshot_path(
+            project_root, settings["universe_snapshot_path"]
+        )
+        universe_snapshot_sha256 = _file_sha256(snapshot_path)
     shareholder_source_health: dict[str, Any] | None = None
     if settings["shareholder_freshness"] is not None:
         from qsys.ops.shareholder_sync import inspect_shareholder_sidecar_health
@@ -1252,15 +1442,17 @@ def run_candidate_inference(
 
     frame["ts_code"] = frame["instrument"].astype(str)
     frame = frame.sort_values("ts_code").reset_index(drop=True)
-    universe_size = len(frame)
+    universe_size = len(universe_members)
     observed_members = sorted(frame["instrument"].astype(str).tolist())
-    if observed_members != universe_members:
-        expected = set(universe_members)
-        observed = set(observed_members)
+    expected = set(universe_members)
+    observed = set(observed_members)
+    unexpected = observed - expected
+    missing_members = expected - observed
+    if unexpected or (missing_members and settings["require_complete_universe_features"]):
         raise InferenceContractError(
             "feature snapshot membership differs from universe snapshot: "
-            f"missing={sorted(expected - observed)[:20]}, "
-            f"unexpected={sorted(observed - expected)[:20]}, "
+            f"missing={sorted(missing_members)[:20]}, "
+            f"unexpected={sorted(unexpected)[:20]}, "
             f"expected_count={len(expected)}, observed_count={len(observed)}"
         )
     if universe_size < settings["min_universe_size"]:
@@ -1331,6 +1523,8 @@ def run_candidate_inference(
 
     metadata = _load_stock_metadata(project_root)
     drop_reasons: dict[str, int] = {}
+    if missing_members:
+        drop_reasons["missing_feature_snapshot_row"] = len(missing_members)
     eligibility: list[bool] = []
     row_reasons: list[list[str]] = []
     names: list[str] = []
@@ -1401,6 +1595,15 @@ def run_candidate_inference(
         for _, row in frame.iterrows()
         if row["eligibility_reasons"]
     ]
+    ineligible_instruments.extend(
+        {
+            "ts_code": instrument,
+            "feature_coverage": 0.0,
+            "reasons": ["missing_feature_snapshot_row"],
+            "missing_features": list(features),
+        }
+        for instrument in sorted(missing_members)
+    )
     eligible = frame.loc[eligibility].copy().reset_index(drop=True)
     if len(eligible) < settings["min_eligible_size"]:
         raise InferenceContractError(
@@ -1424,13 +1627,16 @@ def run_candidate_inference(
             raise InferenceContractError(
                 f"model {model_spec['tag']} produced invalid predictions"
             )
-        std = float(prediction.std())
-        if std < 1e-12:
-            raise InferenceContractError(
-                f"model {model_spec['tag']} predictions have zero variance"
-            )
-        normalised = (prediction - float(prediction.mean())) / std
-        series = pd.Series(normalised, index=eligible["ts_code"], dtype=float)
+        if settings["score_transform"] == "raw_model_prediction":
+            transformed = prediction
+        else:
+            std = float(prediction.std())
+            if std < 1e-12:
+                raise InferenceContractError(
+                    f"model {model_spec['tag']} predictions have zero variance"
+                )
+            transformed = (prediction - float(prediction.mean())) / std
+        series = pd.Series(transformed, index=eligible["ts_code"], dtype=float)
         scores[model_spec["tag"]] = series
         ranks[model_spec["tag"]] = series.rank(method="first", ascending=False).astype(
             int
@@ -1466,11 +1672,16 @@ def run_candidate_inference(
             tag = model_spec["tag"]
             model_rank = int(ranks[tag].loc[row.ts_code])
             model_rank_values.append(model_rank)
+            model_score = float(scores[tag].loc[row.ts_code])
             model_rows.append(
                 {
                     "tag": tag,
                     "weight": model_spec["weight"],
-                    "score": round(float(scores[tag].loc[row.ts_code]), 6),
+                    "score": (
+                        model_score
+                        if settings["score_transform"] == "raw_model_prediction"
+                        else round(model_score, 6)
+                    ),
                     "rank": model_rank,
                 }
             )
@@ -1480,7 +1691,20 @@ def run_candidate_inference(
                 "name": stock["name"],
                 "industry": stock["industry"],
                 "rank": int(row.rank),
-                "ranking_score": round(float(row.ranking_score), 6),
+                "ranking_score": (
+                    float(row.ranking_score)
+                    if settings["score_transform"] == "raw_model_prediction"
+                    else round(float(row.ranking_score), 6)
+                ),
+                **(
+                    {
+                        "raw_prediction": float(
+                            scores[model_tags[0]].loc[row.ts_code]
+                        )
+                    }
+                    if settings["score_transform"] == "raw_model_prediction"
+                    else {}
+                ),
                 "model_rank_gap": max(model_rank_values) - min(model_rank_values),
                 "feature_coverage": round(float(stock["feature_coverage"]), 6),
                 "listed_days": (
@@ -1501,14 +1725,30 @@ def run_candidate_inference(
     candidate_hash = compute_candidate_hash(candidates)
     created_utc = run_anchor_time.astimezone(timezone.utc).replace(microsecond=0)
     created_at = created_utc.isoformat().replace("+00:00", "Z")
-    run_id = (
-        f"infer_{strategy_id}_{dates.signal_date.replace('-', '')}_"
-        f"{created_utc.strftime('%Y%m%dT%H%M%SZ')}_{candidate_hash[:8]}"
+    config_hash = _canonical_hash(strategy_config)
+    run_identity_hash = _canonical_hash(
+        {
+            "signal_date": dates.signal_date,
+            "model_bundle_hash": settings["bundle_hash"],
+            "config_hash": config_hash,
+            "feature_list_hash": feature_list_hash,
+            "feature_snapshot_hash": feature_snapshot_hash,
+            "candidate_hash": candidate_hash,
+        }
     )
+    if settings["idempotent_reuse"]:
+        run_id = (
+            f"infer_{strategy_id}_{dates.signal_date.replace('-', '')}_"
+            f"{run_identity_hash[:24]}"
+        )
+    else:
+        run_id = (
+            f"infer_{strategy_id}_{dates.signal_date.replace('-', '')}_"
+            f"{created_utc.strftime('%Y%m%dT%H%M%SZ')}_{candidate_hash[:8]}"
+        )
     for candidate in candidates:
         candidate["run_id"] = run_id
 
-    config_hash = _canonical_hash(strategy_config)
     payload: dict[str, Any] = {
         "schema_version": 1,
         "artifact_type": "candidate_run",
@@ -1534,11 +1774,15 @@ def run_candidate_inference(
         },
         "universe": settings["universe"],
         "universe_snapshot_semantics": settings["universe_snapshot_semantics"],
+        "universe_snapshot_path": settings["universe_snapshot_path"],
+        "universe_snapshot_sha256": universe_snapshot_sha256,
+        "membership_sha256": universe_snapshot_sha256,
         "universe_hash": universe_hash,
         "top_k": selected_top_k,
         "candidate_count": len(candidates),
         "candidate_hash": candidate_hash,
         "config_hash": config_hash,
+        "run_identity_hash": run_identity_hash,
         "feature_list_id": settings["feature_list_id"],
         "feature_list_hash": feature_list_hash,
         "feature_snapshot_hash": feature_snapshot_hash,
@@ -1556,11 +1800,15 @@ def run_candidate_inference(
             "model_bundle_id": settings["bundle_id"],
             "model_bundle_hash": settings["bundle_hash"],
             "feature_list_id": settings["feature_list_id"],
+            "universe_snapshot_path": settings["universe_snapshot_path"],
+            "universe_snapshot_sha256": universe_snapshot_sha256,
+            "membership_sha256": universe_snapshot_sha256,
             "models": model_lineage,
             "git": _git_state(project_root),
         },
         "blend": {
             "score_transform": settings["score_transform"],
+            "idempotent_reuse": settings["idempotent_reuse"],
             "weights": {model["tag"]: model["weight"] for model in settings["models"]},
             "model_tags": model_tags,
             "ranking_score_stats": _score_stats(ranking["ranking_score"]),
@@ -1571,6 +1819,7 @@ def run_candidate_inference(
             "qlib_latest": qlib_latest,
             "feature_snapshot_date": dates.data_date,
             "universe_rows": universe_size,
+            "feature_snapshot_rows": len(frame),
             "eligible_rows": len(eligible),
             "dropped_rows": universe_size - len(eligible),
             "drop_reasons": dict(sorted(drop_reasons.items())),
@@ -1581,6 +1830,9 @@ def run_candidate_inference(
             "max_feature_missing_ratio": settings["max_feature_missing_ratio"],
             "min_model_used_feature_unique_values": settings[
                 "min_model_used_feature_unique_values"
+            ],
+            "require_complete_universe_features": settings[
+                "require_complete_universe_features"
             ],
             "feature_missing_ratio": {
                 feature: round(ratio, 6)
@@ -1603,5 +1855,56 @@ def run_candidate_inference(
         / run_id
         / "candidate_run.json"
     )
-    _atomic_write_json(artifact_path, payload)
+    if settings["idempotent_reuse"] and artifact_path.exists():
+        try:
+            existing = json.loads(artifact_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise InferenceContractError(
+                f"cannot validate existing idempotent artifact: {artifact_path}"
+            ) from exc
+        key_fields = (
+            "run_identity_hash",
+            "signal_date",
+            "config_hash",
+            "feature_list_hash",
+            "feature_snapshot_hash",
+            "candidate_hash",
+            "universe_hash",
+            "universe_snapshot_sha256",
+        )
+        existing_source = existing.get("source") or {}
+        if existing_source.get("model_bundle_hash") != settings["bundle_hash"]:
+            raise InferenceContractError(
+                "existing idempotent artifact model bundle hash mismatch: "
+                f"{artifact_path}"
+            )
+        if any(existing.get(field) != payload.get(field) for field in key_fields):
+            raise InferenceContractError(
+                "existing idempotent artifact hash mismatch: "
+                f"{artifact_path}"
+            )
+        return InferenceRunResult(artifact_path=artifact_path, payload=existing)
+    try:
+        _atomic_write_json(artifact_path, payload)
+    except FileExistsError:
+        if not settings["idempotent_reuse"]:
+            raise
+        try:
+            existing = json.loads(artifact_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise InferenceContractError(
+                f"cannot validate raced idempotent artifact: {artifact_path}"
+            ) from exc
+        if (
+            existing.get("run_identity_hash") != run_identity_hash
+            or existing.get("candidate_hash") != candidate_hash
+            or existing.get("feature_snapshot_hash") != feature_snapshot_hash
+            or existing.get("config_hash") != config_hash
+            or (existing.get("source") or {}).get("model_bundle_hash")
+            != settings["bundle_hash"]
+        ):
+            raise InferenceContractError(
+                f"existing idempotent artifact hash mismatch: {artifact_path}"
+            )
+        return InferenceRunResult(artifact_path=artifact_path, payload=existing)
     return InferenceRunResult(artifact_path=artifact_path, payload=payload)

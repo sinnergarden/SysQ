@@ -172,6 +172,56 @@ def test_rejects_non_unit_model_weights(tmp_path: Path) -> None:
         validate_inference_config("financial_rc", config, tmp_path)
 
 
+def test_model_bundle_accepts_one_model(tmp_path: Path) -> None:
+    model_root = tmp_path / "data" / "research" / "models"
+    config = _config(model_root)
+    config["inference"]["model_bundle"]["models"] = [
+        config["inference"]["model_bundle"]["models"][0]
+    ]
+    config["inference"]["model_bundle"]["models"][0]["weight"] = 1.0
+    settings = validate_inference_config("financial_rc", config, tmp_path)
+    assert len(settings["models"]) == 1
+    assert settings["require_complete_universe_features"] is True
+    assert settings["idempotent_reuse"] is False
+
+
+def test_allows_incomplete_qlib_rows_when_explicitly_configured(
+    tmp_path: Path,
+) -> None:
+    model_root = tmp_path / "data" / "research" / "models"
+    config = _config(model_root)
+    config["inference"]["require_complete_universe_features"] = False
+    config["inference"]["idempotent_reuse"] = True
+    settings = validate_inference_config("financial_rc", config, tmp_path)
+    assert settings["require_complete_universe_features"] is False
+    assert settings["idempotent_reuse"] is True
+
+
+def test_rejects_non_boolean_new_inference_flags(tmp_path: Path) -> None:
+    model_root = tmp_path / "data" / "research" / "models"
+    config = _config(model_root)
+    config["inference"]["idempotent_reuse"] = "true"
+    with pytest.raises(InferenceContractError, match="must be boolean"):
+        validate_inference_config("financial_rc", config, tmp_path)
+
+
+def test_raw_model_prediction_requires_single_unit_weight_model(
+    tmp_path: Path,
+) -> None:
+    model_root = tmp_path / "data" / "research" / "models"
+    config = _config(model_root)
+    config["inference"]["score_transform"] = "raw_model_prediction"
+    with pytest.raises(InferenceContractError, match="exactly one model"):
+        validate_inference_config("financial_rc", config, tmp_path)
+
+    config["inference"]["model_bundle"]["models"] = [
+        config["inference"]["model_bundle"]["models"][0]
+    ]
+    config["inference"]["model_bundle"]["models"][0]["weight"] = 1.0
+    settings = validate_inference_config("financial_rc", config, tmp_path)
+    assert settings["score_transform"] == "raw_model_prediction"
+
+
 @pytest.mark.parametrize("value", [True, -1, "invalid"])
 def test_rejects_invalid_feature_snapshot_lag(tmp_path: Path, value: object) -> None:
     model_root = tmp_path / "data" / "research" / "models"
@@ -186,6 +236,118 @@ def test_rejects_pit_config_until_provider_exists(tmp_path: Path) -> None:
     config = _config(model_root)
     config["inference"]["universe_snapshot_semantics"] = "pit_constituents_snapshot"
     with pytest.raises(InferenceContractError, match="provider is not implemented"):
+        validate_inference_config("financial_rc", config, tmp_path)
+
+
+def test_dated_pit_semantics_accepts_current_expected_date(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    model_root = tmp_path / "data" / "research" / "models"
+    config = _config(model_root)
+    snapshot = tmp_path / "data" / "research" / "universe_2026-08-07.parquet"
+    snapshot.parent.mkdir(parents=True, exist_ok=True)
+    snapshot.write_bytes(b"parquet")
+    monkeypatch.setattr(
+        pd,
+        "read_parquet",
+        lambda path: pd.DataFrame({"instrument": ["A", "B"]}),
+    )
+    config["inference"].update(
+        {
+            "universe_snapshot_semantics": "dated_pit_membership_snapshot",
+            "universe_snapshot_path": str(snapshot.relative_to(tmp_path)),
+        }
+    )
+    settings = validate_inference_config("financial_rc", config, tmp_path)
+    assert settings["universe_snapshot_path"].endswith("2026-08-07.parquet")
+    dates = resolve_inference_dates(
+        "2026-08-07",
+        None,
+        OPEN_DATES,
+        now=datetime.fromisoformat("2026-08-08T12:00:00+08:00"),
+        universe_snapshot_semantics="dated_pit_membership_snapshot",
+    )
+    assert dates.signal_date == "2026-08-07"
+
+
+def test_dated_pit_path_cannot_select_arbitrary_history(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    snapshot = tmp_path / "data" / "research" / "universe_2026-08-06.parquet"
+    snapshot.parent.mkdir(parents=True, exist_ok=True)
+    snapshot.write_bytes(b"parquet")
+    monkeypatch.setattr(
+        pd,
+        "read_parquet",
+        lambda path: pd.DataFrame({"instrument": ["A"]}),
+    )
+    with pytest.raises(InferenceContractError, match="expected snapshot date"):
+        load_universe_snapshot_members(
+            tmp_path,
+            "csi1800",
+            "2026-08-07",
+            universe_snapshot_semantics="dated_pit_membership_snapshot",
+            universe_snapshot_path=str(snapshot.relative_to(tmp_path)),
+        )
+
+
+@pytest.mark.parametrize("bad_name", ["latest.parquet", "null.parquet"])
+def test_rejects_non_explicit_dated_snapshot_path(
+    tmp_path: Path, bad_name: str
+) -> None:
+    model_root = tmp_path / "data" / "research" / "models"
+    config = _config(model_root)
+    snapshot = tmp_path / "data" / "research" / f"universe_2026-08-07_{bad_name}"
+    snapshot.parent.mkdir(parents=True, exist_ok=True)
+    snapshot.write_bytes(b"parquet")
+    config["inference"].update(
+        {
+            "universe_snapshot_semantics": "dated_pit_membership_snapshot",
+            "universe_snapshot_path": str(snapshot.relative_to(tmp_path)),
+        }
+    )
+    with pytest.raises(InferenceContractError):
+        validate_inference_config("financial_rc", config, tmp_path)
+
+
+def test_rejects_duplicate_dated_snapshot_membership(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    model_root = tmp_path / "data" / "research" / "models"
+    config = _config(model_root)
+    snapshot = tmp_path / "data" / "research" / "universe_2026-08-07.parquet"
+    snapshot.parent.mkdir(parents=True, exist_ok=True)
+    snapshot.write_bytes(b"parquet")
+    monkeypatch.setattr(
+        pd,
+        "read_parquet",
+        lambda path: pd.DataFrame({"instrument": ["A", "A"]}),
+    )
+    config["inference"].update(
+        {
+            "universe_snapshot_semantics": "dated_pit_membership_snapshot",
+            "universe_snapshot_path": str(snapshot.relative_to(tmp_path)),
+        }
+    )
+    with pytest.raises(InferenceContractError, match="duplicate"):
+        validate_inference_config("financial_rc", config, tmp_path)
+
+
+def test_rejects_symlinked_dated_snapshot_path(tmp_path: Path) -> None:
+    model_root = tmp_path / "data" / "research" / "models"
+    config = _config(model_root)
+    snapshot_root = tmp_path / "data" / "research"
+    real = tmp_path / "real_2026-08-07.parquet"
+    real.write_bytes(b"parquet")
+    snapshot = snapshot_root / "universe_2026-08-07.parquet"
+    snapshot.symlink_to(real)
+    config["inference"].update(
+        {
+            "universe_snapshot_semantics": "dated_pit_membership_snapshot",
+            "universe_snapshot_path": str(snapshot.relative_to(tmp_path)),
+        }
+    )
+    with pytest.raises(InferenceContractError, match="symlink"):
         validate_inference_config("financial_rc", config, tmp_path)
 
 

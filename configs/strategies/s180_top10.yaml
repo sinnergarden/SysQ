@@ -1,0 +1,98 @@
+strategy_id: s180_top10
+display_name: "PIT CSI1800 S180 Raw Top10"
+stage: research
+family: ml_single_horizon
+account_id: research_s180_top10
+universe: csi1800
+feature_set: v3a_plus_liquidity_financial_rc
+model_version: content_addressed
+signal_version: s180_raw_top10_v1
+
+hypothesis: >
+  Rank the current dated PIT CSI1800 snapshot with one strictly PIT-trained
+  180-session LightGBM model. This artifact is a research candidate list only;
+  raw predictions are not calibrated returns, probabilities, targets or orders.
+
+feature_availability:
+  margin:
+    source: tushare.margin_detail
+    lag_sessions: 0
+
+feature_freshness:
+  shareholder:
+    source: tushare.stk_holdernumber+tushare.top10_holders
+    availability_rule: announcement_date_asof
+    min_coverage: 0.95
+    features:
+      holder_num_stale_days:
+        max_median_days: 200
+        max_row_days: 365
+      top10_holder_stale_days:
+        max_median_days: 250
+        max_row_days: 365
+
+top10_run:
+  retrain_interval_sessions: 20
+  top_k: 10
+  refresh_labels_on_retrain: true
+  label_config: configs/labels/fwd_ret_180d_raw_pit_csi1800.yaml
+  model_registry: data/research/top10/s180_top10/model_registry.json
+  bundle_root: data/research/models/bundles/s180_top10
+  state_root: runs/top10/s180_top10
+  membership_snapshot_root: data/research/universes/csi1800_pit_daily
+  lock_path: runs/top10/s180_top10/run.lock
+
+training:
+  engine: lightgbm_model_bundle_v1
+  universe: csi1800
+  training_universe: csi1800_pit_union
+  pit_universe_artifact: data/research/universes/csi1800_pit_v2
+  feature_list_id: v3a_plus_liquidity_financial_rc
+  pointer_write_mode: none
+  window_sessions: 504
+  validation_sessions: 40
+  n_estimators: 300
+  min_feature_coverage: 0.50
+  max_feature_missing_ratio: 0.995
+  min_label_universe_coverage: 0.99
+  models:
+    - tag: 180d
+      experiment_id: s180_top10_pit_csi1800
+      label_id: fwd_ret_180d_raw_pit_csi1800
+      horizon: 180
+
+inference:
+  engine: pinned_model_blend_v1
+  universe: csi1800
+  feature_list_id: v3a_plus_liquidity_financial_rc
+  # The Top10 service resolves this to one explicit content-addressed bundle.
+  model_bundle:
+    bundle_id: registry_resolved_at_runtime
+    models: []
+  score_transform: raw_model_prediction
+  top_k: 10
+  min_universe_size: 1800
+  min_eligible_size: 1700
+  min_feature_coverage: 0.75
+  min_global_feature_coverage: 0.75
+  max_feature_missing_ratio: 0.95
+  min_model_used_feature_unique_values: 2
+  min_listed_days: 180
+  min_amount: 0
+  exclude_name_patterns: [ST, "退"]
+  market_close_cutoff: "18:00"
+  feature_snapshot_lag_sessions: 1
+  output_root: outputs
+  universe_snapshot_semantics: dated_pit_membership_snapshot
+  require_complete_universe_features: false
+  idempotent_reuse: true
+
+lifecycle:
+  created: 2026-08-24
+  stage_history:
+    - stage: research
+      at: 2026-08-24
+
+promotion_gates:
+  backtest_verified: false
+  contract_tests_pass: false

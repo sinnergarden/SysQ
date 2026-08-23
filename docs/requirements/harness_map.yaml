@@ -78,6 +78,49 @@ usecases:
       - deploy/
       - qsys/ops/daily_runner.py
 
+  UC_TOP10_SIGNAL_RUN:
+    domain: top10_signal
+    status: stable
+    owner_agent: operator_agent
+    skills:
+      primary: sysq-daily
+      review: sysq-review
+    entrypoints:
+      - scripts/run_daily.py --mode top10
+    supporting_tools:
+      - scripts/run_daily.py --mode train
+      - scripts/run_daily.py --mode infer
+    artifacts:
+      - data/research/models/bundles/s180_top10/{bundle_hash}.json
+      - data/research/top10/s180_top10/model_registry.json
+      - runs/top10/s180_top10/{decision_date}/state.json
+      - outputs/{signal_date}/s180_top10/{run_id}/candidate_run.json
+      - outputs/{signal_date}/s180_top10/{run_id}/top10_run.json
+    checks:
+      - harness/checks/check_usecase_registry.py
+      - harness/checks/check_label_maturity.py
+      - harness/checks/check_inference_artifact.py
+      - harness/checks/check_top10_signal_artifact.py
+    allowed_paths:
+      - scripts/run_daily.py
+      - qsys/signal/top10_run.py
+      - qsys/signal/model_blend_inference.py
+      - qsys/model/financial_rc_trainer.py
+      - qsys/model/registry.py
+      - configs/strategies/s180_top10.yaml
+      - configs/labels/fwd_ret_180d_raw_pit_csi1800.yaml
+      - harness/checks/check_top10_signal_artifact.py
+      - docs/requirements/
+      - .claude/skills/sysq-daily/SKILL.md
+      - tests/
+    forbidden_paths:
+      - qsys/broker/
+      - qsys/trader/
+      - qsys/ledger/
+      - qsys/backtest/
+      - qsys/ops/daily_runner.py
+      - deploy/
+      - research_memos/
 
   UC_RESEARCH_BACKTEST:
     domain: research

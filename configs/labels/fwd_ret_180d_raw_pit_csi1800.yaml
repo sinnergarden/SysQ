@@ -8,12 +8,11 @@ formula:
 universe: csi1800_pit_union
 pit_universe_artifact: csi1800_pit_v2
 require_clean_provenance: true
-# PIT universe ladder diagnostic: same raw forward-return formula as
-# fwd_ret_180d_raw_pit, but namespaced per-universe so the U2 (CSI800 ∪
-# CSI1000) label store does not clobber the CSI800 one.  train universe ==
-# predict universe — labels are computed over the csi1800_pit_union registry.
-# end_date matches the U0 baseline label's tail coverage (2026-08-10) so U0 vs
-# U2 eval windows are apple-to-apple.
+# Strict PIT CSI1800 raw forward-return label, namespaced so it cannot clobber
+# the CSI800 store.  Training rows are filtered by each row's dated PIT
+# membership; current inference membership is supplied separately and never
+# read from this label store.  The Top10 UC advances end_date to the decision
+# date, while LabelStore's 181-session maturity gate keeps immature tails out.
 date_range:
   start_date: "2018-01-01"
   end_date: "2026-08-10"

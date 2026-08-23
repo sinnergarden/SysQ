@@ -14,6 +14,9 @@ Usage::
     python scripts/run_daily.py --strategy financial_rc --mode infer \
         --signal-date auto --top-k 200
 
+    python scripts/run_daily.py --strategy s180_top10 --mode top10 \
+        --signal-date auto
+
     python scripts/run_daily.py --strategy alpha_v1 --notify-only \\
         --trade-date 2026-05-22
 """
@@ -58,6 +61,7 @@ from qsys.ops.attempts import (
 from qsys.ops.run_context import DailyRunContext, resolve_run_root
 from qsys.ops.promotion_resolver import resolve_shadow_promotion
 from qsys.signal.model_blend_inference import run_candidate_inference
+from qsys.signal.top10_run import run_top10_signal
 from qsys.model.registry import create_model_trainer, has_model_trainer
 from qsys.strategy.registry import create_strategy
 
@@ -72,7 +76,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--strategy", required=True, help="策略 ID (如 alpha_v1)")
     parser.add_argument(
         "--mode",
-        choices=["preopen", "postclose", "train", "infer"],
+        choices=["preopen", "postclose", "train", "infer", "top10"],
         default="preopen",
         help="运行模式",
     )
@@ -89,6 +93,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--top-k",
         type=int,
         help="infer 候选数量；省略时使用策略配置",
+    )
+    parser.add_argument(
+        "--force-retrain",
+        action="store_true",
+        help="top10 模式：忽略20交易日调度并重训（必须配合 --reason）",
     )
     parser.add_argument(
         "--debug-run",
@@ -141,26 +150,34 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         )
     if args.force_rerun and not args.reason:
         parser.error("--force-rerun 必须配合 --reason 提供原因")
+    if args.force_retrain and not args.reason:
+        parser.error("--force-retrain 必须配合 --reason 提供原因")
+    if args.force_retrain and args.mode != "top10":
+        parser.error("--force-retrain 只适用于 top10 模式")
     # F04: --output-dir 只允许 debug，防止用新目录绕过 committed/ledger gate
     # （新 run_root 无 COMMITTED marker，但 ledger run_id 相同且已 completed）。
     if args.output_dir and not args.debug_run:
         parser.error("--output-dir 只允许在 --debug-run 模式使用（F04：防止绕过 committed gate）")
-    if args.mode == "infer":
+    if args.mode in {"infer", "top10"}:
         if args.notify_only:
-            parser.error("--notify-only 不适用于 infer 模式")
+            parser.error(f"--notify-only 不适用于 {args.mode} 模式")
         if args.debug_run or args.output_dir or args.force_rerun:
             parser.error(
-                "infer 只写不可覆盖的标准 CandidateRun；不支持 "
+                f"{args.mode} 只写不可覆盖的标准 artifact；不支持 "
                 "--debug-run/--output-dir/--force-rerun"
             )
         if args.train_end_date or args.promotion_pointer:
-            parser.error("infer 不训练模型，也不读取 promotion pointer")
+            parser.error(f"{args.mode} 不接受 train-end 或 promotion pointer")
         if args.trade_date and args.signal_date and args.trade_date != args.signal_date:
             parser.error(
-                "infer 的 --trade-date 仅是 --signal-date 兼容别名，两者不得冲突"
+                f"{args.mode} 的 --trade-date 仅是 --signal-date 兼容别名，两者不得冲突"
             )
         args.signal_date = args.signal_date or args.trade_date or "auto"
         args.trade_date = None
+        if args.mode == "top10":
+            # UC_TOP10_SIGNAL_RUN has a fixed publication contract.  The
+            # generic inference --top-k option must not change it.
+            args.top_k = 10
     elif args.mode == "train":
         if args.force_rerun:
             print("⚠ --force-rerun 对 train 模式无意义，忽略")
@@ -179,6 +196,31 @@ def run_daily_main(argv: list[str] | None = None) -> None:
 
     strategy_id = args.strategy
     config = load_strategy_config(strategy_id, PROJECT_ROOT)
+
+    # UC_TOP10_SIGNAL_RUN is a research-only composite.  It owns its model
+    # schedule, PIT snapshot, quality gate, and artifact state machine, and
+    # returns before any daily trading/promotion/account objects are created.
+    if args.mode == "top10":
+        result = run_top10_signal(
+            strategy_config=config,
+            project_root=PROJECT_ROOT,
+            signal_date=args.signal_date,
+            execution_date=args.execution_date,
+            force_retrain=args.force_retrain,
+            reason=args.reason,
+            triggered_by=args.triggered_by,
+        )
+        payload = result.payload
+        print(f"  ✅ S180 Top10: {result.artifact_path}")
+        print(
+            f"  Dates: data={payload['data_date']} -> "
+            f"decision={payload['decision_date']} -> execution={payload['execution_date']}"
+        )
+        print(
+            f"  Model: {payload['model']['bundle_hash'][:16]}  "
+            f"quality={payload['quality_gate']['status']}  reused={result.reused}"
+        )
+        return
 
     # UC_DAILY_INFERENCE_RUN is artifact-only.  Dispatch before creating a
     # strategy adapter, DailyRunner, promotion snapshot, or account context.
