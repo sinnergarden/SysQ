@@ -91,10 +91,12 @@ class TestLightGBMSingleLabelContract:
         assert isinstance(result, pd.DataFrame)
         required = {"trade_date", "data_date", "instrument", "signal_id", "signal_run_id", "score"}
         assert required.issubset(set(result.columns)), f"Missing columns: {required - set(result.columns)}"
+        assert "score_model_raw" in result.columns
         assert len(result) > 0
         assert (result["signal_id"] == "lgbm_test").all()
         assert (result["signal_run_id"] == "run1").all()
         assert result["score"].notna().all()
+        assert result["score_model_raw"].notna().all()
 
     @patch("qsys.data.calendar.get_trading_calendar", _fake_calendar)
     @patch("qsys.signal.alpha_v1.training.train_model", _fake_train_model)
@@ -290,7 +292,7 @@ class TestLightGBMSingleLabelGolden:
         assert len(result) == 9  # 3 execution days × 3 instruments
         assert list(result.columns) == [
             "trade_date", "data_date", "instrument",
-            "signal_id", "signal_run_id", "score",
+            "signal_id", "signal_run_id", "score_model_raw", "score",
         ]
 
         expected = [
@@ -311,6 +313,7 @@ class TestLightGBMSingleLabelGolden:
             assert abs(row["score"] - exp_score) < 1e-9, (
                 f"row {i} {td} {inst}: score {row['score']:.10f} != {exp_score:.10f}"
             )
+            assert abs(row["score_model_raw"] - 0.1 * i) < 1e-9
 
     @staticmethod
     def _fake_labels(label_id: str = "fwd_ret_5d_xsz_clip3") -> pd.DataFrame:
