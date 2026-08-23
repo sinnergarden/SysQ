@@ -435,6 +435,8 @@ def _atomic_write_parquet(path: Path, frame: pd.DataFrame) -> None:
     )
     try:
         frame.to_parquet(temporary, index=False)
+        with temporary.open("rb") as handle:
+            os.fsync(handle.fileno())
         os.replace(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)
@@ -447,7 +449,7 @@ def _git_provenance(project_root: Path) -> dict[str, Any]:
         "qsys/research/matrix_job.py",
         "qsys/label/compute.py",
         "qsys/label/store.py",
-        "scripts/data_sync.py",
+        "scripts/research/rebuild_pit_universes.py",
         "scripts/research/compute_labels.py",
         "scripts/research/backtest_from_signal.py",
         "scripts/run_research.py",

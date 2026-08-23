@@ -21,19 +21,6 @@ def main():
     p.add_argument("--target-date", default=None)
     p.add_argument("--apply", action="store_true")
     p.add_argument(
-        "--rebuild-pit-universes-v2",
-        action="store_true",
-        help=(
-            "Rebuild corrected csi800/csi1800 PIT v2 artifacts from the "
-            "existing immutable v1 raw snapshots, then exit"
-        ),
-    )
-    p.add_argument(
-        "--overwrite-pit-universes",
-        action="store_true",
-        help="Replace existing PIT v2 targets transactionally",
-    )
-    p.add_argument(
         "--skip-margin-repair",
         action="store_true",
         help="Skip financial_rc margin-history coverage repair after csi800 sync",
@@ -90,15 +77,6 @@ def main():
         ),
     )
     args = p.parse_args()
-    if args.rebuild_pit_universes_v2:
-        from qsys.research.pit_universe import rebuild_pit_universes_v2
-
-        result = rebuild_pit_universes_v2(
-            PROJ,
-            overwrite=args.overwrite_pit_universes,
-        )
-        print(json.dumps(result, indent=2, sort_keys=True))
-        return
     if args.margin_lag_sessions < 1:
         p.error("--margin-lag-sessions must be at least 1 for post-close sync")
     universe = args.universe

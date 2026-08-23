@@ -85,7 +85,7 @@ staging 中生成并验证两个 v2 artifact，全部通过后再原子发布。
 配置必须已提交，scoped worktree 不能有未提交改动。
 
 ```bash
-python scripts/data_sync.py --rebuild-pit-universes-v2
+python scripts/research/rebuild_pit_universes.py
 ```
 
 每个 v2 manifest 绑定 `raw_source_hash`、`membership_sha256`、
@@ -93,6 +93,10 @@ python scripts/data_sync.py --rebuild-pit-universes-v2
 数量、研究窗口逐交易日成员数验证与精确快照集合验证。逻辑 registry 仍使用
 `csi800_pit_union` / `csi1800_pit_union`，但其文件 hash 必须等于 v2 manifest，
 label manifest 也必须再次绑定该 hash。
+
+月度 `index_weight` 快照只能表达“截至该快照所知”的成员变化；若指数在月中发生
+临时调整而数据源没有对应快照，v2 也无法复原该月中生效日。因此本文所称 PIT 是
+**月度快照 as-of carry-forward PIT**，不是交易所逐事件级成分历史。
 
 ## Stage 9B：完整 PIT retrain 用法（correctness audit）
 
