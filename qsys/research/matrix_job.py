@@ -294,6 +294,7 @@ def _create_generator_from_config(
             "label_id", "universe", "n_estimators", "lgb_params",
             "feature_list_id", "pit_membership", "pit_filter_mode",
             "pit_universe_artifact", "liquidity_exclusion_path",
+            "prediction_membership_path", "prediction_membership_sha256",
         }
         unknown = set(params) - _CONSUMED_PARAMS
         if unknown:
@@ -302,7 +303,40 @@ def _create_generator_from_config(
                 f"be silently dropped: {sorted(unknown)}.  Known keys: "
                 f"{sorted(_CONSUMED_PARAMS)}."
             )
-        from qsys.research.generators.lightgbm_single_label import LightGBMSingleLabelGenerator
+        from qsys.research.generators.lightgbm_single_label import (
+            LightGBMSingleLabelGenerator,
+            _prediction_membership_identity,
+        )
+        prediction_membership_path = params.get("prediction_membership_path", "")
+        if params.get("prediction_membership_sha256") and not prediction_membership_path:
+            raise ValueError(
+                "prediction_membership_sha256 requires prediction_membership_path"
+            )
+        if prediction_membership_path:
+            normalized_path, digest, _ = _prediction_membership_identity(
+                prediction_membership_path
+            )
+            declared_digest = params.get("prediction_membership_sha256", "")
+            if declared_digest and declared_digest != digest:
+                raise ValueError(
+                    "prediction_membership_sha256 does not match the snapshot content"
+                )
+            if not (
+                params.get("pit_membership", False)
+                or params.get("pit_filter_mode", "")
+            ):
+                raise ValueError(
+                    "prediction_membership_path requires an enabled PIT filter "
+                    "(pit_membership=true or pit_filter_mode)"
+                )
+            # The pipeline builds checkpoint identity from gen_config.  Bind
+            # the normalized path and actual content hash there as well as in
+            # the generator cache identity.
+            gen_config["params"] = {
+                **params,
+                "prediction_membership_path": normalized_path,
+                "prediction_membership_sha256": digest,
+            }
         return LightGBMSingleLabelGenerator(
             label_id=params["label_id"],
             universe=params.get("universe", "csi300"),
@@ -313,6 +347,7 @@ def _create_generator_from_config(
             pit_filter_mode=params.get("pit_filter_mode", ""),
             pit_universe_artifact=params.get("pit_universe_artifact", "csi800_pit_v2"),
             liquidity_exclusion_path=params.get("liquidity_exclusion_path", ""),
+            prediction_membership_path=prediction_membership_path,
             use_feature_cache=use_feature_cache,
             write_through=write_through,
             feature_cache_root=feature_cache_root,

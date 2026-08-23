@@ -163,6 +163,72 @@ class TestCacheIdentityBindsPitMembership:
             "liquidity_exclusion_sha256"
         ]
 
+    def test_prediction_membership_path_and_content_are_hash_bound(self, tmp_path) -> None:
+        path = tmp_path / "prediction_membership.parquet"
+        pd.DataFrame({"instrument": ["000001.SZ", "000002.SZ"]}).to_parquet(
+            path, index=False
+        )
+        gen = _gen(
+            pit_membership=True,
+            prediction_membership_path=str(path),
+        )
+        first = gen._cache_identity("2020-01-01", "2020-02-01", ["x"])
+        pd.DataFrame({"instrument": ["000001.SZ", "000003.SZ"]}).to_parquet(
+            path, index=False
+        )
+        second = gen._cache_identity("2020-01-01", "2020-02-01", ["x"])
+        assert first["prediction_membership_path"] == str(path.absolute())
+        assert first["prediction_membership_sha256"] != second[
+            "prediction_membership_sha256"
+        ]
+
+
+class TestPredictionMembershipSnapshot:
+    def test_missing_file_fails_closed(self, tmp_path) -> None:
+        with pytest.raises(ValueError, match="existing regular file"):
+            _gen(
+                pit_membership=True,
+                prediction_membership_path=str(tmp_path / "missing.parquet"),
+            )
+
+    def test_missing_instrument_column_fails_closed(self, tmp_path) -> None:
+        path = tmp_path / "bad.parquet"
+        pd.DataFrame({"code": ["000001.SZ"]}).to_parquet(path, index=False)
+        with pytest.raises(ValueError, match="instrument"):
+            _gen(pit_membership=True, prediction_membership_path=str(path))
+
+    def test_duplicate_instrument_fails_closed(self, tmp_path) -> None:
+        path = tmp_path / "duplicate.parquet"
+        pd.DataFrame({"instrument": ["000001.SZ", "000001.SZ"]}).to_parquet(
+            path, index=False
+        )
+        with pytest.raises(ValueError, match="duplicate"):
+            _gen(pit_membership=True, prediction_membership_path=str(path))
+
+    def test_snapshot_without_pit_filter_fails_closed(self, tmp_path) -> None:
+        path = tmp_path / "snapshot.parquet"
+        pd.DataFrame({"instrument": ["000001.SZ"]}).to_parquet(path, index=False)
+        with pytest.raises(ValueError, match="enabled PIT filter"):
+            LightGBMSingleLabelGenerator(prediction_membership_path=str(path))
+
+    def test_exact_snapshot_filter_is_distinct_from_historical_filter(self, tmp_path) -> None:
+        path = tmp_path / "snapshot.parquet"
+        pd.DataFrame({"instrument": ["000003.SZ"]}).to_parquet(path, index=False)
+        gen = _gen(
+            pit_membership=True,
+            prediction_membership_path=str(path),
+        )
+        historical_frame = _make_frame()
+        train_frame = gen._apply_pit_membership(historical_frame)
+        prediction_frame_input = pd.DataFrame({
+            "trade_date": ["2025-01-02", "2025-01-02"],
+            "instrument": [_GAPPED, "000003.SZ"],
+            "feat_x": [1.0, 2.0],
+        })
+        prediction_frame = gen._apply_prediction_membership(prediction_frame_input)
+        assert set(train_frame["instrument"]) == {_GAPPED}
+        assert set(prediction_frame["instrument"]) == {"000003.SZ"}
+
 
 class TestEverMembershipAsOf:
     """PitUniverseStore.ever_membership_as_of — U1 ever-member semantics."""
@@ -306,3 +372,36 @@ class TestParamThreading:
         assert gen.pit_filter_mode == ""
         assert gen.pit_universe_artifact == "csi800_pit_v2"
         assert gen.liquidity_exclusion_path == ""
+
+    def test_factory_threads_prediction_membership_and_binds_hash(self, tmp_path) -> None:
+        from qsys.research.matrix_job import _create_generator_from_config
+
+        path = tmp_path / "prediction_membership.parquet"
+        pd.DataFrame({"instrument": ["000001.SZ"]}).to_parquet(path, index=False)
+        config = {
+            "generator_id": "g",
+            "type": "single_label_lightgbm",
+            "params": {
+                "label_id": "fwd_ret_180d_raw_pit_csi1800",
+                "universe": "csi1800_pit_union",
+                "pit_filter_mode": "member_as_of",
+                "pit_universe_artifact": "csi1800_pit_v1",
+                "prediction_membership_path": str(path),
+            },
+        }
+        gen = _create_generator_from_config(config)
+        assert gen.prediction_membership_path == str(path.absolute())
+        assert config["params"]["prediction_membership_sha256"]
+
+    def test_factory_rejects_prediction_hash_without_path(self) -> None:
+        from qsys.research.matrix_job import _create_generator_from_config
+
+        with pytest.raises(ValueError, match="requires prediction_membership_path"):
+            _create_generator_from_config({
+                "generator_id": "g",
+                "type": "single_label_lightgbm",
+                "params": {
+                    "label_id": "fwd_ret_5d_xsz_clip3",
+                    "prediction_membership_sha256": "abc",
+                },
+            })

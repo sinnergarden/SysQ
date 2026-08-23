@@ -42,6 +42,45 @@ FEATURE_VISIBILITY_CONTRACT = (
 )
 
 
+def _prediction_membership_identity(path_value: str) -> tuple[str, str, set[str]]:
+    """Validate and fingerprint an exact prediction-date membership snapshot.
+
+    The snapshot is intentionally independent from the historical PIT span
+    artifact.  It is an immutable, exact instrument set used only for the
+    prediction rows.  A symlink is rejected so the identity cannot drift via
+    a moving target such as ``latest``.
+    """
+    path = Path(path_value).expanduser().absolute()
+    if path.is_symlink() or not path.is_file():
+        raise ValueError(
+            f"prediction_membership_path must be an existing regular file: {path}"
+        )
+    try:
+        snapshot = pd.read_parquet(path)
+    except Exception as exc:
+        raise ValueError(
+            f"Failed to read prediction_membership_path: {path}"
+        ) from exc
+    if "instrument" not in snapshot.columns:
+        raise ValueError(
+            f"prediction membership snapshot missing required 'instrument' column: {path}"
+        )
+    if snapshot.empty:
+        raise ValueError(f"prediction membership snapshot is empty: {path}")
+    instruments = snapshot["instrument"]
+    if instruments.isna().any():
+        raise ValueError(
+            f"prediction membership snapshot contains null instruments: {path}"
+        )
+    normalized = instruments.astype(str).str.upper()
+    if normalized.duplicated().any():
+        raise ValueError(
+            f"prediction membership snapshot contains duplicate instruments: {path}"
+        )
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    return str(path), digest, set(normalized)
+
+
 @dataclass
 class LightGBMSingleLabelGenerator:
     """Rolling signal generator — trains one LightGBM per label."""
@@ -77,11 +116,30 @@ class LightGBMSingleLabelGenerator:
     pit_filter_mode: str = ""
     pit_universe_artifact: str = "csi800_pit_v2"
     liquidity_exclusion_path: str = ""
+    # Optional exact current-date snapshot.  Historical training remains
+    # member_as_of against ``pit_universe_artifact``; only prediction rows use
+    # this exact instrument set.
+    prediction_membership_path: str = ""
 
     _qlib_inited: bool = field(default=False, repr=False)
     _pit_store: object | None = field(default=None, repr=False, init=False)
     _clean_features: list[str] = field(default_factory=list, repr=False)
     _call_count: int = field(default=0, repr=False)
+    _prediction_membership_sha256: str = field(default="", repr=False, init=False)
+
+    def __post_init__(self) -> None:
+        if not self.prediction_membership_path:
+            return
+        if not self._effective_pit_filter_mode():
+            raise ValueError(
+                "prediction_membership_path requires an enabled PIT filter "
+                "(pit_membership=true or pit_filter_mode)"
+            )
+        normalized, digest, _ = _prediction_membership_identity(
+            self.prediction_membership_path
+        )
+        self.prediction_membership_path = normalized
+        self._prediction_membership_sha256 = digest
 
     # ═══════════════════════════════════════════════════════════════
     # Per-window cache: content identity, not date range alone.
@@ -113,6 +171,12 @@ class LightGBMSingleLabelGenerator:
                 ).hexdigest()
             else:
                 exclusion_hash = "missing"
+        prediction_path = ""
+        prediction_hash = ""
+        if self.prediction_membership_path:
+            prediction_path, prediction_hash, _ = _prediction_membership_identity(
+                self.prediction_membership_path
+            )
         return {
             "schema_version": _WINDOW_CACHE_SCHEMA_VERSION,
             "builder_id": _WINDOW_CACHE_BUILDER_ID,
@@ -126,6 +190,8 @@ class LightGBMSingleLabelGenerator:
             "pit_membership_sha256": membership_hash,
             "liquidity_exclusion_path": self.liquidity_exclusion_path,
             "liquidity_exclusion_sha256": exclusion_hash,
+            "prediction_membership_path": prediction_path,
+            "prediction_membership_sha256": prediction_hash,
             "start": start,
             "end": end,
         }
@@ -353,6 +419,27 @@ class LightGBMSingleLabelGenerator:
             raise ValueError("pit_membership: no rows remain after membership filter")
         return keep
 
+    def _apply_prediction_membership(self, frame: pd.DataFrame) -> pd.DataFrame:
+        """Restrict prediction rows to the exact immutable snapshot set."""
+        if not self.prediction_membership_path:  # pragma: no cover - defensive
+            return frame
+        path, digest, instruments = _prediction_membership_identity(
+            self.prediction_membership_path
+        )
+        if self._prediction_membership_sha256 and digest != self._prediction_membership_sha256:
+            raise ValueError(
+                "prediction membership snapshot changed after generator initialization: "
+                f"{path}"
+            )
+        keep = frame["instrument"].astype(str).str.upper().isin(instruments)
+        result = frame.loc[keep].copy()
+        if result.empty:
+            raise ValueError(
+                "prediction membership snapshot has no matching prediction rows: "
+                f"{path}"
+            )
+        return result
+
     # ═══════════════════════════════════════════════════════════════
     # Training + prediction
     # ═══════════════════════════════════════════════════════════════
@@ -376,10 +463,17 @@ class LightGBMSingleLabelGenerator:
         log.info("Loading data [%s, %s]", train_start, extended_end)
         frame, clean_features = self._load_data(train_start, extended_end)
 
-        # PIT restriction: filter once on the shared frame so training and
-        # prediction use the same membership semantics (feature-date PIT).
-        if self._effective_pit_filter_mode():
-            frame = self._apply_pit_membership(frame)
+        # Historical train rows and current prediction rows can use different
+        # PIT artifacts.  Preserve the old single-frame behavior when no exact
+        # prediction snapshot is supplied.
+        if self.prediction_membership_path:
+            train_frame = self._apply_pit_membership(frame)
+            prediction_frame = self._apply_prediction_membership(frame)
+        else:
+            if self._effective_pit_filter_mode():
+                frame = self._apply_pit_membership(frame)
+            train_frame = frame
+            prediction_frame = frame
 
         from qsys.label.store import LabelStore
         from qsys.signal.alpha_v1.training import train_model, predict_model
@@ -398,8 +492,9 @@ class LightGBMSingleLabelGenerator:
         _check_training_label_maturity(
             train_end, predict_start, _horizon_from_label_id(self.label_id),
         )
-        train = frame[
-            (frame["trade_date"] >= train_start) & (frame["trade_date"] <= train_end)
+        train = train_frame[
+            (train_frame["trade_date"] >= train_start)
+            & (train_frame["trade_date"] <= train_end)
         ].copy()
         train["label_date"] = train["trade_date"].map(next_td)
         train = train.merge(
@@ -429,7 +524,9 @@ class LightGBMSingleLabelGenerator:
         window_cal = get_trading_calendar(predict_start, predict_end)
         prev_td = _build_prev_trading_date_lookup(predict_start, predict_end)
         feature_dates = sorted({prev_td.get(d, d) for d in window_cal})
-        pred = frame[frame["trade_date"].isin(feature_dates)].copy()
+        pred = prediction_frame[
+            prediction_frame["trade_date"].isin(feature_dates)
+        ].copy()
         if pred.empty:
             raise ValueError(f"No feature data for execution window [{predict_start}, {predict_end}]")
 
@@ -462,11 +559,12 @@ class LightGBMSingleLabelGenerator:
                     "instrument": str(r["instrument"]),
                     "signal_id": signal_id,
                     "signal_run_id": signal_run_id,
+                    "score_model_raw": float(r["pred"]),
                     "score": float(z.iloc[i]) if pd.notna(z.iloc[i]) else 0.0,
                 })
 
         result = pd.DataFrame(rows)
         log.info("Generated %d rows across %d trade dates", len(result), result["trade_date"].nunique())
-        del pred, frame, rows
+        del pred, frame, train_frame, prediction_frame, rows
         gc.collect()
         return result
