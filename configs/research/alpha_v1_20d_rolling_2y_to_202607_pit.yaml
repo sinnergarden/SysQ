@@ -1,0 +1,35 @@
+# Short-horizon AlphaV1-clean signal comparison requested by the PIT audit.
+# "AlphaV1" refers ONLY to its feature selection rule: freeze the 227 clean
+# features selected from the current 360-feature semantic candidate registry.
+# Training cadence, LightGBM settings, PIT universe, signal
+# transform, and downstream phase-0 strategy stay aligned with the 90+ feature
+# PIT comparison.  Deliberate signal differences: feature list and 20d label.
+experiment_id: alpha_v1_clean227_20d_rolling_2y_to_202607_pit
+calendar:
+  start_date: "2021-01-01"
+  end_date: "2026-07-31"
+  train_window_days: 504
+  step_days: 20
+signal:
+  signal_id: alpha_v1_clean227_20d_pit
+  score_column: score
+feature_list_id: alpha_v1_clean_227_frozen
+source_manifest_hash: 780ba40ec5ce8a5f5b5c88b02e1e171e0d67c3c2b02639b22ed0a2b889abc237
+window_checkpoints: true
+generators:
+  - generator_id: alpha_v1_clean227_20d_pit
+    type: multi_label_lightgbm
+    params:
+      universe: csi800_pit_union
+      n_estimators: 300
+      feature_list_id: alpha_v1_clean_227_frozen
+      pit_membership: true
+      pit_universe_artifact: csi800_pit_v2
+      labels:
+        - label_id: fwd_ret_20d_raw_pit
+signal_transforms:
+  - transform_id: daily_zscore
+    type: daily_zscore
+labels:
+  - label_id: fwd_ret_20d_raw_pit
+    label_maturity_lag_trading_days: 21

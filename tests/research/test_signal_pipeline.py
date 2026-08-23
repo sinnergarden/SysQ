@@ -10,11 +10,13 @@ import pytest
 
 from qsys.research.matrix_job import RollingResearchConfig
 from qsys.research.signal_pipeline import (
+    CheckpointBatchComplete,
     SignalEvalRef,
     SignalResearchPipeline,
     SignalResearchResult,
     SignalRunRef,
 )
+from qsys.research.window_checkpoint import WindowPredictionCheckpointStore
 
 
 def _make_minimal_config(**overrides) -> RollingResearchConfig:
@@ -198,6 +200,146 @@ class TestSignalResearchPipelineMatrix:
                 == FEATURE_VISIBILITY_CONTRACT_V1
             )
 
+    @patch("qsys.label.store.LabelStore.load_labels")
+    @patch("qsys.research.signal_pipeline.FeatureListRegistry.contract")
+    def test_matrix_binds_feature_content_in_checkpoint_and_signal_manifest(
+        self, mock_contract, mock_labels, tmp_path: Path
+    ) -> None:
+        from qsys.research.generators.fixture import FixtureSignalGenerator
+
+        mock_labels.return_value = _make_fake_labels()
+        feature_contract = {
+            "feature_list_id": "frozen_features",
+            "feature_count": 2,
+            "features_sha256": "a" * 64,
+            "contract": "immutable_v1",
+            "source_artifact": "features.json",
+            "source_artifact_sha256": "a" * 64,
+            "features": ["$close", "$volume"],
+        }
+        mock_contract.return_value = feature_contract
+        config = self._matrix_config()
+        config.feature_list_id = "frozen_features"
+        config.window_checkpoints = True
+        config.source_manifest_hash = "source-v1"
+        generator = FixtureSignalGenerator(n_instruments=10)
+        pipeline = SignalResearchPipeline(str(tmp_path))
+
+        identity = pipeline._window_checkpoint_base_identity(
+            config, config.generators[0], generator
+        )
+        expected = {
+            key: value for key, value in feature_contract.items() if key != "features"
+        }
+        assert identity["feature_list_contract"] == expected
+
+        first_store = WindowPredictionCheckpointStore(
+            tmp_path / "first", identity
+        )
+        changed_contract = {**feature_contract, "features_sha256": "b" * 64}
+        mock_contract.return_value = changed_contract
+        changed_identity = pipeline._window_checkpoint_base_identity(
+            config, config.generators[0], generator
+        )
+        changed_store = WindowPredictionCheckpointStore(
+            tmp_path / "changed", changed_identity
+        )
+        assert (
+            first_store.base_identity_sha256
+            != changed_store.base_identity_sha256
+        )
+        mock_contract.return_value = feature_contract
+
+        result = pipeline.run(
+            config,
+            signal_generator=generator,
+            overwrite_signal=True,
+            overwrite_eval=True,
+        )
+        for ref in result.signal_runs:
+            manifest = pipeline._signal_store.load_manifest(
+                ref.signal_id, ref.signal_run_id
+            )
+            assert manifest["feature_list_contract"] == expected
+
+    @patch("qsys.label.store.LabelStore.load_labels")
+    def test_matrix_resumes_from_validated_window_checkpoints(
+        self, mock_labels, tmp_path: Path
+    ) -> None:
+        from qsys.research.generators.fixture import FixtureSignalGenerator
+
+        mock_labels.return_value = _make_fake_labels()
+        config = self._matrix_config()
+        config.calendar["end_date"] = "2026-01-30"
+        config.window_checkpoints = True
+        config.source_manifest_hash = "source-v1"
+        generator = FixtureSignalGenerator(n_instruments=10)
+        pipeline = SignalResearchPipeline(str(tmp_path))
+
+        with patch.object(
+            generator, "generate", wraps=generator.generate
+        ) as generate:
+            first = pipeline.run(
+                config,
+                signal_generator=generator,
+                overwrite_signal=True,
+                overwrite_eval=True,
+            )
+            first_call_count = generate.call_count
+            assert first_call_count > 0
+            pipeline.run(
+                config,
+                signal_generator=generator,
+                overwrite_signal=True,
+                overwrite_eval=True,
+            )
+            assert generate.call_count == first_call_count
+
+        for ref in first.signal_runs:
+            manifest = pipeline._signal_store.load_manifest(
+                ref.signal_id, ref.signal_run_id
+            )
+            assert len(manifest["window_checkpoint_set_sha256"]) == 64
+
+    @patch("qsys.label.store.LabelStore.load_labels")
+    def test_matrix_checkpoint_batch_exits_after_committed_limit(
+        self, mock_labels, tmp_path: Path
+    ) -> None:
+        from qsys.research.generators.fixture import FixtureSignalGenerator
+
+        mock_labels.return_value = _make_fake_labels()
+        config = self._matrix_config()
+        config.calendar["end_date"] = "2026-02-27"
+        config.window_checkpoints = True
+        config.source_manifest_hash = "source-v1"
+        generator = FixtureSignalGenerator(n_instruments=10)
+        pipeline = SignalResearchPipeline(str(tmp_path))
+
+        with pytest.raises(CheckpointBatchComplete) as first:
+            pipeline.run(
+                config,
+                signal_generator=generator,
+                checkpoint_batch_size=2,
+            )
+        assert first.value.completed_windows == 2
+        assert first.value.total_windows > 2
+
+        with pytest.raises(CheckpointBatchComplete) as second:
+            pipeline.run(
+                config,
+                signal_generator=generator,
+                checkpoint_batch_size=2,
+            )
+        assert second.value.completed_windows == 4
+        assert second.value.total_windows == first.value.total_windows
+
+    def test_checkpoint_batch_size_requires_checkpoint_mode(
+        self, tmp_path: Path
+    ) -> None:
+        pipeline = SignalResearchPipeline(str(tmp_path))
+        with pytest.raises(ValueError, match="requires window_checkpoints"):
+            pipeline.run(self._matrix_config(), checkpoint_batch_size=1)
+
 
 class TestSignalResearchPipelineMultiHead:
     """Multi-head generator support."""
@@ -258,7 +400,14 @@ class TestSignalResearchPipelineMultiHead:
 
 
 class TestSignalResearchPipelineConfigValidation:
-    """Verify config validation rejects backtest/strategy configs."""
+    """Verify config validation rejects unsafe or out-of-scope configs."""
+
+    def test_window_checkpoints_require_source_manifest_hash(self, tmp_path):
+        pipeline = SignalResearchPipeline(str(tmp_path))
+        config = _make_minimal_config()
+        config.window_checkpoints = True
+        with pytest.raises(ValueError, match="source_manifest_hash"):
+            pipeline.run(config)
 
     def test_rejects_strategies(self, tmp_path: Path) -> None:
         pipeline = SignalResearchPipeline(str(tmp_path))

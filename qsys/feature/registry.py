@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import hashlib
+import json
+import string
 from pathlib import Path
 from typing import Any
 
@@ -332,9 +335,100 @@ class FeatureListRegistry:
     @classmethod
     def load(cls, feature_list_id: str) -> list[str]:
         """Load feature list, return qlib field expressions."""
+        return list(cls.contract(feature_list_id)["features"])
+
+    @classmethod
+    def contract(cls, feature_list_id: str) -> dict[str, Any]:
+        """Load and validate a feature list's immutable content contract.
+
+        ``features_sha256`` always binds the ordered expressions. Configs may
+        declare that digest explicitly; ``source_artifact_sha256`` is separate
+        provenance for an external source artifact and is not treated as the
+        feature-list digest.
+        """
         path = cls._CONFIG_DIR / f"{feature_list_id}.yaml"
         if not path.exists():
             raise FileNotFoundError(f"Feature list '{feature_list_id}' not found. Available: {cls.list_ids()}")
         import yaml
         data: dict[str, Any] = yaml.safe_load(path.read_text(encoding="utf-8"))
-        return list(data.get("features", []))
+        if not isinstance(data, dict):
+            raise TypeError(f"Feature list '{feature_list_id}' must be a mapping")
+
+        declared_id = data.get("feature_list_id")
+        if declared_id is not None and str(declared_id) != feature_list_id:
+            raise ValueError(
+                f"Feature list id mismatch: requested '{feature_list_id}', "
+                f"file declares '{declared_id}'"
+            )
+
+        raw_features = data.get("features", [])
+        if not isinstance(raw_features, list) or not all(
+            isinstance(value, str) for value in raw_features
+        ):
+            raise TypeError(
+                f"Feature list '{feature_list_id}' features must be list[str]"
+            )
+        features = list(raw_features)
+        # Historical AlphaV1 ``features.json`` artifacts use this exact
+        # serialization.  Version it explicitly instead of silently changing
+        # the digest scheme in future code.
+        canonicalization = "json_indent_2_utf8_ensure_ascii_true_v1"
+        canonical = json.dumps(features, indent=2).encode("utf-8")
+        features_sha256 = hashlib.sha256(canonical).hexdigest()
+
+        declared_count = data.get("feature_count")
+        if declared_count is not None and type(declared_count) is not int:
+            raise TypeError(
+                f"Feature list '{feature_list_id}' feature_count must be int"
+            )
+        if declared_count is not None and declared_count != len(features):
+            raise ValueError(
+                f"Feature list '{feature_list_id}' count mismatch: "
+                f"declared={declared_count}, actual={len(features)}"
+            )
+        declared_features_sha256 = data.get("features_sha256")
+        if declared_features_sha256 is not None and (
+            not isinstance(declared_features_sha256, str)
+            or len(declared_features_sha256) != 64
+            or any(
+                char not in string.hexdigits
+                for char in declared_features_sha256
+            )
+        ):
+            raise TypeError(
+                f"Feature list '{feature_list_id}' features_sha256 "
+                "must be a 64-character hexadecimal string"
+            )
+        if (
+            declared_features_sha256 is not None
+            and declared_features_sha256 != features_sha256
+        ):
+            raise ValueError(
+                f"Feature list '{feature_list_id}' SHA-256 mismatch: "
+                f"declared={declared_features_sha256}, actual={features_sha256}"
+            )
+        source_artifact_sha256 = data.get("source_artifact_sha256")
+        if source_artifact_sha256 is not None and (
+            not isinstance(source_artifact_sha256, str)
+            or len(source_artifact_sha256) != 64
+            or any(char not in string.hexdigits for char in source_artifact_sha256)
+        ):
+            raise TypeError(
+                f"Feature list '{feature_list_id}' source_artifact_sha256 "
+                "must be a 64-character hexadecimal string"
+            )
+
+        return {
+            "schema_version": "feature_list_content_contract_v1",
+            "feature_list_id": feature_list_id,
+            "feature_count": len(features),
+            "features_sha256": features_sha256,
+            "features_sha256_declared": declared_features_sha256 is not None,
+            "features_sha256_canonicalization": canonicalization,
+            "feature_list_config_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            "contract": data.get("contract"),
+            "source_artifact": data.get("source_artifact"),
+            "source_artifact_sha256": source_artifact_sha256,
+            "source_artifact_sha256_declared": source_artifact_sha256 is not None,
+            "features": features,
+        }

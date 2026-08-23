@@ -102,6 +102,15 @@ class ResearchPaths:
         _sanitize_segment(experiment_id, "experiment_id")
         return self.root / "experiments" / experiment_id
 
+    def window_checkpoint_dir(self, experiment_id: str, generator_id: str) -> Path:
+        _sanitize_segment(experiment_id, "experiment_id")
+        _sanitize_segment(generator_id, "generator_id")
+        return (
+            self.experiment_dir(experiment_id)
+            / "window_checkpoints"
+            / generator_id
+        )
+
     # ── Utilities ───────────────────────────────────────────────────────
 
     def ensure_dir(self, path: Path) -> Path:

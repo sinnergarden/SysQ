@@ -1,0 +1,237 @@
+feature_list_id: alpha_v1_clean_227_frozen
+description: Frozen AlphaV1 clean selection from the 360-feature dynamic semantic candidate registry
+feature_count: 227
+source_artifact: FeatureLibrary.get_semantic_all_features_config -> alpha_v1.get_clean_features @ d4ba533c
+features_sha256: 37d3a149b4454b63afe953db8ffde3d61ee291b232407049855aaea0bd009cc3
+candidate_feature_count: 360
+candidate_features_sha256: 34f9af0b46861ebc0a01ab5cebd86f9dfb39c1cd58c3b1a2302b4879320ad746
+selection_rule: 'apply alpha_v1.get_clean_features keyword classification, removing features classified into HARMFUL_GROUPS: Fundamental, Margin, PricePattern, Valuation, VolumeAmt'
+contract: immutable_alpha_v1_clean_227_from_semantic360_v1
+features:
+- ($high-$low)/$open
+- ($close-$open)/($high-$low+1e-12)
+- ($high-Greater($open, $close))/$open
+- ($high-Greater($open, $close))/($high-$low+1e-12)
+- (Less($open, $close)-$low)/$open
+- (Less($open, $close)-$low)/($high-$low+1e-12)
+- (2*$close-$high-$low)/$open
+- (2*$close-$high-$low)/($high-$low+1e-12)
+- $high/$close
+- $low/$close
+- $vwap/$close
+- Ref($close, 5)/$close
+- Ref($close, 10)/$close
+- Ref($close, 20)/$close
+- Ref($close, 30)/$close
+- Ref($close, 60)/$close
+- Mean($close, 5)/$close
+- Mean($close, 10)/$close
+- Mean($close, 20)/$close
+- Mean($close, 30)/$close
+- Mean($close, 60)/$close
+- Std($close, 5)/$close
+- Std($close, 10)/$close
+- Std($close, 20)/$close
+- Std($close, 30)/$close
+- Std($close, 60)/$close
+- Slope($close, 5)/$close
+- Slope($close, 10)/$close
+- Slope($close, 20)/$close
+- Slope($close, 30)/$close
+- Slope($close, 60)/$close
+- Rsquare($close, 5)
+- Rsquare($close, 10)
+- Rsquare($close, 20)
+- Rsquare($close, 30)
+- Rsquare($close, 60)
+- Resi($close, 5)/$close
+- Resi($close, 10)/$close
+- Resi($close, 20)/$close
+- Resi($close, 30)/$close
+- Resi($close, 60)/$close
+- Rank($close, 5)
+- Rank($close, 10)
+- Rank($close, 20)
+- Rank($close, 30)
+- Rank($close, 60)
+- Mean($close>Ref($close, 1), 5)
+- Mean($close>Ref($close, 1), 10)
+- Mean($close>Ref($close, 1), 20)
+- Mean($close>Ref($close, 1), 30)
+- Mean($close>Ref($close, 1), 60)
+- Mean($close<Ref($close, 1), 5)
+- Mean($close<Ref($close, 1), 10)
+- Mean($close<Ref($close, 1), 20)
+- Mean($close<Ref($close, 1), 30)
+- Mean($close<Ref($close, 1), 60)
+- Mean($close>Ref($close, 1), 5)-Mean($close<Ref($close, 1), 5)
+- Mean($close>Ref($close, 1), 10)-Mean($close<Ref($close, 1), 10)
+- Mean($close>Ref($close, 1), 20)-Mean($close<Ref($close, 1), 20)
+- Mean($close>Ref($close, 1), 30)-Mean($close<Ref($close, 1), 30)
+- Mean($close>Ref($close, 1), 60)-Mean($close<Ref($close, 1), 60)
+- Sum(Greater($close-Ref($close, 1), 0), 5)/(Sum(Abs($close-Ref($close, 1)), 5)+1e-12)
+- Sum(Greater($close-Ref($close, 1), 0), 10)/(Sum(Abs($close-Ref($close, 1)), 10)+1e-12)
+- Sum(Greater($close-Ref($close, 1), 0), 20)/(Sum(Abs($close-Ref($close, 1)), 20)+1e-12)
+- Sum(Greater($close-Ref($close, 1), 0), 30)/(Sum(Abs($close-Ref($close, 1)), 30)+1e-12)
+- Sum(Greater($close-Ref($close, 1), 0), 60)/(Sum(Abs($close-Ref($close, 1)), 60)+1e-12)
+- Sum(Greater(Ref($close, 1)-$close, 0), 5)/(Sum(Abs($close-Ref($close, 1)), 5)+1e-12)
+- Sum(Greater(Ref($close, 1)-$close, 0), 10)/(Sum(Abs($close-Ref($close, 1)), 10)+1e-12)
+- Sum(Greater(Ref($close, 1)-$close, 0), 20)/(Sum(Abs($close-Ref($close, 1)), 20)+1e-12)
+- Sum(Greater(Ref($close, 1)-$close, 0), 30)/(Sum(Abs($close-Ref($close, 1)), 30)+1e-12)
+- Sum(Greater(Ref($close, 1)-$close, 0), 60)/(Sum(Abs($close-Ref($close, 1)), 60)+1e-12)
+- (Sum(Greater($close-Ref($close, 1), 0), 5)-Sum(Greater(Ref($close, 1)-$close, 0), 5))/(Sum(Abs($close-Ref($close, 1)), 5)+1e-12)
+- (Sum(Greater($close-Ref($close, 1), 0), 10)-Sum(Greater(Ref($close, 1)-$close, 0), 10))/(Sum(Abs($close-Ref($close, 1)), 10)+1e-12)
+- (Sum(Greater($close-Ref($close, 1), 0), 20)-Sum(Greater(Ref($close, 1)-$close, 0), 20))/(Sum(Abs($close-Ref($close, 1)), 20)+1e-12)
+- (Sum(Greater($close-Ref($close, 1), 0), 30)-Sum(Greater(Ref($close, 1)-$close, 0), 30))/(Sum(Abs($close-Ref($close, 1)), 30)+1e-12)
+- (Sum(Greater($close-Ref($close, 1), 0), 60)-Sum(Greater(Ref($close, 1)-$close, 0), 60))/(Sum(Abs($close-Ref($close, 1)), 60)+1e-12)
+- $total_mv
+- $circ_mv
+- $net_inflow
+- $big_inflow
+- $total_assets
+- $equity
+- $lend_sell_volume
+- $lend_repay_volume
+- forecast_type_score
+- forecast_stale_days
+- has_forecast
+- is_profitable_ttm
+- gross_margin_delta_yoy
+- breakout_252d_high
+- days_since_252d_high
+- close_pos_in_range
+- open_pos_in_range
+- upper_shadow_ratio
+- lower_shadow_ratio
+- intraday_reversal_strength
+- amount_log
+- amount_zscore_20
+- volume_shock_3
+- volume_shock_5
+- turnover_acceleration
+- amount_log_ind_zscore
+- is_limit_up
+- is_limit_down
+- limit_up_count_5d
+- tradability_score
+- opened_from_limit_up
+- ret_1d
+- ret_3d
+- ret_5d
+- ret_1d_rank
+- ret_3d_rank
+- ret_5d_rank
+- stock_minus_index_ret_3d
+- stock_minus_index_ret_5d
+- stock_minus_industry_ret_3d
+- stock_minus_industry_ret_5d
+- ret_20d
+- ret_60d
+- ret_120d
+- volume_ratio_20d
+- volume_ratio_60d
+- up_day_ratio_60d
+- up_day_ratio_120d
+- trend_smoothness_60d
+- trend_smoothness_120d
+- max_pullback_120d
+- volatility_adjusted_return_60d
+- volatility_adjusted_return_120d
+- rps_60d
+- rps_120d
+- rps_20d
+- rps_20d_minus_rps_60d
+- rps_industry_60d
+- rps_industry_120d
+- price_percentile_252d
+- volume_up_down_ratio_60d
+- above_avg_volume_ratio_60d
+- amount_ratio_20d
+- amount_ratio_60d
+- volume_spike_20d
+- volume_stability_60d
+- market_breadth
+- limit_up_breadth
+- index_volatility_5
+- index_volatility_10
+- index_volatility_20
+- small_vs_large_strength
+- growth_vs_value_proxy
+- market_trend_strength
+- industry_ret_1d
+- industry_ret_3d
+- industry_ret_5d
+- industry_breadth
+- stock_minus_industry_ret
+- log_mktcap
+- float_mktcap
+- roe
+- gross_margin
+- debt_to_asset
+- inventory_yoy
+- ar_yoy
+- roe_delta_252d
+- debt_to_assets_delta_252d
+- op_cashflow_delta_252d
+- pe_rank_252d
+- pb_rank_252d
+- pe_delta_120d
+- pb_delta_120d
+- pe_percentile_756d
+- pb_percentile_756d
+- pe_distance_from_756d_low
+- pb_distance_from_756d_low
+- pe_repair_room_to_median
+- pb_repair_room_to_median
+- earnings_yield_proxy
+- peg_proxy
+- roe_delta_756d
+- ocf_margin
+- continuation_candidate_score
+- repair_candidate_score
+- overheat_risk_score
+- value_trap_risk_score
+- margin_eligible
+- margin_crowding_score
+- margin_trend_confirm_score
+- margin_overheat_risk_score
+- holder_num_chg_qoq
+- holder_num_chg_2q
+- avg_shares_per_holder_chg_qoq
+- top10_holder_ratio_chg_qoq
+- holder_concentration_score
+- holder_squeeze_score
+- holder_price_confirm_score
+- holder_num_stale_days
+- top10_holder_stale_days
+- top10_holder_ratio
+- trend_consistency_60d
+- trend_consistency_120d
+- low_vol_uptrend_60d
+- low_vol_uptrend_120d
+- return_drawdown_ratio_60d
+- return_drawdown_ratio_120d
+- pullback_recovery_speed_60d
+- new_high_persistence_120d
+- up_volume_down_volume_ratio_60d
+- up_volume_down_volume_ratio_120d
+- volume_contraction_after_rise_60d
+- quiet_accumulation_60d
+- amount_stability_60d
+- breakout_volume_quality_120d
+- holder_concentration_trend_confirm
+- holder_concentration_low_vol_uptrend
+- holder_concentration_volume_contract
+- margin_holder_trend_confirm
+- margin_pullback_recovery_confirm
+- industry_ret_20d
+- industry_ret_60d
+- industry_ret_120d
+- industry_breadth_20d
+- industry_breadth_60d
+- industry_new_high_ratio
+- industry_top_stock_momentum
+- industry_volume_expansion
+- stock_minus_industry_ret_20d
+- stock_minus_industry_ret_60d
+- stock_industry_ret_corr_60d

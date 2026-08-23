@@ -1,0 +1,16 @@
+label_id: fwd_ret_20d_raw_pit
+formula:
+  type: forward_return
+  horizon: 20
+  price: close
+  price_basis: adjusted_close
+  adjustment_factor: factor
+universe: csi800_pit_union
+pit_universe_artifact: csi800_pit_v2
+require_clean_provenance: true
+# Strict CSI800 PIT counterpart to fwd_ret_20d_raw.  The union registry only
+# materializes symbols; per-date membership is enforced from the hash-bound
+# interval artifact when the label is constructed.
+date_range:
+  start_date: "2018-01-01"
+  end_date: "2026-08-10"
