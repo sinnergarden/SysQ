@@ -2,10 +2,10 @@ feature_list_id: alpha_v1_clean_227_frozen
 description: Frozen AlphaV1 clean selection from the 360-feature dynamic semantic candidate registry
 feature_count: 227
 source_artifact: FeatureLibrary.get_semantic_all_features_config -> alpha_v1.get_clean_features @ d4ba533c
-source_artifact_sha256: 37d3a149b4454b63afe953db8ffde3d61ee291b232407049855aaea0bd009cc3
+features_sha256: 37d3a149b4454b63afe953db8ffde3d61ee291b232407049855aaea0bd009cc3
 candidate_feature_count: 360
 candidate_features_sha256: 34f9af0b46861ebc0a01ab5cebd86f9dfb39c1cd58c3b1a2302b4879320ad746
-selection_rule: 'remove AlphaV1 HARMFUL_GROUPS: Fundamental, Margin, PricePattern, Valuation, VolumeAmt'
+selection_rule: 'apply alpha_v1.get_clean_features keyword classification, removing features classified into HARMFUL_GROUPS: Fundamental, Margin, PricePattern, Valuation, VolumeAmt'
 contract: immutable_alpha_v1_clean_227_from_semantic360_v1
 features:
 - ($high-$low)/$open

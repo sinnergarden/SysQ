@@ -158,6 +158,8 @@ class WindowPredictionCheckpointStore:
         manifest_tmp = Path(manifest_name)
         try:
             predictions.to_parquet(parquet_tmp, index=False)
+            with parquet_tmp.open("rb") as handle:
+                os.fsync(handle.fileno())
             predictions_sha256 = _sha256_file(parquet_tmp)
             manifest = {
                 "artifact_type": "rolling_window_prediction_checkpoint",

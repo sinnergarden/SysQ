@@ -7,6 +7,7 @@ description: "Alpha V1 production model-input contract, 132 frozen expressions"
 feature_count: 132
 source_artifact: experiments/alpha_v1_models/20260814/features.json
 source_artifact_sha256: f058d84f60d9845730a56c170cf68f5fb450513e27b2550ed0f0b5afa26eeccc
+features_sha256: f058d84f60d9845730a56c170cf68f5fb450513e27b2550ed0f0b5afa26eeccc
 contract: immutable_historical_alpha_v1_model_inputs_v1
 features:
   # ── Raw price/volume (alpha158 core) ──

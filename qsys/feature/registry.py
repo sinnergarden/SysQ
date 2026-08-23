@@ -341,10 +341,10 @@ class FeatureListRegistry:
     def contract(cls, feature_list_id: str) -> dict[str, Any]:
         """Load and validate a feature list's immutable content contract.
 
-        ``features_sha256`` always binds the ordered expressions.  Configs that
-        additionally declare ``feature_count`` or ``source_artifact_sha256``
-        are checked fail-closed so a stale/tampered list cannot be resumed
-        under the same ``feature_list_id``.
+        ``features_sha256`` always binds the ordered expressions. Configs may
+        declare that digest explicitly; ``source_artifact_sha256`` is separate
+        provenance for an external source artifact and is not treated as the
+        feature-list digest.
         """
         path = cls._CONFIG_DIR / f"{feature_list_id}.yaml"
         if not path.exists():
@@ -386,20 +386,36 @@ class FeatureListRegistry:
                 f"Feature list '{feature_list_id}' count mismatch: "
                 f"declared={declared_count}, actual={len(features)}"
             )
-        declared_sha256 = data.get("source_artifact_sha256")
-        if declared_sha256 is not None and (
-            not isinstance(declared_sha256, str)
-            or len(declared_sha256) != 64
-            or any(char not in string.hexdigits for char in declared_sha256)
+        declared_features_sha256 = data.get("features_sha256")
+        if declared_features_sha256 is not None and (
+            not isinstance(declared_features_sha256, str)
+            or len(declared_features_sha256) != 64
+            or any(
+                char not in string.hexdigits
+                for char in declared_features_sha256
+            )
+        ):
+            raise TypeError(
+                f"Feature list '{feature_list_id}' features_sha256 "
+                "must be a 64-character hexadecimal string"
+            )
+        if (
+            declared_features_sha256 is not None
+            and declared_features_sha256 != features_sha256
+        ):
+            raise ValueError(
+                f"Feature list '{feature_list_id}' SHA-256 mismatch: "
+                f"declared={declared_features_sha256}, actual={features_sha256}"
+            )
+        source_artifact_sha256 = data.get("source_artifact_sha256")
+        if source_artifact_sha256 is not None and (
+            not isinstance(source_artifact_sha256, str)
+            or len(source_artifact_sha256) != 64
+            or any(char not in string.hexdigits for char in source_artifact_sha256)
         ):
             raise TypeError(
                 f"Feature list '{feature_list_id}' source_artifact_sha256 "
                 "must be a 64-character hexadecimal string"
-            )
-        if declared_sha256 is not None and str(declared_sha256) != features_sha256:
-            raise ValueError(
-                f"Feature list '{feature_list_id}' SHA-256 mismatch: "
-                f"declared={declared_sha256}, actual={features_sha256}"
             )
 
         return {
@@ -407,11 +423,12 @@ class FeatureListRegistry:
             "feature_list_id": feature_list_id,
             "feature_count": len(features),
             "features_sha256": features_sha256,
+            "features_sha256_declared": declared_features_sha256 is not None,
             "features_sha256_canonicalization": canonicalization,
             "feature_list_config_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
             "contract": data.get("contract"),
             "source_artifact": data.get("source_artifact"),
-            "source_artifact_sha256": declared_sha256,
-            "source_artifact_sha256_declared": declared_sha256 is not None,
+            "source_artifact_sha256": source_artifact_sha256,
+            "source_artifact_sha256_declared": source_artifact_sha256 is not None,
             "features": features,
         }

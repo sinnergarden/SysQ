@@ -21,6 +21,9 @@ ALPHA_V1_CLEAN227_SHA256 = (
 QLIB_SOURCE_SHA256 = (
     "780ba40ec5ce8a5f5b5c88b02e1e171e0d67c3c2b02639b22ed0a2b889abc237"
 )
+CANDIDATE_FEATURES_SHA256 = (
+    "34f9af0b46861ebc0a01ab5cebd86f9dfb39c1cd58c3b1a2302b4879320ad746"
+)
 
 
 def test_alpha_v1_clean227_contract_is_frozen_from_semantic360() -> None:
@@ -35,20 +38,26 @@ def test_alpha_v1_clean227_contract_is_frozen_from_semantic360() -> None:
     assert payload["feature_count"] == 227
     assert len(features) == len(set(features)) == 227
     assert features == get_clean_features(candidates)
-    assert payload["source_artifact_sha256"] == ALPHA_V1_CLEAN227_SHA256
+    assert payload["features_sha256"] == ALPHA_V1_CLEAN227_SHA256
+    candidate_canonical = json.dumps(candidates, indent=2).encode("utf-8")
+    assert hashlib.sha256(candidate_canonical).hexdigest() == (
+        CANDIDATE_FEATURES_SHA256
+    )
+    assert payload["candidate_features_sha256"] == CANDIDATE_FEATURES_SHA256
     canonical = json.dumps(features, indent=2).encode("utf-8")
     assert hashlib.sha256(canonical).hexdigest() == ALPHA_V1_CLEAN227_SHA256
     contract = FeatureListRegistry.contract("alpha_v1_clean_227_frozen")
     assert contract["feature_count"] == 227
     assert contract["features_sha256"] == ALPHA_V1_CLEAN227_SHA256
-    assert contract["source_artifact_sha256"] == ALPHA_V1_CLEAN227_SHA256
+    assert contract["features_sha256_declared"] is True
+    assert contract["source_artifact_sha256"] is None
 
 
 @pytest.mark.parametrize(
     ("override", "error"),
     [
         ({"feature_count": 3}, "count mismatch"),
-        ({"source_artifact_sha256": "0" * 64}, "SHA-256 mismatch"),
+        ({"features_sha256": "0" * 64}, "SHA-256 mismatch"),
     ],
 )
 def test_feature_contract_rejects_tampered_metadata(
@@ -109,6 +118,7 @@ def test_legacy_feature_list_without_declared_hash_is_still_content_bound(
     contract = FeatureListRegistry.contract("legacy")
     assert contract["source_artifact_sha256"] is None
     assert contract["source_artifact_sha256_declared"] is False
+    assert contract["features_sha256_declared"] is False
     assert len(contract["features_sha256"]) == 64
 
 
