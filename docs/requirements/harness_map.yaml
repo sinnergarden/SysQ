@@ -92,6 +92,7 @@ usecases:
       - scripts/research/backtest_from_signal.py
     supporting_tools:
       - scripts/research/compute_labels.py
+      - scripts/research/rebuild_pit_universes.py
     legacy_entrypoints:
       - scripts/research/run_backtest.py
     artifacts:

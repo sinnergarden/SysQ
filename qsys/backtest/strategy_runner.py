@@ -80,6 +80,116 @@ SUPPORTED_MODES = frozenset({
     "cached_daily_equivalent",
 })
 
+
+def _load_pit_execution_universe(
+    research_root: str | Path,
+    artifact_name: str,
+) -> tuple[Any, dict[str, Any]]:
+    """Load a hash-verified PIT universe by its bare artifact name."""
+    name = str(artifact_name).strip()
+    if (
+        not name
+        or name in {".", ".."}
+        or Path(name).is_absolute()
+        or Path(name).name != name
+        or "/" in name
+        or "\\" in name
+    ):
+        raise ValueError(
+            "pit_universe_artifact must be a bare artifact name under "
+            "research_root/universes"
+        )
+
+    from qsys.research.pit_universe import PitUniverseStore
+
+    artifact_dir = Path(research_root) / "universes" / name
+    store = PitUniverseStore(artifact_dir, verify_hash=True)
+    manifest_path = artifact_dir / "manifest.json"
+    identity = {
+        "artifact": name,
+        **store.provenance.to_dict(),
+        "manifest_sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+    }
+    return store, identity
+
+
+def _filter_signal_to_pit_trade_membership(
+    frame: pd.DataFrame,
+    pit_store: Any,
+    *,
+    source_name: str,
+) -> tuple[pd.DataFrame, dict[str, int]]:
+    """Keep signal rows that are index members on their execution date."""
+    required = {"trade_date", "instrument"}
+    missing = sorted(required - set(frame.columns))
+    if missing:
+        raise ValueError(
+            f"{source_name} signal lacks PIT execution-filter columns: {missing}"
+        )
+    if frame.empty:
+        raise ValueError(f"{source_name} signal is empty before PIT execution filter")
+
+    trade_dates = pd.to_datetime(frame["trade_date"], errors="coerce")
+    if trade_dates.isna().any():
+        sample = frame.loc[trade_dates.isna(), "trade_date"].head(3).tolist()
+        raise ValueError(
+            f"{source_name} signal has invalid trade_date values: {sample}"
+        )
+
+    spans = pit_store.spans
+    span_start = pd.to_datetime(
+        spans["effective_from"].astype(str), format="%Y%m%d", errors="coerce"
+    )
+    span_end = pd.to_datetime(
+        spans["effective_to"].astype(str), format="%Y%m%d", errors="coerce"
+    )
+    if span_start.isna().any() or span_end.isna().any():
+        raise ValueError("PIT membership contains invalid effective dates")
+
+    signal_keys = pd.DataFrame({
+        "_pit_row": range(len(frame)),
+        "_pit_instrument": (
+            frame["instrument"].astype(str).str.strip().str.upper().to_numpy()
+        ),
+        "_pit_trade_date": trade_dates.to_numpy(),
+    })
+    span_keys = pd.DataFrame({
+        "_pit_instrument": (
+            spans["instrument"].astype(str).str.strip().str.upper().to_numpy()
+        ),
+        "_pit_from": span_start.to_numpy(),
+        "_pit_to": span_end.to_numpy(),
+    })
+    candidates = signal_keys.merge(
+        span_keys, on="_pit_instrument", how="left", sort=False
+    )
+    valid = candidates[
+        candidates["_pit_trade_date"].ge(candidates["_pit_from"])
+        & candidates["_pit_trade_date"].le(candidates["_pit_to"])
+    ]
+    keep_rows = sorted(valid["_pit_row"].astype(int).unique().tolist())
+    filtered = frame.iloc[keep_rows].copy().reset_index(drop=True)
+
+    input_dates = set(trade_dates.dt.strftime("%Y-%m-%d"))
+    output_dates = set(
+        pd.to_datetime(filtered["trade_date"]).dt.strftime("%Y-%m-%d")
+    )
+    uncovered = sorted(input_dates - output_dates)
+    if uncovered:
+        raise ValueError(
+            f"PIT execution filter removed every {source_name} signal row on "
+            f"trade_date(s): {uncovered[:5]}"
+        )
+    if filtered.empty:
+        raise ValueError(
+            f"PIT execution filter removed every {source_name} signal row"
+        )
+    return filtered, {
+        "input_rows": len(frame),
+        "output_rows": len(filtered),
+        "dropped_rows": len(frame) - len(filtered),
+    }
+
 SUPPORTED_ARTIFACT_MODES = frozenset({"summary", "debug"})
 
 SUPPORTED_EXECUTION_PRICE_MODES = frozenset({"open", "close"})
@@ -1070,6 +1180,7 @@ class BacktestRunner:
         exposure_gate_mode: str = "none",
         exposure_gate_scale: float = 0.5,
         exposure_gate_schedule: dict[str, bool] | None = None,
+        pit_universe_artifact: str | None = None,
     ) -> BacktestRunResult:
         """Backtest from a saved SignalRun (no model inference).
 
@@ -1186,6 +1297,17 @@ class BacktestRunner:
             start_date=None if posterior_config is not None else start_date,
             end_date=end_date,
         )
+        pit_universe_identity: dict[str, Any] | None = None
+        pit_filter_stats: dict[str, dict[str, int]] | None = None
+        pit_store = None
+        if pit_universe_artifact is not None:
+            pit_store, pit_universe_identity = _load_pit_execution_universe(
+                research_root, pit_universe_artifact
+            )
+            primary_signal, primary_stats = _filter_signal_to_pit_trade_membership(
+                primary_signal, pit_store, source_name="primary"
+            )
+            pit_filter_stats = {"primary": primary_stats}
         primary_by_date = {
             str(date): frame.reset_index(drop=True)
             for date, frame in primary_signal.groupby("trade_date", sort=False)
@@ -1202,6 +1324,14 @@ class BacktestRunner:
                 start_date=start_date,
                 end_date=end_date,
             )
+            if pit_store is not None:
+                secondary_signal, secondary_stats = (
+                    _filter_signal_to_pit_trade_membership(
+                        secondary_signal, pit_store, source_name="secondary"
+                    )
+                )
+                assert pit_filter_stats is not None
+                pit_filter_stats["secondary"] = secondary_stats
             secondary_by_date = {
                 str(date): frame.reset_index(drop=True)
                 for date, frame in secondary_signal.groupby(
@@ -1236,6 +1366,8 @@ class BacktestRunner:
             "primary_signal": primary_identity,
             "secondary_signal": secondary_identity,
         }
+        if pit_universe_identity is not None:
+            hash_payload["pit_execution_universe"] = pit_universe_identity
         if rebalance_offset:
             # Default (offset=0) is the pre-offset behaviour; only non-zero
             # offsets change the identity, keeping prior backtest hashes stable.
@@ -1708,6 +1840,12 @@ class BacktestRunner:
                 }
             },
         })
+        if pit_universe_identity is not None:
+            manifest["pit_execution_universe"] = {
+                **pit_universe_identity,
+                "date_semantics": "signal_trade_date_intended_execution_date",
+                "filter_stats": pit_filter_stats,
+            }
         if posterior_config is not None:
             manifest["holding_policy"] = holding_policy
             manifest["posterior_policy"] = posterior_config.to_manifest()

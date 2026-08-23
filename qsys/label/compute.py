@@ -21,6 +21,86 @@ def cs_zscore(s: pd.Series, clip: float = 3.0) -> pd.Series:
     return ((clean - clean.mean()) / std).clip(-clip, clip).reindex(s.index)
 
 
+def _resolve_pit_registry(adapter, universe: str):
+    """Resolve a multi-span PIT registry to (instrument_list, spans).
+
+    A PIT registry is a qlib instrument file (``qlib_dir/instruments/
+    <name>.txt``) where at least one instrument appears on more than one
+    line — i.e. its membership has gaps.  For such registries the naive
+    span-clip-then-shift label computation is wrong (shift crosses the gap),
+    so callers fetch CONTINUOUS history via the instrument list and filter to
+    membership spans only after the label has matured.
+
+    Returns ``(None, None)`` when ``universe`` is not a multi-span registry —
+    a single-span registry (csi800, all), a plain instrument list, or an
+    individual code.  Callers then use the legacy string/registry path which
+    is already correct for contiguous membership.
+    """
+    if not isinstance(universe, str):
+        return None, None
+    low = universe.lower()
+    qlib_dir = getattr(adapter, "qlib_dir", None)
+    if qlib_dir is None:
+        return None, None
+    reg_path = qlib_dir / "instruments" / f"{low}.txt"
+    if not reg_path.exists():
+        return None, None
+    rows = []
+    for line in reg_path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split("\t")
+        if len(parts) >= 3:
+            rows.append((parts[0], parts[1], parts[2]))
+    if not rows:
+        return None, None
+    spans = pd.DataFrame(rows, columns=["instrument", "effective_from", "effective_to"])
+    # A PIT registry only has non-trivial membership semantics when some
+    # instrument holds more than one (non-contiguous) span.
+    if not (spans.groupby("instrument").size() > 1).any():
+        return None, None
+    instruments = sorted(spans["instrument"].unique().tolist())
+    return instruments, spans
+
+
+def _resolve_pit_artifact(artifact: str | None):
+    """Resolve an explicit immutable PIT artifact to instruments and spans."""
+    if not artifact:
+        return None, None
+    from qsys.research.pit_universe import PitUniverseStore
+
+    store = PitUniverseStore(artifact)
+    spans = store.spans[["instrument", "effective_from", "effective_to"]].copy()
+    for column in ("effective_from", "effective_to"):
+        spans[column] = pd.to_datetime(
+            spans[column], format="%Y%m%d", errors="raise"
+        ).dt.strftime("%Y-%m-%d")
+    return store.instruments, spans
+
+
+def _filter_membership(frame: pd.DataFrame, spans: pd.DataFrame) -> pd.DataFrame:
+    """Keep only rows whose (instrument, trade_date) is inside a membership span.
+
+    ``spans`` has columns instrument / effective_from / effective_to (all
+    ``YYYY-MM-DD`` strings, inclusive on both ends).  A date falling in the
+    membership gap is dropped; a member date survives even when its forward
+    label was computed from prices beyond the span end (correct — the label
+    is the realized forward return of holding the member, independent of the
+    later membership exit).
+    """
+    if spans is None or spans.empty:
+        return frame
+    f = frame[["trade_date", "instrument"]].copy()
+    f["_row"] = np.arange(len(f))
+    merged = f.merge(spans, on="instrument", how="left")
+    ok = (merged["trade_date"] >= merged["effective_from"]) & (
+        merged["trade_date"] <= merged["effective_to"]
+    )
+    member_rows = merged.loc[ok, "_row"].unique()
+    return frame.iloc[np.sort(member_rows)]
+
+
 def compute_forward_return(
     universe: str,
     horizon: int,
@@ -30,6 +110,7 @@ def compute_forward_return(
     norm_type: str = "cs_zscore",
     clip_val: float | None = 3.0,
     label_id_override: str | None = None,
+    pit_universe_artifact: str | None = None,
 ) -> pd.DataFrame:
     """Compute forward return label.
 
@@ -63,9 +144,22 @@ def compute_forward_return(
     adapter.init_qlib()
 
     price_col = f"${price_field}"
-    # Fetch both price and adjustment factor — factor is the cumulative
-    # adjustment factor from Tushare (1.0 = no adjustment).
-    raw = adapter.get_features(universe, [price_col, "$factor"], start_time=start, end_time=end)
+    # Resolve multi-span PIT registries: for those, fetch CONTINUOUS trading
+    # history (list path — no span clipping) so that ``shift(-horizon)`` is a
+    # trading-day offset, not a row offset across membership gaps.  PIT
+    # membership filtering is applied only AFTER the label has matured, so a
+    # member's label at T is the realized forward return of holding it for
+    # ``horizon`` trading days — independent of a later membership exit.
+    instruments, spans = _resolve_pit_artifact(pit_universe_artifact)
+    if instruments is None:
+        instruments, spans = _resolve_pit_registry(adapter, universe)
+    if instruments is not None:
+        raw = adapter.get_features(instruments, [price_col, "$factor"],
+                                   start_time=start, end_time=end)
+    else:
+        # Fetch both price and adjustment factor — factor is the cumulative
+        # adjustment factor from Tushare (1.0 = no adjustment).
+        raw = adapter.get_features(universe, [price_col, "$factor"], start_time=start, end_time=end)
     frame = raw.reset_index().rename(columns={"datetime": "trade_date"})
     frame["trade_date"] = frame["trade_date"].astype(str).str[:10]
 
@@ -76,8 +170,13 @@ def compute_forward_return(
     fwd = shifted / frame["_adj_price"] - 1.0
     frame["_fwd"] = fwd
 
+    # PIT membership filtering happens AFTER label maturity (the shift above).
+    # Rows inside a membership gap are dropped; member rows keep the label
+    # computed from continuous history (which may cross the span boundary).
+    if spans is not None:
+        frame = _filter_membership(frame, spans)
+
     suffix = "raw"
-    label_value = fwd.astype(np.float32)
     if norm_type == "cs_zscore":
         suffix = "cs_zscore"
         if clip_val is not None:
@@ -88,6 +187,8 @@ def compute_forward_return(
         )
         label_value = valid["label_value"].astype(np.float32)
         frame = valid
+    else:
+        label_value = frame["_fwd"].astype(np.float32)
 
     label_id = label_id_override or f"fwd_ret_{horizon}d_{suffix}"
     result = pd.DataFrame({
@@ -107,6 +208,7 @@ def compute_raw_forward_return(
     end: str,
     price_field: str = "close",
     label_id_override: str | None = None,
+    pit_universe_artifact: str | None = None,
 ) -> pd.DataFrame:
     """Compute raw (un-normalized) forward return label.
     Delegates to ``compute_forward_return`` with no normalization.
@@ -115,6 +217,7 @@ def compute_raw_forward_return(
         universe, horizon, start, end,
         price_field=price_field, norm_type="", clip_val=None,
         label_id_override=label_id_override,
+        pit_universe_artifact=pit_universe_artifact,
     )
 
 

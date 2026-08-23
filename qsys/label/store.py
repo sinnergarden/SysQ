@@ -8,7 +8,10 @@ docs/USE_CASES.md UC-3 : label lifecycle
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +27,37 @@ _OPTIONAL_COLUMNS = {
     "universe", "is_valid", "invalid_reason",
 }
 _PARQUET_AVAILABLE: bool | None = None
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _atomic_replace_data(path: Path, frame: pd.DataFrame, file_format: str) -> None:
+    temporary = path.with_name(
+        f".{path.stem}.{uuid.uuid4().hex}.tmp{path.suffix}"
+    )
+    try:
+        if file_format == "parquet":
+            frame.to_parquet(temporary, index=False)
+        else:
+            frame.to_csv(temporary, index=False)
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _atomic_write_manifest(path: Path, data: dict[str, Any]) -> None:
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        write_manifest(temporary, data)
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _parquet_available() -> bool:
@@ -119,14 +153,13 @@ class LabelStore:
                 f"Label file already exists: {data_path} (use overwrite=True)"
             )
 
-        if file_format == "parquet":
-            frame.to_parquet(data_path, index=False)
-        else:
-            frame.to_csv(data_path, index=False)
+        _atomic_replace_data(data_path, frame, file_format)
 
         # Write manifest
-        mf = _build_manifest(label_id, frame, manifest)
-        write_manifest(self.paths.label_manifest(label_id), mf)
+        manifest_payload = dict(manifest or {})
+        manifest_payload["labels_sha256"] = _sha256_file(data_path)
+        mf = _build_manifest(label_id, frame, manifest_payload)
+        _atomic_write_manifest(self.paths.label_manifest(label_id), mf)
 
         return data_path
 
@@ -139,6 +172,7 @@ class LabelStore:
         start_date: str | None = None,
         end_date: str | None = None,
         instruments: list[str] | None = None,
+        verify_hash: bool = True,
     ) -> pd.DataFrame:
         """Load label data for *label_id*.
 
@@ -156,6 +190,15 @@ class LabelStore:
         pd.DataFrame
         """
         data_path = self._resolve_data_path(label_id)
+        if verify_hash:
+            manifest_path = self.paths.label_manifest(label_id)
+            if manifest_path.is_file():
+                manifest = read_manifest(manifest_path)
+                expected = manifest.get("labels_sha256")
+                if expected and _sha256_file(data_path) != expected:
+                    raise ValueError(
+                        f"Label data hash mismatch for {label_id}: {data_path}"
+                    )
         if data_path.suffix == ".parquet":
             df = pd.read_parquet(data_path)
         else:
@@ -234,6 +277,7 @@ class LabelStore:
         norm_type = str(norm.get("type", "")) if norm else ""
         clip_val = float(norm["clip"]) if norm and "clip" in norm else None
         universe = str(config.get("universe", "csi300"))
+        pit_universe_artifact = config.get("pit_universe_artifact")
         dr = config.get("date_range", {}); start = str(dr.get("start_date", "2018-01-01")); end = str(dr.get("end_date", "2026-01-01"))
 
         if ftype == "forward_return":
@@ -244,15 +288,80 @@ class LabelStore:
                 # A config label_id (e.g. fwd_ret_180d_raw_pit) is used
                 # verbatim so the store row label_id matches save_labels.
                 label_id_override=label_id,
+                pit_universe_artifact=(
+                    str(pit_universe_artifact) if pit_universe_artifact else None
+                ),
             )
         else:
             raise ValueError(f"Unsupported formula type: {ftype}")
 
         mf = {"horizon": horizon, "universe": universe, "formula": config.get("formula", {}),
-              "normalization": config.get("normalization", {}), "prediction_start": start, "prediction_end": end,
+              "normalization": config.get("normalization", {}),
+              "requested_start_date": start, "requested_end_date": end,
               "n_dates": int(result["trade_date"].nunique()),
               "n_instruments": int(result["instrument"].nunique()),
               "coverage": round(len(result) / max(result["trade_date"].nunique() * result["instrument"].nunique(), 1), 4)}
+        canonical_config = json.dumps(
+            config, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        ).encode("utf-8")
+        mf["config_sha256"] = hashlib.sha256(canonical_config).hexdigest()
+        from qsys.common.git import git_commit_full
+        import qsys.label.compute as compute_module
+
+        mf["git_commit_full"] = git_commit_full()
+        mf["label_compute_code_sha256"] = _sha256_file(
+            Path(compute_module.__file__)
+        )
+        mf["label_store_code_sha256"] = _sha256_file(Path(__file__))
+        from qsys.research.pit_universe import _git_provenance
+
+        git_metadata = _git_provenance(Path.cwd())
+        if config.get("require_clean_provenance") and git_metadata[
+            "git_scoped_dirty"
+        ]:
+            raise ValueError(
+                "Label build code/config scope is dirty; commit it before rebuild"
+            )
+        mf.update(git_metadata)
+        if pit_universe_artifact:
+            from qsys.data.adapter import QlibAdapter
+            from qsys.research.pit_universe import PitUniverseStore
+
+            pit_store = PitUniverseStore(str(pit_universe_artifact))
+            artifact_manifest_path = pit_store.artifact_dir / "manifest.json"
+            artifact_manifest = json.loads(
+                artifact_manifest_path.read_text(encoding="utf-8")
+            )
+            registry_path = (
+                QlibAdapter().qlib_dir / "instruments" / f"{universe.lower()}.txt"
+            )
+            if not registry_path.is_file():
+                raise FileNotFoundError(f"PIT universe registry missing: {registry_path}")
+            registry_hash = _sha256_file(registry_path)
+            expected_registry_hash = artifact_manifest.get("registry_sha256")
+            if expected_registry_hash and registry_hash != expected_registry_hash:
+                raise ValueError(
+                    f"PIT registry hash mismatch for {pit_universe_artifact}: "
+                    f"expected {expected_registry_hash}, got {registry_hash}"
+                )
+            mf.update(
+                {
+                    "pit_universe_artifact": str(pit_universe_artifact),
+                    "universe_membership_sha256": (
+                        pit_store.provenance.membership_sha256
+                    ),
+                    "universe_snapshot_hash": (
+                        pit_store.provenance.raw_source_hash
+                    ),
+                    "universe_raw_source_sha256": (
+                        pit_store.provenance.raw_source_hash
+                    ),
+                    "universe_manifest_sha256": _sha256_file(
+                        artifact_manifest_path
+                    ),
+                    "universe_registry_sha256": registry_hash,
+                }
+            )
         mf.update(config.get("manifest", {}))
         return self.save_labels(label_id, result, manifest=mf, overwrite=overwrite)
 

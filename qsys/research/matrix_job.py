@@ -288,7 +288,8 @@ def _create_generator_from_config(
     if gen_type == "single_label_lightgbm":
         _CONSUMED_PARAMS = {
             "label_id", "universe", "n_estimators", "lgb_params",
-            "feature_list_id", "pit_membership",
+            "feature_list_id", "pit_membership", "pit_filter_mode",
+            "pit_universe_artifact", "liquidity_exclusion_path",
         }
         unknown = set(params) - _CONSUMED_PARAMS
         if unknown:
@@ -305,6 +306,9 @@ def _create_generator_from_config(
             feature_list_id=feature_list_id or params.get("feature_list_id"),
             lgb_params=params.get("lgb_params"),
             pit_membership=params.get("pit_membership", False),
+            pit_filter_mode=params.get("pit_filter_mode", ""),
+            pit_universe_artifact=params.get("pit_universe_artifact", "csi800_pit_v2"),
+            liquidity_exclusion_path=params.get("liquidity_exclusion_path", ""),
             use_feature_cache=use_feature_cache,
             write_through=write_through,
             feature_cache_root=feature_cache_root,

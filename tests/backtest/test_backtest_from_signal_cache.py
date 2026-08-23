@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -60,7 +62,143 @@ def _run_bt(tmp_path, runner_kwargs=None, **kwargs):
         return runner.run_from_signal_cache(**kwargs)
 
 
+def _write_pit_artifact(
+    research_root: Path,
+    name: str = "test_pit_v2",
+    members: tuple[str, ...] = ("000000.SZ", "000001.SZ"),
+) -> Path:
+    artifact = research_root / "universes" / name
+    artifact.mkdir(parents=True)
+    membership = pd.DataFrame({
+        "index_code": ["TEST"] * len(members),
+        "instrument": list(members),
+        "effective_from": ["20260615"] * len(members),
+        "effective_to": ["20260617"] * len(members),
+        "source": ["test"] * len(members),
+        "source_date": ["2026-06-14"] * len(members),
+        "source_version": ["v1"] * len(members),
+    })
+    membership_path = artifact / "membership.parquet"
+    membership.to_parquet(membership_path, index=False)
+    manifest = {
+        "universe_id": name,
+        "membership_sha256": hashlib.sha256(
+            membership_path.read_bytes()
+        ).hexdigest(),
+        "raw_source_hash": "raw-test-hash",
+        "source": "test",
+        "source_date": "2026-06-14",
+        "n_snapshots": 1,
+        "snapshot_date_range": ["20260615", "20260615"],
+        "n_unique_instruments": len(members),
+        "n_membership_spans": len(members),
+        "description": "test PIT universe",
+    }
+    (artifact / "manifest.json").write_text(
+        json.dumps(manifest, sort_keys=True), encoding="utf-8"
+    )
+    return artifact
+
+
 class TestRunFromSignalCache:
+    def test_pit_execution_filter_pins_identity_and_drops_nonmembers(
+        self, tmp_path: Path
+    ) -> None:
+        artifact = _write_pit_artifact(tmp_path)
+        out = tmp_path / "bt_pit"
+        result = _run_bt(
+            tmp_path,
+            fixture_dates=1,
+            fixture_inst=5,
+            signal_id="test_sig",
+            signal_run_id="test_run",
+            start_date="2026-06-15",
+            end_date="2026-06-15",
+            top_n=5,
+            pit_universe_artifact=artifact.name,
+            output_dir=out,
+        )
+        executions = pd.read_csv(out / "executions.csv")
+        manifest = json.loads((out / "manifest.json").read_text())
+        identity = manifest["pit_execution_universe"]
+
+        assert result.status == "completed"
+        assert executions["instrument"].tolist() == ["000000.SZ", "000001.SZ"]
+        assert identity["artifact"] == artifact.name
+        assert identity["membership_sha256"] == hashlib.sha256(
+            (artifact / "membership.parquet").read_bytes()
+        ).hexdigest()
+        assert identity["manifest_sha256"] == hashlib.sha256(
+            (artifact / "manifest.json").read_bytes()
+        ).hexdigest()
+        assert identity["filter_stats"]["primary"] == {
+            "input_rows": 5,
+            "output_rows": 2,
+            "dropped_rows": 3,
+        }
+
+    def test_pit_execution_filter_changes_backtest_identity(
+        self, tmp_path: Path
+    ) -> None:
+        artifact = _write_pit_artifact(tmp_path)
+        without = _run_bt(
+            tmp_path,
+            fixture_dates=1,
+            fixture_inst=5,
+            signal_id="test_sig",
+            signal_run_id="test_run",
+            start_date="2026-06-15",
+            end_date="2026-06-15",
+            output_dir=tmp_path / "without_pit",
+        )
+        with_pit = _run_bt(
+            tmp_path,
+            fixture_dates=1,
+            fixture_inst=5,
+            signal_id="test_sig",
+            signal_run_id="test_run",
+            start_date="2026-06-15",
+            end_date="2026-06-15",
+            pit_universe_artifact=artifact.name,
+            output_dir=tmp_path / "with_pit",
+        )
+        assert without.backtest_id != with_pit.backtest_id
+
+    def test_pit_execution_filter_rejects_tampered_membership(
+        self, tmp_path: Path
+    ) -> None:
+        artifact = _write_pit_artifact(tmp_path)
+        tampered = pd.read_parquet(artifact / "membership.parquet")
+        tampered.loc[0, "instrument"] = "999999.SZ"
+        tampered.to_parquet(artifact / "membership.parquet", index=False)
+        with pytest.raises(ValueError, match="membership hash mismatch"):
+            _run_bt(
+                tmp_path,
+                fixture_dates=1,
+                signal_id="test_sig",
+                signal_run_id="test_run",
+                start_date="2026-06-15",
+                end_date="2026-06-15",
+                pit_universe_artifact=artifact.name,
+            )
+
+    @pytest.mark.parametrize(
+        "bad_name", ["../outside", "nested/artifact", "nested\\artifact", "/tmp/x"]
+    )
+    def test_pit_execution_filter_rejects_non_bare_name(
+        self, tmp_path: Path, bad_name: str
+    ) -> None:
+        with pytest.raises(ValueError, match="bare artifact name"):
+            _run_bt(
+                tmp_path,
+                fixture_dates=1,
+                signal_id="test_sig",
+                signal_run_id="test_run",
+                start_date="2026-06-15",
+                end_date="2026-06-15",
+                pit_universe_artifact=bad_name,
+            )
+
     def test_rejects_legacy_generated_signal_without_visibility_contract(
         self, tmp_path: Path
     ) -> None:

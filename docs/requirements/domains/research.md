@@ -50,6 +50,7 @@ UC-5（Signal Analytics）、UC-6（Signal Combination）、UC-7（Signal Backte
 
 ### Supporting Tools
 - `scripts/research/compute_labels.py` — 标签计算（UC-3）
+- `scripts/research/rebuild_pit_universes.py` — 从冻结快照重建 hash-bound PIT universe
 
 ### Legacy Entrypoints
 - `scripts/research/run_backtest.py` — 旧版回测入口，待收束

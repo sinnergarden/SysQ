@@ -1,0 +1,19 @@
+label_id: fwd_ret_180d_raw_pit_csi1800
+formula:
+  type: forward_return
+  horizon: 180
+  price: close
+  price_basis: adjusted_close
+  adjustment_factor: factor
+universe: csi1800_pit_union
+pit_universe_artifact: csi1800_pit_v2
+require_clean_provenance: true
+# PIT universe ladder diagnostic: same raw forward-return formula as
+# fwd_ret_180d_raw_pit, but namespaced per-universe so the U2 (CSI800 ∪
+# CSI1000) label store does not clobber the CSI800 one.  train universe ==
+# predict universe — labels are computed over the csi1800_pit_union registry.
+# end_date matches the U0 baseline label's tail coverage (2026-08-10) so U0 vs
+# U2 eval windows are apple-to-apple.
+date_range:
+  start_date: "2018-01-01"
+  end_date: "2026-08-10"

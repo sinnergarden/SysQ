@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 import pandas as pd
@@ -130,7 +131,8 @@ class TestComputeFromConfigLabelIdOverride:
 
         def fake_compute_forward_return(universe, horizon, start, end, *,
                                         price_field="close", norm_type="cs_zscore",
-                                        clip_val=3.0, label_id_override=None):
+                                        clip_val=3.0, label_id_override=None,
+                                        pit_universe_artifact=None):
             return pd.DataFrame({
                 "trade_date": ["2020-01-02"],
                 "instrument": ["000001.SZ"],
@@ -156,3 +158,44 @@ class TestComputeFromConfigLabelIdOverride:
         mf = store.load_manifest("fwd_ret_180d_raw_pit")
         assert mf["universe"] == "csi800_pit_union"
         assert mf["horizon"] == 180
+        assert mf["prediction_start"] == "2020-01-02"
+        assert mf["prediction_end"] == "2020-01-02"
+        assert mf["requested_start_date"] == "2018-03-13"
+        assert mf["requested_end_date"] == "2026-08-10"
+
+
+def test_saved_label_manifest_binds_data_hash(tmp_path: Path) -> None:
+    store = LabelStore(root=str(tmp_path / "research"))
+    frame = pd.DataFrame(
+        {
+            "trade_date": ["2024-01-02"],
+            "instrument": ["000001.SZ"],
+            "label_id": ["hash_bound"],
+            "horizon": [5],
+            "label_value": [0.1],
+        }
+    )
+    path = store.save_labels("hash_bound", frame)
+    manifest = store.load_manifest("hash_bound")
+
+    assert manifest["labels_sha256"] == hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def test_tampered_label_data_fails_hash_verification(tmp_path: Path) -> None:
+    store = LabelStore(root=str(tmp_path / "research"))
+    frame = pd.DataFrame(
+        {
+            "trade_date": ["2024-01-02"],
+            "instrument": ["000001.SZ"],
+            "label_id": ["tampered"],
+            "horizon": [5],
+            "label_value": [0.1],
+        }
+    )
+    path = store.save_labels("tampered", frame)
+    changed = pd.read_parquet(path)
+    changed.loc[0, "label_value"] = 0.2
+    changed.to_parquet(path, index=False)
+
+    with pytest.raises(ValueError, match="hash mismatch"):
+        store.load_labels("tampered")

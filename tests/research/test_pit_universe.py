@@ -165,14 +165,14 @@ def test_invalid_span_raises(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(
-    not (Path("data/research/universes/csi800_pit_v1/membership.parquet").is_file()),
-    reason="csi800_pit_v1 artifact not present",
+    not (Path("data/research/universes/csi800_pit_v2/membership.parquet").is_file()),
+    reason="csi800_pit_v2 artifact not present",
 )
 def test_real_artifact_consistency() -> None:
     """Integration: the committed-locally artifact must satisfy core invariants."""
     store = PitUniverseStore()
     prov = store.provenance
-    assert prov.universe_id == "csi800_pit_v1"
+    assert prov.universe_id == "csi800_pit_v2"
     assert prov.n_unique_instruments == len(store.instruments)
     assert prov.n_membership_spans == len(store.spans)
     latest = store.latest_membership()
@@ -180,6 +180,6 @@ def test_real_artifact_consistency() -> None:
     # spot-check point-in-time sizes near a mid-window date
     for probe in ("2018-03-13", "2020-12-31", "2023-06-30"):
         size = len(store.membership_as_of(probe))
-        assert 780 <= size <= 800, f"membership on {probe} has {size} names"
+        assert size == 800, f"membership on {probe} has {size} names"
     # a known delisted-era name must resolve on its PIT membership date
     assert store.is_member("000002.SZ", "2026-07-31")
