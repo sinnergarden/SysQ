@@ -26,7 +26,7 @@
 
 | 阶段 | Service | Timer | 调用链 |
 |------|---------|-------|--------|
-| Data sync + financial_rc | `qsys-csi800-daily-sync.service` | Mon-Fri 19:00 | `data_sync.py` 同步 T、补 T-1 两融，随后用完整 T-1 快照生成供 T+1 使用的 Top200 |
+| Data sync + financial_rc | `qsys-csi800-daily-sync.service` | Mon-Fri 19:00 | `data_sync.py` 按目标日 PIT CSI1800 快照同步 T、补 T-1 两融，随后用完整 T-1 CSI800 策略快照生成供 T+1 使用的 Top200 |
 | Preopen | `qsys-candidate-preopen.service` | Mon-Fri 08:00 | `run_daily_batch.py --stage candidate --mode preopen --trade-date auto` |
 | Postclose | `qsys-candidate-postclose.service` | Mon-Fri 21:00 | `run_daily_batch.py --stage candidate --mode postclose --trade-date auto` |
 | Weekly train | `qsys-candidate-train.service` | Mon 07:00 | `run_daily_batch.py --stage candidate --mode train` |
@@ -322,7 +322,7 @@ cat daily/YYYY-MM-DD/post_close/daily_ops_digest_*.json | python -m json.tool
 
 ```bash
 # 手动触发数据同步
-python scripts/data_sync.py --universe csi800 --apply
+python scripts/data_sync.py --universe csi1800 --apply
 python scripts/run_daily.py --strategy financial_rc --mode infer --signal-date auto --top-k 200
 
 # 数据健康检查（已实现）
@@ -337,6 +337,13 @@ python -c "import json; print(json.load(open('data/audit/' + sorted(__import__('
 
 # 实际 qlib bin 路径：data/qlib_bin/
 ```
+
+CSI1800 同步不会把“今天的 1800 只”倒灌到历史。目标交易日 `T` 分别解析
+`000906.SH` 与 `000852.SH` 在 `T` 当日或之前最新发布的 `index_weight` 月度快照，
+要求严格 800 + 1000 且互不重叠，并写入不可覆盖的
+`data/research/universes/csi1800_pit_daily/YYYYMMDD/`。每日 audit 必须记录两张源
+快照日期、semantic hash、membership parquet hash 与 qlib registry hash；若同一
+目标日重新解析出的集合不同则 fail closed，不能静默覆盖。
 
 ### 跑 preopen
 

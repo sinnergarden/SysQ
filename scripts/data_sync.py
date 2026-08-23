@@ -4,6 +4,7 @@
 Usage:
     python scripts/data_sync.py --config configs/data/csi800_daily_sync.yaml
     python scripts/data_sync.py --universe csi800 --target-date 2026-06-12
+    python scripts/data_sync.py --universe csi1800 --target-date 2026-08-21 --apply
 """
 import argparse
 import json
@@ -13,6 +14,24 @@ from datetime import datetime, timedelta
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 PROJ = Path(__file__).resolve().parent.parent
+
+
+def _require_exact_sync_target(
+    resolved: dict,
+    *,
+    requested_target: str,
+    universe: str,
+) -> str:
+    requested = datetime.strptime(
+        str(requested_target).replace("-", ""), "%Y%m%d"
+    ).strftime("%Y-%m-%d")
+    actual = resolved.get("resolved_trade_date")
+    if not actual or actual != requested or resolved.get("status") != "success":
+        raise RuntimeError(
+            f"cannot resolve exact synced {universe} target date: {resolved}"
+        )
+    return actual
+
 
 def main():
     p = argparse.ArgumentParser(description="Data Sync — UC-1")
@@ -55,16 +74,20 @@ def main():
     p.add_argument(
         "--margin-min-active",
         type=int,
-        default=450,
-        help="Minimum CSI800 symbols with margin balance on every open session",
+        default=None,
+        help=(
+            "Minimum symbols with margin balance per session; defaults to 450 "
+            "for CSI800 and 1300 for CSI1800"
+        ),
     )
     p.add_argument(
         "--margin-min-exchange-coverage",
         type=float,
-        default=0.90,
+        default=None,
         help=(
-            "Minimum per-exchange share of CSI800 symbols with margin balance "
-            "on every repaired open session"
+            "Minimum per-exchange universe share with margin balance; defaults "
+            "to 0.90 for CSI800 and 0.75 for CSI1800 because CSI1000 includes "
+            "more non-margin-eligible names"
         ),
     )
     p.add_argument(
@@ -85,7 +108,11 @@ def main():
     if args.config:
         import yaml
         c = yaml.safe_load(Path(args.config).read_text())
-        target_date = str(c.get("date_range", {}).get("end_date", "")) or datetime.now().strftime("%Y-%m-%d")
+        target_date = str(c.get("date_range", {}).get("end_date", "")).strip() or None
+        if target_date is None:
+            from scripts.ops.sync_csi800_daily import _resolve_target_date
+
+            target_date = _resolve_target_date(None)
         configured_universe = c.get("universe", universe)
         if isinstance(configured_universe, dict):
             universe = configured_universe.get("name", universe)
@@ -94,19 +121,51 @@ def main():
         universe = universe or "csi800"
         do_apply = c.get("execution", {}).get("apply", False) or do_apply
         if c.get("tasks", {}).get("qlib_bin", True):
-            cmd = [sys.executable, str(PROJ / "scripts/ops/sync_csi800_daily.py"), "--target-date", target_date]
+            cmd = [
+                sys.executable,
+                str(PROJ / "scripts/ops/sync_csi800_daily.py"),
+                "--universe",
+                universe,
+                "--target-date",
+                target_date,
+            ]
             if do_apply: cmd.append("--apply")
             subprocess.run(cmd, cwd=str(PROJ), check=True)
-    elif universe == "csi800":
-        target_date = target_date or datetime.now().strftime("%Y-%m-%d")
-        cmd = [sys.executable, str(PROJ / "scripts/ops/sync_csi800_daily.py"), "--target-date", target_date]
+    elif universe in {"csi800", "csi1800"}:
+        if target_date is None:
+            from scripts.ops.sync_csi800_daily import _resolve_target_date
+
+            target_date = _resolve_target_date(None)
+        cmd = [
+            sys.executable,
+            str(PROJ / "scripts/ops/sync_csi800_daily.py"),
+            "--universe",
+            universe,
+            "--target-date",
+            target_date,
+        ]
         if args.apply: cmd.append("--apply")
         subprocess.run(cmd, cwd=str(PROJ), check=True)
     else:
-        print("Specify --config or --universe csi800", file=sys.stderr); sys.exit(1)
+        print(
+            "Specify --config or --universe csi800|csi1800",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
-    if not do_apply or universe != "csi800":
+    if not do_apply or universe not in {"csi800", "csi1800"}:
         return
+
+    margin_min_active = (
+        args.margin_min_active
+        if args.margin_min_active is not None
+        else (1300 if universe == "csi1800" else 450)
+    )
+    margin_min_exchange_coverage = (
+        args.margin_min_exchange_coverage
+        if args.margin_min_exchange_coverage is not None
+        else (0.75 if universe == "csi1800" else 0.90)
+    )
 
     from qsys.data.adapter import QlibAdapter
     from qsys.ops.instrument_coverage import read_instrument_file
@@ -117,13 +176,19 @@ def main():
     )
     from qsys.ops.trade_date import resolve_daily_trade_date
 
-    resolved = resolve_daily_trade_date(target_date, universe="csi800")
-    resolved_target = resolved.get("resolved_trade_date")
-    if not resolved_target:
-        raise RuntimeError(f"cannot resolve synced csi800 target date: {resolved}")
+    resolved = resolve_daily_trade_date(
+        target_date,
+        universe=universe,
+        allow_fallback_to_latest=False,
+    )
+    resolved_target = _require_exact_sync_target(
+        resolved,
+        requested_target=target_date,
+        universe=universe,
+    )
     adapter = QlibAdapter()
     instruments = read_instrument_file(
-        adapter.qlib_dir / "instruments" / "csi800.txt"
+        adapter.qlib_dir / "instruments" / f"{universe}.txt"
     )
     target_ts = datetime.strptime(resolved_target, "%Y-%m-%d")
     active = instruments[
@@ -149,8 +214,17 @@ def main():
         report["universe_history"] = history_result
         if history_result["status"] not in {"healthy", "success"}:
             raise RuntimeError(
-                "csi800 universe feature-history catch-up failed: "
+                f"{universe} universe feature-history catch-up failed: "
                 f"{history_result['summary_path']}"
+            )
+        if universe == "csi1800":
+            from qsys.ops.pit_universe_snapshot import write_current_qlib_registry
+
+            report["csi1800_registry_after_history"] = write_current_qlib_registry(
+                qlib_dir=adapter.qlib_dir,
+                universe=universe,
+                instruments=symbols,
+                as_of_date=resolved_target,
             )
     if not args.skip_margin_repair:
         store = StockDataStore()
@@ -167,13 +241,14 @@ def main():
             symbols=symbols,
             start_date=repair_start,
             end_date=margin_asof_date,
-            min_active=args.margin_min_active,
-            min_exchange_coverage=args.margin_min_exchange_coverage,
+            min_active=margin_min_active,
+            min_exchange_coverage=margin_min_exchange_coverage,
             apply=True,
             output_dir=PROJ / "runs" / "data_sync" / run_id / "margin_repair",
             store=store,
             signal_date=resolved_target,
             availability_lag_sessions=args.margin_lag_sessions,
+            universe=universe,
         )
         report["margin_availability"] = {
             "signal_date": resolved_target,
@@ -184,7 +259,7 @@ def main():
         report["margin_repair"] = margin_result
         if margin_result["status"] not in {"healthy", "success"}:
             raise RuntimeError(
-                "csi800 margin history repair failed: "
+                f"{universe} margin history repair failed: "
                 f"{margin_result['summary_path']}"
             )
 
@@ -211,9 +286,24 @@ def main():
         report["shareholder_repair"] = shareholder_result
         if shareholder_result["status"] not in {"healthy", "success"}:
             raise RuntimeError(
-                "csi800 shareholder history repair failed: "
+                f"{universe} shareholder history repair failed: "
                 f"{shareholder_result['summary_path']}"
             )
+
+    from qsys.data.health import inspect_qlib_data_health
+
+    final_readiness = inspect_qlib_data_health(
+        resolved_target,
+        ["$open", "$high", "$low", "$close", "$volume", "$factor"],
+        universe=universe,
+        min_active_instruments=1750 if universe == "csi1800" else 750,
+    )
+    report["final_readiness"] = final_readiness.to_dict()
+    if final_readiness.blocking_issues:
+        raise RuntimeError(
+            f"{universe} final readiness failed: "
+            + "; ".join(final_readiness.blocking_issues)
+        )
 
     print(
         json.dumps(

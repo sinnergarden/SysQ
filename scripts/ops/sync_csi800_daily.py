@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-csi800 daily incremental data sync — 每日数据闭环.
+CSI800 / PIT CSI1800 daily incremental data sync — 每日数据闭环.
 
 Flow:
   1. resolve target trade date
-  2. get latest csi800 constituents (via index_weight)
+  2. resolve current constituents (CSI1800 uses an immutable PIT snapshot)
   3. pre-check: skip fetch if all stocks already have target date
   4. batch fetch raw data for missing stocks (single-pass)
   5. update index daily data (7 benchmark indices, OHLCV+volume)
   6. convert to qlib bin (incremental → fallback fix)
-  7. refresh csi300 + csi800 instrument files
+  7. refresh qlib instrument files
   8. comprehensive readiness check
   9. write structured audit record → data/audit/
 
@@ -300,7 +300,13 @@ def _do_raw_fetch(
         return {"status": "failed", "codes_fetched": 0, "elapsed_s": round(elapsed, 1), "error": str(e)}
 
 
-def _readiness_check(adapter: QlibAdapter, target_dt: str, min_active: int = 750) -> DataHealthReport:
+def _readiness_check(
+    adapter: QlibAdapter,
+    target_dt: str,
+    *,
+    universe: str,
+    min_active: int,
+) -> DataHealthReport:
     """Run comprehensive readiness checks after sync, using the unified health system.
 
     Returns a ``DataHealthReport`` with separate *blocking* and *warnings* lists.
@@ -312,7 +318,7 @@ def _readiness_check(adapter: QlibAdapter, target_dt: str, min_active: int = 750
     report = inspect_qlib_data_health(
         target_date,
         feature_fields=["$open", "$high", "$low", "$close", "$volume", "$factor"],
-        universe="csi800",
+        universe=universe,
         min_active_instruments=min_active,
     )
     return report
@@ -322,17 +328,38 @@ def _write_audit(audit_dir: Path, report: dict):
     """Write per-day audit record as JSON."""
     audit_dir.mkdir(parents=True, exist_ok=True)
     date_str = report.get("target_date", "unknown")
-    path = audit_dir / f"sync_csi800_{date_str}.json"
+    universe = str(report.get("universe") or "csi800")
+    path = audit_dir / f"sync_{universe}_{date_str}.json"
     path.write_text(json.dumps(report, indent=2, sort_keys=True, ensure_ascii=False) + "\n", encoding="utf-8")
     log.info(f"Audit: {path}")
     return path
 
 
-def _load_last_audit(audit_dir: Path) -> dict | None:
+def _abort_if_stage_failed(
+    report: dict,
+    *,
+    stage: str,
+    summary: dict,
+    do_apply: bool,
+    audit_dir: Path = Path("data/audit"),
+) -> None:
+    """Persist a failed-stage audit and stop before stale data can look ready."""
+
+    if str(summary.get("status")) != "failed":
+        return
+    report["overall_status"] = "failed"
+    report["failure_stage"] = stage
+    report["ended_at"] = datetime.now().isoformat()
+    if do_apply:
+        _write_audit(audit_dir, report)
+    raise RuntimeError(f"{stage} failed: {summary.get('error', 'unknown error')}")
+
+
+def _load_last_audit(audit_dir: Path, universe: str = "csi800") -> dict | None:
     """Load the latest audit record, for incremental skip detection."""
     if not audit_dir.exists():
         return None
-    records = sorted(audit_dir.glob("sync_csi800_*.json"))
+    records = sorted(audit_dir.glob(f"sync_{universe}_*.json"))
     if not records:
         return None
     try:
@@ -369,7 +396,7 @@ def _notify_telegram(report: dict) -> None:
     warnings = readiness_detail.get("warnings", [])
 
     lines = [
-        f"Qsys CSI800 Daily Sync — {target_date}",
+        f"Qsys {str(report.get('universe') or 'csi800').upper()} Daily Sync — {target_date}",
         f"Status: {status}",
         f"Constituents: {constituent_count} | Up-to-date: {up_to_date} | Fetched: {fetched}",
     ]
@@ -405,12 +432,19 @@ def _notify_telegram(report: dict) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="csi800 daily incremental data sync")
+    parser = argparse.ArgumentParser(description="CSI daily incremental data sync")
+    parser.add_argument(
+        "--universe",
+        choices=("csi800", "csi1800"),
+        default="csi800",
+        help="CSI800 current constituents or immutable as-of CSI1800 snapshot",
+    )
     parser.add_argument("--target-date", default=None, help="Target trade date (YYYY-MM-DD or YYYYMMDD)")
     parser.add_argument("--no-qlib-convert", action="store_true", help="Skip qlib conversion after raw fetch")
     parser.add_argument("--apply", action="store_true", help="Apply data changes (default is dry-run)")
     parser.add_argument("--force-fetch", action="store_true", help="Skip pre-check, force fetch all stocks")
     args = parser.parse_args()
+    universe = args.universe
 
     # Resolve target date
     target_dt = _resolve_target_date(args.target_date)
@@ -419,11 +453,18 @@ def main() -> None:
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     log.info("=" * 60)
-    log.info(f"CSI800 Daily Sync — target={target_date}, apply={do_apply}, run_id={run_id}")
+    log.info(
+        "%s Daily Sync — target=%s, apply=%s, run_id=%s",
+        universe.upper(),
+        target_date,
+        do_apply,
+        run_id,
+    )
     log.info("=" * 60)
 
     report = {
         "run_id": run_id,
+        "universe": universe,
         "target_date": target_dt,
         "target_date_display": target_date,
         "applied": do_apply,
@@ -438,7 +479,7 @@ def main() -> None:
     adapter.init_qlib()
     report["steps"]["init_qlib"] = {"elapsed_s": round(time.time() - t0, 1)}
 
-    # Step 1: Get CSI800 constituents
+    # Step 1: Resolve the target-date universe.
     t0 = time.time()
     collector = TushareCollector()
     store = StockDataStore()
@@ -448,13 +489,32 @@ def main() -> None:
         "target_date": target_dt,
         "is_catchup": catchup_start < target_dt,
     }
-    codes = collector.get_universe("csi800")
-    step1 = {"constituent_count": len(codes), "elapsed_s": round(time.time() - t0, 1)}
+    if universe == "csi1800":
+        from qsys.ops.pit_universe_snapshot import resolve_csi1800_pit_snapshot
+
+        pit_snapshot = resolve_csi1800_pit_snapshot(
+            collector,
+            as_of_date=target_dt,
+            project_root=PROJECT_ROOT,
+            apply=do_apply,
+        )
+        codes = list(pit_snapshot.instruments)
+        step1 = {
+            **pit_snapshot.to_dict(),
+            "elapsed_s": round(time.time() - t0, 1),
+        }
+    else:
+        codes = collector.get_universe("csi800")
+        step1 = {
+            "constituent_count": len(codes),
+            "snapshot_semantics": "current_constituents",
+            "elapsed_s": round(time.time() - t0, 1),
+        }
     report["steps"]["get_universe"] = step1
-    log.info(f"CSI800 constituents: {len(codes)}")
+    log.info("%s constituents: %s", universe.upper(), len(codes))
 
     if not codes:
-        log.error("Empty csi800 universe, aborting.")
+        log.error("Empty %s universe, aborting.", universe)
         report["overall_status"] = "failed"
         report["ended_at"] = datetime.now().isoformat()
         _write_audit(Path("data/audit"), report)
@@ -498,6 +558,12 @@ def main() -> None:
             log.info(f"DRY RUN — would fetch {status_check['need_fetch']} stocks for {target_dt}")
             raw_summary = {"dry_run": True, "would_fetch": status_check["need_fetch"], "elapsed_s": round(time.time() - t0, 1)}
         report["steps"]["raw_fetch"] = raw_summary
+    _abort_if_stage_failed(
+        report,
+        stage="raw_fetch",
+        summary=raw_summary,
+        do_apply=do_apply,
+    )
 
     # Step 4: Index daily update (always applies when do_apply, no separate dry-run for this)
     if do_apply:
@@ -532,19 +598,59 @@ def main() -> None:
                 log.error(f"Qlib convert failed: {e2}")
                 qlib_summary = {"mode": "failed", "status": "failed", "error": str(e2)}
     report["steps"]["qlib_convert"] = qlib_summary
+    _abort_if_stage_failed(
+        report,
+        stage="qlib_convert",
+        summary=qlib_summary,
+        do_apply=do_apply,
+    )
 
     # Step 5: Refresh instrument files
     t0 = time.time()
     if do_apply:
-        adapter._refresh_universe_instruments(universe="csi800")
-        adapter._refresh_universe_instruments(universe="csi300")
-        report["steps"]["refresh_instruments"] = {"status": "done", "elapsed_s": round(time.time() - t0, 1)}
+        try:
+            adapter._refresh_universe_instruments(universe="csi800")
+            adapter._refresh_universe_instruments(universe="csi300")
+            registry_result = None
+            if universe == "csi1800":
+                from qsys.ops.pit_universe_snapshot import write_current_qlib_registry
+
+                registry_result = write_current_qlib_registry(
+                    qlib_dir=adapter.qlib_dir,
+                    universe=universe,
+                    instruments=codes,
+                    as_of_date=target_dt,
+                )
+            refresh_summary = {
+                "status": "success",
+                "operational_registry": registry_result,
+                "elapsed_s": round(time.time() - t0, 1),
+            }
+        except Exception as exc:
+            refresh_summary = {
+                "status": "failed",
+                "error": str(exc),
+                "elapsed_s": round(time.time() - t0, 1),
+            }
+        report["steps"]["refresh_instruments"] = refresh_summary
     else:
-        report["steps"]["refresh_instruments"] = {"status": "dry_run"}
+        refresh_summary = {"status": "dry_run"}
+        report["steps"]["refresh_instruments"] = refresh_summary
+    _abort_if_stage_failed(
+        report,
+        stage="refresh_instruments",
+        summary=refresh_summary,
+        do_apply=do_apply,
+    )
 
     # Step 6: Readiness check
     t0 = time.time()
-    readiness_report = _readiness_check(adapter, target_dt, min_active=750)
+    readiness_report = _readiness_check(
+        adapter,
+        target_dt,
+        universe=universe,
+        min_active=1750 if universe == "csi1800" else 750,
+    )
     readiness_elapsed = round(time.time() - t0, 1)
     overall = "ready" if readiness_report.ok else "degraded"
     report["steps"]["readiness_check"] = {"elapsed_s": readiness_elapsed}

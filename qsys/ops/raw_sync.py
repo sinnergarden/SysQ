@@ -391,6 +391,7 @@ def run_margin_history_repair(
     qlib_refresh_fn: Callable[..., dict[str, Any]] | None = None,
     signal_date: str | None = None,
     availability_lag_sessions: int | None = None,
+    universe: str = "csi800",
 ) -> dict[str, Any]:
     """Repair missing daily margin history and refresh affected Qlib symbols.
 
@@ -445,6 +446,7 @@ def run_margin_history_repair(
         min_exchange_coverage=min_exchange_coverage,
     )
     summary: dict[str, Any] = {
+        "universe": universe,
         "start_date": resolved_start,
         "end_date": resolved_end,
         "open_date_count": len(open_dates),
@@ -515,7 +517,7 @@ def run_margin_history_repair(
         refresh_result = qlib_refresh_fn(
             Path(cfg.project_root),
             sorted(affected_symbols),
-            universe="csi800",
+            universe=universe,
             target_date=resolved_end,
             apply=True,
             output_dir=output_dir / "qlib_refresh",

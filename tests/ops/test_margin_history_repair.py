@@ -105,6 +105,7 @@ def test_margin_history_repair_fetches_gaps_and_refreshes_qlib(tmp_path: Path):
         qlib_refresh_fn=_refresh,
         signal_date="2026-08-10",
         availability_lag_sessions=1,
+        universe="csi1800",
     )
 
     assert result["status"] == "success"
@@ -117,6 +118,7 @@ def test_margin_history_repair_fetches_gaps_and_refreshes_qlib(tmp_path: Path):
         "source": "tushare.margin_detail",
     }
     assert len(refresh_calls) == 1
+    assert refresh_calls[0]["kwargs"]["universe"] == "csi1800"
     assert store.frames["AAA"]["close"].tolist() == [100.0, 101.0]
     coverage = inspect_margin_history_coverage(
         store,
