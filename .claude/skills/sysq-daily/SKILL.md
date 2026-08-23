@@ -84,6 +84,26 @@ checks_run: <list>
 known_gaps: <list>
 ```
 
+## S180 Top10 Signal Run
+
+适用于 `UC_TOP10_SIGNAL_RUN`。日常只运行：
+
+```bash
+python scripts/run_daily.py --strategy s180_top10 --mode top10 --signal-date auto
+```
+
+规则：
+
+1. 财报不是本 UC 的 stage 或 gate；Top10 artifact 可以被任意下游只读消费。
+2. 系统按权威交易日历计算距离已发布模型 `as_of_date` 的开市日数量；未满20日不得重复训练，达到20日自动刷新成熟标签并训练。
+3. `--force-retrain` 必须有 `--reason`，但不能绕过 maturity/PIT/feature/model gate。
+4. 历史训练使用 `csi1800_pit_union` 取数，并逐行按 `csi1800_pit_v2` interval 过滤；当前推理使用显式日期快照。
+5. 单模型 raw output 直接写 `raw_prediction` 并以其排序；禁止把 z-score、概率或目标收益混入 Top10。
+6. 模型 registry 只保存内容寻址 bundle；禁止 latest/mtime/symlink。
+7. 输入 fingerprint 相同必须复用已验证 artifact；两个并发 scheduler 只能有一个持锁执行。
+8. `state.json` 是恢复信息，不是成功证据；只有 `top10_run.json` 通过独立 checker 才算完成。
+9. 禁止调用 promotion、DailyRunner preopen/postclose、broker、trader 或 ledger。
+
 ## End-of-task Loop Check
 For daily ops, inference, signal, candidate, retrain, or shadow-related tasks:
 Before final answer, check whether:

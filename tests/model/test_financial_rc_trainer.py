@@ -9,6 +9,9 @@ import pytest
 from qsys.model.financial_rc_trainer import (
     compute_model_artifact_identity,
     FinancialRCTrainingError,
+    FinancialRCTrainer,
+    _filter_pit_membership,
+    _prediction_membership_identity,
     derive_purged_evaluation_train_end,
     derive_training_window,
     profile_label_universe_coverage,
@@ -40,6 +43,18 @@ def test_artifact_identity_distinguishes_same_model_with_different_snapshot() ->
     second = compute_model_artifact_identity(artifact_hashes=changed, **kwargs)
 
     assert first != second
+
+    pit_bound = compute_model_artifact_identity(
+        artifact_hashes=base,
+        universe_lineage={"pit_membership_sha256": "pit-a"},
+        **kwargs,
+    )
+    pit_changed = compute_model_artifact_identity(
+        artifact_hashes=base,
+        universe_lineage={"pit_membership_sha256": "pit-b"},
+        **kwargs,
+    )
+    assert pit_bound != pit_changed
 
 
 def test_window_uses_latest_available_fully_mature_label() -> None:
@@ -126,6 +141,176 @@ def test_financial_rc_has_dedicated_training_candidate(tmp_path) -> None:
     )
     assert trainer.strategy_id == "financial_rc"
     assert trainer.account_id == "research"
+
+
+def _trainer_config(*, strategy_id: str, models: list[dict], engine: str) -> dict:
+    return {
+        "strategy_id": strategy_id,
+        "feature_freshness": {
+            "shareholder": {
+                "min_coverage": 0.95,
+                "features": {
+                    "holder_num_stale_days": {
+                        "max_median_days": 200,
+                        "max_row_days": 365,
+                    },
+                    "top10_holder_stale_days": {
+                        "max_median_days": 250,
+                        "max_row_days": 365,
+                    },
+                },
+            }
+        },
+        "inference": {"universe": "csi1800"},
+        "training": {
+            "engine": engine,
+            "feature_list_id": "features",
+            "training_universe": "csi1800_pit_union",
+            "models": models,
+        },
+    }
+
+
+def test_single_model_generic_engine_and_s180_registry(tmp_path) -> None:
+    config = _trainer_config(
+        strategy_id="s180_top10",
+        engine="lightgbm_model_bundle_v1",
+        models=[
+            {
+                "tag": "s180",
+                "label_id": "fwd_ret_180d_raw",
+                "experiment_id": "s180_top10",
+                "horizon": 180,
+            }
+        ],
+    )
+    trainer = create_model_trainer("s180_top10", config, project_root=tmp_path)
+    settings = trainer._settings()
+    assert settings["engine"] == "lightgbm_model_bundle_v1"
+    assert settings["training_universe"] == "csi1800_pit_union"
+    assert settings["inference_universe"] == "csi1800"
+    assert [item["tag"] for item in settings["models"]] == ["s180"]
+
+
+def test_legacy_financial_rc_engine_still_accepts_two_models(tmp_path) -> None:
+    config = _trainer_config(
+        strategy_id="financial_rc",
+        engine="financial_rc_lightgbm_bundle_v1",
+        models=[
+            {
+                "tag": "60d",
+                "label_id": "fwd_ret_60d_raw",
+                "experiment_id": "60d",
+                "horizon": 60,
+            },
+            {
+                "tag": "180d",
+                "label_id": "fwd_ret_180d_raw",
+                "experiment_id": "180d",
+                "horizon": 180,
+            },
+        ],
+    )
+    settings = FinancialRCTrainer(config, tmp_path)._settings()
+    assert len(settings["models"]) == 2
+
+
+def test_pit_filter_uses_strict_row_date_intervals() -> None:
+    class Store:
+        spans = pd.DataFrame(
+            [
+                {
+                    "instrument": "AAA",
+                    "effective_from": "20220102",
+                    "effective_to": "20220103",
+                }
+            ]
+        )
+
+    frame = pd.DataFrame(
+        {
+            "trade_date": ["2022-01-01", "2022-01-02", "2022-01-03", "2022-01-04"],
+            "instrument": ["AAA", "AAA", "AAA", "AAA"],
+            "value": [1, 2, 3, 4],
+        }
+    )
+    result = _filter_pit_membership(frame, Store())
+    assert result["value"].tolist() == [2, 3]
+
+
+def test_pit_filter_allows_disjoint_reentry_intervals() -> None:
+    class Store:
+        spans = pd.DataFrame(
+            [
+                {
+                    "instrument": "AAA",
+                    "effective_from": "20220101",
+                    "effective_to": "20220102",
+                },
+                {
+                    "instrument": "AAA",
+                    "effective_from": "20220104",
+                    "effective_to": "20220105",
+                },
+            ]
+        )
+
+    frame = pd.DataFrame(
+        {
+            "trade_date": ["2022-01-02", "2022-01-03", "2022-01-04"],
+            "instrument": ["AAA", "AAA", "AAA"],
+            "value": [2, 3, 4],
+        }
+    )
+    result = _filter_pit_membership(frame, Store())
+    assert result["value"].tolist() == [2, 4]
+
+
+def test_pit_filter_rejects_overlapping_active_intervals() -> None:
+    class Store:
+        spans = pd.DataFrame(
+            [
+                {
+                    "instrument": "AAA",
+                    "effective_from": "20220101",
+                    "effective_to": "20220103",
+                },
+                {
+                    "instrument": "AAA",
+                    "effective_from": "20220102",
+                    "effective_to": "20220104",
+                },
+            ]
+        )
+
+    frame = pd.DataFrame(
+        {
+            "trade_date": ["2022-01-02"],
+            "instrument": ["AAA"],
+            "value": [2],
+        }
+    )
+    with pytest.raises(FinancialRCTrainingError, match="overlapping spans"):
+        _filter_pit_membership(frame, Store())
+
+
+def test_prediction_membership_is_regular_parquet_and_hash_bound(tmp_path) -> None:
+    path = tmp_path / "members.parquet"
+    pd.DataFrame({"instrument": ["AAA", "BBB"]}).to_parquet(path, index=False)
+    resolved, digest, members = _prediction_membership_identity(tmp_path, path.name)
+    assert resolved == path.resolve()
+    assert len(digest) == 64
+    assert members == {"AAA", "BBB"}
+
+    symlink = tmp_path / "members-link.parquet"
+    symlink.symlink_to(path)
+    with pytest.raises(FinancialRCTrainingError, match="regular parquet"):
+        _prediction_membership_identity(tmp_path, symlink.name)
+
+    duplicate = tmp_path / "duplicate.parquet"
+    pd.DataFrame({"instrument": ["AAA", "aaa"]}).to_parquet(duplicate, index=False)
+    with pytest.raises(FinancialRCTrainingError, match="duplicate"):
+        _prediction_membership_identity(tmp_path, duplicate.name)
 
 
 def test_scaler_is_fit_on_pre_validation_rows_only() -> None:

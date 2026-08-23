@@ -39,6 +39,30 @@ class TestArgParsing(unittest.TestCase):
         self.assertEqual(args.top_k, 200)
         self.assertIsNone(args.trade_date)
 
+    def test_basic_top10(self):
+        args = parse_args([
+            "--strategy", "s180_top10", "--mode", "top10",
+            "--signal-date", "auto",
+        ])
+        self.assertEqual(args.mode, "top10")
+        self.assertEqual(args.signal_date, "auto")
+        self.assertEqual(args.top_k, 10)
+        self.assertIsNone(args.trade_date)
+
+    def test_top10_force_retrain_requires_reason(self):
+        with self.assertRaises(SystemExit):
+            parse_args([
+                "--strategy", "s180_top10", "--mode", "top10",
+                "--force-retrain",
+            ])
+
+    def test_force_retrain_rejected_outside_top10(self):
+        with self.assertRaises(SystemExit):
+            parse_args([
+                "--strategy", "financial_rc", "--mode", "infer",
+                "--force-retrain", "--reason", "test",
+            ])
+
     def test_infer_trade_date_is_compatibility_alias(self):
         args = parse_args([
             "--strategy", "financial_rc", "--mode", "infer",
@@ -173,6 +197,32 @@ class TestDispatch(unittest.TestCase):
         ])
 
         mock_infer.assert_called_once()
+        mock_create.assert_not_called()
+        mock_runner_cls.assert_not_called()
+
+    @patch("scripts.run_daily.DailyRunner")
+    @patch("scripts.run_daily.create_strategy")
+    @patch("scripts.run_daily.run_top10_signal")
+    @patch("scripts.run_daily.load_strategy_config")
+    def test_dispatch_top10_is_artifact_only(
+        self, mock_load_cfg, mock_top10, mock_create, mock_runner_cls,
+    ):
+        mock_top10.return_value.artifact_path = "/tmp/top10_run.json"
+        mock_top10.return_value.reused = False
+        mock_top10.return_value.payload = {
+            "data_date": "2026-08-20",
+            "decision_date": "2026-08-21",
+            "execution_date": "2026-08-24",
+            "model": {"bundle_hash": "b" * 64},
+            "quality_gate": {"status": "pass"},
+        }
+
+        run_daily_main([
+            "--strategy", "s180_top10", "--mode", "top10",
+            "--signal-date", "auto",
+        ])
+
+        mock_top10.assert_called_once()
         mock_create.assert_not_called()
         mock_runner_cls.assert_not_called()
 

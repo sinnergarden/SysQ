@@ -80,24 +80,26 @@ def compute_model_artifact_identity(
     label_lineage: dict[str, Any],
     training_config_hash: str,
     feature_availability: dict[str, Any],
+    universe_lineage: dict[str, Any] | None = None,
 ) -> str:
     """Identify the complete immutable training artifact, not just model.txt."""
 
-    return _canonical_hash(
-        {
-            "serialization": "financial-rc-model-artifact-v1",
-            "model_sha256": artifact_hashes["model.txt"],
-            "center_sha256": artifact_hashes["center.json"],
-            "scale_sha256": artifact_hashes["scale.json"],
-            "training_snapshot_sha256": artifact_hashes[
-                "training_snapshot.parquet"
-            ],
-            "feature_list_hash": feature_list_hash,
-            "label_lineage": label_lineage,
-            "training_config_hash": training_config_hash,
-            "feature_availability": feature_availability,
-        }
-    )
+    payload = {
+        "serialization": "financial-rc-model-artifact-v1",
+        "model_sha256": artifact_hashes["model.txt"],
+        "center_sha256": artifact_hashes["center.json"],
+        "scale_sha256": artifact_hashes["scale.json"],
+        "training_snapshot_sha256": artifact_hashes["training_snapshot.parquet"],
+        "feature_list_hash": feature_list_hash,
+        "label_lineage": label_lineage,
+        "training_config_hash": training_config_hash,
+        "feature_availability": feature_availability,
+    }
+    # Omit the field for callers computing identities for pre-lineage legacy
+    # artifacts; all generic trainer artifacts pass a non-None lineage map.
+    if universe_lineage is not None:
+        payload["universe_lineage"] = universe_lineage
+    return _canonical_hash(payload)
 
 
 def derive_training_window(
@@ -277,6 +279,184 @@ def _require_mapping(value: Any, name: str) -> dict[str, Any]:
     return value
 
 
+def _resolve_project_path(project_root: Path, value: str | Path) -> Path:
+    """Resolve a configured artifact path without changing process cwd."""
+
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        path = project_root / path
+    return path.resolve(strict=False)
+
+
+def _prediction_membership_identity(
+    project_root: Path, value: str | Path
+) -> tuple[Path, str, set[str]]:
+    """Validate and hash an exact current inference membership snapshot.
+
+    A regular, non-symlink parquet file is required.  The bytes, rather than a
+    parsed/re-serialized frame, are hashed so the identity cannot drift from
+    formatting or parquet metadata changes after training.
+    """
+
+    import pandas as pd
+
+    # Do not call resolve() here: resolving first would erase the symlink bit
+    # that this contract explicitly rejects.
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        path = project_root / path
+    path = path.absolute()
+    if path.is_symlink() or not path.is_file():
+        raise FinancialRCTrainingError(
+            "training.prediction_membership_path must be an existing regular parquet file: "
+            f"{path}"
+        )
+    try:
+        mode = path.stat().st_mode
+    except OSError as exc:
+        raise FinancialRCTrainingError(
+            f"cannot stat prediction membership snapshot: {path}"
+        ) from exc
+    # is_file() follows symlinks, so explicitly require a regular inode too.
+    import stat
+
+    if not stat.S_ISREG(mode):
+        raise FinancialRCTrainingError(
+            "training.prediction_membership_path must be an ordinary regular file: "
+            f"{path}"
+        )
+    try:
+        snapshot = pd.read_parquet(path)
+    except Exception as exc:
+        raise FinancialRCTrainingError(
+            f"failed to read prediction membership parquet: {path}"
+        ) from exc
+    if "instrument" not in snapshot.columns:
+        raise FinancialRCTrainingError(
+            "prediction membership snapshot must contain an instrument column: "
+            f"{path}"
+        )
+    if snapshot.empty:
+        raise FinancialRCTrainingError(
+            f"prediction membership snapshot is empty: {path}"
+        )
+    values = snapshot["instrument"]
+    if values.isna().any():
+        raise FinancialRCTrainingError(
+            f"prediction membership snapshot contains null instruments: {path}"
+        )
+    members = values.astype(str).str.strip().str.upper()
+    if (members == "").any() or members.duplicated().any():
+        raise FinancialRCTrainingError(
+            "prediction membership snapshot contains blank or duplicate instruments: "
+            f"{path}"
+        )
+    return path, _file_sha256(path), set(members.tolist())
+
+
+def _pit_universe_identity(project_root: Path, value: str | Path) -> tuple[Any, dict[str, Any]]:
+    """Load a verified PIT store and expose its immutable provenance."""
+
+    try:
+        from qsys.research.pit_universe import PitUniverseStore
+    except ModuleNotFoundError as exc:
+        # ``qsys.research.__init__`` imports optional qlib-backed modules.  A
+        # trainer contract test may exercise PIT validation without qlib
+        # installed, while the PIT store itself only needs pandas.  Load that
+        # canonical module directly in this narrow fallback.
+        if exc.name not in {"qlib", "qlib.data", "qlib.data.dataset"}:
+            raise
+        import importlib.util
+        import sys
+
+        module_path = Path(__file__).resolve().parents[1] / "research" / "pit_universe.py"
+        spec = importlib.util.spec_from_file_location(
+            "qsys_research_pit_universe_standalone", module_path
+        )
+        if spec is None or spec.loader is None:
+            raise FinancialRCTrainingError(
+                f"cannot load PIT universe store: {module_path}"
+            ) from exc
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        PitUniverseStore = module.PitUniverseStore
+
+    raw = Path(value).expanduser()
+    if not raw.is_absolute():
+        direct = project_root / raw
+        named = project_root / "data" / "research" / "universes" / raw
+        artifact = named if (named / "manifest.json").is_file() else direct
+    else:
+        artifact = raw
+    artifact = artifact.resolve(strict=False)
+    try:
+        store = PitUniverseStore(artifact, verify_hash=True)
+    except (OSError, ValueError) as exc:
+        raise FinancialRCTrainingError(
+            f"failed to load training.pit_universe_artifact: {artifact}"
+        ) from exc
+    provenance = store.provenance.to_dict()
+    try:
+        provenance["artifact_dir"] = str(artifact.relative_to(project_root))
+    except ValueError:
+        provenance["artifact_dir"] = str(artifact)
+    return store, provenance
+
+
+def _filter_pit_membership(frame: Any, store: Any) -> Any:
+    """Apply strict inclusive ``[effective_from, effective_to]`` PIT rows."""
+
+    import pandas as pd
+
+    if frame.empty:
+        return frame
+    required = {"trade_date", "instrument"}
+    missing = sorted(required - set(frame.columns))
+    if missing:
+        raise FinancialRCTrainingError(
+            f"PIT membership filter requires columns: {missing}"
+        )
+    spans = store.spans[["instrument", "effective_from", "effective_to"]].copy()
+    spans["instrument"] = spans["instrument"].astype(str).str.strip().str.upper()
+    spans["effective_from"] = pd.to_datetime(
+        spans["effective_from"], errors="raise"
+    ).dt.strftime("%Y%m%d").astype(int)
+    spans["effective_to"] = pd.to_datetime(
+        spans["effective_to"], errors="raise"
+    ).dt.strftime("%Y%m%d").astype(int)
+    work = frame.copy()
+    work["_pit_row_id"] = work.index
+    work["_pit_instrument"] = work["instrument"].astype(str).str.strip().str.upper()
+    work["_pit_date"] = pd.to_datetime(work["trade_date"], errors="raise").dt.strftime("%Y%m%d").astype(int)
+    # Membership spans are disjoint per instrument; a merge plus interval
+    # comparison is both exact and independent of a collapsed qlib registry.
+    merged = work.merge(
+        spans,
+        left_on="_pit_instrument",
+        right_on="instrument",
+        how="left",
+        suffixes=("", "_span"),
+    )
+    keep = merged["effective_from"].notna() & merged["_pit_date"].between(
+        merged["effective_from"], merged["effective_to"], inclusive="both"
+    )
+    kept_row_ids = merged.loc[keep, "_pit_row_id"].tolist()
+    # A source frame must not be multiplied by overlapping spans.  The store
+    # contract says spans are disjoint, but fail closed if an artifact breaks it.
+    span_counts = merged.loc[keep, "_pit_row_id"].value_counts()
+    if (span_counts > 1).any():
+        raise FinancialRCTrainingError("PIT membership artifact has overlapping spans")
+    result = work.loc[kept_row_ids].drop(
+        columns=["_pit_instrument", "_pit_date", "_pit_row_id"]
+    )
+    if result.empty:
+        raise FinancialRCTrainingError("no feature rows remain after PIT membership filter")
+    if result.index.duplicated().any():
+        raise FinancialRCTrainingError("PIT membership filter produced duplicate feature rows")
+    return result
+
+
 class FinancialRCTrainer:
     """Train and package the pinned 60d/180d LightGBM research bundle."""
 
@@ -316,13 +496,19 @@ class FinancialRCTrainer:
             )
         except ValueError as exc:
             raise FinancialRCTrainingError(str(exc)) from exc
-        if training.get("engine") != "financial_rc_lightgbm_bundle_v1":
+        engine = str(training.get("engine") or "").strip()
+        supported_engines = {
+            "financial_rc_lightgbm_bundle_v1",  # legacy financial_rc config
+            "lightgbm_model_bundle_v1",  # generic single/multi-model bundle
+        }
+        if engine not in supported_engines:
             raise FinancialRCTrainingError(
-                "training.engine must be financial_rc_lightgbm_bundle_v1"
+                "training.engine must be financial_rc_lightgbm_bundle_v1 or "
+                "lightgbm_model_bundle_v1"
             )
         models = training.get("models")
-        if not isinstance(models, list) or len(models) != 2:
-            raise FinancialRCTrainingError("training.models must contain two models")
+        if not isinstance(models, list) or len(models) < 1:
+            raise FinancialRCTrainingError("training.models must contain at least one model")
         parsed_models: list[dict[str, Any]] = []
         tags: set[str] = set()
         for raw in models:
@@ -358,13 +544,37 @@ class FinancialRCTrainer:
                 }
             )
         return {
-            "engine": training["engine"],
+            "engine": engine,
             "feature_list_id": str(
                 training.get("feature_list_id") or self.config.get("feature_set") or ""
             ),
             "universe": str(
-                training.get("universe") or self.config.get("universe") or ""
+                training.get("training_universe")
+                or training.get("universe")
+                or self.config.get("universe")
+                or ""
             ),
+            "training_universe": str(
+                training.get("training_universe")
+                or training.get("universe")
+                or self.config.get("universe")
+                or ""
+            ),
+            "inference_universe": str(
+                training.get("inference_universe")
+                or _require_mapping(self.config.get("inference", {}), "inference").get(
+                    "universe"
+                )
+                or training.get("universe")
+                or self.config.get("universe")
+                or ""
+            ),
+            "pit_universe_artifact": str(
+                training.get("pit_universe_artifact") or ""
+            ).strip(),
+            "prediction_membership_path": str(
+                training.get("prediction_membership_path") or ""
+            ).strip(),
             "min_feature_coverage": float(training.get("min_feature_coverage", 0.5)),
             "max_feature_missing_ratio": float(
                 training.get("max_feature_missing_ratio", 0.995)
@@ -408,9 +618,9 @@ class FinancialRCTrainer:
             raise FinancialRCTrainingError(
                 "financial_rc training is research-only and requires pointer_write_mode=none"
             )
-        if not settings["feature_list_id"] or not settings["universe"]:
+        if not settings["feature_list_id"] or not settings["training_universe"]:
             raise FinancialRCTrainingError(
-                "training requires feature_list_id and universe"
+                "training requires feature_list_id and training universe"
             )
         as_of_date = _normalise_date(
             self.config.get("training", {}).get("end_date") or ctx.trade_date
@@ -426,10 +636,64 @@ class FinancialRCTrainer:
                 "feature list must be non-empty and contain no duplicates"
             )
 
-        universe_members = load_universe_snapshot_members(
-            self.project_root, settings["universe"], as_of_date
-        )
+        pit_store = None
+        pit_provenance: dict[str, Any] | None = None
+        if settings["pit_universe_artifact"]:
+            pit_store, pit_provenance = _pit_universe_identity(
+                self.project_root, settings["pit_universe_artifact"]
+            )
+
+        prediction_path: Path | None = None
+        prediction_members: set[str] | None = None
+        prediction_sha256: str | None = None
+        if settings["prediction_membership_path"]:
+            prediction_path, prediction_sha256, prediction_members = (
+                _prediction_membership_identity(
+                    self.project_root, settings["prediction_membership_path"]
+                )
+            )
+
+        if prediction_members is not None:
+            universe_members = sorted(prediction_members)
+        elif settings["inference_universe"]:
+            universe_members = load_universe_snapshot_members(
+                self.project_root, settings["inference_universe"], as_of_date
+            )
+        else:
+            raise FinancialRCTrainingError("training requires an inference universe")
         universe_hash = compute_universe_hash(universe_members)
+        universe_lineage: dict[str, Any] = {
+            "training_universe": settings["training_universe"],
+            "inference_universe": settings["inference_universe"],
+            "inference_universe_hash": universe_hash,
+            "as_of_date": as_of_date,
+        }
+        if pit_provenance is not None:
+            universe_lineage["pit_universe"] = pit_provenance
+        if prediction_path is not None:
+            universe_lineage["prediction_membership"] = {
+                "path": str(prediction_path.relative_to(self.project_root))
+                if prediction_path.is_relative_to(self.project_root)
+                else str(prediction_path),
+                "sha256": prediction_sha256,
+                "membership_count": len(prediction_members or ()),
+                "semantics": "current_snapshot",
+            }
+
+        # For PIT training the label coverage gate is against the exact
+        # historical union, not the current inference snapshot.  This avoids
+        # rejecting valid delisted/relisted names from the training window.
+        if pit_store is not None:
+            label_universe_members = pit_store.instruments
+        elif settings["training_universe"] != settings["inference_universe"]:
+            label_universe_members = load_universe_snapshot_members(
+                self.project_root, settings["training_universe"], as_of_date
+            )
+        else:
+            label_universe_members = universe_members
+        universe_lineage["training_universe_hash"] = compute_universe_hash(
+            label_universe_members
+        )
 
         label_store = LabelStore(self.project_root / "data" / "research")
         windows: dict[str, TrainingWindow] = {}
@@ -447,7 +711,7 @@ class FinancialRCTrainer:
                 )
             label_coverage = profile_label_universe_coverage(
                 labels["instrument"].unique().tolist(),
-                universe_members,
+                label_universe_members,
                 min_coverage=settings["min_label_universe_coverage"],
             )
             window = derive_training_window(
@@ -487,7 +751,7 @@ class FinancialRCTrainer:
         adapter.init_qlib()
         with _project_working_directory(self.project_root):
             raw = adapter.get_features(
-                settings["universe"],
+                settings["training_universe"],
                 features,
                 start_time=union_start,
                 end_time=union_end,
@@ -497,7 +761,7 @@ class FinancialRCTrainer:
             )
         if raw is None or raw.empty:
             raise FinancialRCTrainingError(
-                f"no features for {settings['universe']} [{union_start}, {union_end}]"
+                f"no features for {settings['training_universe']} [{union_start}, {union_end}]"
             )
         frame = raw.reset_index()
         if "datetime" in frame.columns:
@@ -523,6 +787,9 @@ class FinancialRCTrainer:
         if frame.duplicated(["trade_date", "instrument"]).any():
             raise FinancialRCTrainingError("feature frame contains duplicate rows")
         frame = frame.sort_values(["trade_date", "instrument"]).reset_index(drop=True)
+        if pit_store is not None:
+            frame = _filter_pit_membership(frame, pit_store)
+            frame = frame.sort_values(["trade_date", "instrument"]).reset_index(drop=True)
 
         from qsys.ops.shareholder_sync import inspect_shareholder_sidecar_health
 
@@ -780,6 +1047,17 @@ class FinancialRCTrainer:
                     label_lineage=label_lineage[tag],
                     training_config_hash=settings["config_hash"],
                     feature_availability=settings["feature_availability"],
+                    universe_lineage=(
+                        universe_lineage
+                        if (
+                            settings["engine"] == "lightgbm_model_bundle_v1"
+                            or pit_store is not None
+                            or prediction_path is not None
+                            or settings["training_universe"]
+                            != settings["inference_universe"]
+                        )
+                        else None
+                    ),
                 )
                 artifact_id = artifact_identity_hash[:16]
                 model_metrics = {
@@ -813,9 +1091,35 @@ class FinancialRCTrainer:
                     "feature_list_id": settings["feature_list_id"],
                     "feature_list_hash": feature_list_hash,
                     "ordered_features": features,
-                    "universe": settings["universe"],
+                    # ``universe`` is the consumer-facing inference universe.
+                    # Keep the broader PIT training pool explicit in the
+                    # dedicated field below instead of making inference reject
+                    # an otherwise compatible model bundle.
+                    "universe": settings["inference_universe"],
+                    "training_universe": settings["training_universe"],
+                    "inference_universe": settings["inference_universe"],
                     "universe_hash": universe_hash,
-                    "universe_snapshot_semantics": "current_constituents_snapshot",
+                    "training_universe_hash": universe_lineage["training_universe_hash"],
+                    "universe_lineage": universe_lineage,
+                    "pit_universe_artifact": settings["pit_universe_artifact"] or None,
+                    "pit_membership_sha256": (
+                        pit_provenance.get("membership_sha256")
+                        if pit_provenance is not None
+                        else None
+                    ),
+                    "pit_universe_provenance": pit_provenance,
+                    "prediction_membership_path": (
+                        str(prediction_path.relative_to(self.project_root))
+                        if prediction_path is not None
+                        and prediction_path.is_relative_to(self.project_root)
+                        else str(prediction_path) if prediction_path is not None else None
+                    ),
+                    "prediction_membership_sha256": prediction_sha256,
+                    "universe_snapshot_semantics": (
+                        "pit_interval_membership"
+                        if pit_store is not None
+                        else "current_constituents_snapshot"
+                    ),
                     "label_id": spec["label_id"],
                     "horizon": spec["horizon"],
                     "train_start": window.train_start,
@@ -841,7 +1145,9 @@ class FinancialRCTrainer:
                     "qlib_latest": _normalise_date(qlib_latest) if qlib_latest else None,
                     "library_versions": _package_versions(),
                     "research_limitations": [
-                        "historical rows use the current CSI800 constituent snapshot; not PIT",
+                        *([] if pit_store is not None else [
+                            "historical rows use the current constituent snapshot; not PIT",
+                        ]),
                         "validation is a horizon-purged trailing holdout, not a full rolling OOS backtest",
                     ],
                 }
@@ -900,12 +1206,35 @@ class FinancialRCTrainer:
 
             bundle_payload = {
                 "schema_version": 1,
+                "bundle_format": (
+                    "lightgbm_model_bundle_v1"
+                    if settings["engine"] == "lightgbm_model_bundle_v1"
+                    else "financial_rc_bundle_v1"
+                ),
                 "strategy_id": self.strategy_id,
                 "as_of_date": as_of_date,
                 "feature_list_id": settings["feature_list_id"],
                 "feature_list_hash": feature_list_hash,
-                "universe": settings["universe"],
+                "universe": settings["inference_universe"],
+                "training_universe": settings["training_universe"],
+                "inference_universe": settings["inference_universe"],
                 "universe_hash": universe_hash,
+                "training_universe_hash": universe_lineage["training_universe_hash"],
+                "universe_lineage": universe_lineage,
+                "pit_universe_artifact": settings["pit_universe_artifact"] or None,
+                "pit_membership_sha256": (
+                    pit_provenance.get("membership_sha256")
+                    if pit_provenance is not None
+                    else None
+                ),
+                "pit_universe_provenance": pit_provenance,
+                "prediction_membership_path": (
+                    str(prediction_path.relative_to(self.project_root))
+                    if prediction_path is not None
+                    and prediction_path.is_relative_to(self.project_root)
+                    else str(prediction_path) if prediction_path is not None else None
+                ),
+                "prediction_membership_sha256": prediction_sha256,
                 "feature_availability": settings["feature_availability"],
                 "shareholder_freshness": settings["shareholder_freshness"],
                 "models": bundle_models,
@@ -914,12 +1243,26 @@ class FinancialRCTrainer:
                 "pointer_write_mode": "none",
             }
             bundle_payload["bundle_hash"] = _canonical_hash(bundle_payload)
-            bundle_path = ctx.run_root / "financial_rc_bundle.json"
+            # New generic consumers resolve model_bundle.json.  Keep emitting
+            # the legacy filename for old financial_rc configs so existing
+            # operators and artifact browsers remain compatible.
+            bundle_path = ctx.run_root / "model_bundle.json"
             bundle_path.write_text(
                 json.dumps(bundle_payload, indent=2, ensure_ascii=False),
                 encoding="utf-8",
             )
             artifacts["bundle_manifest"] = str(bundle_path)
+            if settings["engine"] == "financial_rc_lightgbm_bundle_v1":
+                legacy_bundle_path = ctx.run_root / "financial_rc_bundle.json"
+                legacy_bundle_path.write_text(
+                    json.dumps(bundle_payload, indent=2, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+                # Preserve the legacy result contract while exposing the
+                # generic file for consumers that have migrated.
+                artifacts["bundle_manifest"] = str(legacy_bundle_path)
+                artifacts["model_bundle_manifest"] = str(bundle_path)
+                artifacts["legacy_bundle_manifest"] = str(legacy_bundle_path)
         finally:
             if staging_root.exists():
                 shutil.rmtree(staging_root)
@@ -938,6 +1281,10 @@ class FinancialRCTrainer:
             artifacts=artifacts,
             message=(
                 "Pinned research bundle created without promotion pointer writes; "
-                "historical universe remains current-snapshot, not PIT."
+                + (
+                    "historical universe uses strict PIT interval membership."
+                    if pit_store is not None
+                    else "historical universe remains current-snapshot, not PIT."
+                )
             ),
         )

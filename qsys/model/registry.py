@@ -51,3 +51,7 @@ def create_model_trainer(
 from qsys.model.financial_rc_trainer import FinancialRCTrainer  # noqa: E402
 
 register_model_trainer("financial_rc", FinancialRCTrainer)
+# Top10 UC is a single-model use case implemented by the same canonical
+# artifact trainer; its strategy id remains explicit for registry/lineage
+# routing and does not alter the legacy financial_rc candidate.
+register_model_trainer("s180_top10", FinancialRCTrainer)

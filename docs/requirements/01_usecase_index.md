@@ -19,6 +19,7 @@
 |----|------|--------|------|-------|
 | UC_DAILY_OPS | Daily Operations | daily_ops | stable | operator_agent |
 | UC_DAILY_INFERENCE_RUN | Daily Inference Run | daily_ops | stable | operator_agent |
+| UC_TOP10_SIGNAL_RUN | S180 Top10 Signal Run | top10_signal | stable | operator_agent |
 | UC_RESEARCH_BACKTEST | Research Backtest | research | stable | research_agent |
 | UC_MODEL_TRAINING | Model Training | model_training | stable | builder_agent |
 | UC_UI_ANALYSIS | UI Analysis | ui_analysis | draft | ui_agent |
