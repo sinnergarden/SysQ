@@ -98,6 +98,23 @@ label manifest 也必须再次绑定该 hash。
 临时调整而数据源没有对应快照，v2 也无法复原该月中生效日。因此本文所称 PIT 是
 **月度快照 as-of carry-forward PIT**，不是交易所逐事件级成分历史。
 
+## 日常 CSI1800 数据同步快照
+
+历史研究 artifact `csi1800_pit_v2` 是 hash-bound、不可变的，日常数据同步不得为了
+延长当前日期而覆盖它。`scripts/data_sync.py --universe csi1800 --apply` 为目标交易日
+解析不晚于该日的最新 CSI800 与 CSI1000 月度快照，并写入独立的 operational artifact：
+
+```
+data/research/universes/csi1800_pit_daily/YYYYMMDD/
+├── manifest.json
+└── membership.parquet
+```
+
+目录按目标交易日寻址，不使用 `latest` 指针。同一天重复运行仅在 semantic hash 与
+membership 文件 hash 均匹配时复用；成分发生差异、数量不是严格 800 + 1000、两个
+指数有重叠或只有晚于目标日的快照时均 fail closed。该快照用于决定当天需要同步的
+股票和生成当前 `csi1800.txt` qlib registry，不改变历史 PIT-v2 研究结果。
+
 ## Stage 9B：完整 PIT retrain 用法（correctness audit）
 
 Full-PIT retrain 把 PIT 语义同时应用到训练与预测，而不是只过滤 prediction universe
