@@ -10,6 +10,7 @@ import pytest
 
 from qsys.research.matrix_job import RollingResearchConfig
 from qsys.research.signal_pipeline import (
+    CheckpointBatchComplete,
     SignalEvalRef,
     SignalResearchPipeline,
     SignalResearchResult,
@@ -269,6 +270,7 @@ class TestSignalResearchPipelineMatrix:
 
         mock_labels.return_value = _make_fake_labels()
         config = self._matrix_config()
+        config.calendar["end_date"] = "2026-01-30"
         config.window_checkpoints = True
         config.source_manifest_hash = "source-v1"
         generator = FixtureSignalGenerator(n_instruments=10)
@@ -298,6 +300,45 @@ class TestSignalResearchPipelineMatrix:
                 ref.signal_id, ref.signal_run_id
             )
             assert len(manifest["window_checkpoint_set_sha256"]) == 64
+
+    @patch("qsys.label.store.LabelStore.load_labels")
+    def test_matrix_checkpoint_batch_exits_after_committed_limit(
+        self, mock_labels, tmp_path: Path
+    ) -> None:
+        from qsys.research.generators.fixture import FixtureSignalGenerator
+
+        mock_labels.return_value = _make_fake_labels()
+        config = self._matrix_config()
+        config.calendar["end_date"] = "2026-02-27"
+        config.window_checkpoints = True
+        config.source_manifest_hash = "source-v1"
+        generator = FixtureSignalGenerator(n_instruments=10)
+        pipeline = SignalResearchPipeline(str(tmp_path))
+
+        with pytest.raises(CheckpointBatchComplete) as first:
+            pipeline.run(
+                config,
+                signal_generator=generator,
+                checkpoint_batch_size=2,
+            )
+        assert first.value.completed_windows == 2
+        assert first.value.total_windows > 2
+
+        with pytest.raises(CheckpointBatchComplete) as second:
+            pipeline.run(
+                config,
+                signal_generator=generator,
+                checkpoint_batch_size=2,
+            )
+        assert second.value.completed_windows == 4
+        assert second.value.total_windows == first.value.total_windows
+
+    def test_checkpoint_batch_size_requires_checkpoint_mode(
+        self, tmp_path: Path
+    ) -> None:
+        pipeline = SignalResearchPipeline(str(tmp_path))
+        with pytest.raises(ValueError, match="requires window_checkpoints"):
+            pipeline.run(self._matrix_config(), checkpoint_batch_size=1)
 
 
 class TestSignalResearchPipelineMultiHead:

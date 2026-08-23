@@ -8,7 +8,10 @@ import argparse, json
 from pathlib import Path
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from qsys.research.signal_pipeline import SignalResearchPipeline
+from qsys.research.signal_pipeline import (
+    CheckpointBatchComplete,
+    SignalResearchPipeline,
+)
 from qsys.research.matrix_job import RollingResearchConfig
 
 def main():
@@ -26,18 +29,34 @@ def main():
                     help="Source data version hash for cache key")
     p.add_argument("--write-through", action="store_true", default=None,
                     help="Write cache during first run (cold -> warm)")
+    p.add_argument(
+        "--checkpoint-batch-size",
+        type=int,
+        default=None,
+        help="Commit at most N new window checkpoints, then exit 75 for restart",
+    )
     args = p.parse_args()
     config = RollingResearchConfig.from_file(Path(args.config))
-    result = SignalResearchPipeline().run(
-        config,
-        overwrite_signal=args.overwrite_signal,
-        overwrite_eval=args.overwrite_eval,
-        use_feature_cache=args.use_feature_cache,
-        materialize_on_miss=args.materialize_on_miss,
-        write_through=args.write_through,
-        feature_cache_root=args.feature_cache_root,
-        source_manifest_hash=args.source_manifest_hash,
-    )
+    try:
+        result = SignalResearchPipeline().run(
+            config,
+            overwrite_signal=args.overwrite_signal,
+            overwrite_eval=args.overwrite_eval,
+            use_feature_cache=args.use_feature_cache,
+            materialize_on_miss=args.materialize_on_miss,
+            write_through=args.write_through,
+            feature_cache_root=args.feature_cache_root,
+            source_manifest_hash=args.source_manifest_hash,
+            checkpoint_batch_size=args.checkpoint_batch_size,
+        )
+    except CheckpointBatchComplete as exc:
+        print(json.dumps({
+            "status": "checkpoint_batch_complete",
+            "generator_id": exc.generator_id,
+            "completed_windows": exc.completed_windows,
+            "total_windows": exc.total_windows,
+        }))
+        raise SystemExit(75) from None
     print(f"\nExperiment: {config.experiment_id}")
     for sr in result.signal_runs:
         print(f"  Signal: {sr.signal_id} / {sr.signal_run_id}")

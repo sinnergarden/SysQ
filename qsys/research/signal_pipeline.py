@@ -72,6 +72,21 @@ class SignalResearchResult:
     manifest_path: Path
 
 
+class CheckpointBatchComplete(RuntimeError):
+    """A bounded checkpoint batch committed successfully; restart to resume."""
+
+    def __init__(
+        self, *, generator_id: str, completed_windows: int, total_windows: int
+    ) -> None:
+        self.generator_id = generator_id
+        self.completed_windows = completed_windows
+        self.total_windows = total_windows
+        super().__init__(
+            f"Checkpoint batch complete for {generator_id}: "
+            f"{completed_windows}/{total_windows} windows"
+        )
+
+
 class SignalResearchPipeline:
     """Signal research pipeline — generation + IC evaluation only.
 
@@ -97,6 +112,7 @@ class SignalResearchPipeline:
         feature_cache_root: str | None = None,
         source_manifest_hash: str | None = None,
         write_through: bool | None = None,
+        checkpoint_batch_size: int | None = None,
     ) -> SignalResearchResult:
         """Execute signal research pipeline.
 
@@ -112,6 +128,12 @@ class SignalResearchPipeline:
             Allow overwriting existing evaluations.
         use_feature_cache / materialize_on_miss / feature_cache_root / source_manifest_hash:
             Feature cache options.  CLI overrides YAML when set (not None).
+        checkpoint_batch_size:
+            Maximum number of new window checkpoints to commit in this
+            process.  When more windows remain, raise
+            :class:`CheckpointBatchComplete` so a supervisor can restart with
+            a fresh address space.  The runtime limit is deliberately absent
+            from checkpoint identity.
         """
         if isinstance(config, (str, Path)):
             config = RollingResearchConfig.from_file(Path(config))
@@ -131,6 +153,12 @@ class SignalResearchPipeline:
             config.write_through = write_through
 
         self._validate_config(config)
+        if checkpoint_batch_size is not None and checkpoint_batch_size <= 0:
+            raise ValueError("checkpoint_batch_size must be a positive integer")
+        if checkpoint_batch_size is not None and not config.window_checkpoints:
+            raise ValueError(
+                "checkpoint_batch_size requires window_checkpoints=true"
+            )
 
         exp_dir = self._paths.experiment_dir(config.experiment_id)
 
@@ -169,6 +197,7 @@ class SignalResearchPipeline:
                 signal_generator=signal_generator,
                 overwrite_signal=overwrite_signal,
                 overwrite_eval=overwrite_eval,
+                checkpoint_batch_size=checkpoint_batch_size,
             )
 
         return self._run_single(
@@ -358,6 +387,7 @@ class SignalResearchPipeline:
         signal_generator: RollingSignalGenerator | None = None,
         overwrite_signal: bool = False,
         overwrite_eval: bool = False,
+        checkpoint_batch_size: int | None = None,
     ) -> SignalResearchResult:
         """Matrix experiment: generators × transforms (no backtest)."""
         from qsys.research.evaluation import SignalEvaluator
@@ -404,6 +434,7 @@ class SignalResearchPipeline:
 
             checkpoint_store: WindowPredictionCheckpointStore | None = None
             checkpoint_refs: list[WindowCheckpointRef] = []
+            new_checkpoint_count = 0
             if config.window_checkpoints:
                 checkpoint_store = WindowPredictionCheckpointStore(
                     self._paths.window_checkpoint_dir(config.experiment_id, gen_id),
@@ -434,6 +465,17 @@ class SignalResearchPipeline:
                     checkpoint_refs.append(checkpoint_store.save(w, pred))
                     del pred
                     gc.collect()
+                    new_checkpoint_count += 1
+                    if (
+                        checkpoint_batch_size is not None
+                        and new_checkpoint_count >= checkpoint_batch_size
+                        and len(checkpoint_refs) < len(windows)
+                    ):
+                        raise CheckpointBatchComplete(
+                            generator_id=gen_id,
+                            completed_windows=len(checkpoint_refs),
+                            total_windows=len(windows),
+                        )
                 else:
                     all_preds.append(pred)
 
