@@ -10,6 +10,7 @@ import yaml
 from qsys.feature.registry import FeatureListRegistry
 from qsys.feature.library import FeatureLibrary
 from qsys.research.matrix_job import RollingResearchConfig
+from qsys.research.generators.utils import check_training_label_maturity
 from qsys.research.rolling_window import build_rolling_windows
 
 
@@ -171,6 +172,29 @@ def test_alpha_v1_clean227_20d_config_changes_only_signal_contract() -> None:
     assert windows[0].predict_start == "2021-01-04"
     assert windows[-1].predict_end == "2026-07-31"
     assert len(windows) == 68
+
+    maturity_gaps = [
+        check_training_label_maturity(
+            window.train_end, window.predict_start, 20, shifted=True
+        )
+        for window in windows
+    ]
+    assert min(maturity_gaps) >= 22
+
+
+def test_alpha_v1_20d_one_day_shorter_embargo_fails_closed() -> None:
+    windows = build_rolling_windows(
+        "2021-01-01",
+        "2021-03-31",
+        train_window_days=504,
+        step_days=20,
+        label_maturity_lag_trading_days=20,
+    )
+    assert windows
+    with pytest.raises(ValueError, match="label maturity violation"):
+        check_training_label_maturity(
+            windows[0].train_end, windows[0].predict_start, 20, shifted=True
+        )
 
 
 def test_alpha_v1_clean227_matches_pit_phase0_pipeline_except_signal() -> None:
