@@ -52,6 +52,7 @@ class DataHealthReport:
     margin_status: str = "unknown"
     pit_missing_ratio: dict[str, float] = field(default_factory=dict)
     margin_missing_ratio: dict[str, float] = field(default_factory=dict)
+    usable_active_instruments: int = 0
 
     @property
     def ok(self) -> bool:
@@ -84,6 +85,7 @@ class DataHealthReport:
             "margin_status": self.margin_status,
             "pit_missing_ratio": dict(self.pit_missing_ratio),
             "margin_missing_ratio": dict(self.margin_missing_ratio),
+            "usable_active_instruments": self.usable_active_instruments,
         }
 
     def to_markdown(self) -> str:
@@ -102,6 +104,7 @@ class DataHealthReport:
             "core_daily_status",
             "pit_status",
             "margin_status",
+            "usable_active_instruments",
         ]:
             lines.append(f"- {key}: {getattr(self, key)}")
         lines.append(f"- missing_ratio: {self.missing_ratio:.2%}")
@@ -186,6 +189,39 @@ def _classify_layer(fields: list[str], ratios: dict[str, float], threshold: floa
     return "partial", bad
 
 
+def _count_usable_active_instruments(features: pd.DataFrame, *, field: str = "$close") -> int:
+    """Count unique instruments with a non-null core feature on one date.
+
+    Production Qlib frames use a MultiIndex named ``(datetime, instrument)``.
+    Explicit instrument columns and plain indexes are supported for lightweight
+    adapters/tests; a plain RangeIndex therefore counts valid rows as distinct
+    observations rather than failing the health check on index shape.
+    """
+
+    if features is None or features.empty or field not in features.columns:
+        return 0
+    valid = features[field].notna()
+    if isinstance(features.index, pd.MultiIndex):
+        names = list(features.index.names)
+        if "instrument" in names:
+            values = features.index.get_level_values("instrument")
+        elif "ts_code" in names:
+            values = features.index.get_level_values("ts_code")
+        else:
+            values = features.index.get_level_values(-1)
+    elif "instrument" in features.columns:
+        values = features["instrument"]
+    elif "ts_code" in features.columns:
+        values = features["ts_code"]
+    else:
+        values = features.index
+
+    usable = pd.Series(values, index=features.index).loc[valid]
+    usable = usable.dropna().astype(str).str.strip()
+    usable = usable[usable != ""]
+    return int(usable.nunique())
+
+
 def inspect_qlib_data_health(
     requested_date: str,
     feature_fields: Iterable[str],
@@ -238,22 +274,6 @@ def inspect_qlib_data_health(
                 f"Qlib data is stale: last_qlib_date={last_qlib_date}, expected_latest_date={expected_latest_date}"
             )
 
-    # Active instrument count check
-    try:
-        from qlib.data import D
-        inst_obj = D.instruments(universe)
-        cal = D.calendar(start_time=requested_date, end_time=requested_date)
-        if len(cal) > 0:
-            active = D.list_instruments(inst_obj, start_time=requested_date, end_time=requested_date)
-            active_count = len(active)
-            if active_count < min_active_instruments:
-                blocking_issues.append(
-                    f"Active instrument count ({active_count}) < minimum ({min_active_instruments}) "
-                    f"for universe={universe} on {requested_date}"
-                )
-    except Exception as e:
-        warnings.append(f"Could not check active instrument count: {e}")
-
     fields = _normalize_feature_fields(feature_fields)
     required_fields_list = [f for f in required_fields if isinstance(f, str) and f.strip()]
     probe_fields = _extract_probe_fields(fields, required_fields_list)
@@ -264,6 +284,20 @@ def inspect_qlib_data_health(
     probe_features = adapter.get_features(universe, probe_fields, start_time=requested_date, end_time=requested_date)
     if probe_features is None:
         probe_features = pd.DataFrame()
+
+    # Active instrument count must describe usable data on the requested date,
+    # not merely the instrument registry's declared end-date span.  Use the
+    # core close field so a missing optional/derived expression cannot erase
+    # otherwise usable instruments from this universe-level gate.
+    usable_active_instruments = _count_usable_active_instruments(
+        probe_features,
+        field="$close",
+    )
+    if usable_active_instruments < min_active_instruments:
+        blocking_issues.append(
+            f"Usable active instrument count ({usable_active_instruments}) < minimum "
+            f"({min_active_instruments}) for universe={universe} on {requested_date}"
+        )
 
     has_data = not features.empty
     feature_rows = len(features)
@@ -355,6 +389,7 @@ def inspect_qlib_data_health(
         margin_status=margin_status,
         pit_missing_ratio=pit_missing_ratio,
         margin_missing_ratio=margin_missing_ratio,
+        usable_active_instruments=usable_active_instruments,
     )
 
 

@@ -7,7 +7,12 @@ from unittest.mock import patch
 import pytest
 
 from scripts import data_sync
-from scripts.ops.sync_csi800_daily import _abort_if_stage_failed, _write_audit
+from scripts.ops.sync_csi800_daily import (
+    _abort_if_stage_failed,
+    _canonical_symbols_with_data_on_date,
+    _repair_same_date_qlib_gap,
+    _write_audit,
+)
 
 
 def test_data_sync_routes_csi1800_to_canonical_sync_entrypoint():
@@ -99,3 +104,185 @@ def test_failed_registry_refresh_is_audited_and_blocks(tmp_path: Path):
     audit = tmp_path / "sync_csi1800_20260821.json"
     assert audit.is_file()
     assert report["failure_stage"] == "refresh_instruments"
+
+
+def test_same_date_canonical_gap_is_repaired_and_verified():
+    target = "20260821"
+
+    class Store:
+        def __init__(self):
+            self.frames = {
+                "A.SZ": {"trade_date": [target], "close": [10.0]},
+                "B.SZ": {"trade_date": [target], "close": [20.0]},
+            }
+
+        def load_daily(self, symbol):
+            import pandas as pd
+
+            return pd.DataFrame(self.frames.get(symbol, {}))
+
+    class Adapter:
+        def __init__(self):
+            import pandas as pd
+
+            self.frames = [
+                pd.DataFrame(
+                    {"$close": [20.0]},
+                    index=pd.MultiIndex.from_tuples(
+                        [("2026-08-21", "B.SZ")], names=["datetime", "instrument"]
+                    ),
+                ),
+                pd.DataFrame(
+                    {"$close": [10.0, 20.0]},
+                    index=pd.MultiIndex.from_tuples(
+                        [
+                            ("2026-08-21", "A.SZ"),
+                            ("2026-08-21", "B.SZ"),
+                        ],
+                        names=["datetime", "instrument"],
+                    ),
+                ),
+            ]
+            self.repaired = []
+            self.feature_calls = []
+
+        def get_features(self, *args, **kwargs):
+            self.feature_calls.append((args, kwargs))
+            return self.frames.pop(0)
+
+        def convert_fix_symbols(self, symbols, **kwargs):
+            self.repaired.append((symbols, kwargs))
+            return {"status": "success"}
+
+    adapter = Adapter()
+    summary = _repair_same_date_qlib_gap(
+        adapter,
+        Store(),
+        ["A.SZ", "B.SZ"],
+        universe="csi800",
+        target_dt=target,
+        apply=True,
+    )
+
+    assert adapter.feature_calls[0][0][0] == ["A.SZ", "B.SZ"]
+    assert adapter.feature_calls[1][0][0] == ["A.SZ", "B.SZ"]
+    assert adapter.repaired == [(["A.SZ"], {"refresh_universes": []})]
+    assert summary["missing_symbols"] == ["A.SZ"]
+    assert summary["residual_symbols"] == []
+    assert summary["verified_no_gap"] is True
+    assert summary["status"] == "success"
+
+
+def test_same_date_gap_fails_closed_when_repair_leaves_residual():
+    import pandas as pd
+
+    class Store:
+        def load_daily(self, symbol):
+            return pd.DataFrame({"trade_date": ["20260821"], "close": [1.0]})
+
+    frame = pd.DataFrame(
+        {"$close": [1.0]},
+        index=pd.MultiIndex.from_tuples(
+            [("2026-08-21", "OTHER.SZ")], names=["datetime", "instrument"]
+        ),
+    )
+
+    class Adapter:
+        def __init__(self):
+            self.feature_calls = []
+
+        def get_features(self, *_args, **_kwargs):
+            self.feature_calls.append((_args, _kwargs))
+            return frame
+
+        def convert_fix_symbols(self, symbols, **kwargs):
+            assert symbols == ["A.SZ"]
+            assert kwargs == {"refresh_universes": []}
+            return {"status": "success"}
+
+    adapter = Adapter()
+    summary = _repair_same_date_qlib_gap(
+        adapter,
+        Store(),
+        ["A.SZ"],
+        universe="csi1800",
+        target_dt="20260821",
+        apply=True,
+    )
+
+    assert summary["status"] == "failed"
+    assert summary["verified_no_gap"] is False
+    assert summary["residual_symbols"] == ["A.SZ"]
+
+
+def test_paused_or_suspended_canonical_rows_do_not_trigger_repair():
+    import pandas as pd
+
+    target = "20260821"
+
+    class Store:
+        def __init__(self):
+            self.frames = {
+                "PAUSED_EMPTY.SZ": pd.DataFrame(
+                    {
+                        "trade_date": [target],
+                        "open": [float("nan")],
+                        "high": [float("nan")],
+                        "low": [float("nan")],
+                        "close": [float("nan")],
+                        "vol": [0.0],
+                        "amount": [0.0],
+                        "paused": [1],
+                    }
+                ),
+                "PAUSED_CARRY.SZ": pd.DataFrame(
+                    {
+                        "trade_date": [target],
+                        "open": [10.0],
+                        "high": [10.0],
+                        "low": [10.0],
+                        "close": [10.0],
+                        "vol": [0.0],
+                        "amount": [0.0],
+                        "paused": [1],
+                    }
+                ),
+                "SUSPENDED_CARRY.SZ": pd.DataFrame(
+                    {
+                        "trade_date": [target],
+                        "close": [10.0],
+                        "is_suspended": ["true"],
+                    }
+                ),
+                "NO_CLOSE.SZ": pd.DataFrame({"trade_date": [target]}),
+            }
+
+        def load_daily(self, symbol):
+            return self.frames[symbol]
+
+    store = Store()
+    symbols = list(store.frames)
+    assert _canonical_symbols_with_data_on_date(store, symbols, target) == set()
+
+    class Adapter:
+        def get_features(self, requested_symbols, *_args, **_kwargs):
+            assert requested_symbols == sorted(symbols)
+            return pd.DataFrame({"$close": pd.Series(dtype=float)})
+
+        def convert_fix_symbols(self, *_args, **_kwargs):
+            raise AssertionError("suspended rows must not trigger same-date repair")
+
+    summary = _repair_same_date_qlib_gap(
+        Adapter(),
+        store,
+        symbols,
+        universe="csi1800",
+        target_dt=target,
+        apply=True,
+    )
+
+    assert summary["status"] == "success"
+    assert summary["canonical_symbols_with_data_count"] == 0
+    assert summary["missing_symbols"] == []
+    assert summary["residual_symbols"] == []
+    assert summary["verified_no_gap"] is True
