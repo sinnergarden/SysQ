@@ -120,6 +120,10 @@ class LightGBMSingleLabelGenerator:
     # member_as_of against ``pit_universe_artifact``; only prediction rows use
     # this exact instrument set.
     prediction_membership_path: str = ""
+    # Optional operational registry used only to load the latest prediction
+    # feature rows.  The historical PIT-union registry may legitimately end
+    # at its last immutable snapshot and must never be extended in place.
+    prediction_universe: str = ""
 
     _qlib_inited: bool = field(default=False, repr=False)
     _pit_store: object | None = field(default=None, repr=False, init=False)
@@ -128,6 +132,10 @@ class LightGBMSingleLabelGenerator:
     _prediction_membership_sha256: str = field(default="", repr=False, init=False)
 
     def __post_init__(self) -> None:
+        if self.prediction_universe and not self.prediction_membership_path:
+            raise ValueError(
+                "prediction_universe requires prediction_membership_path"
+            )
         if not self.prediction_membership_path:
             return
         if not self._effective_pit_filter_mode():
@@ -192,6 +200,7 @@ class LightGBMSingleLabelGenerator:
             "liquidity_exclusion_sha256": exclusion_hash,
             "prediction_membership_path": prediction_path,
             "prediction_membership_sha256": prediction_hash,
+            "prediction_universe": self.prediction_universe,
             "start": start,
             "end": end,
         }
@@ -440,6 +449,34 @@ class LightGBMSingleLabelGenerator:
             )
         return result
 
+    def _load_prediction_data(
+        self,
+        start: str,
+        end: str,
+        clean_features: list[str],
+    ) -> pd.DataFrame:
+        """Load latest feature rows from the prediction-only registry."""
+        if not self.prediction_universe:
+            raise ValueError("prediction_universe is not configured")
+        from qsys.data.adapter import QlibAdapter
+
+        raw = QlibAdapter().get_features(
+            self.prediction_universe,
+            clean_features + ["$close"],
+            start_time=start,
+            end_time=end,
+        )
+        frame = raw.reset_index().rename(columns={"datetime": "trade_date"})
+        frame = frame.loc[:, ~frame.columns.duplicated()]
+        if "trade_date" not in frame.columns:
+            raise ValueError(
+                f"prediction_universe {self.prediction_universe!r} returned no feature rows"
+            )
+        frame["trade_date"] = frame["trade_date"].astype(str).str[:10]
+        if "instrument" not in frame.columns and "ts_code" in frame.columns:
+            frame = frame.rename(columns={"ts_code": "instrument"})
+        return frame
+
     # ═══════════════════════════════════════════════════════════════
     # Training + prediction
     # ═══════════════════════════════════════════════════════════════
@@ -456,19 +493,31 @@ class LightGBMSingleLabelGenerator:
     ) -> pd.DataFrame:
         self._ensure_qlib()
 
+        from qsys.data.calendar import get_trading_calendar
+
+        window_cal = get_trading_calendar(predict_start, predict_end)
+        prev_td = _build_prev_trading_date_lookup(predict_start, predict_end)
+        feature_dates = sorted({prev_td.get(d, d) for d in window_cal})
         extended_end = (
             datetime.strptime(predict_end, "%Y-%m-%d") + timedelta(days=30)
         ).strftime("%Y-%m-%d")
+        load_end = train_end if self.prediction_universe else extended_end
 
-        log.info("Loading data [%s, %s]", train_start, extended_end)
-        frame, clean_features = self._load_data(train_start, extended_end)
+        log.info("Loading data [%s, %s]", train_start, load_end)
+        frame, clean_features = self._load_data(train_start, load_end)
 
         # Historical train rows and current prediction rows can use different
         # PIT artifacts.  Preserve the old single-frame behavior when no exact
         # prediction snapshot is supplied.
         if self.prediction_membership_path:
             train_frame = self._apply_pit_membership(frame)
-            prediction_frame = self._apply_prediction_membership(frame)
+            if self.prediction_universe:
+                prediction_frame = self._load_prediction_data(
+                    min(feature_dates), max(feature_dates), clean_features,
+                )
+            else:
+                prediction_frame = frame
+            prediction_frame = self._apply_prediction_membership(prediction_frame)
         else:
             if self._effective_pit_filter_mode():
                 frame = self._apply_pit_membership(frame)
@@ -519,11 +568,6 @@ class LightGBMSingleLabelGenerator:
         # features from the previous trading day prev_td(d) (data_date), so the
         # output stays inside the window and no feature bar at/after trade_date
         # is used (no same-day-close lookahead).
-        from qsys.data.calendar import get_trading_calendar
-
-        window_cal = get_trading_calendar(predict_start, predict_end)
-        prev_td = _build_prev_trading_date_lookup(predict_start, predict_end)
-        feature_dates = sorted({prev_td.get(d, d) for d in window_cal})
         pred = prediction_frame[
             prediction_frame["trade_date"].isin(feature_dates)
         ].copy()

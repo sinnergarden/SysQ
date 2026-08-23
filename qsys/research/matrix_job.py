@@ -295,6 +295,7 @@ def _create_generator_from_config(
             "feature_list_id", "pit_membership", "pit_filter_mode",
             "pit_universe_artifact", "liquidity_exclusion_path",
             "prediction_membership_path", "prediction_membership_sha256",
+            "prediction_universe",
         }
         unknown = set(params) - _CONSUMED_PARAMS
         if unknown:
@@ -348,6 +349,7 @@ def _create_generator_from_config(
             pit_universe_artifact=params.get("pit_universe_artifact", "csi800_pit_v2"),
             liquidity_exclusion_path=params.get("liquidity_exclusion_path", ""),
             prediction_membership_path=prediction_membership_path,
+            prediction_universe=params.get("prediction_universe", ""),
             use_feature_cache=use_feature_cache,
             write_through=write_through,
             feature_cache_root=feature_cache_root,

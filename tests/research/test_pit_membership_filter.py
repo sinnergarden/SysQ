@@ -211,6 +211,10 @@ class TestPredictionMembershipSnapshot:
         with pytest.raises(ValueError, match="enabled PIT filter"):
             LightGBMSingleLabelGenerator(prediction_membership_path=str(path))
 
+    def test_prediction_universe_requires_snapshot(self) -> None:
+        with pytest.raises(ValueError, match="requires prediction_membership_path"):
+            LightGBMSingleLabelGenerator(prediction_universe="csi1800")
+
     def test_exact_snapshot_filter_is_distinct_from_historical_filter(self, tmp_path) -> None:
         path = tmp_path / "snapshot.parquet"
         pd.DataFrame({"instrument": ["000003.SZ"]}).to_parquet(path, index=False)
@@ -387,11 +391,13 @@ class TestParamThreading:
                 "pit_filter_mode": "member_as_of",
                 "pit_universe_artifact": "csi1800_pit_v1",
                 "prediction_membership_path": str(path),
+                "prediction_universe": "csi1800",
             },
         }
         gen = _create_generator_from_config(config)
         assert gen.prediction_membership_path == str(path.absolute())
         assert config["params"]["prediction_membership_sha256"]
+        assert gen.prediction_universe == "csi1800"
 
     def test_factory_rejects_prediction_hash_without_path(self) -> None:
         from qsys.research.matrix_job import _create_generator_from_config
