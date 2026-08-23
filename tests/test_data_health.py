@@ -6,6 +6,7 @@ import pandas as pd
 from qsys.data.health import (
     DataHealthReport,
     DataReadinessError,
+    _count_usable_active_instruments,
     assert_qlib_data_ready,
     inspect_qlib_data_health,
 )
@@ -71,12 +72,63 @@ class TestDataHealth(unittest.TestCase):
             universe="all",
             pit_optional_field_missing_threshold=0.9,
             margin_optional_field_missing_threshold=0.9,
+            min_active_instruments=1,
         )
         self.assertTrue(report.ok)
+        self.assertEqual(report.usable_active_instruments, 1)
         self.assertEqual(report.core_daily_status, "ok")
         self.assertEqual(report.pit_status, "warning")
         self.assertEqual(report.margin_status, "warning")
         self.assertTrue(any("non-blocking" in item for item in report.warnings))
+
+    def test_usable_active_instruments_uses_unique_non_null_close(self):
+        frame = pd.DataFrame(
+            {"$close": [1.0, 2.0, float("nan")]},
+            index=pd.MultiIndex.from_tuples(
+                [
+                    ("2026-03-25", "AAA.SZ"),
+                    ("2026-03-25", "AAA.SZ"),
+                    ("2026-03-25", "BBB.SZ"),
+                ],
+                names=["datetime", "instrument"],
+            ),
+        )
+        self.assertEqual(_count_usable_active_instruments(frame), 1)
+
+        range_frame = pd.DataFrame({"$close": [1.0, float("nan"), 2.0]})
+        self.assertEqual(_count_usable_active_instruments(range_frame), 2)
+
+    @patch("qsys.data.health._resolve_expected_latest_date", return_value=("2026-03-25", "2026-03-25"))
+    @patch("qsys.data.health.StockDataStore")
+    @patch("qsys.data.health.QlibAdapter")
+    def test_health_blocks_on_usable_close_instrument_count(self, mock_adapter_cls, mock_store_cls, _mock_expected):
+        mock_store_cls.return_value.get_global_latest_date.return_value = "2026-03-25"
+        mock_adapter = mock_adapter_cls.return_value
+        mock_adapter.get_last_qlib_date.return_value = pd.Timestamp("2026-03-25")
+        mock_adapter.get_features.side_effect = [
+            pd.DataFrame({"$close": [1.0]}),
+            pd.DataFrame(
+                {"$close": [1.0, 2.0]},
+                index=pd.MultiIndex.from_tuples(
+                    [
+                        ("2026-03-25", "AAA.SZ"),
+                        ("2026-03-25", "AAA.SZ"),
+                    ],
+                    names=["datetime", "instrument"],
+                ),
+            ),
+        ]
+
+        report = inspect_qlib_data_health(
+            "2026-03-25",
+            ["$close"],
+            universe="csi800",
+            min_active_instruments=2,
+        )
+
+        self.assertEqual(report.usable_active_instruments, 1)
+        self.assertFalse(report.ok)
+        self.assertTrue(any("Usable active instrument count" in item for item in report.blocking_issues))
 
     def test_assert_qlib_data_ready_raises_clear_exception(self):
         failing_report = DataHealthReport(

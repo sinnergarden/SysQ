@@ -123,6 +123,179 @@ def _check_stock_data_status(store: StockDataStore, codes: list[str], target_dt:
     }
 
 
+def _target_date_values(values: pd.Series) -> pd.Series:
+    """Normalize canonical date values without integer-to-nanosecond coercion."""
+
+    return (
+        values.astype(str)
+        .str.strip()
+        .str.replace(r"\.0$", "", regex=True)
+        .str.replace("-", "", regex=False)
+        .str.slice(0, 8)
+    )
+
+
+def _truthy_flags(values: pd.Series) -> pd.Series:
+    """Normalize numeric and textual truthy flags without remote lookups."""
+
+    numeric = pd.to_numeric(values, errors="coerce").fillna(0)
+    text = values.astype(str).str.strip().str.lower()
+    return numeric.ne(0) | text.isin({"true", "t", "yes", "y", "on"})
+
+
+def _canonical_symbols_with_data_on_date(
+    store: StockDataStore,
+    symbols: list[str],
+    target_dt: str,
+) -> set[str]:
+    """Return symbols with an actual canonical row on ``target_dt``.
+
+    The canonical store is the source of truth for raw availability.  Only a
+    non-null numeric close is eligible for the same-date comparison. Explicit
+    paused/suspended rows are excluded even when a carried-forward close is
+    present; no per-symbol suspension API lookup is needed.
+    """
+
+    target_dt = str(target_dt).replace("-", "")[:8]
+    available: set[str] = set()
+    for symbol in sorted(set(symbols)):
+        try:
+            frame = store.load_daily(symbol)
+        except Exception as exc:
+            raise RuntimeError(
+                f"Failed to inspect canonical data for {symbol} on {target_dt}: {exc}"
+            ) from exc
+        if frame is None or frame.empty or "trade_date" not in frame.columns:
+            continue
+        target_rows = frame.loc[_target_date_values(frame["trade_date"]) == target_dt]
+        if target_rows.empty:
+            continue
+        if "close" not in target_rows.columns:
+            continue
+        close = pd.to_numeric(target_rows["close"], errors="coerce")
+        eligible = close.notna()
+        for flag_column in ("paused", "is_suspended"):
+            if flag_column in target_rows.columns:
+                eligible &= ~_truthy_flags(target_rows[flag_column])
+        if eligible.any():
+            available.add(symbol)
+    return available
+
+
+def _non_empty_feature_symbols(frame: pd.DataFrame, *, field: str = "$close") -> set[str]:
+    """Extract instruments whose requested feature is non-null.
+
+    Qlib normally returns a MultiIndex named ``(datetime, instrument)``.  The
+    explicit column and plain-index branches keep the helper usable with
+    lightweight adapters and test doubles without weakening the production
+    MultiIndex path.
+    """
+
+    if frame is None or frame.empty or field not in frame.columns:
+        return set()
+    valid = frame[field].notna()
+    if isinstance(frame.index, pd.MultiIndex):
+        names = list(frame.index.names)
+        if "instrument" in names:
+            instrument_values = frame.index.get_level_values("instrument")
+        elif "ts_code" in names:
+            instrument_values = frame.index.get_level_values("ts_code")
+        else:
+            instrument_values = frame.index.get_level_values(-1)
+    elif "instrument" in frame.columns:
+        instrument_values = frame["instrument"]
+    elif "ts_code" in frame.columns:
+        instrument_values = frame["ts_code"]
+    else:
+        instrument_values = frame.index
+
+    values = pd.Series(instrument_values, index=frame.index)
+    return {
+        str(value)
+        for value in values.loc[valid].tolist()
+        if pd.notna(value) and str(value).strip()
+    }
+
+
+def _qlib_symbols_with_data_on_date(
+    adapter: QlibAdapter,
+    symbols: list[str],
+    target_dt: str,
+) -> set[str]:
+    """Return exact symbols with a non-empty Qlib ``$close`` on target date."""
+
+    target_date = f"{target_dt[:4]}-{target_dt[4:6]}-{target_dt[6:8]}"
+    frame = adapter.get_features(
+        sorted(set(symbols)),
+        ["$close"],
+        start_time=target_date,
+        end_time=target_date,
+    )
+    return _non_empty_feature_symbols(frame, field="$close")
+
+
+def _repair_same_date_qlib_gap(
+    adapter: QlibAdapter,
+    store: StockDataStore,
+    symbols: list[str],
+    *,
+    universe: str,
+    target_dt: str,
+    apply: bool,
+) -> dict:
+    """Repair and verify canonical-vs-Qlib same-date symbol gaps.
+
+    This stage is intentionally fail-closed: a failed conversion or any
+    residual gap after ``convert_fix_symbols`` is returned as ``failed`` and
+    the caller must abort before readiness can be reported.
+    """
+
+    canonical = _canonical_symbols_with_data_on_date(store, symbols, target_dt)
+    qlib_before = _qlib_symbols_with_data_on_date(adapter, symbols, target_dt)
+    missing_before = sorted(canonical - qlib_before)
+    summary = {
+        "status": "success" if not missing_before else ("dry_run" if not apply else "pending"),
+        "target_date": target_dt,
+        "canonical_symbols_with_data_count": len(canonical),
+        "qlib_symbols_with_data_before_count": len(qlib_before),
+        "missing_symbols": missing_before,
+        "missing_count": len(missing_before),
+        "repaired_symbols": [],
+        "qlib_symbols_with_data_after_count": len(qlib_before),
+        "residual_symbols": missing_before,
+        "residual_count": len(missing_before),
+        "verified_no_gap": not missing_before,
+    }
+    if not missing_before or not apply:
+        return summary
+
+    try:
+        result = adapter.convert_fix_symbols(missing_before, refresh_universes=[])
+    except Exception as exc:
+        summary.update({"status": "failed", "error": str(exc)})
+        return summary
+    if str(result.get("status", "success")) != "success":
+        summary.update({
+            "status": "failed",
+            "error": f"convert_fix_symbols returned status={result.get('status')}",
+        })
+        return summary
+
+    qlib_after = _qlib_symbols_with_data_on_date(adapter, symbols, target_dt)
+    missing_after = sorted(canonical - qlib_after)
+    summary.update({
+        "status": "success" if not missing_after else "failed",
+        "repaired_symbols": missing_before,
+        "qlib_symbols_with_data_after_count": len(qlib_after),
+        "residual_symbols": missing_after,
+        "residual_count": len(missing_after),
+        "verified_no_gap": not missing_after,
+    })
+    if missing_after:
+        summary["error"] = "same-date Qlib gap remains after convert_fix_symbols"
+    return summary
+
+
 def _resolve_catchup_start(
     adapter: QlibAdapter,
     store: StockDataStore,
@@ -608,7 +781,35 @@ def main() -> None:
         audit_dir=audit_dir,
     )
 
-    # Step 5: Refresh instrument files
+    # Step 6: Reconcile same-date canonical rows against non-empty Qlib rows.
+    # This catches the case where dump_update advanced the global calendar but
+    # silently omitted one or more symbols on that same trading day.
+    try:
+        same_date_summary = _repair_same_date_qlib_gap(
+            adapter,
+            store,
+            codes,
+            universe=universe,
+            target_dt=target_dt,
+            apply=do_apply,
+        )
+    except Exception as exc:
+        same_date_summary = {
+            "status": "failed",
+            "target_date": target_dt,
+            "error": str(exc),
+            "verified_no_gap": False,
+        }
+    report["steps"]["same_date_qlib_repair"] = same_date_summary
+    _abort_if_stage_failed(
+        report,
+        stage="same_date_qlib_repair",
+        summary=same_date_summary,
+        do_apply=do_apply,
+        audit_dir=audit_dir,
+    )
+
+    # Step 7: Refresh instrument files after same-date repair is verified.
     t0 = time.time()
     if do_apply:
         try:
@@ -647,7 +848,7 @@ def main() -> None:
         audit_dir=audit_dir,
     )
 
-    # Step 6: Readiness check
+    # Step 8: Readiness check
     t0 = time.time()
     readiness_report = _readiness_check(
         adapter,
@@ -673,7 +874,7 @@ def main() -> None:
     if do_apply:
         _write_audit(audit_dir, report)
 
-    # Step 7: Telegram notification (non-blocking, apply only)
+    # Step 9: Telegram notification (non-blocking, apply only)
     if do_apply:
         _notify_telegram(report)
 
