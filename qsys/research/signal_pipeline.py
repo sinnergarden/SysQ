@@ -305,6 +305,9 @@ class SignalResearchPipeline:
         input_artifacts = getattr(generator, "checkpoint_input_artifacts", None)
         if input_artifacts:
             identity["generator_input_artifacts"] = input_artifacts
+        contract_identity = getattr(generator, "checkpoint_contract_identity", None)
+        if contract_identity:
+            identity["generator_contracts"] = contract_identity
         if config.feature_list_id:
             contract = FeatureListRegistry.contract(config.feature_list_id)
             identity["feature_list_contract"] = {
@@ -356,6 +359,13 @@ class SignalResearchPipeline:
         if feature_visibility_contract:
             signal_manifest["feature_visibility_contract"] = (
                 feature_visibility_contract
+            )
+        shareholder_freshness = getattr(
+            gen, "shareholder_freshness_lineage", None
+        )
+        if shareholder_freshness is not None:
+            signal_manifest["shareholder_freshness_lineage"] = (
+                shareholder_freshness
             )
         if config.source_manifest_hash:
             signal_manifest["source_manifest_hash"] = (
@@ -461,6 +471,7 @@ class SignalResearchPipeline:
         raw_predictions: dict[str, pd.DataFrame] = {}
         generator_visibility_contracts: dict[str, str | None] = {}
         generator_feature_source_lineage: dict[str, dict[str, Any]] = {}
+        generator_shareholder_freshness: dict[str, dict[str, Any] | None] = {}
         generator_checkpoint_hashes: dict[str, str] = {}
         for gen_cfg in effective_generators:
             gen_id = gen_cfg["generator_id"]
@@ -477,7 +488,6 @@ class SignalResearchPipeline:
             generator_feature_source_lineage[gen_id] = getattr(
                 gen, "feature_source_lineage", {}
             )
-
             checkpoint_store: WindowPredictionCheckpointStore | None = None
             checkpoint_refs: list[WindowCheckpointRef] = []
             new_checkpoint_count = 0
@@ -539,6 +549,13 @@ class SignalResearchPipeline:
                     checkpoint_store.checkpoint_set_sha256(checkpoint_refs)
                 )
             raw_predictions[gen_id] = pd.concat(all_preds, ignore_index=True)
+            # Read this only after every window has been generated.  The
+            # lineage property snapshots the accumulated per-window profiles;
+            # capturing it before generation would persist an empty profile
+            # set even though the gate actually ran.
+            generator_shareholder_freshness[gen_id] = getattr(
+                gen, "shareholder_freshness_lineage", None
+            )
             del all_preds
             gc.collect()
 
@@ -584,6 +601,13 @@ class SignalResearchPipeline:
             if feature_source_lineage:
                 signal_manifest["feature_source_lineage"] = (
                     feature_source_lineage
+                )
+            shareholder_freshness = generator_shareholder_freshness.get(
+                job.generator_id
+            )
+            if shareholder_freshness is not None:
+                signal_manifest["shareholder_freshness_lineage"] = (
+                    shareholder_freshness
                 )
             if config.source_manifest_hash:
                 signal_manifest["source_manifest_hash"] = (

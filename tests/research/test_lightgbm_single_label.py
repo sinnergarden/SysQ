@@ -14,6 +14,71 @@ from qsys.research.generators.lightgbm_single_label import (
 from qsys.signal.store import FEATURE_VISIBILITY_CONTRACT_V1
 
 
+_SHAREHOLDER_CONTRACT = {
+    "source": "test",
+    "availability_rule": "announcement_date_asof",
+    "min_coverage": 0.95,
+    "features": {
+        "holder_num_stale_days": {"max_median_days": 200, "max_row_days": 365},
+        "top10_holder_stale_days": {"max_median_days": 250, "max_row_days": 365},
+    },
+}
+
+
+def _freshness_frame(values: list[tuple[float | None, float | None]]) -> pd.DataFrame:
+    return pd.DataFrame({
+        "trade_date": ["2026-01-02"] * len(values),
+        "instrument": [f"00000{i + 1}.SZ" for i in range(len(values))],
+        "holder_num_stale_days": [v[0] for v in values],
+        "top10_holder_stale_days": [v[1] for v in values],
+    })
+
+
+def test_opt_in_shareholder_gate_fails_closed_on_missing_feature() -> None:
+    gen = LightGBMSingleLabelGenerator(
+        shareholder_freshness_contract=_SHAREHOLDER_CONTRACT
+    )
+    frame = _freshness_frame([(10.0, 10.0)])
+    frame = frame.drop(columns=["top10_holder_stale_days"])
+    with pytest.raises(ValueError, match="predict window.*missing freshness feature"):
+        gen._check_shareholder_freshness(
+            frame, role="predict", start="2026-01-02", end="2026-01-02"
+        )
+
+
+def test_opt_in_shareholder_gate_fails_closed_on_low_coverage() -> None:
+    gen = LightGBMSingleLabelGenerator(
+        shareholder_freshness_contract=_SHAREHOLDER_CONTRACT
+    )
+    frame = _freshness_frame([(10.0, 10.0), (None, 10.0)])
+    with pytest.raises(ValueError, match="coverage=.*below"):
+        gen._check_shareholder_freshness(
+            frame, role="train", start="2026-01-02", end="2026-01-02"
+        )
+
+
+def test_opt_in_shareholder_gate_passes_without_mutating_frame() -> None:
+    gen = LightGBMSingleLabelGenerator(
+        shareholder_freshness_contract=_SHAREHOLDER_CONTRACT
+    )
+    frame = _freshness_frame([(10.0, 10.0), (20.0, 20.0)])
+    before = frame.copy(deep=True)
+    gen._check_shareholder_freshness(
+        frame, role="train", start="2026-01-02", end="2026-01-02"
+    )
+    pd.testing.assert_frame_equal(frame, before)
+    assert gen.shareholder_freshness_lineage["profiles"]
+
+
+def test_missing_shareholder_contract_preserves_legacy_noop() -> None:
+    gen = LightGBMSingleLabelGenerator()
+    frame = pd.DataFrame({"trade_date": ["2026-01-02"], "instrument": ["A"]})
+    gen._check_shareholder_freshness(
+        frame, role="train", start="2026-01-02", end="2026-01-02"
+    )
+    assert gen.shareholder_freshness_lineage is None
+
+
 def test_generator_declares_feature_visibility_contract() -> None:
     generator = LightGBMSingleLabelGenerator()
     assert (

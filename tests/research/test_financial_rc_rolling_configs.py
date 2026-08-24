@@ -117,6 +117,12 @@ def test_csi1800_postbootstrap_r1_only_adds_pinned_shareholder_inputs() -> None:
             "shareholder_top10_sha256",
         )
     }
+    contract = rerun_params.pop("shareholder_freshness_contract")
     assert rerun_params == base_params
-    assert pinned["shareholder_holder_sha256"] == "b43e2483adb19d02abc2602a9e0bc41a16ffe3246b34b3974847561e11f7eeab"
-    assert pinned["shareholder_top10_sha256"] == "82bff0a8dc8267280fce0522b2f6f193ada0f45dead58d80bbd1142be738415f"
+    assert pinned["shareholder_holder_sha256"] == "53e03fa87945a7602f64aa385d5b328d9d2b45375ccca193124c355658e704e1"
+    assert pinned["shareholder_top10_sha256"] == "8709f7509e46cd3b8c681099159f9890ee881ab1816ae467e20aa4ae06fe5b4f"
+    assert contract["min_coverage"] == 0.95
+    assert contract["features"]["holder_num_stale_days"] == {
+        "max_median_days": 200,
+        "max_row_days": 365,
+    }

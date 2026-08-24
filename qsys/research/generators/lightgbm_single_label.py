@@ -155,6 +155,11 @@ class LightGBMSingleLabelGenerator:
     shareholder_holder_sha256: str = ""
     shareholder_top10_path: str = ""
     shareholder_top10_sha256: str = ""
+    # Optional research-only contract.  When omitted, preserve the historical
+    # generator behaviour (including its existing NaN handling).  When set,
+    # it is a read-only fail-closed preflight over the raw feature frame; it
+    # never drops rows or changes feature values.
+    shareholder_freshness_contract: dict[str, object] | None = None
 
     _qlib_inited: bool = field(default=False, repr=False)
     _pit_store: object | None = field(default=None, repr=False, init=False)
@@ -162,6 +167,9 @@ class LightGBMSingleLabelGenerator:
     _call_count: int = field(default=0, repr=False)
     _prediction_membership_sha256: str = field(default="", repr=False, init=False)
     _shareholder_source_lineage: dict[str, dict[str, str]] = field(
+        default_factory=dict, repr=False, init=False
+    )
+    _shareholder_freshness_profiles: dict[str, dict[str, object]] = field(
         default_factory=dict, repr=False, init=False
     )
 
@@ -178,6 +186,12 @@ class LightGBMSingleLabelGenerator:
                 "prediction_universe requires prediction_membership_path"
             )
         self._validate_shareholder_snapshot()
+        if self.shareholder_freshness_contract is not None:
+            from qsys.feature.freshness import normalise_shareholder_freshness
+
+            self.shareholder_freshness_contract = normalise_shareholder_freshness(
+                self.shareholder_freshness_contract
+            )
         if not self.prediction_membership_path:
             return
         if not self._effective_pit_filter_mode():
@@ -249,6 +263,25 @@ class LightGBMSingleLabelGenerator:
         return dict(self._shareholder_source_lineage)
 
     @property
+    def shareholder_freshness_lineage(self) -> dict[str, object] | None:
+        """Return the opt-in contract and per-window preflight evidence."""
+        if self.shareholder_freshness_contract is None:
+            return None
+        return {
+            "contract": self.shareholder_freshness_contract,
+            "profiles": dict(self._shareholder_freshness_profiles),
+        }
+
+    @property
+    def checkpoint_contract_identity(self) -> dict[str, object]:
+        """Contracts that alter the generator's acceptance semantics."""
+        if self.shareholder_freshness_contract is None:
+            return {}
+        return {
+            "shareholder_freshness_contract": self.shareholder_freshness_contract,
+        }
+
+    @property
     def checkpoint_input_artifacts(self) -> list[dict[str, str]]:
         return [
             {"name": name, "sha256": payload["sha256"]}
@@ -315,7 +348,7 @@ class LightGBMSingleLabelGenerator:
             prediction_path, prediction_hash, _ = _prediction_membership_identity(
                 self.prediction_membership_path
             )
-        return {
+        identity = {
             "schema_version": _WINDOW_CACHE_SCHEMA_VERSION,
             "builder_id": _WINDOW_CACHE_BUILDER_ID,
             "source_manifest_hash": self.source_manifest_hash,
@@ -334,6 +367,11 @@ class LightGBMSingleLabelGenerator:
             "start": start,
             "end": end,
         }
+        if self.shareholder_freshness_contract is not None:
+            identity["shareholder_freshness_contract"] = (
+                self.shareholder_freshness_contract
+            )
+        return identity
 
     def _window_key(self, start: str, end: str, features: list[str]) -> str:
         raw = json.dumps(
@@ -751,6 +789,41 @@ class LightGBMSingleLabelGenerator:
             )
         return result
 
+    def _check_shareholder_freshness(
+        self,
+        frame: pd.DataFrame,
+        *,
+        role: str,
+        start: str,
+        end: str,
+    ) -> None:
+        """Fail closed on an opted-in shareholder contract without mutation.
+
+        This deliberately runs on the constructed feature frame, before label
+        joins and before the legacy ``fillna(0)`` model-input conversion.  The
+        returned profile is evidence only; no rows or values are changed.
+        """
+        contract = self.shareholder_freshness_contract
+        if contract is None:
+            return
+        from qsys.feature.freshness import profile_shareholder_feature_freshness
+
+        profile = profile_shareholder_feature_freshness(
+            frame[
+                (frame["trade_date"] >= start) & (frame["trade_date"] <= end)
+            ],
+            contract,
+            date_column="trade_date",
+        )
+        key = f"{role}:{start}:{end}"
+        self._shareholder_freshness_profiles[key] = profile
+        if profile["status"] != "pass":
+            violations = "; ".join(profile["violations"])
+            raise ValueError(
+                "shareholder feature freshness failed for "
+                f"{role} window [{start}, {end}]: {violations}"
+            )
+
     def _load_prediction_data(
         self,
         start: str,
@@ -828,6 +901,22 @@ class LightGBMSingleLabelGenerator:
                 frame = self._apply_pit_membership(frame)
             train_frame = frame
             prediction_frame = frame
+
+        # Gate both sides of the rolling window after PIT membership has been
+        # applied and before labels/model preprocessing.  Prediction dates are
+        # the feature dates actually consumed by this execution window.
+        self._check_shareholder_freshness(
+            train_frame,
+            role="train",
+            start=train_start,
+            end=train_end,
+        )
+        self._check_shareholder_freshness(
+            prediction_frame,
+            role="predict",
+            start=min(feature_dates),
+            end=max(feature_dates),
+        )
 
         from qsys.label.store import LabelStore
         from qsys.signal.alpha_v1.training import (

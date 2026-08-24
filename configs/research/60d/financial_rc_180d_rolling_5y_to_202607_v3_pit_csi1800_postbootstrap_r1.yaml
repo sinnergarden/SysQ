@@ -25,10 +25,21 @@ generators:
       feature_list_id: v3a_plus_liquidity_financial_rc
       pit_membership: true
       pit_universe_artifact: csi1800_pit_v2
-      shareholder_holder_path: data/research/source_snapshots/shareholder/20260821_postbootstrap_v1/holder_num.parquet
-      shareholder_holder_sha256: b43e2483adb19d02abc2602a9e0bc41a16ffe3246b34b3974847561e11f7eeab
-      shareholder_top10_path: data/research/source_snapshots/shareholder/20260821_postbootstrap_v1/top10_holder_ratio.parquet
-      shareholder_top10_sha256: 82bff0a8dc8267280fce0522b2f6f193ada0f45dead58d80bbd1142be738415f
+      shareholder_holder_path: data/research/source_snapshots/shareholder/20260821_baseline_complete_v2/holder_num.parquet
+      shareholder_holder_sha256: 53e03fa87945a7602f64aa385d5b328d9d2b45375ccca193124c355658e704e1
+      shareholder_top10_path: data/research/source_snapshots/shareholder/20260821_baseline_complete_v2/top10_holder_ratio.parquet
+      shareholder_top10_sha256: 8709f7509e46cd3b8c681099159f9890ee881ab1816ae467e20aa4ae06fe5b4f
+      shareholder_freshness_contract:
+        source: tushare.stk_holdernumber+tushare.top10_holders
+        availability_rule: announcement_date_asof
+        min_coverage: 0.95
+        features:
+          holder_num_stale_days:
+            max_median_days: 200
+            max_row_days: 365
+          top10_holder_stale_days:
+            max_median_days: 250
+            max_row_days: 365
       labels:
         - label_id: fwd_ret_180d_raw_pit_csi1800
 signal_transforms:

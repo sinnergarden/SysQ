@@ -11,6 +11,17 @@ from qsys.research.generators.lightgbm_single_label import (
 )
 
 
+_FRESHNESS_CONTRACT = {
+    "source": "test",
+    "availability_rule": "announcement_date_asof",
+    "min_coverage": 0.95,
+    "features": {
+        "holder_num_stale_days": {"max_median_days": 200, "max_row_days": 365},
+        "top10_holder_stale_days": {"max_median_days": 250, "max_row_days": 365},
+    },
+}
+
+
 def _generator(tmp_path: Path, **kwargs) -> LightGBMSingleLabelGenerator:
     source_hash = kwargs.pop("source_manifest_hash", "source_v1")
     return LightGBMSingleLabelGenerator(
@@ -32,6 +43,16 @@ def test_cache_key_binds_source_universe_and_ordered_features(tmp_path: Path) ->
         tmp_path, universe="csi800"
     )._window_key("2020-01-01", "2021-01-01", ["f1", "f2"])
     assert key != base._window_key("2020-01-01", "2021-01-01", ["f2", "f1"])
+
+
+def test_cache_key_binds_opt_in_shareholder_freshness_contract(tmp_path: Path) -> None:
+    base = _generator(tmp_path)
+    gated = _generator(
+        tmp_path, shareholder_freshness_contract=_FRESHNESS_CONTRACT
+    )
+    assert base._window_key("2020-01-01", "2021-01-01", ["f1"]) != gated._window_key(
+        "2020-01-01", "2021-01-01", ["f1"]
+    )
 
 
 def test_cache_requires_explicit_source_identity(tmp_path: Path) -> None:

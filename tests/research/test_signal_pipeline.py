@@ -210,6 +210,58 @@ class TestSignalResearchPipelineMatrix:
             }
 
     @patch("qsys.label.store.LabelStore.load_labels")
+    def test_matrix_persists_shareholder_freshness_lineage(
+        self, mock_labels, tmp_path: Path
+    ) -> None:
+        from qsys.research.generators.fixture import FixtureSignalGenerator
+
+        mock_labels.return_value = _make_fake_labels()
+
+        class FreshnessFixtureGenerator(FixtureSignalGenerator):
+            def generate(self, **kwargs):
+                result = super().generate(**kwargs)
+                self.shareholder_freshness_lineage = {
+                    "contract": {"min_coverage": 0.95},
+                    "profiles": {"train:window": {"status": "pass"}},
+                }
+                return result
+
+        generator = FreshnessFixtureGenerator(n_instruments=10)
+        generator.shareholder_freshness_lineage = {
+            "contract": {"min_coverage": 0.95},
+            "profiles": {},
+        }
+        generator.checkpoint_contract_identity = {
+            "shareholder_freshness_contract": {"min_coverage": 0.95}
+        }
+        pipeline = SignalResearchPipeline(str(tmp_path))
+        result = pipeline.run(
+            self._matrix_config(), signal_generator=generator,
+            overwrite_signal=True, overwrite_eval=True,
+        )
+        manifest = pipeline._signal_store.load_manifest(
+            result.signal_runs[0].signal_id, result.signal_runs[0].signal_run_id
+        )
+        assert manifest["shareholder_freshness_lineage"]["contract"]["min_coverage"] == 0.95
+        assert manifest["shareholder_freshness_lineage"]["profiles"] == {
+            "train:window": {"status": "pass"}
+        }
+
+        config = self._matrix_config()
+        config.window_checkpoints = True
+        config.source_manifest_hash = "source-v1"
+        first = pipeline._window_checkpoint_base_identity(
+            config, config.generators[0], generator
+        )
+        generator.checkpoint_contract_identity = {
+            "shareholder_freshness_contract": {"min_coverage": 0.90}
+        }
+        changed = pipeline._window_checkpoint_base_identity(
+            config, config.generators[0], generator
+        )
+        assert first["generator_contracts"] != changed["generator_contracts"]
+
+    @patch("qsys.label.store.LabelStore.load_labels")
     @patch("qsys.research.signal_pipeline.FeatureListRegistry.contract")
     def test_matrix_binds_feature_content_in_checkpoint_and_signal_manifest(
         self, mock_contract, mock_labels, tmp_path: Path
