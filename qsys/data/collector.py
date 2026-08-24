@@ -505,7 +505,13 @@ class TushareCollector:
             requested_codes,
         )
         frames = []
-        for code in sorted(candidates):
+        for index, code in enumerate(sorted(candidates)):
+            # Match the historical per-stock fetcher's conservative pacing:
+            # each candidate expands to four financial API calls, so an
+            # unthrottled loop can exceed Tushare's request-rate contract on
+            # heavy reporting dates.
+            if index > 0:
+                time.sleep(0.3)
             # Ordinary financial endpoints are deliberately called per
             # candidate with ts_code; no unsupported market-wide ann_date
             # query is allowed here.
