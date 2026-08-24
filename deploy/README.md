@@ -38,6 +38,10 @@ CSI1800 切换后，以 `qsys-csi1800-pit-daily-sync.service` 的 journal、日�
 
 ### 安装步骤
 
+先 materialize 并验证固定 revision 的 clean detached runtime，再安装/启用
+timer。部署脚本默认只做 preflight；只有显式传入 `--apply` 才会写入
+systemd user units 并 enable timer，绝不会在脚本内启动完整同步。
+
 ```bash
 # 1. 创建 Telegram 凭证文件
 #    先通过 @BotFather 创建 bot，获取 token
@@ -49,11 +53,17 @@ QSYS_TELEGRAM_ALLOWED_CHAT_ID=你的chat_id
 EOF
 chmod 600 /home/liuming/.openclaw/.env
 
-# 2. 复制 systemd 文件到 user 目录
+# 2. 从明确 revision 创建/更新 runtime，并完成所有路径与 PIT-only 检查
+python scripts/deploy_csi1800_pit_runtime.py \
+  --revision "$(git rev-parse HEAD)"
+
+# 3. 安装 service/timer、daemon-reload 并 enable timer（不启动同步）
+python scripts/deploy_csi1800_pit_runtime.py \
+  --revision "$(git rev-parse HEAD)" --apply
+
+# 4. 其余兼容/候选 units 可按需复制到 user 目录
 cp deploy/systemd/qsys-csi800-daily-sync.service ~/.config/systemd/user/
 cp deploy/systemd/qsys-csi800-daily-sync.timer ~/.config/systemd/user/
-cp deploy/systemd/qsys-csi1800-pit-daily-sync.service ~/.config/systemd/user/
-cp deploy/systemd/qsys-csi1800-pit-daily-sync.timer ~/.config/systemd/user/
 cp deploy/systemd/qsys-candidate-preopen.service ~/.config/systemd/user/
 cp deploy/systemd/qsys-candidate-preopen.timer ~/.config/systemd/user/
 cp deploy/systemd/qsys-candidate-postclose.service ~/.config/systemd/user/
@@ -62,19 +72,19 @@ cp deploy/systemd/qsys-candidate-train.service ~/.config/systemd/user/
 cp deploy/systemd/qsys-candidate-train.timer ~/.config/systemd/user/
 systemctl --user daemon-reload
 
-# 3. 切换到 CSI1800 PIT timer（不要与旧 CSI800 daily timer 并行）
+# 5. 切换到 CSI1800 PIT timer（不要与旧 CSI800 daily timer 并行）
 systemctl --user disable --now qsys-csi800-daily-sync.timer
 systemctl --user stop qsys-csi800-daily-sync.service
 systemctl --user show qsys-csi800-daily-sync.service -p ActiveState -p SubState
 # 仅在旧 service 显示 ActiveState=inactive 后继续
 systemctl --user enable --now qsys-csi1800-pit-daily-sync.timer
 
-# 4. 启用其余 timer
+# 6. 启用其余 timer
 systemctl --user enable --now qsys-candidate-preopen.timer
 systemctl --user enable --now qsys-candidate-postclose.timer
 systemctl --user enable --now qsys-candidate-train.timer
 
-# 5. 确认状态
+# 7. 确认状态
 systemctl --user list-timers --all | grep qsys
 ```
 
