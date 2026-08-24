@@ -455,33 +455,47 @@ def _do_raw_fetch(
 ) -> dict:
     """
     Fetch raw data from ``since_date`` through the target date.
-    Uses optimized path: batch-fetch daily/adj/moneyflow by date loop,
-    per-stock loop for daily_basic/stk_limit/margin (Tushare API constraints).
+
+    A true single-day repair uses ``update_daily``: all six market-wide
+    trade-date endpoints are fetched once, and only the requested universe is
+    written.  A multi-day/catch-up window deliberately keeps the historical
+    path because it has different range and merge semantics.
     """
     if not codes:
         return {"status": "skipped", "reason": "all_stocks_already_up_to_date"}
 
-    code_str = ",".join(codes)
     t0 = time.time()
 
     try:
-        # Use update_universe_history in a targeted way.
-        # The batch-size is set to 200 to maximize batch API efficiency.
-        collector.update_universe_history(
-            universe=codes,  # pass the list directly (get_universe handles list)
-            start_date=since_date or target_dt,
-            end_date=target_dt,
-            incremental=False,
-            batch_size=200,
-            include_moneyflow=True,
-            include_margin=True,
-        )
+        fetch_start = str(since_date or target_dt).replace("-", "")
+        target_dt = str(target_dt).replace("-", "")
+        if fetch_start == target_dt:
+            collector.update_daily(
+                target_dt,
+                codes=codes,
+                include_financial=True,
+                force=True,
+            )
+        else:
+            # Keep history/catch-up behavior unchanged.  In particular, this
+            # path may fetch prior dates and is never used for a single-day
+            # missing-symbol repair.
+            collector.update_universe_history(
+                universe=codes,  # pass the list directly (get_universe handles list)
+                start_date=fetch_start,
+                end_date=target_dt,
+                incremental=False,
+                batch_size=200,
+                include_moneyflow=True,
+                include_margin=True,
+            )
         elapsed = time.time() - t0
         return {
             "status": "success",
             "codes_fetched": len(codes),
-            "since_date": since_date or target_dt,
+            "since_date": fetch_start,
             "target_date": target_dt,
+            "path": "single_day_trade_date" if fetch_start == target_dt else "history_range",
             "elapsed_s": round(elapsed, 1),
         }
     except Exception as e:
