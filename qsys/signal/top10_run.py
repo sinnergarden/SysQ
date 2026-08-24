@@ -518,9 +518,16 @@ def validate_top10_run_artifact(path: str | Path) -> dict[str, Any]:
         raise Top10RunError("candidate hash differs from quality gate")
     if payload["quality_gate"].get("score_transform") != "raw_model_prediction":
         raise Top10RunError("Top10 quality gate must pin raw_model_prediction")
-    if candidate.get("source", {}).get("model_bundle_hash") != payload["model"].get(
-        "bundle_hash"
-    ):
+    candidate_source = candidate.get("source", {})
+    # ``model_bundle_id`` is the content-addressed bundle hash.  The
+    # ``model_bundle_hash`` emitted by model_blend_inference is the hash of
+    # the resolved inference settings, so it is intentionally different
+    # when availability/freshness metadata changes.  Keep the fallback for
+    # legacy candidate artifacts that predate the explicit bundle id.
+    candidate_bundle = candidate_source.get("model_bundle_id")
+    if candidate_bundle is None:
+        candidate_bundle = candidate_source.get("model_bundle_hash")
+    if candidate_bundle != payload["model"].get("bundle_hash"):
         raise Top10RunError("model bundle differs from candidate artifact")
     candidate_rows = candidate.get("candidates")
     if not isinstance(candidate_rows, list) or len(candidate_rows) != 10:

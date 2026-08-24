@@ -15,6 +15,7 @@ from qsys.signal.top10_run import (
     _canonical_hash,
     _file_sha256,
     _select_model_entry,
+    _publish_top10_manifest,
     run_top10_signal,
     validate_top10_run_artifact,
 )
@@ -188,6 +189,30 @@ def test_initial_run_trains_then_publishes_verified_top10(tmp_path: Path) -> Non
     )
     assert state["stage"] == "complete"
     assert state["status"] == "complete"
+
+
+def test_validator_uses_content_bundle_id_not_inference_settings_hash(
+    tmp_path: Path,
+) -> None:
+    _prepare_inputs(tmp_path)
+    inference_result = _write_candidate(tmp_path)
+    inference_result.payload["source"]["model_bundle_id"] = "b" * 64
+    inference_result.payload["source"]["model_bundle_hash"] = "h" * 64
+    inference_result.artifact_path.write_text(
+        json.dumps(inference_result.payload), encoding="utf-8"
+    )
+
+    result = _publish_top10_manifest(
+        tmp_path,
+        inference_result,
+        model_entry={"bundle_hash": "b" * 64},
+        retrained=True,
+        retrain_reason="initial_model",
+        sessions_since_model=0,
+    )
+
+    assert result.payload["model"]["bundle_hash"] == "b" * 64
+    assert validate_top10_run_artifact(result.artifact_path)["run_identity"]
 
 
 def test_model_inside_20_sessions_is_reused(tmp_path: Path) -> None:
