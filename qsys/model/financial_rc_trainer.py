@@ -230,6 +230,27 @@ def profile_label_universe_coverage(
     return result
 
 
+def _label_coverage_universe(
+    pit_store: Any | None,
+    configured_members: Sequence[Any],
+    window: TrainingWindow,
+) -> tuple[list[Any], str]:
+    """Resolve the membership set used by a model's label coverage gate.
+
+    A PIT artifact is an ever-member registry, so its complete instrument set
+    includes names that were only members outside the model's matured label
+    window.  Coverage is therefore profiled against the PIT union overlapping
+    this model's label window.  Non-PIT training retains its configured
+    universe semantics.
+    """
+    if pit_store is not None:
+        return (
+            pit_store.membership_window(window.label_start, window.label_end),
+            "pit_membership_window",
+        )
+    return list(configured_members), "configured_training_universe"
+
+
 @contextmanager
 def _project_working_directory(project_root: Path):
     previous = Path.cwd()
@@ -680,9 +701,9 @@ class FinancialRCTrainer:
                 "semantics": "current_snapshot",
             }
 
-        # For PIT training the label coverage gate is against the exact
-        # historical union, not the current inference snapshot.  This avoids
-        # rejecting valid delisted/relisted names from the training window.
+        # Keep the full PIT ever-member set as the training-universe identity.
+        # Each model's label coverage gate narrows this provenance-bound set to
+        # the members overlapping its own matured label window below.
         if pit_store is not None:
             label_universe_members = pit_store.instruments
         elif settings["training_universe"] != settings["inference_universe"]:
@@ -709,17 +730,29 @@ class FinancialRCTrainer:
                 raise FinancialRCTrainingError(
                     f"duplicate label rows: {spec['label_id']}"
                 )
-            label_coverage = profile_label_universe_coverage(
-                labels["instrument"].unique().tolist(),
-                label_universe_members,
-                min_coverage=settings["min_label_universe_coverage"],
-            )
             window = derive_training_window(
                 open_dates,
                 labels["trade_date"].unique().tolist(),
                 as_of_date=as_of_date,
                 horizon=spec["horizon"],
                 window_sessions=spec["window_sessions"],
+            )
+            coverage_members, coverage_semantics = _label_coverage_universe(
+                pit_store, label_universe_members, window
+            )
+            label_coverage = profile_label_universe_coverage(
+                labels["instrument"].unique().tolist(),
+                coverage_members,
+                min_coverage=settings["min_label_universe_coverage"],
+            )
+            label_coverage.update(
+                {
+                    "coverage_semantics": coverage_semantics,
+                    "coverage_window": {
+                        "label_start": window.label_start,
+                        "label_end": window.label_end,
+                    },
+                }
             )
             windows[spec["tag"]] = window
             labels_by_tag[spec["tag"]] = labels[
