@@ -15,7 +15,7 @@ import os
 import shutil
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -44,9 +44,29 @@ class Top10RunResult:
 
 def _canonical_hash(value: Any) -> str:
     encoded = json.dumps(
-        value, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        default=_canonical_json_default,
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _canonical_json_default(value: Any) -> str:
+    """Serialize the non-JSON scalar types allowed in canonical payloads.
+
+    ``date`` and ``datetime`` are converted explicitly so fingerprints can be
+    generated from YAML-loaded values without changing the representation of
+    ordinary JSON payloads.  Other types are rejected instead of being
+    silently coerced into an unstable or misleading string representation.
+    """
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    raise TypeError(
+        f"unsupported type for canonical hash: {type(value).__module__}."
+        f"{type(value).__qualname__}"
+    )
 
 
 def _file_sha256(path: Path) -> str:
