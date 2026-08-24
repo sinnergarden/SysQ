@@ -149,7 +149,11 @@ def build_margin_features(df: pd.DataFrame) -> pd.DataFrame:
 # ── Shareholder data loader ──────────────────────────────────────────────
 
 
-def load_shareholder_data(df: pd.DataFrame, holder_path: str = "data/canonical/holder_num.parquet") -> pd.DataFrame:
+def load_shareholder_data(
+    df: pd.DataFrame,
+    holder_path: str = "data/canonical/holder_num.parquet",
+    top10_path: str | None = None,
+) -> pd.DataFrame:
     """Load shareholder data from parquet and PIT-merge via ``ann_date`` merge_asof.
 
     ``df`` must have ``trade_date`` (parsed) and ``instrument`` / ``ts_code`` columns.
@@ -228,7 +232,9 @@ def load_shareholder_data(df: pd.DataFrame, holder_path: str = "data/canonical/h
         out["total_share"] = np.nan
 
     # ── top10_holder_ratio + prev_ann ─────────────────────────────────
-    top10_path = holder_path.replace("holder_num", "top10_holder_ratio")
+    top10_path = top10_path or holder_path.replace(
+        "holder_num", "top10_holder_ratio"
+    )
     try:
         tdf = pd.read_parquet(top10_path)
         tdf["_dt"] = _parse_pit_date(tdf["ann_date"])

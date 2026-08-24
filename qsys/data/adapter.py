@@ -63,9 +63,26 @@ class QlibAdapter:
     # requested dates.
     _SEMANTIC_LOOKBACK_CALENDAR_DAYS = 1461
 
-    def __init__(self, *, qlib_dir: str | Path | None = None, raw_dir: str | Path | None = None):
+    def __init__(
+        self,
+        *,
+        qlib_dir: str | Path | None = None,
+        raw_dir: str | Path | None = None,
+        shareholder_holder_path: str | Path | None = None,
+        shareholder_top10_path: str | Path | None = None,
+    ):
         self.qlib_dir = Path(qlib_dir).expanduser() if qlib_dir is not None else Path(str(cfg.get_path("qlib_bin")))
         self.raw_dir = Path(raw_dir).expanduser() if raw_dir is not None else Path(str(cfg.get_path("canonical_dir")))
+        self.shareholder_holder_path = (
+            Path(shareholder_holder_path).expanduser()
+            if shareholder_holder_path is not None
+            else None
+        )
+        self.shareholder_top10_path = (
+            Path(shareholder_top10_path).expanduser()
+            if shareholder_top10_path is not None
+            else None
+        )
         self.meta_db_path = Path(str(cfg.get_path("root"))) / "meta.db"
 
     def get_last_qlib_date(self):
@@ -445,7 +462,16 @@ class QlibAdapter:
         )
 
         try:
-            feat = build_phase1_features(semantic_input, flags=self._semantic_feature_flags(derived_fields))
+            flags = self._semantic_feature_flags(derived_fields)
+            if self.shareholder_holder_path is not None:
+                flags["shareholder_holder_path"] = str(
+                    self.shareholder_holder_path
+                )
+            if self.shareholder_top10_path is not None:
+                flags["shareholder_top10_path"] = str(
+                    self.shareholder_top10_path
+                )
+            feat = build_phase1_features(semantic_input, flags=flags)
         except KeyError as exc:
             log.warning(f"Semantic feature inputs missing; fallback to NaN for unsupported columns: {exc}")
             feat = semantic_input.copy()

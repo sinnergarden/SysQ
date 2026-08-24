@@ -74,7 +74,14 @@ def build_phase1_features(df: pd.DataFrame, flags: dict | None = None) -> pd.Dat
         out = build_margin_features(out)
     if flags.get("enable_v3a_shareholder_features", False):
         from qsys.feature.groups.value_growth_v3a import load_shareholder_data, build_shareholder_features
-        out = load_shareholder_data(out)
+        out = load_shareholder_data(
+            out,
+            holder_path=flags.get(
+                "shareholder_holder_path",
+                "data/canonical/holder_num.parquet",
+            ),
+            top10_path=flags.get("shareholder_top10_path"),
+        )
         out = build_shareholder_features(out)
     if flags.get("enable_v3b_price_volume_features", False):
         from qsys.feature.groups.value_growth_v3b_price_volume import build_v3b_price_volume_features

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from unittest.mock import patch
+import hashlib
 
 import pytest
 
@@ -59,3 +60,47 @@ def test_cache_requires_explicit_feature_list(tmp_path: Path) -> None:
         "qsys.strategy.alpha_v1.spec.get_clean_features", return_value=["f1"]
     ), pytest.raises(ValueError, match="explicit feature_list_id"):
         generator._load_data("2020-01-01", "2021-01-01")
+
+
+def test_shareholder_snapshot_requires_both_files_and_hashes(tmp_path: Path) -> None:
+    holder = tmp_path / "holder.parquet"
+    holder.write_bytes(b"holder")
+    with pytest.raises(ValueError, match="requires path and SHA-256 for both"):
+        LightGBMSingleLabelGenerator(
+            shareholder_holder_path=str(holder),
+            shareholder_holder_sha256=hashlib.sha256(b"holder").hexdigest(),
+        )
+
+
+def test_shareholder_snapshot_hash_is_verified_and_enters_identity(
+    tmp_path: Path,
+) -> None:
+    holder = tmp_path / "holder.parquet"
+    top10 = tmp_path / "top10.parquet"
+    holder.write_bytes(b"holder-v1")
+    top10.write_bytes(b"top10-v1")
+    holder_hash = hashlib.sha256(holder.read_bytes()).hexdigest()
+    top10_hash = hashlib.sha256(top10.read_bytes()).hexdigest()
+
+    generator = LightGBMSingleLabelGenerator(
+        shareholder_holder_path=str(holder),
+        shareholder_holder_sha256=holder_hash,
+        shareholder_top10_path=str(top10),
+        shareholder_top10_sha256=top10_hash,
+    )
+
+    assert generator.checkpoint_input_artifacts == [
+        {"name": "holder_num", "sha256": holder_hash},
+        {"name": "top10_holder_ratio", "sha256": top10_hash},
+    ]
+    assert generator.feature_source_lineage["holder_num"]["path"] == str(
+        holder.absolute()
+    )
+
+    with pytest.raises(ValueError, match="hash mismatch"):
+        LightGBMSingleLabelGenerator(
+            shareholder_holder_path=str(holder),
+            shareholder_holder_sha256="0" * 64,
+            shareholder_top10_path=str(top10),
+            shareholder_top10_sha256=top10_hash,
+        )

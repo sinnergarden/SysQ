@@ -302,6 +302,9 @@ class SignalResearchPipeline:
         dependency_code = _generator_dependency_code_identity(generator)
         if dependency_code:
             identity["generator_dependency_code"] = dependency_code
+        input_artifacts = getattr(generator, "checkpoint_input_artifacts", None)
+        if input_artifacts:
+            identity["generator_input_artifacts"] = input_artifacts
         if config.feature_list_id:
             contract = FeatureListRegistry.contract(config.feature_list_id)
             identity["feature_list_contract"] = {
@@ -457,6 +460,7 @@ class SignalResearchPipeline:
         # ── 3. Generate raw predictions once per generator ──
         raw_predictions: dict[str, pd.DataFrame] = {}
         generator_visibility_contracts: dict[str, str | None] = {}
+        generator_feature_source_lineage: dict[str, dict[str, Any]] = {}
         generator_checkpoint_hashes: dict[str, str] = {}
         for gen_cfg in effective_generators:
             gen_id = gen_cfg["generator_id"]
@@ -469,6 +473,9 @@ class SignalResearchPipeline:
             )
             generator_visibility_contracts[gen_id] = getattr(
                 gen, "feature_visibility_contract", None
+            )
+            generator_feature_source_lineage[gen_id] = getattr(
+                gen, "feature_source_lineage", {}
             )
 
             checkpoint_store: WindowPredictionCheckpointStore | None = None
@@ -570,6 +577,13 @@ class SignalResearchPipeline:
             if feature_visibility_contract:
                 signal_manifest["feature_visibility_contract"] = (
                     feature_visibility_contract
+                )
+            feature_source_lineage = generator_feature_source_lineage.get(
+                job.generator_id
+            )
+            if feature_source_lineage:
+                signal_manifest["feature_source_lineage"] = (
+                    feature_source_lineage
                 )
             if config.source_manifest_hash:
                 signal_manifest["source_manifest_hash"] = (

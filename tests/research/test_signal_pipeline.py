@@ -183,6 +183,9 @@ class TestSignalResearchPipelineMatrix:
         mock_labels.return_value = _make_fake_labels()
         generator = FixtureSignalGenerator(n_instruments=10)
         generator.feature_visibility_contract = FEATURE_VISIBILITY_CONTRACT_V1
+        generator.feature_source_lineage = {
+            "holder_num": {"path": "/frozen/holder.parquet", "sha256": "a" * 64}
+        }
         pipeline = SignalResearchPipeline(str(tmp_path))
         result = pipeline.run(
             self._matrix_config(),
@@ -199,6 +202,12 @@ class TestSignalResearchPipelineMatrix:
                 manifest["feature_visibility_contract"]
                 == FEATURE_VISIBILITY_CONTRACT_V1
             )
+            assert manifest["feature_source_lineage"] == {
+                "holder_num": {
+                    "path": "/frozen/holder.parquet",
+                    "sha256": "a" * 64,
+                }
+            }
 
     @patch("qsys.label.store.LabelStore.load_labels")
     @patch("qsys.research.signal_pipeline.FeatureListRegistry.contract")
@@ -261,6 +270,34 @@ class TestSignalResearchPipelineMatrix:
                 ref.signal_id, ref.signal_run_id
             )
             assert manifest["feature_list_contract"] == expected
+
+    def test_checkpoint_identity_binds_generator_input_artifacts(
+        self, tmp_path: Path
+    ) -> None:
+        from qsys.research.generators.fixture import FixtureSignalGenerator
+
+        config = self._matrix_config()
+        config.window_checkpoints = True
+        config.source_manifest_hash = "source-v1"
+        generator = FixtureSignalGenerator(n_instruments=10)
+        generator.checkpoint_input_artifacts = [
+            {"name": "holder_num", "sha256": "a" * 64}
+        ]
+        pipeline = SignalResearchPipeline(str(tmp_path))
+
+        first = pipeline._window_checkpoint_base_identity(
+            config, config.generators[0], generator
+        )
+        generator.checkpoint_input_artifacts = [
+            {"name": "holder_num", "sha256": "b" * 64}
+        ]
+        changed = pipeline._window_checkpoint_base_identity(
+            config, config.generators[0], generator
+        )
+
+        assert first["generator_input_artifacts"] != changed[
+            "generator_input_artifacts"
+        ]
 
     @patch("qsys.label.store.LabelStore.load_labels")
     def test_matrix_resumes_from_validated_window_checkpoints(

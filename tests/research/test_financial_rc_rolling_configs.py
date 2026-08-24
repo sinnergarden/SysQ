@@ -89,3 +89,34 @@ def test_csi1800_pit_config_only_changes_universe_lineage() -> None:
             "label_maturity_lag_trading_days": 181,
         }
     ]
+
+
+def test_csi1800_postbootstrap_r1_only_adds_pinned_shareholder_inputs() -> None:
+    baseline = RollingResearchConfig.from_file(
+        REPO_ROOT
+        / "configs/research/60d/financial_rc_180d_rolling_5y_to_202607_v3_pit_csi1800.yaml"
+    )
+    rerun = RollingResearchConfig.from_file(
+        REPO_ROOT
+        / "configs/research/60d/financial_rc_180d_rolling_5y_to_202607_v3_pit_csi1800_postbootstrap_r1.yaml"
+    )
+
+    assert rerun.calendar == baseline.calendar
+    assert rerun.feature_list_id == baseline.feature_list_id
+    assert rerun.source_manifest_hash == baseline.source_manifest_hash
+    assert rerun.transforms == baseline.transforms
+    assert rerun.labels == baseline.labels
+    base_params = dict(baseline.generators[0]["params"])
+    rerun_params = dict(rerun.generators[0]["params"])
+    pinned = {
+        key: rerun_params.pop(key)
+        for key in (
+            "shareholder_holder_path",
+            "shareholder_holder_sha256",
+            "shareholder_top10_path",
+            "shareholder_top10_sha256",
+        )
+    }
+    assert rerun_params == base_params
+    assert pinned["shareholder_holder_sha256"] == "b43e2483adb19d02abc2602a9e0bc41a16ffe3246b34b3974847561e11f7eeab"
+    assert pinned["shareholder_top10_sha256"] == "82bff0a8dc8267280fce0522b2f6f193ada0f45dead58d80bbd1142be738415f"

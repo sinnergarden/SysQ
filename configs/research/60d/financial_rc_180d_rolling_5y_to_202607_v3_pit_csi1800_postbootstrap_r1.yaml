@@ -1,0 +1,39 @@
+# Exact namespace-only rerun of the CSI1800 S180 research baseline after the
+# 2026-08-25 shareholder-history bootstrap.  Universe, feature list, label,
+# maturity lag, model parameters, rolling windows and score transform remain
+# frozen.  The only semantic input change is the explicitly pinned immutable
+# shareholder sidecar snapshot.
+experiment_id: financial_rc_180d_rolling_5y_to_202607_v3_pit_csi1800_postbootstrap_r1
+calendar:
+  start_date: "2021-01-01"
+  end_date: "2026-07-31"
+  train_window_days: 504
+  step_days: 20
+signal:
+  signal_id: v3a_growth_financial_180d_pit_csi1800_postbootstrap_r1
+  score_column: score
+feature_list_id: v3a_plus_liquidity_financial_rc
+# Unchanged native Qlib source identity from the frozen baseline config.
+source_manifest_hash: 780ba40ec5ce8a5f5b5c88b02e1e171e0d67c3c2b02639b22ed0a2b889abc237
+window_checkpoints: true
+generators:
+  - generator_id: v3a_growth_financial_180d_pit_csi1800_postbootstrap_r1
+    type: multi_label_lightgbm
+    params:
+      universe: csi1800_pit_union
+      n_estimators: 300
+      feature_list_id: v3a_plus_liquidity_financial_rc
+      pit_membership: true
+      pit_universe_artifact: csi1800_pit_v2
+      shareholder_holder_path: data/research/source_snapshots/shareholder/20260821_postbootstrap_v1/holder_num.parquet
+      shareholder_holder_sha256: b43e2483adb19d02abc2602a9e0bc41a16ffe3246b34b3974847561e11f7eeab
+      shareholder_top10_path: data/research/source_snapshots/shareholder/20260821_postbootstrap_v1/top10_holder_ratio.parquet
+      shareholder_top10_sha256: 82bff0a8dc8267280fce0522b2f6f193ada0f45dead58d80bbd1142be738415f
+      labels:
+        - label_id: fwd_ret_180d_raw_pit_csi1800
+signal_transforms:
+  - transform_id: daily_zscore
+    type: daily_zscore
+labels:
+  - label_id: fwd_ret_180d_raw_pit_csi1800
+    label_maturity_lag_trading_days: 181

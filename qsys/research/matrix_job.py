@@ -297,6 +297,8 @@ def _create_generator_from_config(
             "pit_universe_artifact", "liquidity_exclusion_path",
             "prediction_membership_path", "prediction_membership_sha256",
             "prediction_universe",
+            "shareholder_holder_path", "shareholder_holder_sha256",
+            "shareholder_top10_path", "shareholder_top10_sha256",
         }
         unknown = set(params) - _CONSUMED_PARAMS
         if unknown:
@@ -352,6 +354,10 @@ def _create_generator_from_config(
             liquidity_exclusion_path=params.get("liquidity_exclusion_path", ""),
             prediction_membership_path=prediction_membership_path,
             prediction_universe=params.get("prediction_universe", ""),
+            shareholder_holder_path=params.get("shareholder_holder_path", ""),
+            shareholder_holder_sha256=params.get("shareholder_holder_sha256", ""),
+            shareholder_top10_path=params.get("shareholder_top10_path", ""),
+            shareholder_top10_sha256=params.get("shareholder_top10_sha256", ""),
             use_feature_cache=use_feature_cache,
             write_through=write_through,
             feature_cache_root=feature_cache_root,
