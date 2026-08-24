@@ -711,7 +711,14 @@ class TushareCollector:
                 log.warning(f"{code} dropping {bad_count} rows due to price sanity checks")
                 df = df[~bad]
         if 'close' in df.columns:
-            pct = df['close'].pct_change().abs()
+            # ``update_daily`` validates one cross-sectional frame containing
+            # many symbols.  A plain pct_change() compares adjacent symbols
+            # after sorting by date and reports thousands of fictitious price
+            # moves.  Price continuity is meaningful only within a symbol.
+            if 'ts_code' in df.columns:
+                pct = df.groupby('ts_code', sort=False)['close'].pct_change().abs()
+            else:
+                pct = df['close'].pct_change().abs()
             extreme = int((pct > 0.25).sum())
             if extreme > 0:
                 log.warning(f"{code} found {extreme} extreme moves >25%")
