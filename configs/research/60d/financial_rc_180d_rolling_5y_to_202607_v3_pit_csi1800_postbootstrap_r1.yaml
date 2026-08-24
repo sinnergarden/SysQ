@@ -35,9 +35,15 @@ generators:
         min_coverage: 0.95
         features:
           holder_num_stale_days:
+            # Tushare has no usable holder_num for 143 historical PIT
+            # members: 113 endpoints are empty and 30 are null-only.  The
+            # audited 68-window source floor is 94.2406%.
+            min_coverage: 0.94
             max_median_days: 200
             max_row_days: 365
           top10_holder_stale_days:
+            # Preserve the independently observed 99.9964% source coverage.
+            min_coverage: 0.99
             max_median_days: 250
             max_row_days: 365
       labels:
