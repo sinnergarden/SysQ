@@ -30,7 +30,7 @@ import json
 import os
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, time as wall_time
 from pathlib import Path
 
 import numpy as np
@@ -47,30 +47,47 @@ from qsys.data.adapter import QlibAdapter
 from qsys.utils.logger import log
 
 
-def _resolve_target_date(end_date: str | None) -> str:
-    """Resolve target date: latest trading day up to today, or explicit date."""
+_DAILY_DATA_READY_CUTOFF = wall_time(18, 30)
+
+
+def _resolve_target_date(
+    end_date: str | None,
+    *,
+    now: datetime | None = None,
+) -> str:
+    """Resolve the latest *completed and expected-ready* trading session.
+
+    The timer runs at 19:00 Asia/Shanghai.  Before 18:30 on an open day, the
+    current session is deliberately excluded so an early manual invocation
+    cannot create a partial/future-dated daily run.  An explicit date remains
+    an operator override.  Missing or malformed calendars fail closed instead
+    of silently falling back to today's wall-clock date.
+    """
     if end_date:
         return end_date.replace("-", "")
 
-    today_str = datetime.now().strftime("%Y%m%d")
+    current = now or datetime.now()
+    today_str = current.strftime("%Y%m%d")
+    inclusive_today = current.time() >= _DAILY_DATA_READY_CUTOFF
 
     # Use local trade_cal (data source ground truth, not qlib)
     try:
         cal = StockDataStore().get_calendar()
         if cal is not None and not cal.empty and "is_open" in cal.columns and "cal_date" in cal.columns:
             open_days = sorted(cal[cal["is_open"] == 1]["cal_date"].astype(str).tolist())
-            candidate = [d for d in open_days if d <= today_str]
+            candidate = [
+                d for d in open_days
+                if d < today_str or (inclusive_today and d == today_str)
+            ]
             if candidate:
-                latest = candidate[-1]
-                #跨年: calendar has no entries for current year, use today
-                if latest[:4] != today_str[:4]:
-                    return today_str
-                return latest
+                return candidate[-1]
     except Exception as e:
         log.warning(f"Failed to resolve target date via calendar: {e}")
 
-    # Fallback: today — pre_check will decide whether data needs fetching
-    return today_str
+    raise RuntimeError(
+        "cannot resolve a completed daily target from trade_cal; "
+        "refresh the calendar or pass --target-date explicitly"
+    )
 
 
 def _check_stock_data_status(store: StockDataStore, codes: list[str], target_dt: str) -> dict:
