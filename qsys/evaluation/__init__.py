@@ -1,5 +1,4 @@
-# Evaluation module
-# Provides unified baseline vs extended evaluation with explicit windows and defaults
+"""Evaluation entry points."""
 
 from .evaluator import (
     DEFAULT_MAIN_START,
@@ -9,8 +8,12 @@ from .evaluator import (
     ModelMetrics,
     StrictEvaluator,
 )
+from .top_tail import TopTailValidationError, evaluate_top_tail, write_top_tail_artifacts
 
 __all__ = [
+    "TopTailValidationError",
+    "evaluate_top_tail",
+    "write_top_tail_artifacts",
     "StrictEvaluator",
     "EvaluationReport",
     "EvaluationResult",

@@ -149,6 +149,49 @@ class TestLightGBMSingleLabelContract:
         input_dates = set(self._make_fake_data()["trade_date"])
         assert set(result["data_date"]).issubset(input_dates)
 
+    @patch("qsys.data.calendar.get_trading_calendar", _fake_calendar)
+    @patch("qsys.signal.alpha_v1.training.predict_model", _fake_predict_model)
+    @patch("qsys.label.store.LabelStore.load_labels")
+    def test_weighted_policy_passes_matured_date_weights_to_training(
+        self, mock_labels
+    ) -> None:
+        mock_labels.return_value = self._fake_labels()
+        captured = {}
+
+        def fake_weighted_train(X_train, y_train, tag, **kwargs):
+            captured["weight"] = kwargs["sample_weight"]
+            captured["validation_size"] = kwargs["validation_size"]
+            captured["y_index"] = y_train.index
+            return (
+                FakeModel(),
+                pd.Series([1.0] * X_train.shape[1]),
+                pd.Series([0.0] * X_train.shape[1]),
+            )
+
+        gen = LightGBMSingleLabelGenerator(
+            label_id="fwd_ret_5d_xsz_clip3", sample_weight_policy="top_tail_v1"
+        )
+        with patch.object(gen, "_load_data") as mock_load, patch.object(
+            gen, "_ensure_qlib"
+        ), patch(
+            "qsys.signal.alpha_v1.training.train_model", fake_weighted_train
+        ):
+            mock_load.return_value = self._make_fake_data(), ["f1", "f2"]
+            gen.generate(
+                train_start="2026-01-02",
+                train_end="2026-01-10",
+                predict_start="2026-01-20",
+                predict_end="2026-01-21",
+                signal_id="s",
+                signal_run_id="r",
+            )
+        assert captured["weight"] is not None
+        assert captured["weight"].index.equals(captured["y_index"])
+        assert captured["validation_size"] == max(
+            1, min(20000, int(len(captured["y_index"]) * 0.15))
+        )
+        assert set(captured["weight"].unique()).issubset({1.0, 2.0, 3.0})
+
     @staticmethod
     def _make_fake_data() -> pd.DataFrame:
         dates = [f"2026-01-{d:02d}" for d in range(2, 23)]

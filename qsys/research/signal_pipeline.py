@@ -44,6 +44,42 @@ def _sha256_path(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else "missing"
 
 
+def _generator_dependency_code_identity(
+    generator: RollingSignalGenerator,
+) -> list[dict[str, str]]:
+    """Hash explicitly declared generator code dependencies.
+
+    Generators that do not declare dependencies retain the historical identity
+    shape.  A dependency declaration is a name-to-path mapping; only the
+    stable name and content hash are persisted, so checkout location does not
+    become part of the checkpoint identity.
+    """
+    declared = getattr(generator, "checkpoint_code_dependencies", None)
+    if declared is None:
+        return []
+    if callable(declared):
+        declared = declared()
+    if not isinstance(declared, dict):
+        raise ValueError(
+            "checkpoint_code_dependencies must be a mapping of name to file path"
+        )
+    dependencies: list[dict[str, str]] = []
+    for name, raw_path in sorted(declared.items(), key=lambda item: str(item[0])):
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError("checkpoint code dependency names must be non-empty strings")
+        if not isinstance(raw_path, (str, Path)):
+            raise ValueError(
+                f"checkpoint code dependency {name!r} must resolve to a filesystem path"
+            )
+        path = Path(raw_path).expanduser().resolve()
+        if not path.is_file():
+            raise ValueError(
+                f"checkpoint code dependency {name!r} is not a readable file: {path}"
+            )
+        dependencies.append({"name": name, "sha256": _sha256_path(path)})
+    return dependencies
+
+
 @dataclass
 class SignalRunRef:
     """Reference to one produced SignalRun."""
@@ -263,6 +299,9 @@ class SignalResearchPipeline:
             "source_manifest_hash": config.source_manifest_hash,
             "label_artifacts": label_artifacts,
         }
+        dependency_code = _generator_dependency_code_identity(generator)
+        if dependency_code:
+            identity["generator_dependency_code"] = dependency_code
         if config.feature_list_id:
             contract = FeatureListRegistry.contract(config.feature_list_id)
             identity["feature_list_contract"] = {

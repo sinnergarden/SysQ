@@ -18,6 +18,8 @@ from __future__ import annotations
 import gc
 import hashlib
 import json
+import os
+import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -37,9 +39,26 @@ from qsys.utils.logger import log
 
 _WINDOW_CACHE_SCHEMA_VERSION = 4
 _WINDOW_CACHE_BUILDER_ID = "lightgbm_single_label_qlib_frame_v4_pit_content_bound"
+_ANNUAL_SHARD_SCHEMA_VERSION = 1
 FEATURE_VISIBILITY_CONTRACT = (
     "actual_feature_date_strictly_before_trade_date_v1"
 )
+
+
+def _sha256_file(path: Path, chunk_size: int = 1024 * 1024) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(chunk_size), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _fsync_directory(path: Path) -> None:
+    directory_fd = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
 
 
 def _prediction_membership_identity(path_value: str) -> tuple[str, str, set[str]]:
@@ -94,10 +113,14 @@ class LightGBMSingleLabelGenerator:
     universe: str = "csi300"
     n_estimators: int = 200
     lgb_params: dict | None = None
+    # Closed, explicit model-objective experiment policy.  It is deliberately
+    # absent from feature-cache identity because feature frames are reusable.
+    sample_weight_policy: str | None = None
     feature_list_id: str | None = None
     # ── Feature cache options (opt-in) ──
     use_feature_cache: bool = False
     write_through: bool = False  # save per-window cache on first use
+    cache_write_scope: str = "window"  # "window" or "annual_shard"
     feature_cache_root: str = "data/feature_cache"
     source_manifest_hash: str = ""
     # ── Point-in-Time universe restriction (opt-in) ──
@@ -132,6 +155,13 @@ class LightGBMSingleLabelGenerator:
     _prediction_membership_sha256: str = field(default="", repr=False, init=False)
 
     def __post_init__(self) -> None:
+        from qsys.signal.alpha_v1.training import validate_sample_weight_policy
+
+        validate_sample_weight_policy(self.sample_weight_policy)
+        if self.cache_write_scope not in {"window", "annual_shard"}:
+            raise ValueError(
+                "cache_write_scope must be 'window' or 'annual_shard'"
+            )
         if self.prediction_universe and not self.prediction_membership_path:
             raise ValueError(
                 "prediction_universe requires prediction_membership_path"
@@ -148,6 +178,22 @@ class LightGBMSingleLabelGenerator:
         )
         self.prediction_membership_path = normalized
         self._prediction_membership_sha256 = digest
+
+    @property
+    def checkpoint_code_dependencies(self) -> dict[str, Path]:
+        """Code files whose changes invalidate rolling window checkpoints.
+
+        The generator source hash covers this class, but the model-training
+        semantics live in the shared Alpha V1 training module as well.  Keep
+        that dependency explicit so a training-only change cannot reuse old
+        predictions.  Paths are resolved by the pipeline and only the stable
+        dependency name plus content hash enter checkpoint identity.
+        """
+        from qsys.signal.alpha_v1 import training
+
+        return {
+            "qsys.signal.alpha_v1.training": Path(training.__file__).resolve(),
+        }
 
     # ═══════════════════════════════════════════════════════════════
     # Per-window cache: content identity, not date range alone.
@@ -234,6 +280,184 @@ class LightGBMSingleLabelGenerator:
         path = self._window_cache_path(start, end, features)
         return path.exists() and self._window_meta_path(start, end, features).exists()
 
+    def _annual_shard_dir(self) -> Path:
+        return Path(self.feature_cache_root) / "annual_shards"
+
+    def _annual_shard_path(
+        self, start: str, end: str, features: list[str]
+    ) -> Path:
+        return self._annual_shard_dir() / f"{self._window_key(start, end, features)}.parquet"
+
+    def _annual_shard_meta_path(
+        self, start: str, end: str, features: list[str]
+    ) -> Path:
+        return Path(str(self._annual_shard_path(start, end, features)) + ".meta.json")
+
+    @staticmethod
+    def _cache_identity_without_range(identity: dict[str, object]) -> dict[str, object]:
+        return {key: value for key, value in identity.items() if key not in {"start", "end"}}
+
+    @staticmethod
+    def _annual_ranges(start: str, end: str) -> list[tuple[str, str]]:
+        start_year = int(start[:4])
+        end_year = int(end[:4])
+        return [
+            (f"{year:04d}-01-01", f"{year:04d}-12-31")
+            for year in range(start_year, end_year + 1)
+        ]
+
+    def _read_cache_frame(
+        self,
+        path: Path,
+        features: list[str],
+        *,
+        expected_data_sha256: str | None = None,
+        expected_rows: int | None = None,
+        expected_cols: int | None = None,
+    ) -> pd.DataFrame | None:
+        if not path.is_file():
+            return None
+        if expected_data_sha256:
+            actual = _sha256_file(path)
+            if actual != expected_data_sha256:
+                return None
+        try:
+            df = pd.read_parquet(path)
+        except Exception:
+            return None
+        if expected_rows is not None and len(df) != expected_rows:
+            return None
+        if expected_cols is not None and len(df.columns) != expected_cols:
+            return None
+        if "trade_date" not in df.columns or "instrument" not in df.columns:
+            return None
+        needed = {"trade_date", "instrument"} | set(features)
+        if needed - set(df.columns):
+            return None
+        df = df[["trade_date", "instrument", *features]].copy()
+        df["trade_date"] = df["trade_date"].astype(str).str[:10]
+        return df
+
+    def _load_annual_shard_cache(
+        self,
+        start: str,
+        end: str,
+        features: list[str],
+    ) -> pd.DataFrame | None:
+        """Compose complete calendar-year shards, or return None on any miss."""
+        ranges = self._annual_ranges(start, end)
+        pieces: list[pd.DataFrame] = []
+        expected_base: dict[str, object] | None = None
+        for shard_start, shard_end in ranges:
+            identity = self._cache_identity(shard_start, shard_end, features)
+            if expected_base is None:
+                expected_base = self._cache_identity_without_range(identity)
+            elif self._cache_identity_without_range(identity) != expected_base:
+                return None
+            meta_path = self._annual_shard_meta_path(shard_start, shard_end, features)
+            path = self._annual_shard_path(shard_start, shard_end, features)
+            if not meta_path.is_file():
+                return None
+            try:
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            except Exception:
+                return None
+            if meta.get("schema_version") != _ANNUAL_SHARD_SCHEMA_VERSION:
+                return None
+            if meta.get("identity") != identity:
+                return None
+            piece = self._read_cache_frame(
+                path,
+                features,
+                expected_data_sha256=meta.get("data_sha256"),
+                expected_rows=meta.get("rows"),
+                expected_cols=meta.get("cols"),
+            )
+            if piece is None:
+                return None
+            if not piece["trade_date"].between(shard_start, shard_end).all():
+                return None
+            pieces.append(piece)
+        if not pieces:
+            return None
+        result = pd.concat(pieces, ignore_index=True)
+        result = result[
+            (result["trade_date"] >= start) & (result["trade_date"] <= end)
+        ]
+        if result.duplicated(subset=["trade_date", "instrument"]).any():
+            raise ValueError("annual feature cache contains duplicate instrument/date keys")
+        result = result.sort_values(
+            ["instrument", "trade_date"], kind="mergesort"
+        ).reset_index(drop=True)
+        if result.empty:
+            return None
+        log.info(
+            "Annual feature cache composed [{}, {}] from {} shards ({} rows)",
+            start,
+            end,
+            len(pieces),
+            len(result),
+        )
+        return result
+
+    def _write_cache_frame(
+        self,
+        frame: pd.DataFrame,
+        start: str,
+        end: str,
+        features: list[str],
+    ) -> Path:
+        if self.cache_write_scope == "annual_shard":
+            path = self._annual_shard_path(start, end, features)
+            meta_path = self._annual_shard_meta_path(start, end, features)
+            identity = self._cache_identity(start, end, features)
+            meta = {
+                "schema_version": _ANNUAL_SHARD_SCHEMA_VERSION,
+                "identity": identity,
+                "rows": len(frame),
+                "cols": len(frame.columns),
+            }
+        else:
+            path = self._window_cache_path(start, end, features)
+            meta_path = self._window_meta_path(start, end, features)
+            meta = {
+                **self._cache_identity(start, end, features),
+                "window_key": self._window_key(start, end, features),
+                "rows": len(frame),
+                "cols": len(frame.columns),
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+        path.parent.mkdir(parents=True, exist_ok=True)
+        out = frame.copy()
+        data_fd, data_tmp_name = tempfile.mkstemp(
+            prefix=f".{path.name}.", suffix=".parquet.tmp", dir=str(path.parent)
+        )
+        os.close(data_fd)
+        try:
+            out.to_parquet(data_tmp_name, index=False)
+            with open(data_tmp_name, "rb") as handle:
+                os.fsync(handle.fileno())
+            os.replace(data_tmp_name, path)
+            _fsync_directory(path.parent)
+        finally:
+            if os.path.exists(data_tmp_name):
+                os.unlink(data_tmp_name)
+        meta["data_sha256"] = _sha256_file(path)
+        fd, tmp_name = tempfile.mkstemp(
+            prefix=f".{meta_path.name}.", suffix=".tmp", dir=str(meta_path.parent)
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump(meta, handle, indent=2, ensure_ascii=False, default=str)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(tmp_name, meta_path)
+            _fsync_directory(meta_path.parent)
+        finally:
+            if os.path.exists(tmp_name):
+                os.unlink(tmp_name)
+        return path
+
     # ═══════════════════════════════════════════════════════════════
     # Data loader
     # ═══════════════════════════════════════════════════════════════
@@ -280,27 +504,31 @@ class LightGBMSingleLabelGenerator:
                     "Window cache identity mismatch: "
                     + ", ".join(identity_mismatches)
                 )
-
-            df = pd.read_parquet(path)
-            # trade_date was saved as str; ensure it stays str
-            df["trade_date"] = df["trade_date"].astype(str).str[:10]
-
-            needed = {"trade_date", "instrument"} | set(clean)
-            missing = needed - set(df.columns)
-            if missing:
+            df = self._read_cache_frame(
+                path,
+                clean,
+                expected_data_sha256=meta.get("data_sha256"),
+                expected_rows=meta.get("rows"),
+                expected_cols=meta.get("cols"),
+            )
+            if df is None:
                 raise ValueError(
-                    f"Cache missing features needed by '{self.feature_list_id}': {missing}. "
+                    f"Cache missing or malformed features needed by '{self.feature_list_id}'. "
                     "Re-run with write_through=True for this exact feature list."
                 )
-            df = df[["trade_date", "instrument", *clean]]
 
-            log.info("Cache HIT: %s (%d rows x %d cols, subset=%d feats)",
+            log.info("Cache HIT: {} ({} rows x {} cols, subset={} feats)",
                      path.name, len(df), len(df.columns), len(clean))
             return df, clean
 
+        if self.use_feature_cache:
+            composed = self._load_annual_shard_cache(start, end, clean)
+            if composed is not None:
+                return composed, clean
+
         # ── Original qlib path (cache miss or disabled) ──
         self._call_count += 1
-        log.info("Loading qlib data [%s, %s] (call #%d)", start, end, self._call_count)
+        log.info("Loading qlib data [{}, {}] (call #{})", start, end, self._call_count)
 
         from qsys.data.adapter import QlibAdapter
         adapter = QlibAdapter()
@@ -315,25 +543,9 @@ class LightGBMSingleLabelGenerator:
 
         # ── Write-through: save this window's frame to per-window cache ──
         if self.use_feature_cache and self.write_through:
-            path = self._window_cache_path(start, end, clean)
-            meta_path = self._window_meta_path(start, end, clean)
-            path.parent.mkdir(parents=True, exist_ok=True)
+            path = self._write_cache_frame(frame, start, end, clean)
 
-            # Save parquet
-            out = frame.copy()
-            out.to_parquet(path, index=False)
-
-            # Save meta
-            meta = {
-                **self._cache_identity(start, end, clean),
-                "window_key": self._window_key(start, end, clean),
-                "rows": len(frame),
-                "cols": len(frame.columns),
-                "created_at": datetime.now(timezone.utc).isoformat(),
-            }
-            meta_path.write_text(json.dumps(meta, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
-
-            log.info("Cache WRITTEN: %s (%d rows x %d cols, %.1f MB)",
+            log.info("Cache WRITTEN: {} ({} rows x {} cols, {:.1f} MB)",
                      path.name, len(frame), len(frame.columns), path.stat().st_size / 1024 / 1024)
 
         return frame, clean
@@ -414,14 +626,14 @@ class LightGBMSingleLabelGenerator:
             )
             keep = keep[~key.isin(excl)]
             log.info(
-                "liquidity exclusion anti-join: %d -> %d rows",
+                "liquidity exclusion anti-join: {} -> {} rows",
                 len(key), len(keep),
             )
 
         n_dropped = len(frame) - len(keep)
         log.info(
-            "pit_membership filter [mode=%s, artifact=%s]: %d -> %d rows "
-            "(dropped %d)",
+            "pit_membership filter [mode={}, artifact={}]: {} -> {} rows "
+            "(dropped {})",
             mode, self.pit_universe_artifact, len(frame), len(keep), n_dropped,
         )
         if keep.empty:
@@ -503,7 +715,7 @@ class LightGBMSingleLabelGenerator:
         ).strftime("%Y-%m-%d")
         load_end = train_end if self.prediction_universe else extended_end
 
-        log.info("Loading data [%s, %s]", train_start, load_end)
+        log.info("Loading data [{}, {}]", train_start, load_end)
         frame, clean_features = self._load_data(train_start, load_end)
 
         # Historical train rows and current prediction rows can use different
@@ -525,12 +737,17 @@ class LightGBMSingleLabelGenerator:
             prediction_frame = frame
 
         from qsys.label.store import LabelStore
-        from qsys.signal.alpha_v1.training import train_model, predict_model
+        from qsys.signal.alpha_v1.training import (
+            compute_train_partition_sample_weight,
+            predict_model,
+            resolve_validation_size,
+            train_model,
+        )
 
         label_df = LabelStore().load_labels(self.label_id)
 
         # Train
-        log.info("Training window: %s -> %s", train_start, train_end)
+        log.info("Training window: {} -> {}", train_start, train_end)
         # F01 (Option A, strict): features at date f are paired with the forward
         # return that starts on the NEXT trading day (the actual buy day's
         # close-to-close proxy), matching inference where trade_date = next_td(f).
@@ -557,10 +774,21 @@ class LightGBMSingleLabelGenerator:
         y_tr = train.loc[y_valid, "label_value"].astype(float)
         if y_tr.empty:
             raise ValueError(f"No valid training samples for {self.label_id}")
+        # Keep this boundary identical to train_model: validation labels must
+        # not affect percentile ranks used for training weights.
+        validation_size = resolve_validation_size(len(y_tr))
+        sample_weight = compute_train_partition_sample_weight(
+            y_tr,
+            train.loc[y_valid, "label_date"],
+            self.sample_weight_policy,
+            validation_size=validation_size,
+        )
 
         model, center, scale = train_model(
             X_tr.loc[y_tr.index], y_tr, "window",
             n_estimators=self.n_estimators, lgb_params=self.lgb_params,
+            validation_size=validation_size,
+            sample_weight=sample_weight,
         )
 
         # Predict — F01 backward-shift: the configured [predict_start,
@@ -608,7 +836,7 @@ class LightGBMSingleLabelGenerator:
                 })
 
         result = pd.DataFrame(rows)
-        log.info("Generated %d rows across %d trade dates", len(result), result["trade_date"].nunique())
+        log.info("Generated {} rows across {} trade dates", len(result), result["trade_date"].nunique())
         del pred, frame, train_frame, prediction_frame, rows
         gc.collect()
         return result
