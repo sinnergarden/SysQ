@@ -9,8 +9,11 @@ import pytest
 
 from qsys.backtest.posterior_policy import (
     PosteriorPolicyConfig,
+    PosteriorPolicyState,
     prepare_posterior_signal_views,
+    run_posterior_policy_day,
 )
+from qsys.backtest.accounting import BacktestAccount, ValuationState
 from qsys.backtest.strategy_runner import BacktestRunner
 from qsys.signal.store import SignalStore
 
@@ -127,6 +130,252 @@ def test_delta_threshold_is_strictly_prior() -> None:
     assert views.deltas[dates[2]]["A"] == 100.0
     assert views.delta_thresholds[dates[2]] == 1.0
     assert views.delta_observations[dates[1]] == 0
+
+
+def test_posterior_first_entry_missing_close_uses_prior_legal_stale_mark() -> None:
+    trade_date = "2026-06-02"
+    day_signal = pd.DataFrame({"instrument": ["A"], "score": [1.0]})
+    views = prepare_posterior_signal_views(
+        {trade_date: day_signal}, [trade_date], score_column="score",
+        config=PosteriorPolicyConfig(),
+    )
+
+    class _Market:
+        def latest_legal_close_before(self, date, instruments):
+            assert date == trade_date and instruments == ["A"]
+            return {"A": {"price": 9.0, "price_date": "2026-06-01"}}
+
+        def snapshot(self, date, instruments, price_col="open"):
+            return {"A": 10.0}, _status_frame(instruments)
+
+        def observed_close(self, date, instruments):
+            return {}
+
+    def _status_frame(instruments):
+        return pd.DataFrame(
+            {"is_suspended": False, "is_limit_up": False, "is_limit_down": False},
+            index=instruments,
+        )
+
+    account = BacktestAccount(10_000)
+    account.start_day(trade_date)
+    valuation = ValuationState()
+    result, _, _ = run_posterior_policy_day(
+        account=account,
+        state=PosteriorPolicyState(),
+        config=PosteriorPolicyConfig(),
+        views=views,
+        day_signal=day_signal,
+        trade_date=trade_date,
+        trading_index=0,
+        is_rebalance=True,
+        top_n=1,
+        commission=0.0,
+        stamp_duty=0.0,
+        min_commission=0.0,
+        slippage=0.0,
+        execution_price_mode="open",
+        market_snapshot_fn=None,
+        market_data=_Market(),
+        valuation_state=valuation,
+    )
+    mark = valuation.mark_to_market(account, trade_date).iloc[0]
+    assert result["filled_count"] == 1
+    assert result["market_value_after"] == pytest.approx(9_000.0)
+    assert mark["last_price"] == pytest.approx(9.0)
+    assert bool(mark["stale_price"])
+
+
+@pytest.mark.parametrize(
+    "held_open,held_close", [(10.0, 10.0), (100.0, 1_000.0)]
+)
+def test_same_day_open_and_close_do_not_change_prior_equity_sizing(
+    held_open, held_close
+) -> None:
+    prior_day, trade_date = "2026-06-01", "2026-06-02"
+    signal = pd.DataFrame(
+        {"instrument": ["A", "B"], "score": [2.0, 1.0]}
+    )
+    config = PosteriorPolicyConfig()
+    views = prepare_posterior_signal_views(
+        {trade_date: signal}, [trade_date], score_column="score", config=config
+    )
+    account = BacktestAccount(2_000.0)
+    account.start_day(prior_day)
+    account.update_after_deal("B", 100, 10.0, 0.0, "buy")
+    account.start_day(trade_date)
+    valuation = ValuationState()
+    valuation.update({"B": 10.0}, prior_day)
+    state = PosteriorPolicyState(
+        entry_index={"B": 0}, previous_close={"B": 10.0},
+        peak_close={"B": 10.0},
+    )
+
+    class _Market:
+        def latest_legal_close_before(self, date, instruments):
+            assert instruments == ["A"]
+            return {"A": {"price": 10.0, "price_date": prior_day}}
+
+        def snapshot(self, date, instruments, price_col="open"):
+            return {"A": 10.0, "B": held_open}, pd.DataFrame(
+                {"is_suspended": False, "is_limit_up": False, "is_limit_down": False},
+                index=instruments,
+            )
+
+        def observed_close(self, date, instruments):
+            return {"A": 10.0, "B": held_close}
+
+    result, _, orders = run_posterior_policy_day(
+        account=account,
+        state=state,
+        config=config,
+        views=views,
+        day_signal=signal,
+        trade_date=trade_date,
+        trading_index=1,
+        is_rebalance=True,
+        top_n=2,
+        commission=0.0,
+        stamp_duty=0.0,
+        min_commission=0.0,
+        slippage=0.0,
+        execution_price_mode="open",
+        market_snapshot_fn=None,
+        market_data=_Market(),
+        valuation_state=valuation,
+    )
+    a_buys = [order for order in orders if order["symbol"] == "A"]
+    assert a_buys[0]["amount"] == 100
+    assert not [order for order in orders if order["symbol"] == "B"]
+    assert result["total_value_before"] == pytest.approx(2_000.0)
+
+
+def test_non_rebalance_requests_market_data_for_holdings_only() -> None:
+    prior_day, trade_date = "2026-06-01", "2026-06-02"
+    signal = pd.DataFrame(
+        {"instrument": ["B", "A"], "score": [2.0, 1.0]}
+    )
+    config = PosteriorPolicyConfig()
+    views = prepare_posterior_signal_views(
+        {trade_date: signal}, [trade_date], score_column="score", config=config
+    )
+    account = BacktestAccount(2_000.0)
+    account.start_day(prior_day)
+    account.update_after_deal("A", 100, 10.0, 0.0, "buy")
+    account.start_day(trade_date)
+    valuation = ValuationState()
+    valuation.update({"A": 10.0}, prior_day)
+
+    class _HeldOnlyMarket:
+        def latest_legal_close_before(self, date, instruments):
+            raise AssertionError("non-rebalance candidates must not be seeded")
+
+        def snapshot(self, date, instruments, price_col="open"):
+            assert instruments == ["A"]
+            return {"A": 10.0}, pd.DataFrame(
+                {"is_suspended": False, "is_limit_up": False, "is_limit_down": False},
+                index=instruments,
+            )
+
+        def observed_close(self, date, instruments):
+            assert instruments == ["A"]
+            return {"A": 10.0}
+
+    result, _, orders = run_posterior_policy_day(
+        account=account,
+        state=PosteriorPolicyState(
+            entry_index={"A": 0}, previous_close={"A": 10.0},
+            peak_close={"A": 10.0},
+        ),
+        config=config,
+        views=views,
+        day_signal=signal,
+        trade_date=trade_date,
+        trading_index=1,
+        is_rebalance=False,
+        top_n=1,
+        commission=0.0,
+        stamp_duty=0.0,
+        min_commission=0.0,
+        slippage=0.0,
+        execution_price_mode="open",
+        market_snapshot_fn=None,
+        market_data=_HeldOnlyMarket(),
+        valuation_state=valuation,
+    )
+    assert result["position_count"] == 1
+    assert orders == []
+
+
+def test_posterior_zero_sellable_exit_is_rejected_and_recorded() -> None:
+    trade_date = "2026-06-02"
+    account = BacktestAccount(1_000.0)
+    account.start_day(trade_date)
+    account.update_after_deal("A", 100, 10.0, 0.0, "buy")
+    assert account.positions["A"].sellable_amount == 0
+    valuation = ValuationState()
+    valuation.update({"A": 10.0}, trade_date)
+    signal = pd.DataFrame({"instrument": ["B"], "score": [2.0]})
+    config = PosteriorPolicyConfig(
+        rank_exit=True,
+        posterior_stop_loss=0.999,
+        winner_activation_return=0.999,
+        winner_trailing_stop=0.999,
+    )
+    views = prepare_posterior_signal_views(
+        {trade_date: signal}, [trade_date], score_column="score",
+        config=config,
+    )
+
+    class _Market:
+        def latest_legal_close_before(self, date, instruments):
+            assert date == trade_date and instruments == ["B"]
+            return {"B": {"price": 10.0, "price_date": "2026-06-01"}}
+
+        def snapshot(self, date, instruments, price_col="open"):
+            return {instrument: 10.0 for instrument in instruments}, pd.DataFrame(
+                {
+                    "is_suspended": False,
+                    "is_limit_up": False,
+                    "is_limit_down": False,
+                },
+                index=instruments,
+            )
+
+        def observed_close(self, date, instruments):
+            return {instrument: 10.0 for instrument in instruments}
+
+    collector: list[dict] = []
+    result, _, orders = run_posterior_policy_day(
+        account=account,
+        state=PosteriorPolicyState(
+            previous_close={"A": 10.0}, peak_close={"A": 10.0},
+        ),
+        config=config,
+        views=views,
+        day_signal=signal,
+        trade_date=trade_date,
+        trading_index=1,
+        is_rebalance=True,
+        top_n=1,
+        commission=0.0,
+        stamp_duty=0.0,
+        min_commission=0.0,
+        slippage=0.0,
+        execution_price_mode="open",
+        market_snapshot_fn=None,
+        execution_collector=collector,
+        market_data=_Market(),
+        valuation_state=valuation,
+    )
+    assert [order for order in orders if order["symbol"] == "A"][0]["amount"] == 0
+    assert result["rejected_count"] == 1
+    assert result["filled_count"] == 0
+    assert result["policy_exit_count"] == 0
+    assert account.positions["A"].total_amount == 100
+    assert collector[0]["status"] == "rejected"
+    assert "T+1" in collector[0]["rejection_reason"]
+    assert "zero sellable" in collector[0]["rejection_reason"]
 
 
 def test_initial_entry_is_equal_weight_and_rank_drop_does_not_sell(tmp_path: Path) -> None:

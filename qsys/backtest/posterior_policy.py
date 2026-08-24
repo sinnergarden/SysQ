@@ -10,7 +10,7 @@ session's close.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from typing import Any
+from typing import Any, Mapping
 
 import numpy as np
 import pandas as pd
@@ -18,6 +18,82 @@ import pandas as pd
 from qsys.backtest._execution import execute_trade_day
 from qsys.ops.plan_builder import build_order_intents
 from qsys.trader.account import Account
+from qsys.backtest.accounting import BacktestAccount, ValuationState
+
+
+class _ValuationPlanningAccount:
+    """Planning-only account view with valuation equity and open prices.
+
+    ``build_order_intents`` accepts an Account-shaped object and uses the
+    supplied prices for executable quantities.  Its equity calculation must
+    nevertheless use the last legal close, not today's open.  This proxy
+    keeps that distinction local to planning and never mutates the account.
+    """
+
+    def __init__(self, account: Account, valuation_prices: Mapping[str, float]):
+        self._account = account
+        self.positions = account.positions
+        self.cash = account.cash
+        self.frozen_cash = getattr(account, "frozen_cash", 0.0)
+        self._valuation_prices = dict(valuation_prices)
+
+    def get_total_equity(self, _prices: Mapping[str, float]) -> float:
+        return float(self._account.get_total_equity(self._valuation_prices))
+
+    def get_market_value(self, _prices: Mapping[str, float]) -> float:
+        return float(self._account.get_market_value(self._valuation_prices))
+
+
+def build_valuation_execution_orders(
+    account: Account,
+    target_weights: Mapping[str, float],
+    valuation_prices: Mapping[str, float],
+    execution_prices: Mapping[str, float],
+    *,
+    total_equity: float | None = None,
+) -> list[dict[str, Any]]:
+    """Create lots with prior-close valuation and current-open execution.
+
+    Target equity and every held position's current value use the last legal
+    pre-open valuation.  Only the conversion from a dollar difference to
+    requested shares uses today's legal execution price.  This prevents an
+    open gap in a held name from changing total equity or creating a spurious
+    keep-position rebalance.
+    """
+    planning_equity = (
+        float(account.get_total_equity(valuation_prices))
+        if total_equity is None else float(total_equity)
+    )
+    orders: list[dict[str, Any]] = []
+    for instrument in sorted(set(account.positions) | set(target_weights)):
+        execution_price = float(execution_prices.get(instrument, 0.0) or 0.0)
+        if not np.isfinite(execution_price) or execution_price <= 0:
+            continue
+        position = account.positions.get(instrument)
+        quantity = int(position.total_amount) if position is not None else 0
+        if position is not None:
+            valuation_price = float(valuation_prices.get(instrument, 0.0) or 0.0)
+            if not np.isfinite(valuation_price) or valuation_price <= 0:
+                raise ValueError(
+                    f"missing prior legal valuation for held instrument {instrument}"
+                )
+            current_value = quantity * valuation_price
+        else:
+            current_value = 0.0
+        target_value = planning_equity * float(target_weights.get(instrument, 0.0))
+        raw_amount = (target_value - current_value) / execution_price
+        amount = abs(int(raw_amount / 100) * 100)
+        if amount <= 0:
+            continue
+        orders.append({
+            "symbol": instrument,
+            "amount": amount,
+            "side": "buy" if raw_amount > 0 else "sell",
+            "price": execution_price,
+            "order_type": "market",
+        })
+    orders.sort(key=lambda order: 0 if order["side"] == "sell" else 1)
+    return orders
 
 
 @dataclass(frozen=True)
@@ -103,6 +179,12 @@ class PosteriorPolicyState:
     entry_index: dict[str, int] = field(default_factory=dict)
     previous_close: dict[str, float] = field(default_factory=dict)
     peak_close: dict[str, float] = field(default_factory=dict)
+    # Gross cash entitlements accumulated since entry, expressed per current
+    # share.  Adding this to raw close keeps hard-stop/winner references on a
+    # total-return basis across ex-dividend dates without changing thresholds.
+    cumulative_cash_per_current_share: dict[str, float] = field(
+        default_factory=dict
+    )
     winner_active: set[str] = field(default_factory=set)
 
 
@@ -198,15 +280,21 @@ def _current_weight_targets(
     account: Account,
     exec_prices: dict[str, float],
     keep: set[str],
+    valuation_prices: Mapping[str, float] | None = None,
+    total_equity: float | None = None,
 ) -> dict[str, float]:
-    total_equity = float(account.get_total_equity(exec_prices))
-    if total_equity <= 0:
+    mark_prices = dict(valuation_prices or exec_prices)
+    equity = (
+        float(account.get_total_equity(mark_prices))
+        if total_equity is None else float(total_equity)
+    )
+    if equity <= 0:
         return {instrument: 0.0 for instrument in keep}
     return {
         instrument: (
             account.positions[instrument].total_amount
-            * float(exec_prices.get(instrument, 0.0) or 0.0)
-            / total_equity
+            * float(mark_prices.get(instrument, 0.0) or 0.0)
+            / equity
         )
         for instrument in sorted(keep)
         if instrument in account.positions
@@ -232,6 +320,13 @@ def run_posterior_policy_day(
     market_snapshot_fn: Any,
     execution_collector: list[dict[str, Any]] | None = None,
     exposure_gate_schedule: dict[str, bool] | None = None,
+    market_data: Any = None,
+    valuation_state: ValuationState | None = None,
+    adv_by_instrument: Mapping[str, float] | None = None,
+    max_participation_rate: float | None = None,
+    liquidity_gate_mode: str = "warning",
+    adv_window: int = 20,
+    adv_min_periods: int = 5,
 ) -> tuple[dict[str, Any], pd.DataFrame, list[dict[str, Any]]]:
     """Advance the posterior policy by one execution date."""
     if day_signal.empty and "instrument" not in day_signal.columns:
@@ -243,17 +338,25 @@ def run_posterior_policy_day(
 
     ranked = sorted(score_map, key=lambda x: (rank_map[x], x))
     top_candidates = ranked[:top_n]
-    instruments = sorted(set(account.positions).union(top_candidates))
+    # New names can enter only on a rebalance date.  On intervening sessions
+    # request market data solely for live holdings; ranking/exit diagnostics
+    # still use the full cached signal views without loading candidate prices.
+    instruments = sorted(
+        set(account.positions).union(top_candidates if is_rebalance else [])
+    )
     if not instruments:
+        receivable = float(getattr(account, "total_receivable", 0.0))
         result = {
             "trade_date": trade_date,
             "execution_price_mode": execution_price_mode,
             "cash_before": float(account.cash),
             "market_value_before": 0.0,
-            "total_value_before": float(account.cash),
+            "total_value_before": float(account.cash) + receivable,
             "cash_after": float(account.cash),
             "market_value_after": 0.0,
-            "total_value_after": float(account.cash),
+            "total_value_after": float(account.cash) + receivable,
+            "receivable_before": receivable,
+            "receivable_after": receivable,
             "order_count": 0,
             "buy_count": 0,
             "sell_count": 0,
@@ -271,11 +374,44 @@ def run_posterior_policy_day(
 
     if execution_price_mode != "open":
         raise ValueError("posterior_confirmed requires open execution")
-    exec_prices, market_status = market_snapshot_fn(
-        trade_date, instruments, price_col="open"
-    )
-    mtm_prices, _ = market_snapshot_fn(
-        trade_date, instruments, price_col="close"
+    if market_data is not None:
+        if valuation_state is not None:
+            unheld_candidates = [
+                instrument for instrument in instruments
+                if instrument not in account.positions
+            ]
+            if unheld_candidates:
+                valuation_state.seed_asof(
+                    market_data.latest_legal_close_before(
+                        trade_date, unheld_candidates
+                    ),
+                    trade_date,
+                )
+        exec_prices, market_status = market_data.snapshot(
+            trade_date, instruments, price_col="open"
+        )
+        mtm_prices = market_data.observed_close(trade_date, instruments)
+        if max_participation_rate is not None and adv_by_instrument is None:
+            adv_by_instrument, _ = market_data.adv_snapshot(
+                trade_date, instruments, window=adv_window,
+                min_periods=adv_min_periods,
+            )
+    else:
+        exec_prices, market_status = market_snapshot_fn(
+            trade_date, instruments, price_col="open"
+        )
+        mtm_prices, _ = market_snapshot_fn(
+            trade_date, instruments, price_col="close"
+        )
+    planning_prices = {}
+    if valuation_state is not None:
+        planning_prices.update(valuation_state.prices)
+    else:
+        planning_prices.update(exec_prices)
+    planning_total_equity = float(account.get_total_equity(planning_prices))
+    planning_account = (
+        _ValuationPlanningAccount(account, planning_prices)
+        if valuation_state is not None else account
     )
 
     exit_reasons: dict[str, str] = {}
@@ -357,7 +493,11 @@ def run_posterior_policy_day(
                 exit_reasons[instrument] = "rank_exit"
 
     keep = set(account.positions).difference(exit_reasons)
-    sell_targets = _current_weight_targets(account, exec_prices, keep)
+    valuation_prices = planning_prices if valuation_state is not None else None
+    sell_targets = _current_weight_targets(
+        account, exec_prices, keep, valuation_prices,
+        total_equity=planning_total_equity,
+    )
     for instrument in exit_reasons:
         sell_targets[instrument] = 0.0
 
@@ -384,10 +524,23 @@ def run_posterior_policy_day(
                     kept_weights[instrument] / total_kept * budget
                 )
 
-    sell_orders, _, _, _, _, _ = build_order_intents(
-        account, day_signal, sell_targets, exec_prices, trade_date
-    )
+    if valuation_state is not None:
+        sell_orders = build_valuation_execution_orders(
+            account, sell_targets, planning_prices, exec_prices,
+            total_equity=planning_total_equity,
+        )
+    else:
+        sell_orders, _, _, _, _, _ = build_order_intents(
+            planning_account, day_signal, sell_targets, exec_prices, trade_date
+        )
     sell_orders = [order for order in sell_orders if order["side"] == "sell"]
+    # A full policy exit is allowed to liquidate a residual odd-lot created
+    # by a stock dividend/split.  Ordinary rebalancing remains lot-rounded.
+    for order in sell_orders:
+        instrument = str(order.get("symbol") or "")
+        if instrument in exit_reasons and instrument in account.positions:
+            order["amount"] = int(account.positions[instrument].sellable_amount)
+            order["price"] = float(exec_prices.get(instrument, order.get("price", 0.0)))
     for order in sell_orders:
         order["execution_phase"] = "exit"
         order["trade_reason"] = exit_reasons.get(
@@ -407,13 +560,20 @@ def run_posterior_policy_day(
         slippage=slippage,
         execution_price_mode=execution_price_mode,
         execution_collector=execution_collector,
+        valuation_state=valuation_state,
+        adv_by_instrument=adv_by_instrument,
+        max_participation_rate=max_participation_rate,
+        liquidity_gate_mode=liquidity_gate_mode,
     )
     after_sells = set(account.positions)
     actual_exits = before.difference(after_sells)
 
     entries: list[str] = []
     buy_orders: list[dict[str, Any]] = []
-    buy_targets = _current_weight_targets(account, exec_prices, after_sells)
+    buy_targets = _current_weight_targets(
+        account, exec_prices, after_sells, valuation_prices,
+        total_equity=planning_total_equity,
+    )
     if is_rebalance:
         desired_slots = max(top_n - len(after_sells), 0)
         realised_replacements = [
@@ -439,9 +599,15 @@ def run_posterior_policy_day(
         )
         for instrument in entries:
             buy_targets[instrument] = entry_weight
-        generated, _, _, _, _, _ = build_order_intents(
-            account, day_signal, buy_targets, exec_prices, trade_date
-        )
+        if valuation_state is not None:
+            generated = build_valuation_execution_orders(
+                account, buy_targets, planning_prices, exec_prices,
+                total_equity=planning_total_equity,
+            )
+        else:
+            generated, _, _, _, _, _ = build_order_intents(
+                planning_account, day_signal, buy_targets, exec_prices, trade_date
+            )
         buy_orders = [order for order in generated if order["side"] == "buy"]
         replacement_entries = {candidate for _, candidate in reserved_replacements}
         for order in buy_orders:
@@ -466,6 +632,10 @@ def run_posterior_policy_day(
         slippage=slippage,
         execution_price_mode=execution_price_mode,
         execution_collector=execution_collector,
+        valuation_state=valuation_state,
+        adv_by_instrument=adv_by_instrument,
+        max_participation_rate=max_participation_rate,
+        liquidity_gate_mode=liquidity_gate_mode,
     )
     after = set(account.positions)
     actual_entries = after.difference(after_sells)
@@ -475,9 +645,11 @@ def run_posterior_policy_day(
         state.entry_index.pop(instrument, None)
         state.previous_close.pop(instrument, None)
         state.peak_close.pop(instrument, None)
+        state.cumulative_cash_per_current_share.pop(instrument, None)
         state.winner_active.discard(instrument)
     for instrument in actual_entries:
         state.entry_index[instrument] = trading_index
+        state.cumulative_cash_per_current_share[instrument] = 0.0
 
     # Current close becomes visible only after today's open decisions and is
     # stored exclusively for the next trading day's decision.
@@ -485,8 +657,14 @@ def run_posterior_policy_day(
         close = float(mtm_prices.get(instrument, 0.0) or 0.0)
         if close <= 0:
             continue
-        state.previous_close[instrument] = close
-        state.peak_close[instrument] = max(state.peak_close.get(instrument, close), close)
+        total_return_close = close + state.cumulative_cash_per_current_share.get(
+            instrument, 0.0
+        )
+        state.previous_close[instrument] = total_return_close
+        state.peak_close[instrument] = max(
+            state.peak_close.get(instrument, total_return_close),
+            total_return_close,
+        )
         position = account.positions[instrument]
         if position.avg_cost > 0 and state.peak_close[instrument] / position.avg_cost - 1.0 >= config.winner_activation_return:
             state.winner_active.add(instrument)

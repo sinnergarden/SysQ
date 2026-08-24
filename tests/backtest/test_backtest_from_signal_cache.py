@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+import subprocess
+import sys
 from unittest.mock import patch
 
 import pandas as pd
@@ -101,6 +103,58 @@ def _write_pit_artifact(
 
 
 class TestRunFromSignalCache:
+    def test_cli_rejects_complete_accounting_with_accumulate(self) -> None:
+        script = Path(__file__).parents[2] / "scripts/research/backtest_from_signal.py"
+        completed = subprocess.run(
+            [
+                sys.executable, str(script),
+                "--signal-id", "sig",
+                "--signal-run-id", "run",
+                "--start-date", "2026-06-15",
+                "--end-date", "2026-06-15",
+                "--accumulate",
+                "--require-complete-accounting",
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert completed.returncode == 2
+        assert "not supported with --accumulate" in completed.stderr
+
+    def test_legacy_accumulate_smoke_keeps_non_accounting_manifest(
+        self, tmp_path: Path
+    ) -> None:
+        store = SignalStore(str(tmp_path))
+        _signal_fixture(store, n_dates=1, n_inst=3)
+        output = tmp_path / "accumulate_smoke"
+        with patch(
+            "qsys.backtest.strategy_runner.fetch_market_snapshot", _mock_prices
+        ), patch(
+            "qsys.backtest.strategy_runner._resolve_trading_dates", _mock_calendar
+        ):
+            result = BacktestRunner().run_accumulate(
+                signal_id="test_sig",
+                signal_run_id="test_run",
+                start_date="2026-06-15",
+                end_date="2026-06-15",
+                research_root=tmp_path,
+                output_dir=output,
+                overwrite=True,
+                rebalance_freq="daily",
+                commission=0.0,
+                stamp_duty=0.0,
+                min_commission=0.0,
+                slippage=0.0,
+            )
+        manifest = json.loads((output / "manifest.json").read_text())
+        assert result.status == "completed"
+        assert manifest["corporate_action_policy"] == "not_modeled"
+        assert any(
+            "corporate actions are not modeled" in item
+            for item in manifest["research_limitations"]
+        )
+
     def test_pit_execution_filter_pins_identity_and_drops_nonmembers(
         self, tmp_path: Path
     ) -> None:
@@ -570,7 +624,8 @@ class TestRunFromSignalCache:
         assert len(rows) == 2
         assert set(rows["status"]) == {"filled"}
         assert set(rows["trade_reason"]) == {"rebalance_to_target_weight"}
-        assert artifact["schema_version"] == "backtest_executions_v1"
+        assert artifact["schema_version"] == "backtest_executions_v2"
+        assert {"order_value", "adv", "participation_rate", "liquidity_status"}.issubset(rows.columns)
         assert artifact["row_count"] == len(rows)
         assert artifact["complete"] is True
         assert artifact["sha256"] == hashlib.sha256(

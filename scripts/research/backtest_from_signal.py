@@ -143,6 +143,27 @@ def main() -> None:
             "filters signal candidates on their execution trade date"
         ),
     )
+    parser.add_argument(
+        "--corporate-action-artifact", default=None,
+        help="Bare corporate-action artifact name; required for accounting baseline",
+    )
+    parser.add_argument(
+        "--canonical-data-root", default=None,
+        help="Root of immutable canonical daily raw-price files",
+    )
+    parser.add_argument(
+        "--max-participation-rate", type=float, default=None,
+        help="ADV participation cap; baseline uses 0.10 with reject gate",
+    )
+    parser.add_argument(
+        "--liquidity-gate-mode", choices=["warning", "reject"], default="warning",
+    )
+    parser.add_argument("--adv-window", type=int, default=20)
+    parser.add_argument("--adv-min-periods", type=int, default=5)
+    parser.add_argument(
+        "--require-complete-accounting", action="store_true",
+        help="Require canonical data + corporate-action artifact + 10% reject gate",
+    )
     parser.add_argument("--start-date", required=True)
     parser.add_argument("--end-date", required=True)
     parser.add_argument("--strategy-template-id", default="rank_weight_top20")
@@ -265,6 +286,22 @@ def main() -> None:
         )
     if (args.blend_output_signal_id or args.blend_output_signal_run_id) and not args.materialize_blend:
         parser.error("blend output identifiers require --materialize-blend")
+    if args.accumulate and args.require_complete_accounting:
+        parser.error(
+            "--require-complete-accounting is not supported with --accumulate"
+        )
+    if not args.accumulate and args.require_complete_accounting:
+        if args.corporate_action_artifact is None or args.canonical_data_root is None:
+            parser.error(
+                "--require-complete-accounting requires corporate-action artifact "
+                "and canonical data root"
+            )
+        if args.max_participation_rate is None:
+            args.max_participation_rate = 0.10
+        if args.liquidity_gate_mode != "reject":
+            parser.error(
+                "complete accounting requires --liquidity-gate-mode reject"
+            )
 
     exposure_gate_schedule: dict[str, bool] | None = None
     if args.exposure_gate_schedule is not None:
@@ -329,11 +366,25 @@ def main() -> None:
         exposure_gate_scale=args.exposure_gate_scale,
         exposure_gate_schedule=exposure_gate_schedule,
         pit_universe_artifact=args.pit_universe_artifact,
+        corporate_action_artifact=args.corporate_action_artifact,
+        canonical_data_root=args.canonical_data_root,
+        max_participation_rate=args.max_participation_rate,
+        liquidity_gate_mode=args.liquidity_gate_mode,
+        adv_window=args.adv_window,
+        adv_min_periods=args.adv_min_periods,
+        require_complete_accounting=args.require_complete_accounting,
     )
     if args.accumulate:
         if args.pit_universe_artifact is not None:
             parser.error("--pit-universe-artifact is not supported with --accumulate")
         kwargs.pop("pit_universe_artifact", None)
+        kwargs.pop("corporate_action_artifact", None)
+        kwargs.pop("canonical_data_root", None)
+        kwargs.pop("max_participation_rate", None)
+        kwargs.pop("liquidity_gate_mode", None)
+        kwargs.pop("adv_window", None)
+        kwargs.pop("adv_min_periods", None)
+        kwargs.pop("require_complete_accounting", None)
         result = runner.run_accumulate(**kwargs)
     else:
         kwargs.pop("maxdd_signal_id", None)
