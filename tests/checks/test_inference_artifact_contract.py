@@ -39,6 +39,61 @@ def _check(payload: dict) -> list[str]:
     return check_payload(payload, open_dates=OPEN_DATES)
 
 
+def _valid_s180_top10_payload() -> dict:
+    """Convert the legacy fixture into the canonical single-model S180 contract."""
+    payload = deepcopy(_valid_payload())
+    payload["strategy_id"] = "s180_top10"
+    payload["universe"] = "csi1800"
+    payload["universe_snapshot_semantics"] = "dated_pit_membership_snapshot"
+    payload["source"]["model_bundle_id"] = "b" * 64
+    payload["source"]["models"] = [deepcopy(payload["source"]["models"][1])]
+    payload["source"]["models"][0]["weight"] = 1.0
+    payload["source"]["models"][0]["tag"] = "180d"
+    payload["blend"] = {
+        "score_transform": "raw_model_prediction",
+        "model_tags": ["180d"],
+        "weights": {"180d": 1.0},
+    }
+    row = payload["candidates"][0]
+    row["strategy_id"] = "s180_top10"
+    row["ranking_score"] = 1.5
+    row["raw_prediction"] = 1.5
+    row["models"] = [
+        {"tag": "180d", "weight": 1.0, "score": 1.5, "rank": 1}
+    ]
+    payload["candidate_hash"] = compute_candidate_hash(payload["candidates"])
+    payload["source"]["model_bundle_hash"] = contract_hash(
+        {
+            "bundle_id": payload["source"]["model_bundle_id"],
+            "feature_list_id": payload["source"]["feature_list_id"],
+            "feature_availability": {
+                "margin": {
+                    key: value
+                    for key, value in payload["feature_availability"]["margin"].items()
+                    if key != "as_of_date"
+                }
+            },
+            "shareholder_freshness": SHAREHOLDER_CONTRACT,
+            "models": [
+                {
+                    key: payload["source"]["models"][0][key]
+                    for key in (
+                        "tag",
+                        "weight",
+                        "horizon",
+                        "label_id",
+                        "model_hash",
+                        "artifact_id",
+                        "model_dir",
+                        "artifact_sha256",
+                    )
+                }
+            ],
+        }
+    )
+    return payload
+
+
 def _valid_payload() -> dict:
     candidates = [
         {
@@ -247,6 +302,38 @@ def _valid_payload() -> dict:
 
 def test_valid_candidate_run_passes() -> None:
     assert _check(_valid_payload()) == []
+
+
+def test_valid_s180_top10_uses_pit_raw_and_separate_bundle_settings_hash() -> None:
+    payload = _valid_s180_top10_payload()
+    assert payload["source"]["model_bundle_id"] != payload["source"]["model_bundle_hash"]
+    assert _check(payload) == []
+
+
+def test_s180_top10_requires_dated_pit_snapshot() -> None:
+    payload = _valid_s180_top10_payload()
+    payload["universe_snapshot_semantics"] = "current_constituents_snapshot"
+    assert "s180_top10 requires dated_pit_membership_snapshot" in _check(payload)
+
+
+def test_s180_top10_requires_raw_model_prediction() -> None:
+    payload = _valid_s180_top10_payload()
+    payload["blend"]["score_transform"] = "daily_cs_zscore_unclipped_ddof0"
+    assert "blend.score_transform must be raw_model_prediction" in _check(payload)
+
+
+def test_s180_top10_settings_hash_must_match_bundle_id_and_model_files() -> None:
+    payload = _valid_s180_top10_payload()
+    payload["source"]["model_bundle_hash"] = "c" * 64
+    assert "source.model_bundle_hash does not match pinned model bundle" in _check(payload)
+
+    payload = _valid_s180_top10_payload()
+    payload["source"]["model_bundle_id"] = "bundle_v1"
+    assert any("model_bundle_id must be" in violation for violation in _check(payload))
+
+    payload = _valid_s180_top10_payload()
+    payload["source"]["models"][0]["artifact_sha256"]["model.txt"] = "bad"
+    assert any("artifact_sha256['model.txt'] must be SHA-256" in violation for violation in _check(payload))
 
 
 def test_dropped_rows_must_be_fully_enumerated() -> None:

@@ -320,6 +320,12 @@ def check_payload(
             violations.append("source.engine must be pinned_model_blend_v1")
         if not source.get("model_bundle_id"):
             violations.append("CandidateRun source missing model_bundle_id")
+        elif payload.get("strategy_id") == "s180_top10" and not _is_sha256(
+            source.get("model_bundle_id")
+        ):
+            violations.append(
+                "s180_top10 source.model_bundle_id must be the 64-char registry bundle hash"
+            )
         if not _is_sha256(source.get("model_bundle_hash")):
             violations.append("CandidateRun source.model_bundle_hash must be SHA-256")
         if source.get("feature_list_id") != payload.get("feature_list_id"):
@@ -437,7 +443,10 @@ def check_payload(
                 violations.append(
                     f"{prefix}.feature_availability must match top-level contract"
                 )
-        if is_candidate_run and payload.get("strategy_id") == "financial_rc":
+        if is_candidate_run and payload.get("strategy_id") in {
+            "financial_rc",
+            "s180_top10",
+        }:
             try:
                 observed_contract = normalise_shareholder_freshness(
                     model.get("shareholder_freshness_contract")
@@ -501,6 +510,11 @@ def check_payload(
         violations.append(
             f"source.models weights must sum to 1.0, got {sum(model_weights.values())}"
         )
+    if is_candidate_run and payload.get("strategy_id") == "s180_top10":
+        if model_tags != ["180d"] or model_weights != {"180d": 1.0}:
+            violations.append(
+                "s180_top10 requires exactly one 180d model with weight=1.0"
+            )
     if _contains_latest(source):
         violations.append(
             "Forbidden implicit latest model resolution in source provenance"
@@ -549,24 +563,36 @@ def check_payload(
     for field in ("feature_list_id", "universe", "universe_snapshot_semantics"):
         if is_candidate_run and not payload.get(field):
             violations.append(f"CandidateRun missing {field}")
-    if (
-        is_candidate_run
-        and payload.get("universe_snapshot_semantics")
-        != "current_constituents_snapshot"
-    ):
-        violations.append(
-            "CandidateRun only supports current_constituents_snapshot; "
-            "the PIT universe provider is not implemented"
+    if is_candidate_run:
+        expected_semantics = (
+            "dated_pit_membership_snapshot"
+            if payload.get("strategy_id") == "s180_top10"
+            else "current_constituents_snapshot"
         )
+        if payload.get("universe_snapshot_semantics") != expected_semantics:
+            if payload.get("strategy_id") == "s180_top10":
+                violations.append(
+                    "s180_top10 requires dated_pit_membership_snapshot"
+                )
+            else:
+                violations.append(
+                    "CandidateRun only supports current_constituents_snapshot; "
+                    "the PIT universe provider is not implemented"
+                )
 
     blend = payload.get("blend")
     if not isinstance(blend, dict):
         violations.append("Missing blend provenance object")
         blend = {}
     if is_candidate_run:
-        if blend.get("score_transform") != "daily_cs_zscore_unclipped_ddof0":
+        expected_transform = (
+            "raw_model_prediction"
+            if payload.get("strategy_id") == "s180_top10"
+            else "daily_cs_zscore_unclipped_ddof0"
+        )
+        if blend.get("score_transform") != expected_transform:
             violations.append(
-                "blend.score_transform must be daily_cs_zscore_unclipped_ddof0"
+                f"blend.score_transform must be {expected_transform}"
             )
         if blend.get("model_tags") != model_tags:
             violations.append("blend.model_tags must match source.models order")
@@ -691,6 +717,19 @@ def check_payload(
                 raise ValueError
         except (TypeError, ValueError):
             violations.append(f"{prefix} ranking_score must be finite")
+        if is_candidate_run and payload.get("strategy_id") == "s180_top10":
+            try:
+                raw_prediction = float(row.get("raw_prediction"))
+                if not math.isfinite(raw_prediction):
+                    raise ValueError
+                if raw_prediction != score:
+                    violations.append(
+                        f"{prefix} raw_prediction must equal ranking_score for s180_top10"
+                    )
+            except (TypeError, ValueError):
+                violations.append(
+                    f"{prefix} raw_prediction must be finite for s180_top10"
+                )
         for field, expected in (
             ("run_id", payload.get("run_id")),
             ("strategy_id", payload.get("strategy_id")),
