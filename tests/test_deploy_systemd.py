@@ -17,6 +17,7 @@ from scripts.deploy_csi1800_pit_runtime import (
     SERVICE_NAME,
     TIMER_NAME,
     apply_systemd,
+    main as deploy_main,
     materialize_runtime,
     validate_runtime_contract,
 )
@@ -223,6 +224,31 @@ def test_valid_runtime_materializes_and_passes_contract(tmp_path: Path):
     revision = materialize_runtime(cfg)
     assert len(revision) == 40
     validate_runtime_contract(cfg)
+
+
+def test_cli_preserves_stable_python_symlink_used_by_unit(tmp_path: Path):
+    cfg = _fixture_config(tmp_path)
+    stable_python = tmp_path / "python"
+    stable_python.symlink_to(Path(sys.executable))
+    cfg.service_file.write_text(
+        cfg.service_file.read_text(encoding="utf-8").replace(
+            str(sys.executable), str(stable_python)
+        ),
+        encoding="utf-8",
+    )
+
+    assert deploy_main([
+        "--repo", str(cfg.repo),
+        "--revision", "HEAD",
+        "--runtime", str(cfg.runtime),
+        "--python", str(stable_python),
+        "--settings-file", str(cfg.settings_file),
+        "--data-root", str(cfg.data_root),
+        "--service-file", str(cfg.service_file),
+        "--timer-file", str(cfg.timer_file),
+        "--systemd-user-dir", str(cfg.systemd_user_dir),
+        "--dry-run",
+    ]) == 0
 
 
 def test_apply_enables_timer_but_never_starts_service(tmp_path: Path, monkeypatch):

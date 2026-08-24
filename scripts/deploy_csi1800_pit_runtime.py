@@ -255,7 +255,11 @@ def main(argv: list[str] | None = None) -> int:
         repo=repo,
         revision=args.revision,
         runtime=runtime,
-        python=_canonical(args.python),
+        # Preserve the operator-facing interpreter path.  Conda/mamba expose
+        # ``bin/python`` as a stable symlink and the unit intentionally binds
+        # that exact path; resolving it to ``python3.x`` would make two
+        # equivalent paths fail the textual deployment contract.
+        python=args.python.expanduser().absolute(),
         settings_file=_canonical(args.settings_file),
         data_root=_canonical(args.data_root),
         service_file=_canonical(args.service_file),
