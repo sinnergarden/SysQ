@@ -64,6 +64,7 @@ from qsys.backtest._execution import (
 from qsys.backtest.posterior_policy import (
     PosteriorPolicyConfig,
     PosteriorPolicyState,
+    build_valuation_execution_orders,
     prepare_posterior_signal_views,
     run_posterior_policy_day,
 )
@@ -75,10 +76,86 @@ from qsys.strategy.allocation.rank_weight import build_rank_weight_targets
 from qsys.trader.account import Account
 from qsys.trader.matcher import MatchEngine
 
+from qsys.backtest.accounting import BacktestAccount, CorporateActionStore, ValuationState
+from qsys.backtest.market_data import MarketDataAdapter
+
 SUPPORTED_MODES = frozenset({
     "strict_daily_equivalent",
     "cached_daily_equivalent",
 })
+
+# Canonical factor files are stored at four decimal places.  A small relative
+# move can therefore be a vendor-wide rounding correction rather than a
+# corporate action.  Only larger moves require explanation by the immutable
+# corporate-action artifact; this threshold is shared by the event and pending
+# branches of the completeness guard below.
+FACTOR_ROUNDING_REL_TOLERANCE = 5e-4
+
+
+def _factor_jump_exceeds_rounding_tolerance(
+    previous: float | None, current: float,
+) -> bool:
+    """Return whether a raw factor move is material for completeness checks."""
+    if previous is None or previous <= 0:
+        return False
+    return abs(float(current) / float(previous) - 1.0) > FACTOR_ROUNDING_REL_TOLERANCE
+
+
+def _prune_factor_completeness_state(
+    *,
+    held_instruments: set[str],
+    previous_factors: dict[str, float],
+    pending_explained_factor_change: dict[str, int],
+) -> None:
+    """Drop factor continuity state for instruments no longer held.
+
+    Factor continuity is meaningful only across consecutive holding days.  In
+    particular, a factor change while a symbol is out of the portfolio must
+    not be compared with the last factor observed before that gap.
+    """
+    for instrument in tuple(previous_factors):
+        if instrument not in held_instruments:
+            previous_factors.pop(instrument, None)
+    for instrument in tuple(pending_explained_factor_change):
+        if instrument not in held_instruments:
+            pending_explained_factor_change.pop(instrument, None)
+
+
+def _update_factor_completeness_guard(
+    *,
+    factors: dict[str, float],
+    previous_factors: dict[str, float],
+    event_instruments: set[str],
+    pending_explained_factor_change: dict[str, int],
+    trade_date: str,
+) -> None:
+    """Validate factor continuity without inferring events from factor data.
+
+    The pending state allows an explained factor change to be observed one
+    trading day after its event when the canonical factor row is unavailable.
+    Both the immediate event check and that pending state use the same
+    rounding tolerance.
+    """
+    for instrument, factor in factors.items():
+        previous = previous_factors.get(instrument)
+        factor_jump = _factor_jump_exceeds_rounding_tolerance(previous, factor)
+        if (
+            factor_jump
+            and instrument not in event_instruments
+            and pending_explained_factor_change.get(instrument, 0) <= 0
+        ):
+            raise ValueError(
+                "uncovered corporate-action factor jump for "
+                f"{instrument} on {trade_date}"
+            )
+        if instrument in event_instruments and factor_jump:
+            pending_explained_factor_change[instrument] = 1
+        elif pending_explained_factor_change.get(instrument, 0) > 0:
+            pending_explained_factor_change[instrument] -= 1
+        previous_factors[instrument] = float(factor)
+    for instrument in event_instruments:
+        if instrument not in factors:
+            pending_explained_factor_change[instrument] = 1
 
 
 def _load_pit_execution_universe(
@@ -193,6 +270,170 @@ def _filter_signal_to_pit_trade_membership(
 SUPPORTED_ARTIFACT_MODES = frozenset({"summary", "debug"})
 
 SUPPORTED_EXECUTION_PRICE_MODES = frozenset({"open", "close"})
+
+
+def _load_corporate_action_store(
+    research_root: str | Path, artifact_name: str | None,
+) -> CorporateActionStore | None:
+    """Resolve a bare corporate-action artifact without path aliases.
+
+    The artifact name is a single bare component below
+    ``research_root/corporate_actions``.
+    """
+    if artifact_name is None:
+        return None
+    name = str(artifact_name).strip()
+    if (
+        not name or name in {".", ".."} or Path(name).name != name
+        or Path(name).is_absolute() or "/" in name or "\\" in name
+    ):
+        raise ValueError("corporate_action_artifact must be a bare artifact name")
+    return CorporateActionStore(research_root, name)
+
+
+def _snapshot_from_context(
+    market_data: Any,
+    trade_date: str,
+    instruments: list[str],
+    *,
+    price_col: str,
+):
+    if market_data is not None:
+        return market_data.snapshot(trade_date, instruments, price_col=price_col)
+    return fetch_market_snapshot(trade_date, instruments, price_col=price_col)
+
+
+def _observed_close_from_context(
+    market_data: Any,
+    trade_date: str,
+    instruments: list[str],
+):
+    if market_data is not None:
+        return market_data.observed_close(trade_date, instruments)
+    return fetch_market_snapshot(trade_date, instruments, price_col="close")[0]
+
+
+def _seed_valuation_asof(
+    market_data: Any,
+    valuation_state: ValuationState,
+    trade_date: str,
+    instruments: list[str],
+) -> None:
+    """Seed valuation from the latest canonical close before *trade_date*.
+
+    The adapter's as-of method is intentionally separate from execution
+    snapshots.  It returns only observations strictly earlier than the day's
+    open decision; same-day close is admitted later by end-of-day MTM only.
+    """
+    if market_data is None or not instruments:
+        return
+    valuation_state.seed_asof(
+        market_data.latest_legal_close_before(trade_date, instruments),
+        trade_date,
+    )
+
+
+def _enrich_accounting_day(
+    day_result: dict[str, Any],
+    account: BacktestAccount,
+    valuation_state: ValuationState,
+    trade_date: str,
+    valuation_ledger_rows: list[dict[str, Any]],
+    attribution: dict[str, Any],
+) -> None:
+    marks = valuation_state.mark_to_market(account, trade_date)
+    stale = marks[marks["stale_price"]] if not marks.empty else marks
+    stale_mv = float(stale["market_value"].sum()) if not stale.empty else 0.0
+    stale_count = int(len(stale))
+    for row in marks.to_dict("records"):
+        valuation_ledger_rows.append({"trade_date": trade_date, **row})
+    day_result.update({
+        "stale_position_count": stale_count,
+        "stale_market_value": stale_mv,
+        "dividend_receivable": float(account.total_receivable),
+        "realized_pnl": float(account.realized_pnl),
+        "unrealized_pnl": float(account.unrealized_pnl(valuation_state.prices)),
+        "corporate_action_amount": float(account.corporate_action_income),
+    })
+    previous = attribution["_previous"]
+    day_result.update({
+        "daily_realized_pnl": float(account.realized_pnl) - previous["realized_pnl"],
+        "daily_unrealized_pnl": float(account.unrealized_pnl(valuation_state.prices)) - previous["unrealized_pnl"],
+        "daily_corporate_action_amount": float(account.corporate_action_income) - previous["corporate_action_income"],
+    })
+    previous["realized_pnl"] = float(account.realized_pnl)
+    previous["unrealized_pnl"] = float(account.unrealized_pnl(valuation_state.prices))
+    previous["corporate_action_income"] = float(account.corporate_action_income)
+    identity_error = float(
+        day_result["total_value_after"]
+        - (
+            account.init_cash + account.realized_trade_pnl
+            + account.corporate_action_income
+            + account.unrealized_pnl(valuation_state.prices)
+        )
+    )
+    if abs(identity_error) > 1e-6:
+        raise RuntimeError(f"accounting identity mismatch on {trade_date}: {identity_error}")
+    day_result["accounting_identity_error"] = identity_error
+    attribution["missing_price"]["stale_position_days"] += stale_count
+    attribution["missing_price"]["stale_market_value_day_sum"] += stale_mv
+    attribution["missing_price"]["stale_position_count_day_sum"] += stale_count
+
+
+def _adjust_posterior_corporate_action_state(
+    state: PosteriorPolicyState,
+    events: list[dict[str, Any]],
+    held_before: set[str],
+) -> None:
+    """Keep posterior per-share references invariant under raw-price events."""
+    for event in sorted(
+        events,
+        key=lambda item: (
+            0 if str(item.get("event_type") or "") == "cash_dividend" else 1,
+            str(item.get("event_id") or ""),
+        ),
+    ):
+        instrument = str(event.get("instrument") or "")
+        if instrument not in held_before:
+            continue
+        kind = str(event.get("event_type") or "")
+        multiplier = float(event.get("share_multiplier", 1.0) or 1.0)
+        cash = float(event.get("cash_per_share", 0.0) or 0.0)
+        if kind in {"stock_dividend", "bonus_shares", "split", "consolidation"} and multiplier > 0:
+            if instrument in state.previous_close:
+                state.previous_close[instrument] /= multiplier
+            if instrument in state.peak_close:
+                state.peak_close[instrument] /= multiplier
+            if instrument in state.cumulative_cash_per_current_share:
+                state.cumulative_cash_per_current_share[instrument] /= multiplier
+        elif kind == "cash_dividend" and cash > 0:
+            state.cumulative_cash_per_current_share[instrument] = (
+                state.cumulative_cash_per_current_share.get(instrument, 0.0)
+                + cash
+            )
+
+
+def _adjust_valuation_corporate_action_reference(
+    valuation_state: ValuationState,
+    events: list[dict[str, Any]],
+    held_before: set[str],
+) -> None:
+    """Adjust carried raw-price references on an ex-date with no close.
+
+    The accounting kernel owns the valuation cache mutation; this runner only
+    supplies the event and whether the position existed before ex-date.
+    """
+    for event in sorted(
+        events,
+        key=lambda item: (
+            0 if str(item.get("event_type") or "") == "cash_dividend" else 1,
+            str(item.get("event_id") or ""),
+        ),
+    ):
+        instrument = str(event.get("instrument") or "")
+        if instrument not in held_before:
+            continue
+        valuation_state.adjust_for_corporate_action(event, instrument in held_before)
 
 
 def _resolve_trading_dates(start_date: str, end_date: str) -> list[str]:
@@ -1062,7 +1303,12 @@ class BacktestRunner:
 
 
     @staticmethod
-    def _write_summary(result: BacktestRunResult, output_path: Path) -> None:
+    def _write_summary(
+        result: BacktestRunResult,
+        output_path: Path,
+        *,
+        rewrite_daily_summary: bool = True,
+    ) -> None:
         """Write backtest result summary JSON."""
         from qsys.utils.json_io import write_json
 
@@ -1081,7 +1327,7 @@ class BacktestRunner:
         }
         write_json(output_path / "backtest_result.json", summary)
 
-        if result.daily_summary:
+        if rewrite_daily_summary and result.daily_summary:
             pd.DataFrame(result.daily_summary).to_csv(
                 output_path / "daily_summary.csv", index=False,
             )
@@ -1181,6 +1427,13 @@ class BacktestRunner:
         exposure_gate_scale: float = 0.5,
         exposure_gate_schedule: dict[str, bool] | None = None,
         pit_universe_artifact: str | None = None,
+        corporate_action_artifact: str | None = None,
+        canonical_data_root: str | Path | None = None,
+        max_participation_rate: float | None = None,
+        liquidity_gate_mode: str = "warning",
+        adv_window: int = 20,
+        adv_min_periods: int = 5,
+        require_complete_accounting: bool = False,
     ) -> BacktestRunResult:
         """Backtest from a saved SignalRun (no model inference).
 
@@ -1250,6 +1503,34 @@ class BacktestRunner:
                 "fees. Use raw execution prices; corporate actions remain an "
                 "explicit research limitation."
             )
+        if stop_loss is not None or trailing_stop is not None:
+            raise ValueError(
+                "legacy stop_loss/trailing_stop are disabled; use the "
+                "posterior policy exit rules so every exit goes through the "
+                "execution kernel"
+            )
+        if liquidity_gate_mode not in {"warning", "reject"}:
+            raise ValueError("liquidity_gate_mode must be 'warning' or 'reject'")
+        if max_participation_rate is not None and max_participation_rate <= 0:
+            raise ValueError("max_participation_rate must be positive")
+        if adv_window <= 0 or not 1 <= adv_min_periods <= adv_window:
+            raise ValueError("invalid ADV window/min_periods")
+        if (corporate_action_artifact is None) != (canonical_data_root is None):
+            raise ValueError(
+                "corporate_action_artifact and canonical_data_root must be "
+                "provided together"
+            )
+        if require_complete_accounting:
+            if corporate_action_artifact is None or canonical_data_root is None:
+                raise ValueError(
+                    "complete accounting requires corporate-action artifact "
+                    "and canonical data root"
+                )
+            if max_participation_rate != 0.10 or liquidity_gate_mode != "reject":
+                raise ValueError(
+                    "complete accounting requires max_participation_rate=0.10 "
+                    "and liquidity_gate_mode='reject'"
+                )
         if holding_policy not in {"target_rebalance", "posterior_confirmed"}:
             raise ValueError(
                 "holding_policy must be 'target_rebalance' or "
@@ -1286,6 +1567,37 @@ class BacktestRunner:
                 exposure_gate_scale=exposure_gate_scale,
             )
             posterior_config.validate()
+
+        corporate_action_store = _load_corporate_action_store(
+            research_root, corporate_action_artifact
+        )
+        if require_complete_accounting:
+            assert corporate_action_store is not None
+            corporate_manifest = corporate_action_store.manifest
+            required_provenance = (
+                "manifest_sha256",
+                "source_raw_path",
+                "source_raw_artifact_sha256",
+            )
+            missing_provenance = [
+                field for field in required_provenance
+                if not str(corporate_manifest.get(field) or "").strip()
+            ]
+            if missing_provenance:
+                raise ValueError(
+                    "complete accounting requires verified corporate-action "
+                    "raw-source provenance; missing: "
+                    f"{missing_provenance}"
+                )
+        accounting_enabled = (
+            corporate_action_store is not None
+            or canonical_data_root is not None
+            or max_participation_rate is not None
+        )
+        market_data = (
+            MarketDataAdapter(canonical_data_root)
+            if canonical_data_root is not None else None
+        )
 
         signal_store = SignalStore(str(research_root))
         primary_identity = signal_store.validate_backtest_source(
@@ -1339,6 +1651,65 @@ class BacktestRunner:
                 )
             }
 
+        if rebalance_offset < 0:
+            raise ValueError("rebalance_offset must be >= 0")
+        # Resolve the exact execution cadence before freezing market lineage.
+        # Only scheduled rebalance dates can introduce a new top-N name;
+        # posterior signals on intervening dates are used for held-name exits
+        # but never expand the market-data source set.
+        trading_dates = _resolve_trading_dates(start_date, end_date)
+        trading_dates = [d for d in trading_dates if start_date <= d <= end_date]
+        if not trading_dates:
+            raise ValueError(f"No trading dates in range [{start_date}, {end_date}]")
+        identity_rebalance_dates: set[str] = set()
+        identity_last_trade: str | None = None
+        identity_last_rebalance: str | None = None
+        for identity_date in trading_dates:
+            skip = should_skip_weekly_rebalance(
+                rebalance_freq,
+                identity_date,
+                identity_last_trade,
+                trading_dates=trading_dates,
+                last_rebalance_date=identity_last_rebalance,
+                offset=rebalance_offset,
+            )
+            if not skip:
+                identity_rebalance_dates.add(identity_date)
+                identity_last_rebalance = identity_date
+            identity_last_trade = identity_date
+
+        market_source_identity: dict[str, Any] | None = None
+        if market_data is not None:
+            candidate_instruments: set[str] = set()
+            identity_frames = [
+                by_date.get(date, pd.DataFrame())
+                for by_date in (primary_by_date, secondary_by_date)
+                for date in sorted(identity_rebalance_dates)
+            ]
+            for frame in identity_frames:
+                if frame.empty:
+                    continue
+                ranked = frame.sort_values(
+                    [score_column, "instrument"],
+                    ascending=[False, True],
+                    kind="mergesort",
+                )
+                candidate_instruments.update(
+                    ranked.head(top_n)["instrument"].astype(str).tolist()
+                )
+            market_source_identity = market_data.source_identity(
+                sorted(candidate_instruments)
+            )
+            if (
+                require_complete_accounting
+                and market_source_identity.get("requested_missing_instruments")
+            ):
+                missing = market_source_identity["requested_missing_instruments"]
+                raise ValueError(
+                    "complete accounting requires canonical market source "
+                    f"coverage for every rebalance candidate; missing: {missing}"
+                )
+
         # ── Build run/backtest IDs ────────────────────────────────────────
         # Cached signal semantics:
         # - signal.trade_date = intended_execution_date
@@ -1365,15 +1736,25 @@ class BacktestRunner:
             "blend_weight": blend_weight,
             "primary_signal": primary_identity,
             "secondary_signal": secondary_identity,
+            "accounting_schema": "accounting_v1" if accounting_enabled else "legacy",
+            "corporate_action_artifact": corporate_action_artifact,
+            "canonical_data_root": str(canonical_data_root) if canonical_data_root is not None else None,
+            "max_participation_rate": max_participation_rate,
+            "liquidity_gate_mode": liquidity_gate_mode,
+            "adv_window": adv_window,
+            "adv_min_periods": adv_min_periods,
+            "require_complete_accounting": require_complete_accounting,
+            "market_source_identity": market_source_identity,
         }
+        if corporate_action_store is not None:
+            manifest = getattr(corporate_action_store, "manifest", {})
+            hash_payload["corporate_action_manifest"] = manifest
         if pit_universe_identity is not None:
             hash_payload["pit_execution_universe"] = pit_universe_identity
         if rebalance_offset:
             # Default (offset=0) is the pre-offset behaviour; only non-zero
             # offsets change the identity, keeping prior backtest hashes stable.
             hash_payload["rebalance_offset"] = rebalance_offset
-        if rebalance_offset < 0:
-            raise ValueError("rebalance_offset must be >= 0")
         if posterior_config is not None:
             hash_payload["holding_policy"] = holding_policy
             hash_payload["posterior_policy"] = posterior_config.to_manifest()
@@ -1412,14 +1793,39 @@ class BacktestRunner:
             )
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        # ── Resolve trading dates ─────────────────────────────────────────
-        trading_dates = _resolve_trading_dates(start_date, end_date)
-        trading_dates = [d for d in trading_dates if start_date <= d <= end_date]
-        if not trading_dates:
-            raise ValueError(f"No trading dates in range [{start_date}, {end_date}]")
-
         # ── Account ───────────────────────────────────────────────────────
-        account = Account(init_cash=initial_capital)
+        account = (
+            BacktestAccount(init_cash=initial_capital)
+            if accounting_enabled else Account(init_cash=initial_capital)
+        )
+        valuation_state = ValuationState() if accounting_enabled else None
+        valuation_ledger_rows: list[dict[str, Any]] = []
+        corporate_action_ledger_rows: list[dict[str, Any]] = []
+        corporate_action_ledger_cursor = 0
+        previous_factors: dict[str, float] = {}
+        pending_explained_factor_change: dict[str, int] = {}
+        accounting_attribution: dict[str, Any] = {
+            "schema_version": "accounting_attribution_v1",
+            "missing_price": {
+                "stale_position_days": 0,
+                "stale_market_value_day_sum": 0.0,
+                "stale_position_count_day_sum": 0,
+            },
+            "corporate_actions": {
+                "source_event_count": 0,
+                "held_applied_event_count": 0,
+                "no_position_event_count": 0,
+                "settlement_count": 0,
+                "cash_dividend": 0.0,
+                "pay_cash": 0.0,
+                "share_adjustment": 0.0,
+            },
+            "_previous": {
+                "realized_pnl": 0.0,
+                "unrealized_pnl": 0.0,
+                "corporate_action_income": 0.0,
+            },
+        }
 
         # ── Daily loop ────────────────────────────────────────────────────
         daily_summaries: list[dict[str, Any]] = []
@@ -1464,6 +1870,71 @@ class BacktestRunner:
             )
 
         for trading_index, trade_date in enumerate(trading_dates):
+            # Accounting day boundary is deliberately before any market
+            # snapshot.  Corporate actions are applied on raw prices at the
+            # ex-date; execution still uses only the day's legal open.
+            day_events: list[dict[str, Any]] = []
+            if accounting_enabled:
+                assert isinstance(account, BacktestAccount)
+                assert valuation_state is not None
+                # Capture settlement rows emitted by start_day as well as
+                # ex-date application rows emitted below.  The cursor starts
+                # before the day boundary so pay/list-date records cannot be
+                # skipped from the exported event ledger.
+                ledger_start = corporate_action_ledger_cursor
+                held_before_actions = set(account.positions)
+                _prune_factor_completeness_state(
+                    held_instruments=held_before_actions,
+                    previous_factors=previous_factors,
+                    pending_explained_factor_change=pending_explained_factor_change,
+                )
+                _seed_valuation_asof(
+                    market_data,
+                    valuation_state,
+                    trade_date,
+                    [
+                        instrument for instrument in held_before_actions
+                        if instrument not in valuation_state.prices
+                    ],
+                )
+                account.start_day(trade_date)
+                if corporate_action_store is not None:
+                    day_events = corporate_action_store.for_date(trade_date)
+                    accounting_attribution["corporate_actions"]["source_event_count"] += len(day_events)
+                    account.apply_corporate_actions(
+                        day_events, trade_date
+                    )
+                    if posterior_state is not None:
+                        _adjust_posterior_corporate_action_state(
+                            posterior_state, day_events, held_before_actions
+                        )
+                    _adjust_valuation_corporate_action_reference(
+                        valuation_state, day_events, held_before_actions
+                    )
+                # A raw factor jump is only acceptable when the immutable
+                # event artifact explains it.  Never infer an event from the
+                # factor itself.
+                if market_data is not None and account.positions:
+                    factors = market_data.factor_snapshot(
+                        trade_date, list(account.positions.keys())
+                    )
+                    event_instruments = {
+                        str(event.get("instrument")) for event in day_events
+                        if str(event.get("instrument")) in held_before_actions
+                    }
+                    _update_factor_completeness_guard(
+                        factors=factors,
+                        previous_factors=previous_factors,
+                        event_instruments=event_instruments,
+                        pending_explained_factor_change=pending_explained_factor_change,
+                        trade_date=trade_date,
+                    )
+                new_rows = account.corporate_action_ledger_rows[ledger_start:]
+                corporate_action_ledger_rows.extend(new_rows)
+                corporate_action_ledger_cursor = len(
+                    account.corporate_action_ledger_rows
+                )
+
             if posterior_config is not None:
                 assert posterior_state is not None
                 assert posterior_views is not None
@@ -1499,12 +1970,23 @@ class BacktestRunner:
                     market_snapshot_fn=fetch_market_snapshot,
                     execution_collector=execution_rows,
                     exposure_gate_schedule=exposure_gate_schedule,
+                    market_data=market_data,
+                    valuation_state=valuation_state,
+                    max_participation_rate=max_participation_rate,
+                    liquidity_gate_mode=liquidity_gate_mode,
+                    adv_window=adv_window,
+                    adv_min_periods=adv_min_periods,
                 )
                 if is_rebalance:
                     # Cadence anchor for "<n>d" refresh: the next rebalance
                     # counts trading days strictly after this date.
                     self._last_rebalance_date = trade_date
                 self._last_trade_date = trade_date
+                if accounting_enabled:
+                    _enrich_accounting_day(
+                        day_result, account, valuation_state, trade_date,
+                        valuation_ledger_rows, accounting_attribution,
+                    )
                 daily_summaries.append(day_result)
                 if daily_debug_dir:
                     day_dir = daily_debug_dir / trade_date
@@ -1520,12 +2002,14 @@ class BacktestRunner:
             mtm_prices: dict[str, float] = {}
             if account.positions:
                 try:
-                    mtm_prices, _ = fetch_market_snapshot(
-                        trade_date, list(account.positions.keys()),
-                        price_col="close" if self._execution_price_mode == "open" else "close",
+                    mtm_prices = _observed_close_from_context(
+                        market_data, trade_date, list(account.positions.keys())
                     )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    if accounting_enabled:
+                        raise RuntimeError(
+                            f"accounting market-data failure on {trade_date}: {exc}"
+                        ) from exc
 
             # 1. Rebalance-cadence check (weekly, daily, or "<n>d" trading days)
             rebalance_due = not should_skip_weekly_rebalance(
@@ -1538,18 +2022,33 @@ class BacktestRunner:
 
             if not is_rebalance:
                 # Weekly skip — compute before, stop-loss, compute after
-                if mtm_prices:
+                if accounting_enabled:
+                    assert valuation_state is not None
+                    pos_before = valuation_state.mark_to_market(account, trade_date)
+                    mv_before = float(pos_before["market_value"].sum()) if not pos_before.empty else 0.0
+                elif mtm_prices:
                     pos_before = positions_frame(account, mtm_prices)
                     mv_before = float(pos_before["market_value"].sum()) if not pos_before.empty else 0.0
                 else:
                     mv_before = 0.0
                 cash_before = float(account.cash)
-                tv_before = cash_before + mv_before
-                sl_result = self._stop_loss_check(account, mtm_prices, stop_loss, trailing_stop,
-                                                         slippage, commission, min_commission, stamp_duty)
+                tv_before = cash_before + float(getattr(account, "total_receivable", 0.0)) + mv_before
+                sl_result = {"stop_events": 0, "stop_turnover": 0.0}
                 stop_events = int(sl_result["stop_events"])
                 self._last_trade_date = trade_date
-                if mtm_prices:
+                if accounting_enabled:
+                    assert valuation_state is not None
+                    valuation_state.update(
+                        {
+                            instrument: price
+                            for instrument, price in mtm_prices.items()
+                            if instrument in account.positions
+                        },
+                        trade_date,
+                    )
+                    pos_after = valuation_state.mark_to_market(account, trade_date)
+                    mv_after = float(pos_after["market_value"].sum()) if not pos_after.empty else 0.0
+                elif mtm_prices:
                     pos_after = positions_frame(account, mtm_prices)
                     mv_after = float(pos_after["market_value"].sum()) if not pos_after.empty else 0.0
                 else:
@@ -1562,7 +2061,7 @@ class BacktestRunner:
                     "total_value_before": tv_before,
                     "cash_after": float(account.cash),
                     "market_value_after": mv_after,
-                    "total_value_after": float(account.cash) + mv_after,
+                    "total_value_after": float(account.cash) + float(getattr(account, "total_receivable", 0.0)) + mv_after,
                     "order_count": 0, "buy_count": 0,
                     "sell_count": int(sl_result["stop_events"]),
                     "filled_count": int(sl_result["stop_events"]),
@@ -1574,23 +2073,43 @@ class BacktestRunner:
                     "rebalance_due": False,
                     "is_rebalance": False,
                 })
+                if accounting_enabled:
+                    _enrich_accounting_day(
+                        daily_summaries[-1], account, valuation_state, trade_date,
+                        valuation_ledger_rows, accounting_attribution,
+                    )
                 continue
 
             # 2. Load signal for this date
             day_signal = primary_by_date.get(trade_date, pd.DataFrame()).copy()
             if day_signal.empty:
                 # Before-state, stop-loss, after-state
-                if mtm_prices:
+                if accounting_enabled:
+                    assert valuation_state is not None
+                    pos_before = valuation_state.mark_to_market(account, trade_date)
+                    mv_before = float(pos_before["market_value"].sum()) if not pos_before.empty else 0.0
+                elif mtm_prices:
                     pos_before = positions_frame(account, mtm_prices)
                     mv_before = float(pos_before["market_value"].sum()) if not pos_before.empty else 0.0
                 else:
                     mv_before = 0.0
                 cash_before = float(account.cash)
-                tv_before = cash_before + mv_before
-                sl_result = self._stop_loss_check(account, mtm_prices, stop_loss, trailing_stop,
-                                                                     slippage, commission, min_commission, stamp_duty)
+                tv_before = cash_before + float(getattr(account, "total_receivable", 0.0)) + mv_before
+                sl_result = {"stop_events": 0, "stop_turnover": 0.0}
                 self._last_trade_date = trade_date
-                if mtm_prices:
+                if accounting_enabled:
+                    assert valuation_state is not None
+                    valuation_state.update(
+                        {
+                            instrument: price
+                            for instrument, price in mtm_prices.items()
+                            if instrument in account.positions
+                        },
+                        trade_date,
+                    )
+                    pos_after = valuation_state.mark_to_market(account, trade_date)
+                    mv_after = float(pos_after["market_value"].sum()) if not pos_after.empty else 0.0
+                elif mtm_prices:
                     pos_after = positions_frame(account, mtm_prices)
                     mv_after = float(pos_after["market_value"].sum()) if not pos_after.empty else 0.0
                 else:
@@ -1603,7 +2122,7 @@ class BacktestRunner:
                     "total_value_before": tv_before,
                     "cash_after": float(account.cash),
                     "market_value_after": mv_after,
-                    "total_value_after": float(account.cash) + mv_after,
+                    "total_value_after": float(account.cash) + float(getattr(account, "total_receivable", 0.0)) + mv_after,
                     "order_count": 0, "buy_count": 0,
                     "sell_count": int(sl_result["stop_events"]),
                     "filled_count": int(sl_result["stop_events"]),
@@ -1615,6 +2134,11 @@ class BacktestRunner:
                     "rebalance_due": True,
                     "is_rebalance": False,
                 })
+                if accounting_enabled:
+                    _enrich_accounting_day(
+                        daily_summaries[-1], account, valuation_state, trade_date,
+                        valuation_ledger_rows, accounting_attribution,
+                    )
                 continue
 
             # 2b. No-lookahead check — primary signal
@@ -1673,44 +2197,93 @@ class BacktestRunner:
                 signal_run_id=signal_run_id,
             )
             instruments = sorted(set(targets["instrument"]) | set(account.positions.keys()))
+            if accounting_enabled:
+                assert valuation_state is not None
+                _seed_valuation_asof(
+                    market_data, valuation_state, trade_date,
+                    [
+                        instrument for instrument in instruments
+                        if instrument not in account.positions
+                    ],
+                )
 
             # 4. Resolve execution prices
             try:
                 if self._execution_price_mode == "open":
-                    exec_prices_raw, market_status = fetch_market_snapshot(
-                        trade_date, instruments, price_col="open",
+                    exec_prices_raw, market_status = _snapshot_from_context(
+                        market_data, trade_date, instruments, price_col="open",
                     )
-                    mtm_prices_raw, _ = fetch_market_snapshot(
-                        trade_date, instruments, price_col="close",
+                    mtm_prices_raw = _observed_close_from_context(
+                        market_data, trade_date, instruments,
                     )
                 else:
-                    exec_prices_raw, market_status = fetch_market_snapshot(trade_date, instruments)
+                    exec_prices_raw, market_status = _snapshot_from_context(
+                        market_data, trade_date, instruments, price_col="close"
+                    )
                     mtm_prices_raw = exec_prices_raw
 
                 exec_prices, mtm_prices = exec_prices_raw, mtm_prices_raw
             except Exception as exc:
+                if accounting_enabled:
+                    raise RuntimeError(
+                        f"accounting market-data failure on {trade_date}: {exc}"
+                    ) from exc
                 daily_summaries.append(self._empty_day(
                     trade_date, trade_date, account, f"no_market_data: {exc}",
                     rebalance_due=True, is_rebalance=False,
                 ))
                 continue
 
-            # 5. Before-state
-            pos_before = positions_frame(account, mtm_prices)
+            # 5. Before-state.  Accounting mode never interprets a missing
+            # close as zero market value.
+            if accounting_enabled:
+                assert valuation_state is not None
+                pos_before = valuation_state.mark_to_market(account, trade_date)
+            else:
+                pos_before = positions_frame(account, mtm_prices)
             cash_before = float(account.cash)
             mv_before = float(pos_before["market_value"].sum()) if not pos_before.empty else 0.0
-            tv_before = cash_before + mv_before
+            tv_before = cash_before + float(getattr(account, "total_receivable", 0.0)) + mv_before
 
             orders: list[dict] = []
 
             # 6. Build order intents
-            orders, _, _, _, _, _ = build_order_intents(
-                account, day_signal, targets.set_index("instrument")["target_weight"].to_dict(),
-                exec_prices, trade_date,
-            )
+            planning_account = account
+            adv_by_instrument = None
+            if accounting_enabled:
+                assert valuation_state is not None
+                planning_prices = dict(valuation_state.prices)
+                if market_data is not None and max_participation_rate is not None:
+                    adv_by_instrument, _ = market_data.adv_snapshot(
+                        trade_date, instruments, window=adv_window,
+                        min_periods=adv_min_periods,
+                    )
+            target_weight_map = targets.set_index("instrument")[
+                "target_weight"
+            ].to_dict()
+            if accounting_enabled:
+                orders = build_valuation_execution_orders(
+                    account, target_weight_map, planning_prices, exec_prices
+                )
+            else:
+                orders, _, _, _, _, _ = build_order_intents(
+                    planning_account, day_signal, target_weight_map,
+                    exec_prices, trade_date,
+                )
             for order in orders:
                 order["execution_phase"] = "rebalance"
                 order["trade_reason"] = "rebalance_to_target_weight"
+                if accounting_enabled and order["side"] == "sell":
+                    instrument = str(order.get("symbol") or "")
+                    target_weight = float(
+                        targets.set_index("instrument")["target_weight"].get(
+                            instrument, 0.0
+                        )
+                    )
+                    if target_weight <= 0 and instrument in account.positions:
+                        order["amount"] = int(
+                            account.positions[instrument].sellable_amount
+                        )
 
             # 7. Execute, settle, MTM
             from qsys.backtest._execution import execute_trade_day
@@ -1720,6 +2293,10 @@ class BacktestRunner:
                 min_commission=min_commission, slippage=slippage,
                 execution_price_mode=self._execution_price_mode,
                 execution_collector=execution_rows,
+                valuation_state=valuation_state,
+                adv_by_instrument=adv_by_instrument,
+                max_participation_rate=max_participation_rate,
+                liquidity_gate_mode=liquidity_gate_mode,
             )
             self._last_prices = mtm_prices
             self._last_trade_date = trade_date
@@ -1741,6 +2318,11 @@ class BacktestRunner:
             day_result["turnover"] = day_result.get("turnover", 0.0) + sl_result["stop_turnover"]
             day_result["rebalance_due"] = True
             day_result["is_rebalance"] = True
+            if accounting_enabled:
+                _enrich_accounting_day(
+                    day_result, account, valuation_state, trade_date,
+                    valuation_ledger_rows, accounting_attribution,
+                )
             daily_summaries.append(day_result)
 
             # 9. Debug artifacts
@@ -1818,10 +2400,15 @@ class BacktestRunner:
             "signal_trade_date_semantics": "intended_execution_date",
             "mtm_price": "close",
             "price_adjustment_policy": "raw_execution_and_mtm",
-            "corporate_action_policy": "not_modeled",
+            "corporate_action_policy": (
+                "raw_price_event_ledger_v1" if accounting_enabled else "not_modeled"
+            ),
             "research_limitations": [
-                "cash dividends, splits, and other corporate actions are not modeled",
+                *([] if accounting_enabled else [
+                    "cash dividends, splits, and other corporate actions are not modeled",
+                ]),
                 "current-universe historical runs contain survivorship bias unless the source declares PIT membership",
+                *(["dividend withholding tax is not modeled"] if accounting_enabled else []),
             ],
             "commission_bp": commission,
             "stamp_duty_bp": stamp_duty,
@@ -1836,10 +2423,26 @@ class BacktestRunner:
                     "schema_version": EXECUTION_ARTIFACT_SCHEMA_VERSION,
                     "sha256": executions_sha256,
                     "row_count": len(execution_rows),
-                    "complete": stop_loss is None and trailing_stop is None,
+                    # Every order is collected by the shared execution
+                    # kernel, including explicit zero-quantity rejections.
+                    # Legacy stop paths are disabled above, so this artifact
+                    # is complete even when it contains rejected rows.
+                    "complete": True,
                 }
             },
         })
+        if market_source_identity is not None:
+            manifest["market_source_identity"] = market_source_identity
+        if accounting_enabled:
+            manifest["corporate_action_policy"] = "raw_price_event_ledger_v1"
+            manifest["accounting_params"] = {
+                "corporate_action_artifact": corporate_action_artifact,
+                "canonical_data_root": str(canonical_data_root),
+                "max_participation_rate": max_participation_rate,
+                "liquidity_gate_mode": liquidity_gate_mode,
+                "adv_window": adv_window,
+                "adv_min_periods": adv_min_periods,
+            }
         if pit_universe_identity is not None:
             manifest["pit_execution_universe"] = {
                 **pit_universe_identity,
@@ -1904,6 +2507,32 @@ class BacktestRunner:
         _td = len([d for d in daily_summaries if d.get("order_count", 0) > 0])
         _reb_due = sum(1 for d in daily_summaries if d.get("rebalance_due", False))
         _reb_done = sum(1 for d in daily_summaries if d.get("is_rebalance", False))
+        _equity = pd.Series(
+            [initial_capital]
+            + [float(d.get("total_value_after", initial_capital)) for d in daily_summaries],
+            dtype=float,
+        )
+        _daily_ret = _equity.pct_change().replace([float("inf"), float("-inf")], pd.NA).dropna()
+        _elapsed_days = max(
+            1,
+            (pd.Timestamp(trading_dates[-1]) - pd.Timestamp(trading_dates[0])).days
+            if trading_dates else 1,
+        )
+        _years = _elapsed_days / 365.25
+        _cagr = (
+            (float(_equity.iloc[-1]) / initial_capital) ** (1.0 / _years) - 1.0
+            if _years > 0 and initial_capital > 0 and float(_equity.iloc[-1]) >= 0
+            else 0.0
+        )
+        _sharpe = (
+            float(_daily_ret.mean() / _daily_ret.std(ddof=1) * (252.0 ** 0.5))
+            if len(_daily_ret) > 1 and float(_daily_ret.std(ddof=1)) > 0 else 0.0
+        )
+        _maxdd = (
+            float((_equity / _equity.cummax() - 1.0).min())
+            if len(_equity) else 0.0
+        )
+        _turnover_ratio = float(_tt / max(float(_equity.mean()), 1e-12))
         _m = {
             "initial_capital": initial_capital, "final_value": final_value,
             "total_return": total_return, "trading_day_count": len(trading_dates),
@@ -1911,6 +2540,11 @@ class BacktestRunner:
             "order_count_total": _ot, "filled_count_total": _ft,
             "rejected_count_total": _rt, "avg_order_per_day": round(_ot / max(len(trading_dates), 1), 2),
             "turnover_total": round(_tt, 2), "avg_turnover": round(_tt / max(_td, 1), 2),
+            "turnover_annualized": _turnover_ratio * (365.25 / _elapsed_days),
+            "cagr": _cagr,
+            "annualized_return": _cagr,
+            "sharpe": _sharpe,
+            "max_drawdown": _maxdd,
             "rebalance_due_day_count": _reb_due,
             "rebalance_executed_day_count": _reb_done,
         }
@@ -1930,6 +2564,149 @@ class BacktestRunner:
                     for d in daily_summaries
                 )
         write_manifest(output_dir / "metrics.json", with_standard_metadata(_m))
+
+        if accounting_enabled:
+            # Accounting artifacts are immutable exports of the same run.  Do
+            # not replace raw prices with adjusted prices and do not omit an
+            # empty ledger: the empty CSV is still part of the hash boundary.
+            assert isinstance(account, BacktestAccount)
+            # Export and derive attribution from the authoritative complete
+            # account ledger.  The cursor above is retained as an invariant:
+            # any mismatch would mean the runner dropped a day-boundary row.
+            complete_ledger = account.corporate_action_ledger_rows
+            if corporate_action_ledger_rows != complete_ledger:
+                raise RuntimeError("corporate-action ledger cursor mismatch")
+            corporate_action_ledger_rows = complete_ledger
+            action_attr = accounting_attribution["corporate_actions"]
+            action_attr["held_applied_event_count"] = sum(
+                row.get("status") == "applied" for row in complete_ledger
+            )
+            action_attr["no_position_event_count"] = sum(
+                row.get("status") == "no_position" for row in complete_ledger
+            )
+            action_attr["settlement_count"] = sum(
+                row.get("status") == "settled" for row in complete_ledger
+            )
+            action_attr["cash_dividend"] = sum(
+                max(0.0, float(row.get("receivable_delta", 0.0) or 0.0))
+                for row in complete_ledger if row.get("status") == "applied"
+            )
+            action_attr["pay_cash"] = sum(
+                max(0.0, float(row.get("cash_delta", 0.0) or 0.0))
+                for row in complete_ledger if row.get("status") == "settled"
+            )
+            action_attr["share_adjustment"] = sum(
+                int(row.get("shares_after", 0) or 0)
+                - int(row.get("shares_before", 0) or 0)
+                for row in complete_ledger if row.get("status") == "applied"
+            )
+            corp_path = output_dir / "corporate_action_ledger.csv"
+            account.corporate_action_ledger_frame().to_csv(corp_path, index=False)
+            valuation_path = output_dir / "valuation_ledger.csv"
+            valuation_columns = [
+                "trade_date", "instrument", "quantity", "sellable_quantity",
+                "cost_price", "last_price", "market_value", "price_date",
+                "stale_price", "stale_days",
+            ]
+            pd.DataFrame(valuation_ledger_rows, columns=valuation_columns).to_csv(
+                valuation_path, index=False
+            )
+            attribution_path = output_dir / "accounting_attribution.json"
+            attribution_output = {
+                key: value for key, value in accounting_attribution.items()
+                if key != "_previous"
+            }
+            attribution_path.write_text(
+                json.dumps(attribution_output, sort_keys=True, indent=2),
+                encoding="utf-8",
+            )
+            manifest_path = output_dir / "manifest.json"
+            manifest_payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest_payload["accounting"] = {
+                "schema_version": "accounting_v1",
+                "valuation_policy": "stale_last_legal_close",
+                "execution_policy": "raw_price_event_ledger_v1",
+                "t_plus_one": True,
+                "liquidity_policy": "strict_prior_ADV",
+                "corporate_action_artifact": corporate_action_artifact,
+                "canonical_data_root": str(canonical_data_root) if canonical_data_root is not None else None,
+                "max_participation_rate": max_participation_rate,
+                "liquidity_gate_mode": liquidity_gate_mode,
+                "adv_window": adv_window,
+                "adv_min_periods": adv_min_periods,
+                "artifacts": {
+                    "executions": {
+                        "path": executions_path.name,
+                        "schema_version": EXECUTION_ARTIFACT_SCHEMA_VERSION,
+                        "sha256": executions_sha256,
+                        "row_count": len(execution_rows),
+                        "complete": True,
+                    },
+                    "daily_summary": {
+                        "path": "daily_summary.csv",
+                        "schema_version": "backtest_daily_summary_v1",
+                        "sha256": hashlib.sha256(
+                            (output_dir / "daily_summary.csv").read_bytes()
+                        ).hexdigest() if (output_dir / "daily_summary.csv").exists() else "",
+                        "row_count": len(daily_summaries),
+                        "complete": True,
+                    },
+                    "metrics": {
+                        "path": "metrics.json",
+                        "schema_version": "metrics_v1",
+                        "sha256": hashlib.sha256(
+                            (output_dir / "metrics.json").read_bytes()
+                        ).hexdigest(),
+                        "row_count": 1,
+                        "complete": True,
+                    },
+                    "corporate_action_ledger": {
+                        "path": corp_path.name,
+                        "schema_version": "corporate_action_ledger_v1",
+                        "sha256": hashlib.sha256(corp_path.read_bytes()).hexdigest(),
+                        "row_count": len(corporate_action_ledger_rows),
+                        "complete": True,
+                    },
+                    "valuation_ledger": {
+                        "path": valuation_path.name,
+                        "schema_version": "valuation_ledger_v1",
+                        "sha256": hashlib.sha256(valuation_path.read_bytes()).hexdigest(),
+                        "row_count": len(valuation_ledger_rows),
+                        "complete": True,
+                    },
+                    "accounting_attribution": {
+                        "path": attribution_path.name,
+                        "schema_version": "accounting_attribution_v1",
+                        "sha256": hashlib.sha256(attribution_path.read_bytes()).hexdigest(),
+                        "row_count": 1,
+                        "complete": True,
+                    },
+                },
+            }
+            if corporate_action_store is not None:
+                manifest_payload["accounting"]["corporate_action_manifest"] = getattr(
+                    corporate_action_store, "manifest", {}
+                )
+            top_artifacts = manifest_payload.setdefault("artifacts", {})
+            for key, filename, schema, row_count in (
+                ("daily_summary", "daily_summary.csv", "backtest_daily_summary_v1", len(daily_summaries)),
+                ("executions", "executions.csv", EXECUTION_ARTIFACT_SCHEMA_VERSION, len(execution_rows)),
+                ("corporate_action_ledger", corp_path.name, "corporate_action_ledger_v1", len(corporate_action_ledger_rows)),
+                ("valuation_ledger", valuation_path.name, "valuation_ledger_v1", len(valuation_ledger_rows)),
+                # JSON artifacts are one logical row by contract, even though
+                # they are not tabular files.
+                ("accounting_attribution", attribution_path.name, "accounting_attribution_v1", 1),
+                ("metrics", "metrics.json", "metrics_v1", 1),
+            ):
+                path = output_dir / filename
+                top_artifacts[key] = {
+                    "path": filename,
+                    "schema_version": schema,
+                    "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                    "row_count": row_count,
+                    "complete": True,
+                }
+            write_manifest(manifest_path, manifest_payload)
 
         result = BacktestRunResult(
             strategy_id=strategy_template_id,
@@ -1960,7 +2737,17 @@ class BacktestRunner:
             ),
         )
 
-        self._write_summary(result, output_dir)
+        if accounting_enabled:
+            result.artifacts.update({
+                "executions": str(output_dir / "executions.csv"),
+                "corporate_action_ledger": str(output_dir / "corporate_action_ledger.csv"),
+                "valuation_ledger": str(output_dir / "valuation_ledger.csv"),
+                "accounting_attribution": str(output_dir / "accounting_attribution.json"),
+            })
+
+        self._write_summary(
+            result, output_dir, rewrite_daily_summary=not accounting_enabled
+        )
         return result
 
 
