@@ -8,7 +8,7 @@ import os
 import re
 import shutil
 import tempfile
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -574,18 +574,48 @@ def _quarter_ends(start_date: str, end_date: str) -> list[str]:
     ]
 
 
+def _calendar_year_chunks(start_date: str, end_date: str) -> list[tuple[str, str]]:
+    """Return deterministic, inclusive, non-overlapping calendar-year chunks."""
+
+    start = pd.Timestamp(start_date).date()
+    end = pd.Timestamp(end_date).date()
+    if start > end:
+        raise ValueError("start_date must be on or before end_date")
+    chunks: list[tuple[str, str]] = []
+    current = start
+    while current <= end:
+        chunk_end = date(current.year, 12, 31)
+        if chunk_end > end:
+            chunk_end = end
+        chunks.append((current.isoformat(), chunk_end.isoformat()))
+        current = chunk_end + timedelta(days=1)
+    return chunks
+
+
 def fetch_shareholder_backfill(
     collector: Any, *, start_date: str, end_date: str
 ) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, Any]]:
     """Fetch missed holder data with bounded, paged Tushare calls."""
 
-    start_api = pd.Timestamp(start_date).strftime("%Y%m%d")
-    end_api = pd.Timestamp(end_date).strftime("%Y%m%d")
-    holder_raw = _paged_call(
-        collector.pro.stk_holdernumber,
-        limit=3000,
-        start_date=start_api,
-        end_date=end_api,
+    holder_pages: list[pd.DataFrame] = []
+    holder_chunks: list[dict[str, Any]] = []
+    for chunk_start, chunk_end in _calendar_year_chunks(start_date, end_date):
+        page = _paged_call(
+            collector.pro.stk_holdernumber,
+            limit=3000,
+            start_date=pd.Timestamp(chunk_start).strftime("%Y%m%d"),
+            end_date=pd.Timestamp(chunk_end).strftime("%Y%m%d"),
+        )
+        holder_pages.append(page)
+        holder_chunks.append(
+            {
+                "start_date": chunk_start,
+                "end_date": chunk_end,
+                "rows": len(page),
+            }
+        )
+    holder_raw = (
+        pd.concat(holder_pages, ignore_index=True) if holder_pages else pd.DataFrame()
     )
     top10_pages: list[pd.DataFrame] = []
     periods = _quarter_ends(start_date, end_date)
@@ -608,6 +638,7 @@ def fetch_shareholder_backfill(
         "start_date": start_date,
         "end_date": end_date,
         "quarter_periods": periods,
+        "holder_chunks": holder_chunks,
         "holder_source_rows": len(holder_raw),
         "top10_source_rows": len(top10_raw),
     }
@@ -664,8 +695,14 @@ def run_shareholder_history_repair(
     data_root: Path | None = None,
     collector: Any | None = None,
     start_date: str | None = None,
+    required_history_start_date: str | None = None,
 ) -> dict[str, Any]:
-    """Repair canonical shareholder PIT sidecars and emit an immutable audit."""
+    """Repair canonical shareholder PIT sidecars and emit an immutable audit.
+
+    ``required_history_start_date`` is the durable bootstrap contract.  The
+    optional ``start_date`` remains a one-shot operator override and does not
+    replace that contract in the persisted state.
+    """
 
     resolved_data_root, _ = _resolve_data_root(
         project_root=project_root, data_root=data_root
@@ -692,37 +729,55 @@ def run_shareholder_history_repair(
             state = json.loads(state_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             state = {}
+    state_before = dict(state)
     checked_through = _normalise_date(state.get("checked_through"))
-    if start_date is not None:
-        resolved_start = _normalise_date(start_date)
+    resolved_end = _normalise_date(end_date)
+    explicit_start = _normalise_date(start_date) if start_date is not None else None
+    required_start = (
+        _normalise_date(required_history_start_date)
+        if required_history_start_date is not None
+        else explicit_start
+    )
+    if required_start is None and resolved_end is not None:
+        required_start = (
+            pd.Timestamp(resolved_end) - pd.Timedelta(days=550)
+        ).strftime("%Y-%m-%d")
+    state_history_start = _normalise_date(state.get("history_start_date"))
+    bootstrap_required = (
+        required_start is None
+        or state_history_start is None
+        or state_history_start > required_start
+        or checked_through is None
+    )
+    if explicit_start is not None:
+        resolved_start = explicit_start
+        mode = "backfill"
+    elif bootstrap_required:
+        resolved_start = required_start
         mode = "backfill"
     elif checked_through:
-        resolved_start = (date.fromisoformat(checked_through) + timedelta(days=1)).isoformat()
+        resolved_start = (
+            date.fromisoformat(checked_through) + timedelta(days=1)
+        ).isoformat()
         mode = "incremental"
     else:
-        maxima = [
-            value
-            for value in (
-                holder_before["ann_date"].max() if not holder_before.empty else None,
-                top10_before["ann_date"].max() if not top10_before.empty else None,
-            )
-            if value
-        ]
-        seed = min(maxima) if maxima else (
-            pd.Timestamp(end_date) - pd.Timedelta(days=550)
-        ).strftime("%Y-%m-%d")
-        resolved_start = (
-            pd.Timestamp(seed) - pd.Timedelta(days=7)
-        ).strftime("%Y-%m-%d")
+        resolved_start = None
         mode = "backfill"
-    resolved_end = _normalise_date(end_date)
-    if resolved_start is None or resolved_end is None:
+    if resolved_start is None or resolved_end is None or required_start is None:
         raise ValueError("shareholder repair requires valid start/end dates")
     summary: dict[str, Any] = {
-        "status": "healthy" if before["status"] == "pass" else "planned",
+        "status": (
+            "healthy"
+            if before["status"] == "pass" and not bootstrap_required
+            else "planned"
+        ),
         "apply": apply,
         "start_date": resolved_start,
         "end_date": resolved_end,
+        "required_history_start_date": required_start,
+        "bootstrap_required": bootstrap_required,
+        "state_before": state_before,
+        "state_after": state_before,
         "before": before,
         "fetch": {"mode": mode, "status": "skipped"},
         "rows_before": {"holder_num": len(holder_before), "top10": len(top10_before)},
@@ -739,10 +794,15 @@ def run_shareholder_history_repair(
         if source_path.is_file():
             shutil.copy2(source_path, backup_dir / source_path.name)
     summary["backup_dir"] = str(backup_dir)
+    pending_state: dict[str, Any] | None = None
     if resolved_start > resolved_end:
-        summary["status"] = "success" if before["status"] == "pass" else "failed"
+        summary["status"] = (
+            "success"
+            if before["status"] == "pass" and not bootstrap_required
+            else "failed"
+        )
         summary["fetch"] = {"mode": mode, "status": "already_checked"}
-    else:
+    elif apply:
         if collector is None:
             from qsys.data.collector import TushareCollector
 
@@ -766,15 +826,23 @@ def run_shareholder_history_repair(
             )
             _atomic_write_parquet(holder_after, holder_path)
             _atomic_write_parquet(top10_after, top10_path)
-            _atomic_write_json(
-                {
-                    "schema_version": 1,
-                    "checked_through": resolved_end,
-                    "source": "tushare.stk_holdernumber+tushare.top10_holders",
-                    "availability_rule": "announcement_date_asof",
-                },
-                state_path,
-            )
+            pending_state = {
+                "schema_version": 2,
+                "checked_through": resolved_end,
+                "history_start_date": min(
+                    value
+                    for value in (state_history_start, resolved_start)
+                    if value is not None
+                ),
+                "last_successful_start": resolved_start,
+                "last_successful_end": resolved_end,
+                "last_successful_mode": mode,
+                "holder_num_sha256": _file_sha256(holder_path),
+                "top10_holder_ratio_sha256": _file_sha256(top10_path),
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+                "source": "tushare.stk_holdernumber+tushare.top10_holders",
+                "availability_rule": "announcement_date_asof",
+            }
         except Exception as exc:
             summary["status"] = "failed"
             summary["error"] = str(exc)
@@ -794,7 +862,18 @@ def run_shareholder_history_repair(
             normalise_top10_rows(pd.read_parquet(top10_path))
         ) if top10_path.is_file() else 0,
     }
-    if summary.get("status") != "failed":
+    if summary.get("status") != "failed" and after["status"] != "pass":
+        summary["status"] = "failed"
+        summary["error"] = "shareholder sidecar freshness gate failed after repair"
+    elif pending_state is not None and summary.get("status") != "failed":
+        try:
+            _atomic_write_json(pending_state, state_path)
+            summary["state_after"] = pending_state
+            summary["status"] = "success"
+        except Exception as exc:
+            summary["status"] = "failed"
+            summary["error"] = str(exc)
+    elif summary.get("status") not in {"failed", "healthy"}:
         summary["status"] = "success" if after["status"] == "pass" else "failed"
     output_dir.mkdir(parents=True, exist_ok=True)
     audit_path = output_dir / "shareholder_repair_summary.json"
