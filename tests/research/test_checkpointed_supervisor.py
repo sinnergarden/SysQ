@@ -11,10 +11,12 @@ import threading
 import pytest
 
 from scripts.research.run_checkpointed_supervisor import (
+    _build_windows,
     ChildResult,
     SupervisorError,
     run_supervisor,
 )
+from qsys.research.matrix_job import RollingResearchConfig
 
 
 def _config(tmp_path: Path) -> Path:
@@ -38,6 +40,12 @@ def _config(tmp_path: Path) -> Path:
         "source_manifest_hash": "source-v1",
     }), encoding="utf-8")
     return path
+
+
+def _window_count(config_path: Path) -> int:
+    """Use the production window builder so terminal partials stay covered."""
+    config = RollingResearchConfig.from_file(config_path)
+    return len(_build_windows(config))
 
 
 class FakeChildren:
@@ -73,9 +81,9 @@ def _all_progress(total: int, *, start: int = 1) -> list[ChildResult]:
 def test_checkpoint_exit_75_progresses_then_terminal_exit(tmp_path: Path) -> None:
     config = _config(tmp_path)
     state_path = tmp_path / "state.json"
-    # The fixture calendar creates 13 windows.
+    total = _window_count(config)
     children = FakeChildren([
-        *_all_progress(13),
+        *_all_progress(total),
         ChildResult(0, "completed\n"),
     ])
     state = run_supervisor(
@@ -88,7 +96,7 @@ def test_checkpoint_exit_75_progresses_then_terminal_exit(tmp_path: Path) -> Non
     )
     assert state["status"] == "complete"
     assert state["completed_windows"] == state["total_windows"]
-    assert len(children.commands) == 13
+    assert len(children.commands) == total
     assert children.commands[0][0] == sys.executable
     assert "scripts/run_research.py" in children.commands[0][1]
     assert children.commands[0][-2:] == ["--checkpoint-batch-size", "1"]
@@ -98,7 +106,8 @@ def test_checkpoint_exit_75_progresses_then_terminal_exit(tmp_path: Path) -> Non
 def test_exit_75_without_monotonic_progress_fails_closed(tmp_path: Path) -> None:
     config = _config(tmp_path)
     state_path = tmp_path / "state.json"
-    children = FakeChildren([_progress(0, 13)])
+    total = _window_count(config)
+    children = FakeChildren([_progress(0, total)])
     with pytest.raises(SupervisorError, match="invalid checkpoint progress"):
         run_supervisor(
             config_path=config,
@@ -133,7 +142,8 @@ def test_exit_75_without_protocol_payload_fails_closed(tmp_path: Path) -> None:
 def test_exit_zero_requires_terminal_artifacts(tmp_path: Path) -> None:
     config = _config(tmp_path)
     state_path = tmp_path / "state.json"
-    children = FakeChildren([*_all_progress(13), ChildResult(0, "done")])
+    total = _window_count(config)
+    children = FakeChildren([*_all_progress(total), ChildResult(0, "done")])
 
     def reject(config, *, project_root):
         raise ValueError("missing terminal manifest")
@@ -149,19 +159,20 @@ def test_exit_zero_requires_terminal_artifacts(tmp_path: Path) -> None:
         )
     state = json.loads(state_path.read_text())
     assert state["status"] == "failed"
-    assert state["completed_windows"] == 12
+    assert state["completed_windows"] == total - 1
 
 
 def test_identity_conflict_rejects_without_launching_child(tmp_path: Path) -> None:
     config = _config(tmp_path)
     state_path = tmp_path / "state.json"
+    total = _window_count(config)
     state_path.write_text(json.dumps({
         "schema_version": "checkpoint_supervisor_v1",
         "run_identity": "different",
         "config_sha256": "different",
         "revision": "rev-old",
         "experiment_id": "exp_supervisor",
-        "total_windows": 13,
+        "total_windows": total,
         "status": "running",
         "pid": None,
     }), encoding="utf-8")
@@ -206,8 +217,9 @@ def test_existing_complete_state_is_reused_after_validation(tmp_path: Path) -> N
 def test_child_failure_preserves_completed_checkpoint_state(tmp_path: Path) -> None:
     config = _config(tmp_path)
     state_path = tmp_path / "state.json"
+    total = _window_count(config)
     children = FakeChildren([
-        _progress(1, 13),
+        _progress(1, total),
         ChildResult(2, "child error"),
     ])
     with pytest.raises(SupervisorError, match="child failed with exit code 2"):
@@ -228,13 +240,14 @@ def test_child_failure_preserves_completed_checkpoint_state(tmp_path: Path) -> N
 def test_failed_supervisor_releases_lock_for_resume(tmp_path: Path) -> None:
     config = _config(tmp_path)
     state_path = tmp_path / "state.json"
+    total = _window_count(config)
     with pytest.raises(SupervisorError, match="child failed with exit code 2"):
         run_supervisor(
             config_path=config,
             checkpoint_batch_size=1,
             run_state_path=state_path,
             child_runner=FakeChildren([
-                _progress(1, 13),
+                _progress(1, total),
                 ChildResult(2, "child error"),
             ]),
             terminal_validator=_validator,
@@ -246,14 +259,14 @@ def test_failed_supervisor_releases_lock_for_resume(tmp_path: Path) -> None:
         checkpoint_batch_size=1,
         run_state_path=state_path,
         child_runner=FakeChildren([
-            *_all_progress(13, start=2),
+            *_all_progress(total, start=2),
             ChildResult(0, "done"),
         ]),
         terminal_validator=_validator,
         revision="rev-1",
     )
     assert resumed["status"] == "complete"
-    assert resumed["completed_windows"] == 13
+    assert resumed["completed_windows"] == total
 
 
 def test_concurrent_supervisor_is_rejected_without_state_or_checkpoint_mutation(
@@ -322,7 +335,8 @@ def test_concurrent_supervisor_is_rejected_without_state_or_checkpoint_mutation(
 def test_max_restarts_stops_without_deleting_checkpoints(tmp_path: Path) -> None:
     config = _config(tmp_path)
     state_path = tmp_path / "state.json"
-    children = FakeChildren([_progress(1, 13), _progress(2, 13)])
+    total = _window_count(config)
+    children = FakeChildren([_progress(1, total), _progress(2, total)])
     with pytest.raises(SupervisorError, match="max_restarts exceeded"):
         run_supervisor(
             config_path=config,
