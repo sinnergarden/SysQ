@@ -1801,6 +1801,7 @@ class TushareCollector:
         # Loop Control
         curr_dt = datetime.strptime(start_date, '%Y%m%d')
         end_dt = datetime.strptime(end_date, '%Y%m%d')
+        mutations: list[dict] = []
 
         while curr_dt <= end_dt:
             # Chunking: 3 Months (Quarterly)
@@ -1929,10 +1930,19 @@ class TushareCollector:
                 # 3.5 Margin — subset from pre-fetched full-period data
                 df_margin = pd.DataFrame()
                 if include_margin and df_margin_all is not None and not df_margin_all.empty:
-                    df_margin = df_margin_all[
-                        df_margin_all["trade_date"].between(chunk_start, chunk_end) &
-                        df_margin_all["ts_code"].isin(valid_codes)
-                    ].copy()
+                    required_margin_keys = {"ts_code", "trade_date"}
+                    if required_margin_keys.issubset(df_margin_all.columns):
+                        df_margin = df_margin_all[
+                            df_margin_all["trade_date"].between(chunk_start, chunk_end)
+                            & df_margin_all["ts_code"].isin(valid_codes)
+                        ].copy()
+                    else:
+                        log.warning(
+                            "Skip margin subset for %s-%s: missing keys %s",
+                            chunk_start,
+                            chunk_end,
+                            sorted(required_margin_keys - set(df_margin_all.columns)),
+                        )
 
                 # 4. Filter Basic/Limit from All
                 df_basic = pd.DataFrame()
