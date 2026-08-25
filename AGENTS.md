@@ -133,7 +133,15 @@ Loop Result:
 
 - **禁止推 main**（必须 PR，零例外）
 - 禁止 `latest` / mtime / symlink
-- 禁止改 broker / trader / ledger / deploy / systemd
+- 禁止改 broker / trader / ledger。
+- `deploy/` 与 `systemd` 仍默认禁止；唯一窄例外是明确归类为
+  `UC_DAILY_RUNTIME_DEPLOYMENT` 且有人工 `--confirm-deploy` operator confirmation 的独立 PR：只能
+  部署/验证 materialized detached runtime 与 systemd user unit。该例外不允许启动
+  数据同步 service，`apply` 只允许安装 unit、daemon-reload 和 enable timer；不得
+  扩展到推理、broker、trader、ledger、signal、model、feature 或 backtest。
+- 任何 deploy 例外都必须显式使用 commit revision；禁止 `latest`、mtime 或 symlink
+  解析 revision/artifact/model。固定解释器路径本身可以是已验证的 symlink，但不得
+  用 symlink 决定代码 revision、artifact 或 model。
 - 禁止从 `archive/` import
 - 禁止混 PR（架构+业务+文档+测试分开）
 

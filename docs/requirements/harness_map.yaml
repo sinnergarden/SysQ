@@ -31,6 +31,7 @@ usecases:
       - scripts/run_daily.py
       - scripts/run_daily_batch.py
       - scripts/ops/sync_csi800_daily.py
+      - qsys/data/collector.py
       - qsys/ops/
       - configs/strategies/
       - harness/checks/
@@ -40,6 +41,46 @@ usecases:
       - qsys/backtest/
       - qsys/trader/
       - qsys/broker/
+  UC_DAILY_RUNTIME_DEPLOYMENT:
+    domain: runtime_deployment
+    status: draft
+    owner_agent: operator_agent
+    skills:
+      primary: sysq-dev
+      review: sysq-review
+    entrypoints:
+      - scripts/deploy_csi1800_pit_runtime.py
+    artifacts:
+      - detached runtime checkout pinned to an explicit commit revision
+      - installed qsys-csi1800-pit-daily-sync.service and timer bytes
+      - stdout and preflight verification result
+    checks:
+      - harness/checks/check_usecase_registry.py
+      - harness/checks/check_agent_docs.py
+      - tests/test_deploy_systemd.py
+    allowed_paths:
+      - scripts/deploy_csi1800_pit_runtime.py
+      - deploy/
+      - tests/test_deploy_systemd.py
+      - AGENTS.md
+      - docs/requirements/
+      - .claude/skills/sysq-dev/SKILL.md
+    forbidden_paths:
+      - scripts/data_sync.py
+      - scripts/ops/sync_csi800_daily.py
+      - scripts/run_daily.py
+      - scripts/run_daily_batch.py
+      - qsys/data/
+      - qsys/signal/
+      - qsys/model/
+      - qsys/feature/
+      - qsys/backtest/
+      - qsys/broker/
+      - qsys/trader/
+      - qsys/ledger/
+      - qsys/ops/
+      - data/
+      - outputs/
   UC_DAILY_INFERENCE_RUN:
     domain: daily_ops
     status: stable
