@@ -1,18 +1,65 @@
 import os
+import hashlib
 import tushare as ts
 import pandas as pd
 import time
 import json
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Mapping, Optional
 from qsys.config import cfg
 from qsys.utils.logger import log
 from qsys.data.storage import StockDataStore
 from qsys.data._collector_utils import _normalize_date, _dedupe_list
 from qsys.data._merge_helpers import merge_trade_frames, prepare_financial_frame
 from qsys.data._fetch_strategies import fetch_with_retry, fetch_by_stock_loop, fetch_by_date_loop
-from qsys.data.source_audit import normalized_response_metadata, stable_scope_hash, utc_now
+from qsys.data.source_audit import (
+    checkpoint_requested_scope,
+    normalized_response_metadata,
+    redact_secrets,
+    stable_scope_hash,
+    utc_now,
+)
 import numpy as np
+
+
+def _supplier_request_sha256(
+    kwargs: Mapping[str, object], *, request_variant: str | None = None,
+) -> str:
+    """Hash the exact secret-safe supplier query without persisting it."""
+
+    if not isinstance(kwargs, Mapping) or not kwargs:
+        raise ValueError("supplier request kwargs cannot be empty")
+    if any(not isinstance(key, str) or not key.strip() for key in kwargs):
+        raise ValueError("supplier request kwargs contain an invalid key")
+    try:
+        # Validate the original values before redaction so types such as sets,
+        # callables, and timestamps are rejected instead of being coerced or
+        # silently omitted from the request identity.
+        json.dumps(
+            dict(kwargs),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError("supplier request kwargs are not canonically serializable") from exc
+    payload = {
+        "kwargs": redact_secrets(dict(kwargs)),
+        "request_variant": request_variant,
+    }
+    try:
+        canonical = json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError("supplier request kwargs are not canonically serializable") from exc
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
 
 class TushareCollector:
     def __init__(self):
@@ -276,7 +323,18 @@ class TushareCollector:
     def _prepare_financial_frame(self, df: pd.DataFrame, value_cols):
         return prepare_financial_frame(df, value_cols)
 
-    def _fetch_financials(self, start_date, end_date, ts_code=None):
+    def _fetch_financials(
+        self,
+        start_date,
+        end_date,
+        ts_code=None,
+        *,
+        run_id: str | None = None,
+        audit_store=None,
+        resume_proof: Mapping[str, object] | None = None,
+        scope_key: str = "ad_hoc",
+        universe: str = "ad_hoc",
+    ):
         start_date = _normalize_date(start_date)
         end_date = _normalize_date(end_date)
         if start_date is None or end_date is None:
@@ -290,19 +348,38 @@ class TushareCollector:
         if not ts_code:
             return pd.DataFrame()
 
+        requested_scope = {
+            "date_start": start_date,
+            "date_end": end_date,
+            "symbol_count": 1,
+            "symbols_sha256": stable_scope_hash([ts_code]),
+        }
+
+        def fetch_statement(endpoint_name: str) -> pd.DataFrame:
+            frame, _ = self._fetch_daily_endpoint_with_receipt(
+                endpoint_name,
+                run_id=run_id,
+                audit_store=audit_store,
+                requested_scope=requested_scope,
+                resume_proof=resume_proof,
+                scope_key=scope_key,
+                universe=universe,
+                identity_columns=("ts_code", "ann_date"),
+                evidence_fields=tuple(self._get_interface_field_list(endpoint_name)),
+                ts_code=ts_code,
+                start_date=start_date,
+                end_date=end_date,
+                fields=self._get_interface_fields(endpoint_name),
+            )
+            return frame
+
         income_dfs = []
         balance_dfs = []
         cashflow_dfs = []
         fina_dfs = []
         
         # 1. Income
-        df = self._fetch_with_retry(
-            self._get_interface_api("income"),
-            ts_code=ts_code,
-            start_date=start_date,
-            end_date=end_date,
-            fields=self._get_interface_fields("income"),
-        )
+        df = fetch_statement("income")
         if df is not None and not df.empty:
             missing = {"ts_code", "ann_date"} - set(df.columns)
             if missing:
@@ -310,13 +387,7 @@ class TushareCollector:
             income_dfs.append(df)
             
         # 2. Balancesheet
-        df = self._fetch_with_retry(
-            self._get_interface_api("balancesheet"),
-            ts_code=ts_code,
-            start_date=start_date,
-            end_date=end_date,
-            fields=self._get_interface_fields("balancesheet"),
-        )
+        df = fetch_statement("balancesheet")
         if df is not None and not df.empty:
             missing = {"ts_code", "ann_date"} - set(df.columns)
             if missing:
@@ -324,13 +395,7 @@ class TushareCollector:
             balance_dfs.append(df)
             
         # 3. Cashflow
-        df = self._fetch_with_retry(
-            self._get_interface_api("cashflow"),
-            ts_code=ts_code,
-            start_date=start_date,
-            end_date=end_date,
-            fields=self._get_interface_fields("cashflow"),
-        )
+        df = fetch_statement("cashflow")
         if df is not None and not df.empty:
             missing = {"ts_code", "ann_date"} - set(df.columns)
             if missing:
@@ -338,13 +403,7 @@ class TushareCollector:
             cashflow_dfs.append(df)
             
         # 4. Fina Indicator
-        df = self._fetch_with_retry(
-            self._get_interface_api("fina_indicator"),
-            ts_code=ts_code,
-            start_date=start_date,
-            end_date=end_date,
-            fields=self._get_interface_fields("fina_indicator"),
-        )
+        df = fetch_statement("fina_indicator")
         if df is not None and not df.empty:
             missing = {"ts_code", "ann_date"} - set(df.columns)
             if missing:
@@ -446,6 +505,12 @@ class TushareCollector:
         self,
         target_date: str,
         requested_codes: set[str],
+        *,
+        run_id: str | None = None,
+        audit_store=None,
+        resume_proof: Mapping[str, object] | None = None,
+        scope_key: str = "ad_hoc",
+        universe: str = "ad_hoc",
     ) -> set[str]:
         """Find requested symbols with a disclosure event on ``target_date``.
 
@@ -469,12 +534,24 @@ class TushareCollector:
         if isinstance(fields, list):
             fields = ",".join(fields)
         fields = fields or "ts_code,ann_date,end_date,pre_date,actual_date"
-        api = self._get_interface_api("disclosure_date")
-
         candidates: set[str] = set()
         for date_field in ("actual_date", "ann_date"):
-            frame = self._fetch_with_retry(
-                api,
+            frame, _ = self._fetch_daily_endpoint_with_receipt(
+                "disclosure_date",
+                run_id=run_id,
+                audit_store=audit_store,
+                requested_scope={
+                    "date_start": target_date,
+                    "date_end": target_date,
+                    "symbol_count": len(requested_codes),
+                    "symbols_sha256": stable_scope_hash(requested_codes),
+                },
+                resume_proof=resume_proof,
+                scope_key=scope_key,
+                universe=universe,
+                request_variant=date_field,
+                identity_columns=("ts_code", date_field),
+                evidence_fields=tuple(self._get_interface_field_list("disclosure_date")),
                 **{date_field: target_date, "fields": fields},
             )
             if frame is None or frame.empty:
@@ -497,13 +574,33 @@ class TushareCollector:
             candidates.update(set(matching).intersection(requested_codes))
         return candidates
 
-    def _fetch_financials_for_daily(self, target_date: str, requested_codes: set[str]):
+    def _fetch_financials_for_daily(
+        self,
+        target_date: str,
+        requested_codes: set[str],
+        *,
+        run_id: str | None = None,
+        audit_store=None,
+        resume_proof: Mapping[str, object] | None = None,
+        scope_key: str = "ad_hoc",
+        universe: str = "ad_hoc",
+    ):
         """Fetch only requested reports announced on a single target date."""
         target_date = _normalize_date(target_date)
         requested_codes = {str(code) for code in requested_codes if str(code).strip()}
+        discovery_kwargs = (
+            {
+                "run_id": run_id,
+                "audit_store": audit_store,
+                "resume_proof": resume_proof,
+                "scope_key": scope_key,
+                "universe": universe,
+            }
+            if run_id is not None or audit_store is not None or resume_proof is not None
+            else {}
+        )
         candidates = self._discover_financial_announcement_codes(
-            target_date,
-            requested_codes,
+            target_date, requested_codes, **discovery_kwargs
         )
         frames = []
         for index, code in enumerate(sorted(candidates)):
@@ -516,10 +613,19 @@ class TushareCollector:
             # Ordinary financial endpoints are deliberately called per
             # candidate with ts_code; no unsupported market-wide ann_date
             # query is allowed here.
+            statement_kwargs = (
+                {
+                    "run_id": run_id,
+                    "audit_store": audit_store,
+                    "resume_proof": resume_proof,
+                    "scope_key": scope_key,
+                    "universe": universe,
+                }
+                if run_id is not None or audit_store is not None or resume_proof is not None
+                else {}
+            )
             frame = self._fetch_financials(
-                target_date,
-                target_date,
-                ts_code=code,
+                target_date, target_date, ts_code=code, **statement_kwargs
             )
             if frame is None or frame.empty:
                 continue
@@ -757,12 +863,44 @@ class TushareCollector:
         run_id: str | None,
         audit_store,
         requested_scope: dict,
+        resume_proof: Mapping[str, object] | None = None,
+        scope_key: str = "ad_hoc",
+        universe: str = "ad_hoc",
+        request_variant: str | None = None,
+        identity_columns: tuple[str, ...] = ("ts_code", "trade_date"),
         evidence_fields: tuple[str, ...] = (),
         required_column_groups: tuple[tuple[str, ...], ...] = (),
         required_endpoint: bool = True,
         **kwargs,
     ) -> tuple[pd.DataFrame, str | None]:
         """Fetch one endpoint and append a normalized, secret-safe receipt."""
+
+        request_sha256 = _supplier_request_sha256(
+            kwargs, request_variant=request_variant
+        )
+        requested_scope = checkpoint_requested_scope(
+            requested_scope,
+            source="tushare",
+            endpoint=endpoint_name,
+            contract_version="1",
+            scope_key=scope_key,
+            universe=universe,
+            request_variant=request_variant,
+            request_sha256=request_sha256,
+        )
+        if resume_proof is not None:
+            if audit_store is None or run_id is None:
+                raise ValueError("resume proof requires run_id and audit_store")
+            reused = audit_store.reuse_fetch_shard(
+                run_id=run_id,
+                resume_proof=resume_proof,
+                source="tushare",
+                endpoint=endpoint_name,
+                contract_version="1",
+                requested_scope=requested_scope,
+            )
+            if reused is not None:
+                return reused["frame"], str(reused["receipt_id"])
 
         api = self._get_interface_api(endpoint_name)
         attempt_count = 0
@@ -800,7 +938,7 @@ class TushareCollector:
 
         frame = frame if frame is not None else pd.DataFrame()
         status = "empty" if frame.empty else "success"
-        required_keys = {"ts_code", "trade_date"}
+        required_keys = set(identity_columns)
         if not frame.empty and not required_keys.issubset(frame.columns):
             status = "partial"
         if not frame.empty and any(not set(group).intersection(frame.columns) for group in required_column_groups):
@@ -837,6 +975,9 @@ class TushareCollector:
         force: bool = False,
         run_id: str | None = None,
         audit_store=None,
+        resume_proof: Mapping[str, object] | None = None,
+        scope_key: str | None = None,
+        universe: str | None = None,
     ) -> dict:
         """
         Update stocks for one specific date using trade-date batch APIs.
@@ -854,6 +995,10 @@ class TushareCollector:
         date = _normalize_date(date)
         if date is None:
             raise ValueError("daily update requires a target trade date")
+        if resume_proof is not None and (not scope_key or not universe):
+            raise ValueError("resume requires explicit scope_key and universe")
+        effective_universe = str(universe or scope_key or "ad_hoc")
+        effective_scope_key = str(scope_key or effective_universe)
         requested_codes = set(str(code) for code in (codes or []) if str(code).strip())
         canonical_mutations: list[dict] = []
         cal = self.store.get_calendar()
@@ -889,6 +1034,9 @@ class TushareCollector:
                 run_id=run_id,
                 audit_store=audit_store,
                 requested_scope=request_scope,
+                resume_proof=resume_proof,
+                scope_key=effective_scope_key,
+                universe=effective_universe,
                 evidence_fields=("open", "high", "low", "close", "volume"),
                 required_column_groups=(("open",), ("high",), ("low",), ("close",), ("vol", "volume")),
                 trade_date=date,
@@ -900,6 +1048,9 @@ class TushareCollector:
                 run_id=run_id,
                 audit_store=audit_store,
                 requested_scope=request_scope,
+                resume_proof=resume_proof,
+                scope_key=effective_scope_key,
+                universe=effective_universe,
                 required_endpoint=False,
                 trade_date=date,
                 fields=self._get_interface_fields("daily_basic"),
@@ -912,6 +1063,9 @@ class TushareCollector:
                 run_id=run_id,
                 audit_store=audit_store,
                 requested_scope=request_scope,
+                resume_proof=resume_proof,
+                scope_key=effective_scope_key,
+                universe=effective_universe,
                 evidence_fields=("factor",),
                 required_column_groups=(("adj_factor", "factor"),),
                 trade_date=date,
@@ -976,6 +1130,9 @@ class TushareCollector:
                 run_id=run_id,
                 audit_store=audit_store,
                 requested_scope=request_scope,
+                resume_proof=resume_proof,
+                scope_key=effective_scope_key,
+                universe=effective_universe,
                 required_endpoint=False,
                 trade_date=date,
                 fields=self._get_interface_fields("stk_limit"),
@@ -987,6 +1144,9 @@ class TushareCollector:
                 run_id=run_id,
                 audit_store=audit_store,
                 requested_scope=request_scope,
+                resume_proof=resume_proof,
+                scope_key=effective_scope_key,
+                universe=effective_universe,
                 required_endpoint=False,
                 trade_date=date,
                 fields=self._get_interface_fields("moneyflow"),
@@ -1058,6 +1218,9 @@ class TushareCollector:
                 run_id=run_id,
                 audit_store=audit_store,
                 requested_scope=request_scope,
+                resume_proof=resume_proof,
+                scope_key=effective_scope_key,
+                universe=effective_universe,
                 required_endpoint=False,
                 trade_date=date,
                 fields=self._get_interface_fields("margin"),
@@ -1080,7 +1243,15 @@ class TushareCollector:
             # required ts_code and retain only report ann_date == target.
             fin_df = pd.DataFrame()
             if include_financial:
-                fin_df = self._fetch_financials_for_daily(date, requested_codes)
+                fin_df = self._fetch_financials_for_daily(
+                    date,
+                    requested_codes,
+                    run_id=run_id,
+                    audit_store=audit_store,
+                    resume_proof=resume_proof,
+                    scope_key=effective_scope_key,
+                    universe=effective_universe,
+                )
                 df_daily = self._merge_financials(df_daily, fin_df)
 
             # Fill missing adj_factor with 1.0 (new listings might miss it?)

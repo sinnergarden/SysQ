@@ -2,17 +2,63 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from pathlib import Path
 import pandas as pd
 import pytest
 
-from qsys.data.collector import TushareCollector
-from qsys.data.source_audit import SourceAuditStore
+from qsys.data.collector import TushareCollector, _supplier_request_sha256
+from qsys.data.source_audit import SourceAuditStore, stable_scope_hash
 from qsys.data.storage import StockDataStore
 from qsys.ops.data_coverage import fetch_suspension_evidence
 from scripts.ops.sync_csi800_daily import _do_raw_fetch, _refresh_and_verify_changed_symbols
 
 
 TARGET = "20260821"
+
+
+def test_supplier_request_hash_is_order_independent_and_rejects_ambiguous_values() -> None:
+    first = _supplier_request_sha256({
+        "fields": "ts_code,trade_date,close",
+        "trade_date": TARGET,
+    })
+    second = _supplier_request_sha256({
+        "trade_date": TARGET,
+        "fields": "ts_code,trade_date,close",
+    })
+    assert first == second
+    assert first != _supplier_request_sha256({
+        "fields": "ts_code,trade_date,close,open",
+        "trade_date": TARGET,
+    })
+    with pytest.raises(ValueError, match="cannot be empty"):
+        _supplier_request_sha256({})
+    with pytest.raises(ValueError, match="not canonically serializable"):
+        _supplier_request_sha256({"fields": {"close", "open"}})
+
+
+def _append_run_started(audit: SourceAuditStore, run_id: str) -> None:
+    audit.append_event(run_id, "run_started", {
+        "entrypoint": "scripts/data_sync.py",
+        "universe": "csi1800",
+        "target_date": TARGET,
+    })
+
+
+def _failed_run_proof(
+    audit: SourceAuditStore, audit_root: Path, run_id: str,
+) -> dict[str, str]:
+    audit.record_crash_receipt(
+        run_id=run_id,
+        receipt_root=audit_root / "source_runs",
+        entrypoint="scripts/data_sync.py",
+        error="injected test failure",
+    )
+    return audit.validate_resume_run(
+        resume_from_run_id=run_id,
+        expected_entrypoint="scripts/data_sync.py",
+        universe="csi1800",
+        target_date=TARGET,
+    )
 
 
 def test_raw_fetch_single_day_uses_trade_date_path_only():
@@ -57,6 +103,63 @@ def test_raw_fetch_multi_day_keeps_history_path():
     assert result["path"] == "history_range"
     assert collector.daily_calls == []
     assert collector.history_calls[0]["start_date"] == "20260820"
+
+
+def test_raw_fetch_propagates_resume_scope_and_rejects_historical_resume(tmp_path: Path):
+    class Collector:
+        def __init__(self):
+            self.daily_calls = []
+            self.history_calls = []
+
+        def update_daily(self, *args, **kwargs):
+            self.daily_calls.append((args, kwargs))
+            return {"status": "success", "mutations": []}
+
+        def update_universe_history(self, **kwargs):
+            self.history_calls.append(kwargs)
+
+    audit = SourceAuditStore(tmp_path / "audit" / "audit.db")
+    audit.append_event("resume-current", "run_started", {
+        "entrypoint": "scripts/data_sync.py", "universe": "csi1800",
+        "target_date": TARGET,
+    })
+    proof = {
+        "resume_from_run_id": "old",
+        "receipt_path": "/tmp/old",
+        "receipt_sha256": "a" * 64,
+        "entrypoint": "scripts/data_sync.py",
+        "universe": "csi1800",
+        "target_date": TARGET,
+    }
+    collector = Collector()
+    result = _do_raw_fetch(
+        collector,
+        ["000001.SZ"],
+        TARGET,
+        run_id="resume-current",
+        audit_store=audit,
+        resume_proof=proof,
+        scope_key="csi1800",
+        universe="csi1800",
+    )
+    kwargs = collector.daily_calls[0][1]
+    assert kwargs["resume_proof"] is proof
+    assert kwargs["scope_key"] == "csi1800"
+    assert kwargs["universe"] == "csi1800"
+    assert result["status"] == "success"
+
+    historical = Collector()
+    failed = _do_raw_fetch(
+        historical,
+        ["000001.SZ"],
+        TARGET,
+        since_date="20260820",
+        resume_proof=proof,
+    )
+    assert failed["status"] == "failed"
+    assert "only supported" in failed["error"]
+    assert historical.daily_calls == []
+    assert historical.history_calls == []
 
 
 def _build_daily_collector(store, calls):
@@ -227,6 +330,497 @@ def test_daily_fastpath_writes_only_target_and_fetches_candidate_financials(tmp_
         ).fetchall()]
     assert all("symbols" not in scope for scope in scopes)
     assert all({"symbol_count", "symbols_sha256"}.issubset(scope) for scope in scopes)
+
+
+def test_market_endpoint_resume_reuses_verified_success_and_empty_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("qsys.data._fetch_strategies.time.sleep", lambda _seconds: None)
+    audit_root = tmp_path / "audit"
+    audit = SourceAuditStore(audit_root / "audit.db")
+    old_run = "market-failed"
+    _append_run_started(audit, old_run)
+    base_scope = {
+        "date_start": TARGET,
+        "date_end": TARGET,
+        "symbol_count": 1,
+        "symbols_sha256": stable_scope_hash(["000001.SZ"]),
+    }
+
+    def spy(frame=None, *, error: Exception | None = None):
+        calls = []
+
+        def fetch(**kwargs):
+            calls.append(kwargs)
+            if error is not None:
+                raise error
+            return frame.copy()
+
+        fetch.calls = calls
+        return fetch
+
+    old_calls = {
+        "daily": spy(pd.DataFrame({
+            "ts_code": ["000001.SZ"], "trade_date": [TARGET], "close": [11.0],
+        })),
+        "daily_basic": spy(pd.DataFrame()),
+        "stk_limit": spy(pd.DataFrame({"ts_code": ["000001.SZ"], "up_limit": [12.0]})),
+        "moneyflow": spy(error=RuntimeError("supplier down")),
+        "margin_detail": spy(pd.DataFrame({
+            "ts_code": ["000001.SZ"], "trade_date": [TARGET], "rzye": [5.0],
+        })),
+    }
+    collector = _build_daily_collector(object(), old_calls)
+    for endpoint, required in (
+        ("daily", True), ("daily_basic", False), ("stk_limit", False),
+        ("moneyflow", False), ("margin", False),
+    ):
+        collector._fetch_daily_endpoint_with_receipt(
+            endpoint,
+            run_id=old_run,
+            audit_store=audit,
+            requested_scope=base_scope,
+            scope_key="csi1800",
+            universe="csi1800",
+            required_endpoint=required,
+            trade_date=TARGET,
+        )
+    proof = _failed_run_proof(audit, audit_root, old_run)
+    with sqlite3.connect(audit_root / "audit.db") as conn:
+        margin_payload = conn.execute(
+            "SELECT payload_path FROM fetch_receipts "
+            "WHERE run_id=? AND endpoint='margin'",
+            (old_run,),
+        ).fetchone()[0]
+    tampered = tmp_path / margin_payload
+    tampered.write_bytes(tampered.read_bytes() + b"tampered")
+
+    def forbidden(**_kwargs):
+        raise AssertionError("verified durable shard must not call supplier")
+
+    fresh_calls = {
+        "daily": forbidden,
+        "daily_basic": forbidden,
+        "stk_limit": spy(pd.DataFrame({
+            "ts_code": ["000001.SZ"], "trade_date": [TARGET], "up_limit": [12.0],
+        })),
+        "moneyflow": spy(pd.DataFrame()),
+        "margin_detail": spy(pd.DataFrame({
+            "ts_code": ["000001.SZ"], "trade_date": [TARGET], "rzye": [5.0],
+        })),
+    }
+    resumed = _build_daily_collector(object(), fresh_calls)
+    new_run = "market-resumed"
+    _append_run_started(audit, new_run)
+    statuses = {}
+    for endpoint, required in (
+        ("daily", True), ("daily_basic", False), ("stk_limit", False),
+        ("moneyflow", False), ("margin", False),
+    ):
+        frame, receipt_id = resumed._fetch_daily_endpoint_with_receipt(
+            endpoint,
+            run_id=new_run,
+            audit_store=audit,
+            resume_proof=proof,
+            requested_scope=base_scope,
+            scope_key="csi1800",
+            universe="csi1800",
+            required_endpoint=required,
+            trade_date=TARGET,
+        )
+        statuses[endpoint] = (len(frame), receipt_id)
+
+    assert statuses["daily"][0] == 1
+    assert statuses["daily_basic"][0] == 0
+    assert len(fresh_calls["stk_limit"].calls) == 1
+    assert len(fresh_calls["moneyflow"].calls) == 1
+    assert len(fresh_calls["margin_detail"].calls) == 1
+    reused_events = [
+        event["payload"]
+        for event in audit.run_evidence_summary(new_run)["events"]
+        if event["event_type"] == "fetch_shard_reused"
+    ]
+    assert {event["endpoint"] for event in reused_events} == {"daily", "daily_basic"}
+
+    # A second failed run is self-contained: the next explicit resume points
+    # only at its terminal receipt and clones its current-run receipt identity.
+    second_proof = _failed_run_proof(audit, audit_root, new_run)
+    third_run = "market-resumed-again"
+    _append_run_started(audit, third_run)
+    third_collector = _build_daily_collector(object(), {"daily": forbidden})
+    third_frame, _ = third_collector._fetch_daily_endpoint_with_receipt(
+        "daily",
+        run_id=third_run,
+        audit_store=audit,
+        resume_proof=second_proof,
+        requested_scope=base_scope,
+        scope_key="csi1800",
+        universe="csi1800",
+        trade_date=TARGET,
+    )
+    assert len(third_frame) == 1
+    third_event = [
+        event["payload"]
+        for event in audit.run_evidence_summary(third_run)["events"]
+        if event["event_type"] == "fetch_shard_reused"
+    ][0]
+    assert third_event["resume_from_run_id"] == new_run
+    assert third_event["source_receipt_id"] == statuses["daily"][1]
+
+
+@pytest.mark.parametrize(
+    "endpoint,identity_columns,old_fields,new_fields,query_kwargs,old_frame,new_frame",
+    [
+        (
+            "daily",
+            ("ts_code", "trade_date"),
+            "ts_code,trade_date,close",
+            "ts_code,trade_date,close,open",
+            {"trade_date": TARGET},
+            pd.DataFrame({
+                "ts_code": ["000001.SZ"], "trade_date": [TARGET], "close": [11.0],
+            }),
+            pd.DataFrame({
+                "ts_code": ["000001.SZ"], "trade_date": [TARGET],
+                "close": [11.0], "open": [10.0],
+            }),
+        ),
+        (
+            "income",
+            ("ts_code", "ann_date"),
+            "ts_code,ann_date,end_date,n_income",
+            "ts_code,ann_date,end_date,n_income,revenue",
+            {"ts_code": "000001.SZ", "start_date": TARGET, "end_date": TARGET},
+            pd.DataFrame({
+                "ts_code": ["000001.SZ"], "ann_date": [TARGET],
+                "end_date": ["20260630"], "n_income": [2.0],
+            }),
+            pd.DataFrame({
+                "ts_code": ["000001.SZ"], "ann_date": [TARGET],
+                "end_date": ["20260630"], "n_income": [2.0], "revenue": [10.0],
+            }),
+        ),
+    ],
+)
+def test_changed_supplier_fields_never_reuse_stale_market_or_financial_shard(
+    tmp_path: Path,
+    endpoint: str,
+    identity_columns: tuple[str, ...],
+    old_fields: str,
+    new_fields: str,
+    query_kwargs: dict[str, str],
+    old_frame: pd.DataFrame,
+    new_frame: pd.DataFrame,
+) -> None:
+    audit_root = tmp_path / "audit"
+    audit = SourceAuditStore(audit_root / "audit.db")
+    base_scope = {
+        "date_start": TARGET,
+        "date_end": TARGET,
+        "symbol_count": 1,
+        "symbols_sha256": stable_scope_hash(["000001.SZ"]),
+    }
+
+    old_calls = []
+
+    def old_api(**kwargs):
+        old_calls.append(kwargs)
+        return old_frame.copy()
+
+    old_run = f"query-fields-old-{endpoint}"
+    _append_run_started(audit, old_run)
+    old_collector = _build_daily_collector(object(), {endpoint: old_api})
+    old_collector._fetch_daily_endpoint_with_receipt(
+        endpoint,
+        run_id=old_run,
+        audit_store=audit,
+        requested_scope=base_scope,
+        scope_key="csi1800",
+        universe="csi1800",
+        identity_columns=identity_columns,
+        **query_kwargs,
+        fields=old_fields,
+    )
+    proof = _failed_run_proof(audit, audit_root, old_run)
+    assert len(old_calls) == 1
+
+    fresh_calls = []
+
+    def fresh_api(**kwargs):
+        fresh_calls.append(kwargs)
+        return new_frame.copy()
+
+    new_run = f"query-fields-new-{endpoint}"
+    _append_run_started(audit, new_run)
+    new_collector = _build_daily_collector(object(), {endpoint: fresh_api})
+    frame, _ = new_collector._fetch_daily_endpoint_with_receipt(
+        endpoint,
+        run_id=new_run,
+        audit_store=audit,
+        resume_proof=proof,
+        requested_scope=base_scope,
+        scope_key="csi1800",
+        universe="csi1800",
+        identity_columns=identity_columns,
+        **query_kwargs,
+        fields=new_fields,
+    )
+    assert len(fresh_calls) == 1
+    pd.testing.assert_frame_equal(frame, new_frame)
+
+    with sqlite3.connect(audit_root / "audit.db") as connection:
+        scopes = [
+            json.loads(row[0])
+            for row in connection.execute(
+                "SELECT requested_scope_json FROM fetch_receipts "
+                "WHERE endpoint=? ORDER BY rowid",
+                (endpoint,),
+            ).fetchall()
+        ]
+    assert len(scopes) == 2
+    assert scopes[0]["request_sha256"] != scopes[1]["request_sha256"]
+    assert scopes[0]["checkpoint_key"] != scopes[1]["checkpoint_key"]
+    assert not any(
+        event["event_type"] == "fetch_shard_reused"
+        for event in audit.run_evidence_summary(new_run)["events"]
+    )
+
+
+def test_update_daily_resume_skips_completed_endpoint_and_rebuilds_daily_bundle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("qsys.data._fetch_strategies.time.sleep", lambda _seconds: None)
+
+    class Store:
+        def __init__(self):
+            self.saved = []
+
+        def get_calendar(self):
+            return pd.DataFrame({"cal_date": [TARGET], "is_open": [1]})
+
+        def get_global_latest_date(self):
+            return None
+
+        def load_daily(self, _code):
+            return None
+
+        def save_daily(self, frame, code, existing_df=None):
+            self.saved.append((code, frame.copy()))
+            return []
+
+    def spy(frame=None, *, error: Exception | None = None):
+        def fetch(**kwargs):
+            fetch.calls.append(kwargs)
+            if error is not None:
+                raise error
+            return frame.copy()
+
+        fetch.calls = []
+        return fetch
+
+    daily_frame = pd.DataFrame({
+        "ts_code": ["000001.SZ"], "trade_date": [TARGET],
+        "open": [10.0], "high": [12.0], "low": [9.0], "close": [11.0],
+        "vol": [100.0], "amount": [1.0],
+    })
+    empty = pd.DataFrame()
+    audit_root = tmp_path / "audit"
+    audit = SourceAuditStore(audit_root / "audit.db")
+    old_run = "chain-failed"
+    _append_run_started(audit, old_run)
+    old_calls = {
+        "daily": spy(daily_frame),
+        "daily_basic": spy(empty),
+        "adj_factor": spy(error=RuntimeError("adj unavailable")),
+        "stk_limit": spy(empty), "moneyflow": spy(empty),
+        "margin_detail": spy(empty), "disclosure_date": spy(empty),
+    }
+    for endpoint in ("income", "balancesheet", "cashflow", "fina_indicator"):
+        old_calls[endpoint] = spy(empty)
+    failed_collector = _build_daily_collector(Store(), old_calls)
+    with pytest.raises(Exception, match="Max retries exceeded"):
+        failed_collector.update_daily(
+            TARGET,
+            codes=["000001.SZ"],
+            force=True,
+            run_id=old_run,
+            audit_store=audit,
+            scope_key="csi1800",
+            universe="csi1800",
+        )
+    proof = _failed_run_proof(audit, audit_root, old_run)
+    old_receipt = Path(proof["receipt_path"])
+    old_bytes = old_receipt.read_bytes()
+
+    new_run = "chain-resumed"
+    _append_run_started(audit, new_run)
+    fresh_calls = {
+        "daily": spy(error=AssertionError("daily must be reused")),
+        "daily_basic": spy(error=AssertionError("empty must be reused")),
+        "adj_factor": spy(pd.DataFrame({
+            "ts_code": ["000001.SZ"], "trade_date": [TARGET], "adj_factor": [1.0],
+        })),
+        "stk_limit": spy(empty), "moneyflow": spy(empty),
+        "margin_detail": spy(empty), "disclosure_date": spy(empty),
+    }
+    for endpoint in ("income", "balancesheet", "cashflow", "fina_indicator"):
+        fresh_calls[endpoint] = spy(empty)
+    resumed_store = Store()
+    resumed_collector = _build_daily_collector(resumed_store, fresh_calls)
+    result = resumed_collector.update_daily(
+        TARGET,
+        codes=["000001.SZ"],
+        force=True,
+        run_id=new_run,
+        audit_store=audit,
+        resume_proof=proof,
+        scope_key="csi1800",
+        universe="csi1800",
+    )
+
+    assert result["status"] == "success"
+    assert fresh_calls["daily"].calls == []
+    assert fresh_calls["daily_basic"].calls == []
+    assert len(fresh_calls["adj_factor"].calls) == 1
+    assert len(resumed_store.saved) == 1
+    with sqlite3.connect(audit_root / "audit.db") as conn:
+        endpoints = [row[0] for row in conn.execute(
+            "SELECT endpoint FROM fetch_receipts WHERE run_id=? ORDER BY rowid",
+            (new_run,),
+        ).fetchall()]
+    assert endpoints.count("daily_bundle") == 1
+    reused_endpoints = {
+        event["payload"]["endpoint"]
+        for event in audit.run_evidence_summary(new_run)["events"]
+        if event["event_type"] == "fetch_shard_reused"
+    }
+    assert reused_endpoints == {"daily", "daily_basic"}
+    assert "daily_bundle" not in reused_endpoints
+    assert old_receipt.read_bytes() == old_bytes
+
+
+def test_financial_discovery_and_per_symbol_shards_resume_without_supplier_calls(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("qsys.data.collector.time.sleep", lambda _seconds: None)
+    codes = ["000001.SZ", "000002.SZ"]
+
+    def disclosure_api(**kwargs):
+        disclosure_api.calls.append(kwargs)
+        return pd.DataFrame({
+            "ts_code": codes,
+            "ann_date": [TARGET, TARGET],
+            "actual_date": [TARGET, TARGET],
+            "end_date": ["20260630", "20260630"],
+        })
+
+    disclosure_api.calls = []
+
+    def statement_api(endpoint):
+        def fetch(**kwargs):
+            fetch.calls.append(kwargs)
+            code = kwargs["ts_code"]
+            common = {
+                "ts_code": [code], "ann_date": [TARGET], "end_date": ["20260630"],
+            }
+            values = {
+                "income": {"n_income": [2.0], "revenue": [10.0], "oper_cost": [6.0]},
+                "balancesheet": {
+                    "total_assets": [20.0], "total_hldr_eqy_exc_min_int": [8.0],
+                    "total_cur_assets": [12.0], "total_cur_liab": [6.0],
+                },
+                "cashflow": {"n_cashflow_act": [4.0]},
+                "fina_indicator": {
+                    "roe": [0.25], "grossprofit_margin": [0.4],
+                    "debt_to_assets": [0.6], "current_ratio": [2.0],
+                    "q_dtprofit": [2.0], "q_gr_yoy": [0.1],
+                },
+            }
+            return pd.DataFrame({**common, **values[endpoint]})
+
+        fetch.calls = []
+        return fetch
+
+    old_calls = {"disclosure_date": disclosure_api}
+    for endpoint in ("income", "balancesheet", "cashflow", "fina_indicator"):
+        old_calls[endpoint] = statement_api(endpoint)
+    old_collector = _build_daily_collector(object(), old_calls)
+    audit_root = tmp_path / "audit"
+    audit = SourceAuditStore(audit_root / "audit.db")
+    old_run = "financial-failed"
+    _append_run_started(audit, old_run)
+    old_result = old_collector._fetch_financials_for_daily(
+        TARGET,
+        set(codes),
+        run_id=old_run,
+        audit_store=audit,
+        scope_key="csi1800",
+        universe="csi1800",
+    )
+    assert set(old_result["ts_code"]) == set(codes)
+    proof = _failed_run_proof(audit, audit_root, old_run)
+
+    with sqlite3.connect(audit_root / "audit.db") as conn:
+        receipt_rows = conn.execute(
+            "SELECT endpoint,requested_scope_json FROM fetch_receipts "
+            "WHERE run_id=? ORDER BY rowid",
+            (old_run,),
+        ).fetchall()
+    assert len(receipt_rows) == 10
+    scopes_by_endpoint = {}
+    for endpoint, scope_json in receipt_rows:
+        scopes_by_endpoint.setdefault(endpoint, []).append(json.loads(scope_json))
+    disclosure_scopes = scopes_by_endpoint["disclosure_date"]
+    assert {scope["request_variant"] for scope in disclosure_scopes} == {
+        "actual_date", "ann_date",
+    }
+    assert len({scope["checkpoint_key"] for scope in disclosure_scopes}) == 2
+    for endpoint in ("income", "balancesheet", "cashflow", "fina_indicator"):
+        assert len(scopes_by_endpoint[endpoint]) == 2
+        assert len({scope["symbols_sha256"] for scope in scopes_by_endpoint[endpoint]}) == 2
+        assert len({scope["checkpoint_key"] for scope in scopes_by_endpoint[endpoint]}) == 2
+
+    def forbidden_api(**kwargs):
+        forbidden_api.calls.append(kwargs)
+        raise AssertionError("financial shard must be reused")
+
+    forbidden_api.calls = []
+    fresh_calls = {"disclosure_date": forbidden_api}
+    for endpoint in ("income", "balancesheet", "cashflow", "fina_indicator"):
+        fresh_calls[endpoint] = forbidden_api
+    resumed_collector = _build_daily_collector(object(), fresh_calls)
+    new_run = "financial-resumed"
+    _append_run_started(audit, new_run)
+    resumed_result = resumed_collector._fetch_financials_for_daily(
+        TARGET,
+        set(codes),
+        run_id=new_run,
+        audit_store=audit,
+        resume_proof=proof,
+        scope_key="csi1800",
+        universe="csi1800",
+    )
+
+    assert set(resumed_result["ts_code"]) == set(codes)
+    assert forbidden_api.calls == []
+    reused_events = [
+        event["payload"]
+        for event in audit.run_evidence_summary(new_run)["events"]
+        if event["event_type"] == "fetch_shard_reused"
+    ]
+    assert len(reused_events) == 10
+    with sqlite3.connect(audit_root / "audit.db") as conn:
+        links = set(conn.execute(
+            """SELECT f.endpoint,l.field_name,l.run_id
+               FROM field_receipt_links l
+               JOIN fetch_receipts f ON f.receipt_id=l.receipt_id
+               WHERE l.run_id=?""",
+            (new_run,),
+        ).fetchall())
+    assert ("income", "n_income", new_run) in links
+    assert ("cashflow", "n_cashflow_act", new_run) in links
+    assert ("fina_indicator", "q_dtprofit", new_run) in links
+    assert ("income", "net_income", new_run) not in links
 
 
 def test_mutation_refresh_dump_fixes_only_updates_but_reads_back_inserts_too():
@@ -415,6 +1009,150 @@ def test_suspension_exception_has_raw_receipt_and_query_failure_blocks(monkeypat
     assert audit.verify_fetch_receipt(
         run_id="suspension-failure", receipt_id=failed["suspension_receipt_id"]
     )["status"] == "failed"
+
+
+@pytest.mark.parametrize("supplier_status", ["success", "empty"])
+def test_suspension_success_and_empty_resume_without_supplier_call(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, supplier_status: str,
+) -> None:
+    missing_symbol = "000002.SZ"
+
+    class Collector:
+        def update_daily(self, *args, **kwargs):
+            return {
+                "status": "success",
+                "mutations": [],
+                "required_endpoint_missing_symbols": {
+                    "daily": [missing_symbol], "adj_factor": [missing_symbol],
+                },
+            }
+
+    raw = (
+        pd.DataFrame({
+            "ts_code": [missing_symbol], "trade_date": [TARGET],
+            "suspend_timing": ["S"],
+        })
+        if supplier_status == "success"
+        else pd.DataFrame()
+    )
+    mapping = {missing_symbol: {"2026-08-21"}} if supplier_status == "success" else {}
+    calls = []
+
+    def first_fetch(**kwargs):
+        calls.append(kwargs)
+        return {
+            "status": supplier_status,
+            "suspended_dates_by_symbol": mapping,
+            "raw_frame": raw,
+            "errors": [],
+            "attempt_count": 1,
+        }
+
+    monkeypatch.setattr("qsys.ops.data_coverage.fetch_suspension_evidence", first_fetch)
+    audit_root = tmp_path / "audit"
+    audit = SourceAuditStore(audit_root / "audit.db")
+    old_run = f"suspend-{supplier_status}-old"
+    _append_run_started(audit, old_run)
+    _do_raw_fetch(
+        Collector(), ["000001.SZ", missing_symbol], TARGET,
+        run_id=old_run, audit_store=audit,
+        scope_key="csi1800", universe="csi1800",
+    )
+    proof = _failed_run_proof(audit, audit_root, old_run)
+    old_receipt = Path(proof["receipt_path"])
+    old_bytes = old_receipt.read_bytes()
+    assert len(calls) == 1
+
+    def forbidden(**kwargs):
+        calls.append(kwargs)
+        raise AssertionError("verified suspend_d shard must be reused")
+
+    monkeypatch.setattr("qsys.ops.data_coverage.fetch_suspension_evidence", forbidden)
+    new_run = f"suspend-{supplier_status}-new"
+    _append_run_started(audit, new_run)
+    result = _do_raw_fetch(
+        Collector(), ["000001.SZ", missing_symbol], TARGET,
+        run_id=new_run, audit_store=audit, resume_proof=proof,
+        scope_key="csi1800", universe="csi1800",
+    )
+    assert len(calls) == 1
+    assert result["source_scope_coverage"]["suspension_query_status"] == supplier_status
+    reused = [
+        event["payload"]
+        for event in audit.run_evidence_summary(new_run)["events"]
+        if event["event_type"] == "fetch_shard_reused"
+    ]
+    assert [event["endpoint"] for event in reused] == ["suspend_d"]
+    assert old_receipt.read_bytes() == old_bytes
+
+
+@pytest.mark.parametrize("damage", ["tamper", "missing"])
+def test_bad_suspension_payload_refetches_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, damage: str,
+) -> None:
+    missing_symbol = "000002.SZ"
+
+    class Collector:
+        def update_daily(self, *args, **kwargs):
+            return {
+                "status": "success", "mutations": [],
+                "required_endpoint_missing_symbols": {
+                    "daily": [missing_symbol], "adj_factor": [missing_symbol],
+                },
+            }
+
+    raw = pd.DataFrame({
+        "ts_code": [missing_symbol], "trade_date": [TARGET],
+        "suspend_timing": ["S"],
+    })
+
+    def evidence(**_kwargs):
+        return {
+            "status": "success",
+            "suspended_dates_by_symbol": {missing_symbol: {"2026-08-21"}},
+            "raw_frame": raw,
+            "errors": [],
+            "attempt_count": 1,
+        }
+
+    monkeypatch.setattr("qsys.ops.data_coverage.fetch_suspension_evidence", evidence)
+    audit_root = tmp_path / "audit"
+    audit = SourceAuditStore(audit_root / "audit.db")
+    old_run = f"suspend-bad-{damage}"
+    _append_run_started(audit, old_run)
+    result = _do_raw_fetch(
+        Collector(), ["000001.SZ", missing_symbol], TARGET,
+        run_id=old_run, audit_store=audit,
+        scope_key="csi1800", universe="csi1800",
+    )
+    proof = _failed_run_proof(audit, audit_root, old_run)
+    with sqlite3.connect(audit_root / "audit.db") as conn:
+        relative = conn.execute(
+            "SELECT payload_path FROM fetch_receipts WHERE receipt_id=?",
+            (result["source_scope_coverage"]["suspension_receipt_id"],),
+        ).fetchone()[0]
+    payload = tmp_path / relative
+    if damage == "tamper":
+        payload.write_bytes(payload.read_bytes() + b"tampered")
+    else:
+        payload.unlink()
+
+    calls = []
+
+    def refetch(**kwargs):
+        calls.append(kwargs)
+        return evidence(**kwargs)
+
+    monkeypatch.setattr("qsys.ops.data_coverage.fetch_suspension_evidence", refetch)
+    new_run = f"suspend-refetch-{damage}"
+    _append_run_started(audit, new_run)
+    fresh = _do_raw_fetch(
+        Collector(), ["000001.SZ", missing_symbol], TARGET,
+        run_id=new_run, audit_store=audit, resume_proof=proof,
+        scope_key="csi1800", universe="csi1800",
+    )
+    assert len(calls) == 1
+    assert fresh["source_scope_coverage"]["status"] == "success"
 
 
 def _raw_required_field_gap_result(*, factor_values, low_values):

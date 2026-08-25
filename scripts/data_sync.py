@@ -72,6 +72,45 @@ def _prepare_applied_market_child(
     return run_id, audit_store, receipt_root, crash_evidence
 
 
+def _attach_explicit_resume(
+    cmd: list[str],
+    *,
+    audit_store,
+    run_id: str,
+    resume_from_run_id: str,
+    universe: str,
+    target_date: str,
+) -> dict[str, str]:
+    """Validate one explicit failed wrapper run and bind it to the fresh run."""
+
+    proof = audit_store.validate_resume_run(
+        resume_from_run_id=resume_from_run_id,
+        expected_entrypoint="scripts/data_sync.py",
+        universe=universe,
+        target_date=target_date,
+    )
+    audit_store.append_event(
+        run_id,
+        "resume_from_run",
+        {
+            "resume_from_run_id": proof["resume_from_run_id"],
+            "source_receipt_sha256": proof["receipt_sha256"],
+            "entrypoint": proof["entrypoint"],
+            "universe": proof["universe"],
+            "target_date": proof["target_date"],
+        },
+    )
+    cmd.extend(
+        [
+            "--resume-from-run-id",
+            proof["resume_from_run_id"],
+            "--resume-from-receipt-sha256",
+            proof["receipt_sha256"],
+        ]
+    )
+    return proof
+
+
 def _finalize_wrapper_evidence(
     *, audit_store, run_id: str, receipt_root: Path, final_readiness_ok: bool
 ) -> dict:
@@ -210,6 +249,11 @@ def _main_under_writer_lock(writer_lock=None):
         help="Force the applied CSI800/CSI1800 market child to refetch the target scope",
     )
     p.add_argument(
+        "--resume-from-run-id",
+        default=None,
+        help="Explicit failed run whose verified durable remote shards may be reused",
+    )
+    p.add_argument(
         "--skip-margin-repair",
         action="store_true",
         help="Skip financial_rc margin-history coverage repair after csi800 sync",
@@ -276,6 +320,8 @@ def _main_under_writer_lock(writer_lock=None):
         ),
     )
     args = p.parse_args()
+    if args.force_fetch and args.resume_from_run_id:
+        p.error("--force-fetch and --resume-from-run-id are mutually exclusive")
     if args.margin_lag_sessions < 1:
         p.error("--margin-lag-sessions must be at least 1 for post-close sync")
     if args.shareholder_history_lookback_days <= 0:
@@ -301,6 +347,8 @@ def _main_under_writer_lock(writer_lock=None):
             universe = configured_universe
         universe = universe or "csi800"
         do_apply = c.get("execution", {}).get("apply", False) or do_apply
+        if args.resume_from_run_id and not do_apply:
+            p.error("--resume-from-run-id is apply-only")
         from qsys.config import cfg
 
         data_root = Path(cfg.get_path("root")).resolve() if do_apply else None
@@ -322,8 +370,19 @@ def _main_under_writer_lock(writer_lock=None):
                     universe=universe,
                     target_date=target_date,
                 )
+                if args.resume_from_run_id:
+                    _attach_explicit_resume(
+                        cmd,
+                        audit_store=wrapper_audit,
+                        run_id=sync_run_id,
+                        resume_from_run_id=args.resume_from_run_id,
+                        universe=universe,
+                        target_date=target_date,
+                    )
             _run_market_child(cmd, do_apply=do_apply, writer_lock=writer_lock)
     elif universe in {"csi800", "csi1800"}:
+        if args.resume_from_run_id and not do_apply:
+            p.error("--resume-from-run-id is apply-only")
         if target_date is None:
             from scripts.ops.sync_csi800_daily import _resolve_target_date
 
@@ -348,6 +407,15 @@ def _main_under_writer_lock(writer_lock=None):
                 universe=universe,
                 target_date=target_date,
             )
+            if args.resume_from_run_id:
+                _attach_explicit_resume(
+                    cmd,
+                    audit_store=wrapper_audit,
+                    run_id=sync_run_id,
+                    resume_from_run_id=args.resume_from_run_id,
+                    universe=universe,
+                    target_date=target_date,
+                )
         _run_market_child(cmd, do_apply=do_apply, writer_lock=writer_lock)
     else:
         print(

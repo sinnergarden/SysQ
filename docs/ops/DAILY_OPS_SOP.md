@@ -106,6 +106,32 @@ python scripts/data_sync.py \
 才生成唯一 terminal receipt、推进对应 trusted watermark。不要单独运行 inner 来建立正式
 恢复证据链。
 
+如果失败 run 已经留下不可变的 untrusted/crash receipt，优先用显式 run id 恢复其中已经
+验证落盘的远端分片：
+
+```bash
+python scripts/data_sync.py \
+  --universe csi1800 \
+  --target-date YYYY-MM-DD \
+  --apply --resume-from-run-id <failed_run_id>
+```
+
+resume 只适用于单个 target-date 的 applied CSI800/CSI1800 正式 wrapper 路径，且与
+`--force-fetch` 互斥；系统不会猜测 latest run 或按文件时间选择来源。旧 run 必须是同一
+wrapper 入口、universe、target-date 的 failed/untrusted terminal receipt，trusted run、
+历史多日 repair、scope 不匹配或 receipt/payload 被修改都会被拒绝或重新远端请求。
+
+wrapper 每次 resume 仍创建新的 shared run_id，并在同一个 writer lock 内运行完整 market
+child、outer repairs 和 readiness。已验证且持久化的 success/empty supplier shard 会克隆到
+新 run 并保留原始 observed/published metadata；partial、failure、缺失或 hash 不符的 shard
+会正常重试。`daily_bundle`、canonical merge、Qlib readback 和 readiness 都是本地派生阶段，
+每次必须重建/重验，不能因为 canonical precheck 已完整而跳过。若新 run 再失败，下一次只需
+显式引用这个最新失败 run；它已经包含本次采用的全部 verified shard，不遍历更早祖先。
+
+这里保证的是 verified-durable at-most-once：只有已写入并可校验 receipt/payload 的响应才可
+跳过远端调用。若进程在 supplier 返回之后、durable receipt 写入之前崩溃，该 shard 没有可
+验证断点，下一次 resume 可能再次请求；这不是全局 exactly-once。
+
 水位未推进时，不要手工改 SQLite 或复制旧 receipt。先检查本 run 的 terminal gates 和事件：
 
 ```bash

@@ -23,6 +23,8 @@ from scripts.ops.sync_csi800_daily import (
     _write_audit,
 )
 
+DUMMY_RECEIPT_SHA = "a" * 64
+
 
 def test_dry_run_does_not_forward_force_fetch_to_canonical_sync_entrypoint():
     with patch.object(
@@ -108,6 +110,170 @@ def test_applied_config_wrapper_forwards_force_fetch_to_shared_child(tmp_path: P
     assert command[command.index("--universe") + 1] == "csi800"
 
 
+def _write_failed_wrapper_receipt(
+    tmp_path: Path,
+    *,
+    run_id: str,
+    universe: str = "csi1800",
+    target_date: str = "20260821",
+    trust_state: str = "untrusted",
+) -> tuple[SourceAuditStore, Path]:
+    audit = SourceAuditStore(tmp_path / "audit" / "audit.db")
+    audit.append_event(run_id, "run_started", {
+        "entrypoint": "scripts/data_sync.py",
+        "universe": universe,
+        "target_date": target_date,
+    })
+    root = tmp_path / "audit" / "source_runs"
+    if trust_state == "untrusted":
+        result = audit.record_crash_receipt(
+            run_id=run_id,
+            receipt_root=root,
+            entrypoint="scripts/data_sync.py",
+            error="injected failure",
+        )
+        return audit, Path(result["receipt_path"])
+    return audit, audit.export_receipt(
+        run_id, root, trust_state=trust_state, gates={}
+    )
+
+
+@pytest.mark.parametrize(
+    "argv,match",
+    [
+        (
+            ["data_sync.py", "--universe", "csi1800", "--target-date", "2026-08-21",
+             "--resume-from-run-id", "old", "--force-fetch"],
+            "mutually exclusive",
+        ),
+        (
+            ["data_sync.py", "--universe", "csi1800", "--target-date", "2026-08-21",
+             "--resume-from-run-id", "old"],
+            "apply-only",
+        ),
+    ],
+)
+def test_wrapper_resume_is_apply_only_and_conflicts_with_force(argv, match):
+    with patch.object(sys, "argv", argv), pytest.raises(SystemExit) as stopped:
+        data_sync._main_under_writer_lock(None)
+    assert stopped.value.code == 2
+
+
+def test_wrapper_validates_and_forwards_explicit_resume_before_child(tmp_path: Path):
+    old_run = "explicit-failed"
+    audit, old_receipt = _write_failed_wrapper_receipt(tmp_path, run_id=old_run)
+    old_bytes = old_receipt.read_bytes()
+    with patch.object(
+        sys,
+        "argv",
+        [
+            "data_sync.py", "--universe", "csi1800", "--target-date", "2026-08-21",
+            "--apply", "--resume-from-run-id", old_run,
+        ],
+    ), patch(
+        "scripts.data_sync.subprocess.run",
+        side_effect=subprocess.CalledProcessError(2, "sync"),
+    ) as run, patch(
+        "qsys.config.cfg.get_path", return_value=str(tmp_path)
+    ), pytest.raises(subprocess.CalledProcessError):
+        data_sync.main()
+
+    command = run.call_args.args[0]
+    assert command.count("--resume-from-run-id") == 1
+    assert command[command.index("--resume-from-run-id") + 1] == old_run
+    assert command.count("--resume-from-receipt-sha256") == 1
+    assert command[command.index("--resume-from-receipt-sha256") + 1] == (
+        hashlib.sha256(old_receipt.read_bytes()).hexdigest()
+    )
+    assert command.count("--run-id") == 1
+    assert "--wrapper-managed-finalize" in command
+    fresh_run = command[command.index("--run-id") + 1]
+    events = audit.run_evidence_summary(fresh_run)["events"]
+    lineage = [event for event in events if event["event_type"] == "resume_from_run"]
+    assert len(lineage) == 1
+    assert lineage[0]["payload"]["resume_from_run_id"] == old_run
+    assert old_receipt.read_bytes() == old_bytes
+
+
+def test_applied_config_wrapper_forwards_explicit_resume_to_shared_child(
+    tmp_path: Path,
+) -> None:
+    old_run = "config-explicit-failed"
+    _write_failed_wrapper_receipt(
+        tmp_path, run_id=old_run, universe="csi800"
+    )
+    config = tmp_path / "sync-resume.yaml"
+    config.write_text(
+        "\n".join(
+            [
+                "universe: csi800",
+                "date_range:",
+                "  end_date: '2026-08-21'",
+                "execution:",
+                "  apply: true",
+                "tasks:",
+                "  qlib_bin: true",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    with patch.object(
+        sys,
+        "argv",
+        ["data_sync.py", "--config", str(config), "--resume-from-run-id", old_run],
+    ), patch(
+        "scripts.data_sync.subprocess.run",
+        side_effect=subprocess.CalledProcessError(2, "sync"),
+    ) as run, patch(
+        "qsys.config.cfg.get_path", return_value=str(tmp_path)
+    ), pytest.raises(subprocess.CalledProcessError):
+        data_sync.main()
+
+    command = run.call_args.args[0]
+    assert command.count("--resume-from-run-id") == 1
+    assert command[command.index("--resume-from-run-id") + 1] == old_run
+    assert command.count("--resume-from-receipt-sha256") == 1
+    assert command.count("--run-id") == 1
+    assert "--wrapper-managed-finalize" in command
+    assert command[command.index("--universe") + 1] == "csi800"
+
+
+@pytest.mark.parametrize(
+    "source_universe,source_target,trust_state",
+    [
+        ("csi800", "20260821", "untrusted"),
+        ("csi1800", "20260820", "untrusted"),
+        ("csi1800", "20260821", "trusted"),
+    ],
+)
+def test_wrapper_rejects_wrong_or_trusted_resume_source_before_child(
+    tmp_path: Path, source_universe: str, source_target: str, trust_state: str,
+) -> None:
+    old_run = f"bad-source-{source_universe}-{source_target}-{trust_state}"
+    _write_failed_wrapper_receipt(
+        tmp_path,
+        run_id=old_run,
+        universe=source_universe,
+        target_date=source_target,
+        trust_state=trust_state,
+    )
+    with patch.object(
+        sys,
+        "argv",
+        [
+            "data_sync.py", "--universe", "csi1800", "--target-date", "20260821",
+            "--apply", "--resume-from-run-id", old_run,
+        ],
+    ), patch(
+        "scripts.data_sync.subprocess.run"
+    ) as run, patch(
+        "qsys.config.cfg.get_path", return_value=str(tmp_path)
+    ), pytest.raises(ValueError):
+        data_sync.main()
+    run.assert_not_called()
+
+
 def test_inner_wrapper_mode_rejects_non_inherited_lock(tmp_path: Path):
     with data_writer_lock(tmp_path) as direct_lock, patch.object(
         sys,
@@ -115,6 +281,191 @@ def test_inner_wrapper_mode_rejects_non_inherited_lock(tmp_path: Path):
         ["sync", "--apply", "--wrapper-managed-finalize", "--run-id", "lock-test"],
     ), pytest.raises(SystemExit):
         daily_sync._main_under_writer_lock(direct_lock)
+
+
+@pytest.mark.parametrize(
+    "argv,match",
+    [
+        (
+            ["sync", "--apply", "--resume-from-run-id", "old",
+             "--resume-from-receipt-sha256", DUMMY_RECEIPT_SHA],
+            "wrapper-managed",
+        ),
+        (
+            ["sync", "--wrapper-managed-finalize", "--resume-from-run-id", "old",
+             "--resume-from-receipt-sha256", DUMMY_RECEIPT_SHA],
+            "requires --apply",
+        ),
+        (
+            ["sync", "--apply", "--wrapper-managed-finalize", "--resume-from-run-id", "old",
+             "--resume-from-receipt-sha256", DUMMY_RECEIPT_SHA, "--force-fetch"],
+            "mutually exclusive",
+        ),
+        (
+            ["sync", "--apply", "--wrapper-managed-finalize",
+             "--resume-from-run-id", "old"],
+            "requires --resume-from-receipt-sha256",
+        ),
+    ],
+)
+def test_inner_resume_argument_contract(
+    argv: list[str], match: str, capsys: pytest.CaptureFixture[str],
+) -> None:
+    inherited = SimpleNamespace(inherited=True)
+    with patch.object(sys, "argv", argv), pytest.raises(SystemExit):
+        daily_sync._main_under_writer_lock(inherited)
+    assert match in capsys.readouterr().err
+
+
+def test_inner_rejects_historical_resume_before_work() -> None:
+    inherited = SimpleNamespace(inherited=True)
+    with patch.object(
+        sys,
+        "argv",
+        [
+            "sync", "--apply", "--wrapper-managed-finalize",
+            "--resume-from-run-id", "old",
+            "--resume-from-receipt-sha256", DUMMY_RECEIPT_SHA,
+            "--target-date", "20260821",
+            "--repair-start-date", "20260820",
+        ],
+    ), patch.object(
+        daily_sync, "_resolve_target_date", return_value="20260821"
+    ), pytest.raises(SystemExit):
+        daily_sync._main_under_writer_lock(inherited)
+
+
+def test_inner_rejects_wrapper_receipt_sha_mismatch_before_qlib_or_supplier_work(
+    tmp_path: Path,
+) -> None:
+    old_run = "sha-mismatch-old"
+    current_run = "sha-mismatch-current"
+    _write_failed_wrapper_receipt(tmp_path, run_id=old_run)
+    inherited = SimpleNamespace(inherited=True)
+    with patch.object(
+        sys,
+        "argv",
+        [
+            "sync", "--apply", "--wrapper-managed-finalize",
+            "--run-id", current_run, "--resume-from-run-id", old_run,
+            "--resume-from-receipt-sha256", "0" * 64,
+            "--universe", "csi1800", "--target-date", "20260821",
+        ],
+    ), patch.object(
+        daily_sync.cfg, "get_path", return_value=str(tmp_path)
+    ), patch.object(
+        daily_sync, "_resolve_target_date", return_value="20260821"
+    ), patch.object(
+        daily_sync, "QlibAdapter"
+    ) as adapter, patch.object(
+        daily_sync, "TushareCollector"
+    ) as collector, pytest.raises(ValueError, match="SHA-256 mismatch"):
+        daily_sync._main_under_writer_lock(inherited)
+    adapter.assert_not_called()
+    collector.assert_not_called()
+
+
+def test_inner_resume_bypasses_complete_precheck_and_calls_full_universe_collector(
+    tmp_path: Path,
+) -> None:
+    target = "20260821"
+    old_run = "precheck-old"
+    current_run = "precheck-fresh"
+    audit, old_receipt = _write_failed_wrapper_receipt(tmp_path, run_id=old_run)
+    audit.append_event(current_run, "run_started", {
+        "entrypoint": "scripts/data_sync.py", "universe": "csi1800",
+        "target_date": target,
+    })
+    captured = {}
+
+    class Adapter:
+        qlib_dir = tmp_path / "qlib"
+
+        def init_qlib(self):
+            pass
+
+        def convert_incremental(self, _since):
+            pass
+
+        def _refresh_universe_instruments(self, **_kwargs):
+            pass
+
+    class Store:
+        pass
+
+    def raw_fetch(_collector, codes, target_dt, **kwargs):
+        captured.update({"codes": list(codes), "target": target_dt, **kwargs})
+        kwargs["audit_store"].append_event(
+            kwargs["run_id"], "canonical_commit", {"status": "success"}
+        )
+        kwargs["audit_store"].append_event(
+            kwargs["run_id"], "source_scope_coverage",
+            {"status": "success", "suspension_query_status": "not_required"},
+        )
+        return {
+            "status": "success", "mutations": [],
+            "source_scope_coverage": {"status": "success"},
+        }
+
+    snapshot = SimpleNamespace(
+        instruments=["000001.SZ", "000002.SZ"],
+        to_dict=lambda: {"snapshot_semantics": "pit"},
+    )
+    health = SimpleNamespace(ok=True, blocking_issues=[], warnings=[])
+    inherited = SimpleNamespace(inherited=True)
+    with patch.object(
+        sys,
+        "argv",
+        [
+            "sync", "--apply", "--wrapper-managed-finalize",
+            "--run-id", current_run, "--resume-from-run-id", old_run,
+            "--resume-from-receipt-sha256",
+            hashlib.sha256(old_receipt.read_bytes()).hexdigest(),
+            "--universe", "csi1800", "--target-date", target,
+        ],
+    ), patch.multiple(
+        daily_sync,
+        QlibAdapter=Adapter,
+        TushareCollector=lambda: object(),
+        StockDataStore=Store,
+        _resolve_target_date=lambda _value: target,
+        _check_stock_data_status=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("resume must not take canonical precheck noop")
+        ),
+        _do_raw_fetch=raw_fetch,
+        _update_index_daily=lambda *_args: {},
+        _refresh_and_verify_changed_symbols=lambda *_args, **_kwargs: {
+            "status": "success", "changed_symbols": [], "verified_value_count": 0,
+        },
+        _repair_same_date_qlib_gap=lambda *_args, **_kwargs: {
+            "status": "success", "verified_no_gap": True,
+            "canonical_exclusions": [], "canonical_exclusion_count": 0,
+        },
+        _readiness_check=lambda *_args, **_kwargs: health,
+        _previous_open_session=lambda *_args: "20260820",
+        _write_audit=lambda *_args, **_kwargs: None,
+        _notify_telegram=lambda *_args, **_kwargs: None,
+    ), patch.object(
+        daily_sync.cfg, "get_path", return_value=str(tmp_path)
+    ), patch(
+        "qsys.ops.pit_universe_snapshot.resolve_csi1800_pit_snapshot",
+        return_value=snapshot,
+    ), patch(
+        "qsys.ops.pit_universe_snapshot.write_current_qlib_registry",
+        return_value={"status": "success"},
+    ), patch.object(
+        daily_sync.SourceAuditStore,
+        "evaluate_field_receipts",
+        return_value={"status": "success", "fields": {}},
+    ):
+        daily_sync._main_under_writer_lock(inherited)
+
+    assert captured["codes"] == ["000001.SZ", "000002.SZ"]
+    assert captured["resume_proof"]["resume_from_run_id"] == old_run
+    assert captured["scope_key"] == "csi1800"
+    assert captured["universe"] == "csi1800"
+    events = audit.run_evidence_summary(current_run)["events"]
+    assert any(event["event_type"] == "resume_from_run_validated" for event in events)
 
 
 def test_wrapper_finalizes_only_after_outer_readiness_event(tmp_path: Path):

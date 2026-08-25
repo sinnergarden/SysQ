@@ -47,6 +47,7 @@ from qsys.data.source_audit import (
     LEGACY_UNTRUSTED,
     SourceAuditStore,
     TRUSTED,
+    checkpoint_requested_scope,
     data_writer_lock,
     new_run_id,
     normalized_response_metadata,
@@ -647,6 +648,51 @@ def _update_index_daily(collector: TushareCollector, target_dt: str) -> dict:
     return results
 
 
+def _suspension_evidence_from_reused_frame(
+    frame: pd.DataFrame,
+    *,
+    symbols: set[str],
+    start_date: str,
+    end_date: str,
+) -> dict | None:
+    """Rebuild the small suspension map from a verified raw supplier payload."""
+
+    if frame is None or frame.empty:
+        return {
+            "status": "empty",
+            "suspended_dates_by_symbol": {},
+            "raw_frame": pd.DataFrame(columns=list(frame.columns) if frame is not None else []),
+            "errors": [],
+            "attempt_count": 0,
+        }
+    if not {"ts_code", "trade_date"}.issubset(frame.columns):
+        return None
+    allowed = {str(symbol) for symbol in symbols}
+    response_symbols = frame["ts_code"].astype("string")
+    if response_symbols.isna().any() or not set(response_symbols.astype(str)).issubset(allowed):
+        return None
+    date_text = (
+        frame["trade_date"].astype(str).str.strip().str.replace("-", "", regex=False).str[:8]
+    )
+    normalized_dates = pd.to_datetime(date_text, format="%Y%m%d", errors="coerce")
+    if normalized_dates.isna().any():
+        return None
+    start = pd.to_datetime(str(start_date).replace("-", ""), format="%Y%m%d")
+    end = pd.to_datetime(str(end_date).replace("-", ""), format="%Y%m%d")
+    if (normalized_dates < start).any() or (normalized_dates > end).any():
+        return None
+    suspended: dict[str, set[str]] = {}
+    for symbol, date_value in zip(response_symbols.astype(str), normalized_dates):
+        suspended.setdefault(symbol, set()).add(pd.Timestamp(date_value).strftime("%Y-%m-%d"))
+    return {
+        "status": "success",
+        "suspended_dates_by_symbol": suspended,
+        "raw_frame": frame,
+        "errors": [],
+        "attempt_count": 0,
+    }
+
+
 def _do_raw_fetch(
     collector: TushareCollector,
     codes: list[str],
@@ -655,6 +701,9 @@ def _do_raw_fetch(
     since_date: str | None = None,
     run_id: str | None = None,
     audit_store: SourceAuditStore | None = None,
+    resume_proof: dict | None = None,
+    scope_key: str | None = None,
+    universe: str | None = None,
 ) -> dict:
     """
     Fetch raw data from ``since_date`` through the target date.
@@ -672,17 +721,26 @@ def _do_raw_fetch(
     try:
         fetch_start = str(since_date or target_dt).replace("-", "")
         target_dt = str(target_dt).replace("-", "")
+        if resume_proof is not None and fetch_start != target_dt:
+            raise ValueError("resume is only supported for one target-date shard path")
         if fetch_start == target_dt:
+            evidence_kwargs = (
+                {
+                    "run_id": run_id,
+                    "audit_store": audit_store,
+                    "scope_key": str(scope_key or universe or "ad_hoc"),
+                    "universe": str(universe or scope_key or "ad_hoc"),
+                    **({"resume_proof": resume_proof} if resume_proof is not None else {}),
+                }
+                if run_id is not None and audit_store is not None
+                else {}
+            )
             collector_result = collector.update_daily(
                 target_dt,
                 codes=codes,
                 include_financial=True,
                 force=True,
-                **(
-                    {"run_id": run_id, "audit_store": audit_store}
-                    if run_id is not None and audit_store is not None
-                    else {}
-                ),
+                **evidence_kwargs,
             )
         else:
             # This path may fetch prior dates, and is only reachable for an
@@ -741,23 +799,56 @@ def _do_raw_fetch(
         if requested_missing and fetch_start == target_dt:
             from qsys.ops.data_coverage import fetch_suspension_evidence
 
-            suspension_evidence = fetch_suspension_evidence(
-                symbols=set(requested_missing), start_date=target_dt, end_date=target_dt
+            suspension_scope = checkpoint_requested_scope(
+                {
+                    "date_start": target_dt,
+                    "date_end": target_dt,
+                    "symbol_count": len(requested_missing),
+                    "symbols_sha256": stable_scope_hash(requested_missing),
+                },
+                source="tushare",
+                endpoint="suspend_d",
+                contract_version="1",
+                scope_key=str(scope_key or universe or "ad_hoc"),
+                universe=str(universe or scope_key or "ad_hoc"),
             )
+            reused_suspension = None
+            if resume_proof is not None and audit_store is not None and run_id is not None:
+                reused_suspension = audit_store.reuse_fetch_shard(
+                    run_id=run_id,
+                    resume_proof=resume_proof,
+                    source="tushare",
+                    endpoint="suspend_d",
+                    contract_version="1",
+                    requested_scope=suspension_scope,
+                )
+            suspension_evidence = None
+            if reused_suspension is not None:
+                suspension_evidence = _suspension_evidence_from_reused_frame(
+                    reused_suspension["frame"],
+                    symbols=set(requested_missing),
+                    start_date=target_dt,
+                    end_date=target_dt,
+                )
+                if suspension_evidence is not None:
+                    suspension_receipt_id = str(reused_suspension["receipt_id"])
+            if suspension_evidence is None:
+                suspension_evidence = fetch_suspension_evidence(
+                    symbols=set(requested_missing), start_date=target_dt, end_date=target_dt
+                )
             suspension_query_status = str(suspension_evidence["status"])
             raw_suspension_frame = suspension_evidence["raw_frame"]
-            if audit_store is not None and run_id is not None:
+            if (
+                suspension_receipt_id is None
+                and audit_store is not None
+                and run_id is not None
+            ):
                 suspension_receipt_id = audit_store.record_fetch(
                     run_id=run_id,
                     source="tushare",
                     endpoint="suspend_d",
                     status=suspension_query_status,
-                    requested_scope={
-                        "date_start": target_dt,
-                        "date_end": target_dt,
-                        "symbol_count": len(requested_missing),
-                        "symbols_sha256": stable_scope_hash(requested_missing),
-                    },
+                    requested_scope=suspension_scope,
                     returned_rows=len(raw_suspension_frame),
                     attempt_count=max(1, int(suspension_evidence["attempt_count"])),
                     payload_frame=(
@@ -1072,20 +1163,34 @@ def _main_under_writer_lock(writer_lock: data_writer_lock) -> None:
     parser.add_argument("--apply", action="store_true", help="Apply data changes (default is dry-run)")
     parser.add_argument("--force-fetch", action="store_true", help="Skip pre-check, force fetch all stocks")
     parser.add_argument("--run-id", default=None, help="Explicit shared run identity from the canonical wrapper")
+    parser.add_argument("--resume-from-run-id", default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--resume-from-receipt-sha256", default=None, help=argparse.SUPPRESS)
     parser.add_argument(
         "--wrapper-managed-finalize",
         action="store_true",
         help=argparse.SUPPRESS,
     )
     args = parser.parse_args()
+    if bool(args.resume_from_run_id) != bool(args.resume_from_receipt_sha256):
+        parser.error(
+            "--resume-from-run-id requires --resume-from-receipt-sha256 from the wrapper"
+        )
     if args.wrapper_managed_finalize and not writer_lock.inherited:
         parser.error("--wrapper-managed-finalize requires a verified inherited writer lock fd")
+    if args.resume_from_run_id and not args.wrapper_managed_finalize:
+        parser.error("--resume-from-run-id requires --wrapper-managed-finalize")
+    if args.resume_from_run_id and not args.apply:
+        parser.error("--resume-from-run-id requires --apply")
+    if args.resume_from_run_id and args.force_fetch:
+        parser.error("--resume-from-run-id and --force-fetch are mutually exclusive")
     universe = args.universe
 
     # Resolve target date
     target_dt = _resolve_target_date(args.target_date)
     sync_window = _resolve_sync_window(target_dt, args.repair_start_date)
     sync_start = sync_window["start_date"]
+    if args.resume_from_run_id and sync_start != target_dt:
+        parser.error("resume is only supported for the single target-date path")
     target_date = f"{target_dt[:4]}-{target_dt[4:6]}-{target_dt[6:]}"
     do_apply = args.apply
     run_id = validate_run_id(args.run_id or new_run_id("data_sync"))
@@ -1137,6 +1242,27 @@ def _main_under_writer_lock(writer_lock: data_writer_lock) -> None:
             "receipt_root": receipt_root,
             "entrypoint": "scripts/ops/sync_csi800_daily.py",
         }
+    resume_proof = None
+    if args.resume_from_run_id:
+        if source_audit is None:
+            parser.error("--resume-from-run-id requires --apply")
+        resume_proof = source_audit.validate_resume_run(
+            resume_from_run_id=args.resume_from_run_id,
+            expected_entrypoint="scripts/data_sync.py",
+            universe=universe,
+            target_date=target_dt,
+            expected_receipt_sha256=args.resume_from_receipt_sha256,
+        )
+        source_audit.append_event(
+            run_id,
+            "resume_from_run_validated",
+            {
+                "resume_from_run_id": resume_proof["resume_from_run_id"],
+                "source_receipt_sha256": resume_proof["receipt_sha256"],
+                "universe": universe,
+                "target_date": target_dt,
+            },
+        )
 
     # Step 0: Initialize Qlib
     t0 = time.time()
@@ -1182,9 +1308,12 @@ def _main_under_writer_lock(writer_lock: data_writer_lock) -> None:
 
     # Step 2: Pre-check — which stocks already have target date?
     t0 = time.time()
-    if args.force_fetch:
+    if args.force_fetch or resume_proof is not None:
         status_check = {"have": [], "missing": codes, "total": len(codes), "already_up_to_date": 0, "need_fetch": len(codes)}
-        log.info("Force fetch: skipping pre-check, fetching all stocks")
+        if args.force_fetch:
+            log.info("Force fetch: skipping pre-check, fetching all stocks")
+        else:
+            log.info("Resume: running full target universe so verified shards clone into the fresh run")
     else:
         status_check = _check_stock_data_status(store, codes, target_dt)
         step2 = {"checked_count": len(codes), "already_up_to_date": status_check["already_up_to_date"],
@@ -1250,6 +1379,9 @@ def _main_under_writer_lock(writer_lock: data_writer_lock) -> None:
                 since_date=sync_start,
                 run_id=run_id,
                 audit_store=source_audit,
+                resume_proof=resume_proof,
+                scope_key=universe,
+                universe=universe,
             )
         report["steps"]["raw_fetch"] = raw_summary
     else:
