@@ -47,10 +47,23 @@ def normalise_shareholder_freshness(value: Any) -> dict[str, Any]:
                 f"freshness limits for {feature} require "
                 "0 < max_median_days <= max_row_days"
             )
-        features[feature] = {
+        feature_contract: dict[str, int | float] = {
             "max_median_days": max_median_days,
             "max_row_days": max_row_days,
         }
+        if "min_coverage" in raw:
+            try:
+                feature_min_coverage = float(raw["min_coverage"])
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"freshness limits for {feature}.min_coverage must be numeric"
+                ) from exc
+            if not 0.0 < feature_min_coverage <= 1.0:
+                raise ValueError(
+                    f"freshness limits for {feature}.min_coverage must be in (0, 1]"
+                )
+            feature_contract["min_coverage"] = feature_min_coverage
+        features[feature] = feature_contract
     try:
         min_coverage = float(value["min_coverage"])
     except (KeyError, TypeError, ValueError) as exc:
@@ -118,10 +131,14 @@ def profile_shareholder_feature_freshness(
                 else None
             )
             observed_median = profile["max_daily_median_days"]
-        if coverage < contract["min_coverage"]:
+        required_coverage = float(
+            limits.get("min_coverage", contract["min_coverage"])
+        )
+        profile["min_coverage"] = required_coverage
+        if coverage < required_coverage:
             violations.append(
                 f"{feature} coverage={coverage:.2%} below "
-                f"{contract['min_coverage']:.2%}"
+                f"{required_coverage:.2%}"
             )
         if observed_median is None or observed_median > limits["max_median_days"]:
             violations.append(

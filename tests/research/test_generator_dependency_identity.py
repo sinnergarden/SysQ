@@ -27,12 +27,24 @@ def test_lightgbm_declares_training_dependency() -> None:
     generator = LightGBMSingleLabelGenerator()
     dependencies = _generator_dependency_code_identity(generator)
 
-    assert [entry["name"] for entry in dependencies] == [
-        "qsys.signal.alpha_v1.training"
-    ]
-    training_path = Path(__file__).resolve().parents[2] / "qsys/signal/alpha_v1/training.py"
-    expected = hashlib.sha256(training_path.read_bytes()).hexdigest()
-    assert dependencies[0]["sha256"] == expected
+    repo_root = Path(__file__).resolve().parents[2]
+    expected_paths = {
+        "qsys.data.adapter": repo_root / "qsys/data/adapter.py",
+        "qsys.feature.builder": repo_root / "qsys/feature/builder.py",
+        "qsys.feature.groups.value_growth_v3a": (
+            repo_root / "qsys/feature/groups/value_growth_v3a.py"
+        ),
+        "qsys.signal.alpha_v1.training": (
+            repo_root / "qsys/signal/alpha_v1/training.py"
+        ),
+    }
+    assert [entry["name"] for entry in dependencies] == sorted(expected_paths)
+    assert {
+        entry["name"]: entry["sha256"] for entry in dependencies
+    } == {
+        name: hashlib.sha256(path.read_bytes()).hexdigest()
+        for name, path in expected_paths.items()
+    }
 
 
 def test_dependency_hash_changes_checkpoint_identity(tmp_path: Path) -> None:

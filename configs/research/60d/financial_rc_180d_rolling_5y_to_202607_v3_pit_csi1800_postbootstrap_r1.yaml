@@ -1,0 +1,56 @@
+# Exact namespace-only rerun of the CSI1800 S180 research baseline after the
+# 2026-08-25 shareholder-history bootstrap.  Universe, feature list, label,
+# maturity lag, model parameters, rolling windows and score transform remain
+# frozen.  The only semantic input change is the explicitly pinned immutable
+# shareholder sidecar snapshot.
+experiment_id: financial_rc_180d_rolling_5y_to_202607_v3_pit_csi1800_postbootstrap_r1
+calendar:
+  start_date: "2021-01-01"
+  end_date: "2026-07-31"
+  train_window_days: 504
+  step_days: 20
+signal:
+  signal_id: v3a_growth_financial_180d_pit_csi1800_postbootstrap_r1
+  score_column: score
+feature_list_id: v3a_plus_liquidity_financial_rc
+# Unchanged native Qlib source identity from the frozen baseline config.
+source_manifest_hash: 780ba40ec5ce8a5f5b5c88b02e1e171e0d67c3c2b02639b22ed0a2b889abc237
+window_checkpoints: true
+generators:
+  - generator_id: v3a_growth_financial_180d_pit_csi1800_postbootstrap_r1
+    type: multi_label_lightgbm
+    params:
+      universe: csi1800_pit_union
+      n_estimators: 300
+      feature_list_id: v3a_plus_liquidity_financial_rc
+      pit_membership: true
+      pit_universe_artifact: csi1800_pit_v2
+      shareholder_holder_path: data/research/source_snapshots/shareholder/20260821_baseline_complete_v2/holder_num.parquet
+      shareholder_holder_sha256: 53e03fa87945a7602f64aa385d5b328d9d2b45375ccca193124c355658e704e1
+      shareholder_top10_path: data/research/source_snapshots/shareholder/20260821_baseline_complete_v2/top10_holder_ratio.parquet
+      shareholder_top10_sha256: 8709f7509e46cd3b8c681099159f9890ee881ab1816ae467e20aa4ae06fe5b4f
+      shareholder_freshness_contract:
+        source: tushare.stk_holdernumber+tushare.top10_holders
+        availability_rule: announcement_date_asof
+        min_coverage: 0.95
+        features:
+          holder_num_stale_days:
+            # Tushare has no usable holder_num for 143 historical PIT
+            # members: 113 endpoints are empty and 30 are null-only.  The
+            # audited 68-window source floor is 94.2406%.
+            min_coverage: 0.94
+            max_median_days: 200
+            max_row_days: 365
+          top10_holder_stale_days:
+            # Preserve the independently observed 99.9964% source coverage.
+            min_coverage: 0.99
+            max_median_days: 250
+            max_row_days: 365
+      labels:
+        - label_id: fwd_ret_180d_raw_pit_csi1800
+signal_transforms:
+  - transform_id: daily_zscore
+    type: daily_zscore
+labels:
+  - label_id: fwd_ret_180d_raw_pit_csi1800
+    label_maturity_lag_trading_days: 181

@@ -89,3 +89,46 @@ def test_csi1800_pit_config_only_changes_universe_lineage() -> None:
             "label_maturity_lag_trading_days": 181,
         }
     ]
+
+
+def test_csi1800_postbootstrap_r1_only_adds_pinned_shareholder_inputs() -> None:
+    baseline = RollingResearchConfig.from_file(
+        REPO_ROOT
+        / "configs/research/60d/financial_rc_180d_rolling_5y_to_202607_v3_pit_csi1800.yaml"
+    )
+    rerun = RollingResearchConfig.from_file(
+        REPO_ROOT
+        / "configs/research/60d/financial_rc_180d_rolling_5y_to_202607_v3_pit_csi1800_postbootstrap_r1.yaml"
+    )
+
+    assert rerun.calendar == baseline.calendar
+    assert rerun.feature_list_id == baseline.feature_list_id
+    assert rerun.source_manifest_hash == baseline.source_manifest_hash
+    assert rerun.transforms == baseline.transforms
+    assert rerun.labels == baseline.labels
+    base_params = dict(baseline.generators[0]["params"])
+    rerun_params = dict(rerun.generators[0]["params"])
+    pinned = {
+        key: rerun_params.pop(key)
+        for key in (
+            "shareholder_holder_path",
+            "shareholder_holder_sha256",
+            "shareholder_top10_path",
+            "shareholder_top10_sha256",
+        )
+    }
+    contract = rerun_params.pop("shareholder_freshness_contract")
+    assert rerun_params == base_params
+    assert pinned["shareholder_holder_sha256"] == "53e03fa87945a7602f64aa385d5b328d9d2b45375ccca193124c355658e704e1"
+    assert pinned["shareholder_top10_sha256"] == "8709f7509e46cd3b8c681099159f9890ee881ab1816ae467e20aa4ae06fe5b4f"
+    assert contract["min_coverage"] == 0.95
+    assert contract["features"]["holder_num_stale_days"] == {
+        "min_coverage": 0.94,
+        "max_median_days": 200,
+        "max_row_days": 365,
+    }
+    assert contract["features"]["top10_holder_stale_days"] == {
+        "min_coverage": 0.99,
+        "max_median_days": 250,
+        "max_row_days": 365,
+    }

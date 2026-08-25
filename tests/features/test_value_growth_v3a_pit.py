@@ -45,3 +45,37 @@ def test_average_shares_change_does_not_require_total_share():
     result = build_shareholder_features(frame)
 
     assert result.loc[0, "avg_shares_per_holder_chg_qoq"] == 0.25
+
+
+def test_explicit_top10_snapshot_does_not_follow_holder_filename(tmp_path):
+    holder_path = tmp_path / "frozen_holder.parquet"
+    top10_path = tmp_path / "frozen_concentration.parquet"
+    pd.DataFrame(
+        {
+            "inst": ["AAA"],
+            "ann_date": [20260115],
+            "holder_num": [100.0],
+        }
+    ).to_parquet(holder_path)
+    pd.DataFrame(
+        {
+            "inst": ["AAA"],
+            "ann_date": [20260116],
+            "top10_ratio": [55.0],
+        }
+    ).to_parquet(top10_path)
+    daily = pd.DataFrame(
+        {
+            "trade_date": pd.to_datetime(["2026-01-19"]),
+            "ts_code": ["AAA"],
+        }
+    )
+
+    loaded = load_shareholder_data(
+        daily,
+        holder_path=str(holder_path),
+        top10_path=str(top10_path),
+    )
+
+    assert loaded.loc[0, "holder_num"] == 100.0
+    assert loaded.loc[0, "top10_holder_ratio"] == 55.0

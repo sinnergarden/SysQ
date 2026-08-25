@@ -147,12 +147,31 @@ class LightGBMSingleLabelGenerator:
     # feature rows.  The historical PIT-union registry may legitimately end
     # at its last immutable snapshot and must never be extended in place.
     prediction_universe: str = ""
+    # Optional immutable shareholder sidecar snapshot.  Production/daily
+    # inference may keep using canonical defaults, while long research runs
+    # must pin both files and their declared content hashes so checkpoints
+    # cannot silently span a historical bootstrap or repair.
+    shareholder_holder_path: str = ""
+    shareholder_holder_sha256: str = ""
+    shareholder_top10_path: str = ""
+    shareholder_top10_sha256: str = ""
+    # Optional research-only contract.  When omitted, preserve the historical
+    # generator behaviour (including its existing NaN handling).  When set,
+    # it is a read-only fail-closed preflight over the raw feature frame; it
+    # never drops rows or changes feature values.
+    shareholder_freshness_contract: dict[str, object] | None = None
 
     _qlib_inited: bool = field(default=False, repr=False)
     _pit_store: object | None = field(default=None, repr=False, init=False)
     _clean_features: list[str] = field(default_factory=list, repr=False)
     _call_count: int = field(default=0, repr=False)
     _prediction_membership_sha256: str = field(default="", repr=False, init=False)
+    _shareholder_source_lineage: dict[str, dict[str, str]] = field(
+        default_factory=dict, repr=False, init=False
+    )
+    _shareholder_freshness_profiles: dict[str, dict[str, object]] = field(
+        default_factory=dict, repr=False, init=False
+    )
 
     def __post_init__(self) -> None:
         from qsys.signal.alpha_v1.training import validate_sample_weight_policy
@@ -165,6 +184,13 @@ class LightGBMSingleLabelGenerator:
         if self.prediction_universe and not self.prediction_membership_path:
             raise ValueError(
                 "prediction_universe requires prediction_membership_path"
+            )
+        self._validate_shareholder_snapshot()
+        if self.shareholder_freshness_contract is not None:
+            from qsys.feature.freshness import normalise_shareholder_freshness
+
+            self.shareholder_freshness_contract = normalise_shareholder_freshness(
+                self.shareholder_freshness_contract
             )
         if not self.prediction_membership_path:
             return
@@ -179,6 +205,89 @@ class LightGBMSingleLabelGenerator:
         self.prediction_membership_path = normalized
         self._prediction_membership_sha256 = digest
 
+    def _validate_shareholder_snapshot(self) -> None:
+        values = {
+            "shareholder_holder_path": self.shareholder_holder_path,
+            "shareholder_holder_sha256": self.shareholder_holder_sha256,
+            "shareholder_top10_path": self.shareholder_top10_path,
+            "shareholder_top10_sha256": self.shareholder_top10_sha256,
+        }
+        if not any(values.values()):
+            return
+        missing = [key for key, value in values.items() if not value]
+        if missing:
+            raise ValueError(
+                "shareholder snapshot requires path and SHA-256 for both files; "
+                f"missing {missing}"
+            )
+
+        lineage: dict[str, dict[str, str]] = {}
+        for name, path_value, declared_hash in (
+            ("holder_num", self.shareholder_holder_path, self.shareholder_holder_sha256),
+            (
+                "top10_holder_ratio",
+                self.shareholder_top10_path,
+                self.shareholder_top10_sha256,
+            ),
+        ):
+            if len(declared_hash) != 64 or any(
+                char not in "0123456789abcdef" for char in declared_hash.lower()
+            ):
+                raise ValueError(
+                    f"{name} shareholder snapshot hash must be SHA-256"
+                )
+            path = Path(path_value).expanduser().absolute()
+            if path.is_symlink() or not path.is_file():
+                raise ValueError(
+                    f"{name} shareholder snapshot must be an existing regular file: {path}"
+                )
+            actual_hash = _sha256_file(path)
+            if actual_hash != declared_hash.lower():
+                raise ValueError(
+                    f"{name} shareholder snapshot hash mismatch: "
+                    f"declared={declared_hash.lower()} actual={actual_hash}"
+                )
+            lineage[name] = {
+                "path": str(path),
+                "sha256": actual_hash,
+            }
+
+        self.shareholder_holder_path = lineage["holder_num"]["path"]
+        self.shareholder_holder_sha256 = lineage["holder_num"]["sha256"]
+        self.shareholder_top10_path = lineage["top10_holder_ratio"]["path"]
+        self.shareholder_top10_sha256 = lineage["top10_holder_ratio"]["sha256"]
+        self._shareholder_source_lineage = lineage
+
+    @property
+    def feature_source_lineage(self) -> dict[str, dict[str, str]]:
+        return dict(self._shareholder_source_lineage)
+
+    @property
+    def shareholder_freshness_lineage(self) -> dict[str, object] | None:
+        """Return the opt-in contract and per-window preflight evidence."""
+        if self.shareholder_freshness_contract is None:
+            return None
+        return {
+            "contract": self.shareholder_freshness_contract,
+            "profiles": dict(self._shareholder_freshness_profiles),
+        }
+
+    @property
+    def checkpoint_contract_identity(self) -> dict[str, object]:
+        """Contracts that alter the generator's acceptance semantics."""
+        if self.shareholder_freshness_contract is None:
+            return {}
+        return {
+            "shareholder_freshness_contract": self.shareholder_freshness_contract,
+        }
+
+    @property
+    def checkpoint_input_artifacts(self) -> list[dict[str, str]]:
+        return [
+            {"name": name, "sha256": payload["sha256"]}
+            for name, payload in sorted(self._shareholder_source_lineage.items())
+        ]
+
     @property
     def checkpoint_code_dependencies(self) -> dict[str, Path]:
         """Code files whose changes invalidate rolling window checkpoints.
@@ -189,9 +298,17 @@ class LightGBMSingleLabelGenerator:
         predictions.  Paths are resolved by the pipeline and only the stable
         dependency name plus content hash enter checkpoint identity.
         """
+        from qsys.data import adapter
+        from qsys.feature import builder
+        from qsys.feature.groups import value_growth_v3a
         from qsys.signal.alpha_v1 import training
 
         return {
+            "qsys.data.adapter": Path(adapter.__file__).resolve(),
+            "qsys.feature.builder": Path(builder.__file__).resolve(),
+            "qsys.feature.groups.value_growth_v3a": Path(
+                value_growth_v3a.__file__
+            ).resolve(),
             "qsys.signal.alpha_v1.training": Path(training.__file__).resolve(),
         }
 
@@ -231,7 +348,7 @@ class LightGBMSingleLabelGenerator:
             prediction_path, prediction_hash, _ = _prediction_membership_identity(
                 self.prediction_membership_path
             )
-        return {
+        identity = {
             "schema_version": _WINDOW_CACHE_SCHEMA_VERSION,
             "builder_id": _WINDOW_CACHE_BUILDER_ID,
             "source_manifest_hash": self.source_manifest_hash,
@@ -250,6 +367,11 @@ class LightGBMSingleLabelGenerator:
             "start": start,
             "end": end,
         }
+        if self.shareholder_freshness_contract is not None:
+            identity["shareholder_freshness_contract"] = (
+                self.shareholder_freshness_contract
+            )
+        return identity
 
     def _window_key(self, start: str, end: str, features: list[str]) -> str:
         raw = json.dumps(
@@ -465,7 +587,10 @@ class LightGBMSingleLabelGenerator:
     def _ensure_qlib(self) -> None:
         if not self._qlib_inited:
             from qsys.data.adapter import QlibAdapter
-            QlibAdapter().init_qlib()
+            QlibAdapter(
+                shareholder_holder_path=self.shareholder_holder_path or None,
+                shareholder_top10_path=self.shareholder_top10_path or None,
+            ).init_qlib()
             self._qlib_inited = True
 
     def _load_data(self, start: str, end: str) -> tuple[pd.DataFrame, list[str]]:
@@ -531,7 +656,10 @@ class LightGBMSingleLabelGenerator:
         log.info("Loading qlib data [{}, {}] (call #{})", start, end, self._call_count)
 
         from qsys.data.adapter import QlibAdapter
-        adapter = QlibAdapter()
+        adapter = QlibAdapter(
+            shareholder_holder_path=self.shareholder_holder_path or None,
+            shareholder_top10_path=self.shareholder_top10_path or None,
+        )
 
         # Build features via qlib + phase1 builder
         raw = adapter.get_features(self.universe, clean + ["$close"], start_time=start, end_time=end)
@@ -661,6 +789,41 @@ class LightGBMSingleLabelGenerator:
             )
         return result
 
+    def _check_shareholder_freshness(
+        self,
+        frame: pd.DataFrame,
+        *,
+        role: str,
+        start: str,
+        end: str,
+    ) -> None:
+        """Fail closed on an opted-in shareholder contract without mutation.
+
+        This deliberately runs on the constructed feature frame, before label
+        joins and before the legacy ``fillna(0)`` model-input conversion.  The
+        returned profile is evidence only; no rows or values are changed.
+        """
+        contract = self.shareholder_freshness_contract
+        if contract is None:
+            return
+        from qsys.feature.freshness import profile_shareholder_feature_freshness
+
+        profile = profile_shareholder_feature_freshness(
+            frame[
+                (frame["trade_date"] >= start) & (frame["trade_date"] <= end)
+            ],
+            contract,
+            date_column="trade_date",
+        )
+        key = f"{role}:{start}:{end}"
+        self._shareholder_freshness_profiles[key] = profile
+        if profile["status"] != "pass":
+            violations = "; ".join(profile["violations"])
+            raise ValueError(
+                "shareholder feature freshness failed for "
+                f"{role} window [{start}, {end}]: {violations}"
+            )
+
     def _load_prediction_data(
         self,
         start: str,
@@ -672,7 +835,10 @@ class LightGBMSingleLabelGenerator:
             raise ValueError("prediction_universe is not configured")
         from qsys.data.adapter import QlibAdapter
 
-        raw = QlibAdapter().get_features(
+        raw = QlibAdapter(
+            shareholder_holder_path=self.shareholder_holder_path or None,
+            shareholder_top10_path=self.shareholder_top10_path or None,
+        ).get_features(
             self.prediction_universe,
             clean_features + ["$close"],
             start_time=start,
@@ -735,6 +901,22 @@ class LightGBMSingleLabelGenerator:
                 frame = self._apply_pit_membership(frame)
             train_frame = frame
             prediction_frame = frame
+
+        # Gate both sides of the rolling window after PIT membership has been
+        # applied and before labels/model preprocessing.  Prediction dates are
+        # the feature dates actually consumed by this execution window.
+        self._check_shareholder_freshness(
+            train_frame,
+            role="train",
+            start=train_start,
+            end=train_end,
+        )
+        self._check_shareholder_freshness(
+            prediction_frame,
+            role="predict",
+            start=min(feature_dates),
+            end=max(feature_dates),
+        )
 
         from qsys.label.store import LabelStore
         from qsys.signal.alpha_v1.training import (
