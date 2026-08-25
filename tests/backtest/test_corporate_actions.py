@@ -6,6 +6,7 @@ import json
 import pandas as pd
 import pytest
 
+import qsys.backtest.accounting as accounting
 from qsys.backtest.accounting import (
     BacktestAccount,
     CorporateActionStore,
@@ -93,6 +94,46 @@ def test_normalize_filters_unimplemented_and_retains_source_fields(tmp_path) -> 
     assert len(store.for_date("2026-01-02")) == 2
     digest = hashlib.sha256((root / "events.parquet").read_bytes()).hexdigest()
     assert json.loads((root / "manifest.json").read_text())["events_sha256"] == digest
+
+
+def test_store_for_date_uses_normalized_index_and_isolation(tmp_path, monkeypatch) -> None:
+    raw = pd.DataFrame([{
+        "ts_code": "A", "div_proc": "实施", "ex_date": "2026-01-02",
+        "pay_date": "2026-01-03", "cash_div_tax": 1.0,
+        "imp_ann_date": "2026-01-01",
+    }, {
+        "ts_code": "B", "div_proc": "实施", "ex_date": "2026-01-03",
+        "pay_date": "2026-01-04", "cash_div_tax": 2.0,
+        "imp_ann_date": "2026-01-02",
+    }])
+    events = normalize_tushare_dividend(raw)
+    write_corporate_action_artifact(events, tmp_path, artifact_name="indexed")
+    store = CorporateActionStore(tmp_path, "indexed")
+
+    original_day = accounting._day
+    expected = store.events[
+        store.events["effective_date"].map(original_day) == "2026-01-02"
+    ].to_dict("records")
+    day_calls = 0
+
+    def counted_day(value):
+        nonlocal day_calls
+        day_calls += 1
+        return original_day(value)
+
+    monkeypatch.setattr(accounting, "_day", counted_day)
+    first = store.for_date("20260102")
+    assert first == expected
+    assert day_calls == 1  # request normalization only; no full-frame scan
+
+    first[0]["cash_per_share"] = 999.0
+    first[0]["caller_only"] = True
+    second = store.for_date("2026-01-02")
+    assert second == expected
+    assert "caller_only" not in second[0]
+    assert second[0]["cash_per_share"] != 999.0
+    assert store.for_date("2026-01-01") == []
+    assert store.for_date("2026-01-02") == second
 
 
 def test_normalize_requires_list_date_and_rejects_known_at_lookahead() -> None:

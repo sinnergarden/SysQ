@@ -924,9 +924,22 @@ class CorporateActionStore:
         if expected_rows and expected_rows != actual_rows:
             raise ValueError("corporate action source event-row SHA256 mismatch")
 
+        # ``for_date`` is on the hot path of date-by-date backtests.  Build
+        # the normalized-date index only after every integrity and semantic
+        # check above has passed, so a partially validated artifact can never
+        # become queryable through this store.  Tuples keep the private index
+        # stable; callers receive fresh dicts below and cannot mutate it.
+        events_by_date: dict[str, list[dict[str, Any]]] = {}
+        for event in self.events.to_dict("records"):
+            normalized_date = _day(event.get("effective_date"))
+            events_by_date.setdefault(normalized_date, []).append(event)
+        self._events_by_effective_date = {
+            day: tuple(events) for day, events in events_by_date.items()
+        }
+
     def for_date(self, trade_date: str) -> list[dict[str, Any]]:
         day = _day(trade_date)
-        return self.events[self.events["effective_date"].map(_day) == day].to_dict("records")
+        return [dict(event) for event in self._events_by_effective_date.get(day, ())]
 
     def __iter__(self):
         return iter(self.events.to_dict("records"))

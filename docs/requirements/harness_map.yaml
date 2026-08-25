@@ -177,6 +177,7 @@ usecases:
     supporting_tools:
       - scripts/research/compute_labels.py
       - scripts/research/rebuild_pit_universes.py
+      - scripts/research/build_corporate_action_artifact.py
       - scripts/research/evaluate_top_tail.py
       - scripts/research/preheat_feature_cache.py
     legacy_entrypoints:
