@@ -26,15 +26,21 @@ usecases:
       - harness/checks/check_no_latest_model_resolution.py
       - harness/checks/check_daily_inference_ready.py
       - harness/checks/check_shareholder_data_freshness.py
+      - tests/test_source_audit.py
+      - tests/test_data_sync_csi1800.py
+      - tests/ops/test_universe_history.py
     allowed_paths:
       - scripts/data_sync.py
       - scripts/run_daily.py
       - scripts/run_daily_batch.py
       - scripts/ops/sync_csi800_daily.py
       - qsys/data/collector.py
+      - qsys/data/storage.py
+      - qsys/data/source_audit.py
       - qsys/ops/
       - configs/strategies/
       - harness/checks/
+      - docs/ops/DAILY_OPS_SOP.md
       - tests/
     forbidden_paths:
       - qsys/ledger/
@@ -327,6 +333,40 @@ usecases:
       - qsys/trader/
       - qsys/broker/
       - qsys/backtest/
+
+  UC_PIT_DATA_CERTIFICATION:
+    domain: data_certification
+    status: draft
+    owner_agent: reviewer_agent
+    skills:
+      primary: sysq-dev
+      review: sysq-review
+    entrypoints:
+      - scripts/research/certify_pit_baseline.py
+    artifacts:
+      - data/audit/audit.db
+      - data/audit/source_runs/{run_id}/receipt.json
+      - future certification artifact (not implemented in this phase)
+    checks:
+      - harness/checks/check_usecase_registry.py
+      - tests/test_source_audit.py
+    allowed_paths:
+      - scripts/research/certify_pit_baseline.py
+      - qsys/data/source_audit.py
+      - docs/requirements/
+      - docs/CONTRACTS.md
+      - tests/test_source_audit.py
+    forbidden_paths:
+      - scripts/data_sync.py
+      - scripts/run_daily.py
+      - scripts/run_daily_batch.py
+      - qsys/ops/daily_runner.py
+      - qsys/model/
+      - qsys/signal/
+      - qsys/backtest/
+      - qsys/broker/
+      - qsys/trader/
+      - qsys/ledger/
 
   UC_STOCK_FUNDAMENTAL_RESEARCH:
     domain: stock_research

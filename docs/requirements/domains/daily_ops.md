@@ -63,6 +63,9 @@ stable
 ### Required Checks
 - `harness/checks/check_model_resolution_boundary.py`
 - `harness/checks/check_no_latest_model_resolution.py`
+- `tests/test_source_audit.py`：source/field scope、PIT timestamps、mutation hash、连续水位
+- `tests/test_data_sync_csi1800.py`：required endpoint/scope、Qlib readback、terminal ownership
+- `tests/ops/test_universe_history.py`：canonical history mutation 的保守 scope 与 crash recovery
 - `validate_daily_stage_manifest()`：独立复核日期、策略、stage status；子进程 exit 0 不能代替 manifest
 - preopen 内部任一阶段失败必须非零退出，且成功后才写 active attempt
 
@@ -75,9 +78,12 @@ operator_agent
 - `scripts/run_daily_batch.py`
 - `scripts/ops/sync_csi800_daily.py`
 - `qsys/data/collector.py`
+- `qsys/data/storage.py`
+- `qsys/data/source_audit.py`
 - `qsys/ops/`
 - `configs/strategies/`
 - `harness/checks/`
+- `docs/ops/DAILY_OPS_SOP.md`
 - `tests/`
 
 ### Forbidden Paths

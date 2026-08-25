@@ -2,7 +2,7 @@ import pandas as pd
 import sqlite3
 import os
 import tempfile
-from typing import Optional, cast
+from typing import Any, Optional, cast
 from pathlib import Path
 from qsys.config import cfg
 from qsys.utils.logger import log
@@ -51,15 +51,26 @@ class StockDataStore:
         except Exception as e:
             log.error(f"Failed to init DB: {e}")
 
-    def save_daily(self, df: pd.DataFrame, code: str, existing_df: Optional[pd.DataFrame] = None):
+    def save_daily(
+        self,
+        df: pd.DataFrame,
+        code: str,
+        existing_df: Optional[pd.DataFrame] = None,
+    ) -> list[dict[str, Any]]:
         """
         Save daily data to feather.
         If file exists, merge and deduplicate.
+
+        Returns canonical mutation receipts.  Receipts contain only the exact
+        affected symbol/date/field names and hashes of those affected windows;
+        they never persist full before/after values.
         """
         if df.empty:
-            return
+            return []
 
         file_path = self.canonical_dir / f"{code}.feather"
+        incoming_df = df.copy()
+        old_df: Optional[pd.DataFrame] = None
 
         # Ensure data types
         # Tushare returns object for some floats sometimes, ensure conversion
@@ -83,22 +94,54 @@ class StockDataStore:
         from qsys.data.cleaner import coalesce_merge_suffix_columns
 
         df = coalesce_merge_suffix_columns(df)
+        old_canonical_df = (
+            coalesce_merge_suffix_columns(old_df.copy()) if old_df is not None else None
+        )
 
         if "circ_mv" in df.columns:
             df["circ_mv"] = pd.to_numeric(df["circ_mv"], errors="coerce").fillna(0.0)
             df.loc[df["circ_mv"] < 0, "circ_mv"] = 0.0
 
+        from qsys.data.source_audit import build_canonical_mutations, utc_now
+
+        mutations = build_canonical_mutations(
+            symbol=code,
+            incoming=incoming_df,
+            before=old_canonical_df,
+            after=df,
+        )
+
         # Atomic write
         self._atomic_write(df, file_path)
+        committed_at = utc_now()
+        for mutation in mutations:
+            mutation["ingested_at"] = committed_at
         latest_date = df['trade_date'].astype(str).max()
         if latest_date:
             self.update_latest_date(code, latest_date)
+        return mutations
 
     def load_daily(self, code: str) -> Optional[pd.DataFrame]:
         file_path = self.canonical_dir / f"{code}.feather"
         if not file_path.exists():
             return None
         return pd.read_feather(file_path)
+
+    def load_daily_window(
+        self,
+        code: str,
+        *,
+        start_date: str,
+        end_date: str,
+        columns: list[str] | None = None,
+    ) -> Optional[pd.DataFrame]:
+        file_path = self.canonical_dir / f"{code}.feather"
+        if not file_path.exists():
+            return None
+        requested = list(dict.fromkeys(["trade_date", *(columns or [])]))
+        frame = pd.read_feather(file_path, columns=requested)
+        dates = frame["trade_date"].astype(str).str.replace("-", "", regex=False).str[:8]
+        return frame.loc[(dates >= start_date) & (dates <= end_date)].copy()
 
     def _atomic_write(self, df: pd.DataFrame, target_path: Path):
         # Write to temp file first

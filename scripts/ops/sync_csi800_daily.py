@@ -43,11 +43,31 @@ if str(PROJECT_ROOT) not in sys.path:
 from qsys.config import cfg
 from qsys.data.collector import TushareCollector
 from qsys.data.storage import StockDataStore
+from qsys.data.source_audit import (
+    LEGACY_UNTRUSTED,
+    SourceAuditStore,
+    TRUSTED,
+    data_writer_lock,
+    new_run_id,
+    normalized_response_metadata,
+    stable_scope_hash,
+    validate_run_id,
+)
 from qsys.data.adapter import QlibAdapter
 from qsys.utils.logger import log
 
 
 _DAILY_DATA_READY_CUTOFF = wall_time(18, 30)
+TRUSTED_DAILY_FIELDS = ("open", "high", "low", "close", "volume", "factor")
+TRUSTED_DAILY_FIELD_ENDPOINTS = {
+    "open": "daily",
+    "high": "daily",
+    "low": "daily",
+    "close": "daily",
+    "volume": "daily",
+    "factor": "adj_factor",
+}
+_CRASH_EVIDENCE: dict | None = None
 
 
 def _resolve_target_date(
@@ -127,6 +147,20 @@ def _resolve_sync_window(
             )
         mode = "explicit_historical_repair" if start < target else "daily_single_day"
     return {"mode": mode, "start_date": start, "target_date": target}
+
+
+def _previous_open_session(store: StockDataStore, target_dt: str) -> str | None:
+    if not hasattr(store, "get_calendar"):
+        return None
+    calendar = store.get_calendar()
+    if calendar is None or calendar.empty or not {"cal_date", "is_open"}.issubset(calendar.columns):
+        return None
+    dates = sorted(
+        str(value).replace("-", "")[:8]
+        for value in calendar.loc[calendar["is_open"] == 1, "cal_date"].tolist()
+        if str(value).replace("-", "")[:8] < target_dt
+    )
+    return dates[-1] if dates else None
 
 
 def _check_stock_data_status(store: StockDataStore, codes: list[str], target_dt: str) -> dict:
@@ -379,6 +413,163 @@ def _repair_same_date_qlib_gap(
     return summary
 
 
+_CANONICAL_TO_QLIB_READBACK = {
+    "open": "$open",
+    "high": "$high",
+    "low": "$low",
+    "close": "$close",
+    "factor": "$factor",
+    "adj_factor": "$factor",
+    "volume": "$volume",
+    "vol": "$volume",
+    "amount": "$amount",
+}
+
+
+def _refresh_and_verify_changed_symbols(
+    adapter: QlibAdapter,
+    store: StockDataStore,
+    mutations: list[dict],
+    *,
+    target_dt: str,
+    apply: bool,
+) -> dict:
+    """Drive Qlib dump_fix from exact mutations, then read back changed values."""
+
+    changed = [item for item in mutations if item.get("mutation_type") in {"insert", "update"}]
+    symbols = sorted({str(item["symbol"]) for item in changed})
+    revision_symbols = sorted(
+        {str(item["symbol"]) for item in changed if item.get("mutation_type") == "update"}
+    )
+    if not symbols:
+        return {
+            "status": "success",
+            "mode": "noop",
+            "changed_symbols": [],
+            "verified_value_count": 0,
+        }
+    if not apply:
+        return {"status": "dry_run", "changed_symbols": symbols, "verified_value_count": 0}
+
+    refresh = (
+        adapter.convert_fix_symbols(revision_symbols, refresh_universes=[])
+        if revision_symbols
+        else {"status": "skipped", "reason": "inserts_handled_by_incremental", "symbols_count": 0}
+    )
+    if revision_symbols and refresh.get("status") != "success":
+        return {
+            "status": "failed",
+            "error": f"convert_fix_symbols returned status={refresh.get('status')}",
+            "changed_symbols": symbols,
+            "revision_symbols": revision_symbols,
+            "refresh": refresh,
+        }
+
+    fields = sorted(
+        {
+            _CANONICAL_TO_QLIB_READBACK[field]
+            for item in changed
+            for field in item.get("fields", [])
+            if field in _CANONICAL_TO_QLIB_READBACK
+        }
+    )
+    if not fields:
+        return {
+            "status": "success",
+            "mode": "mutation_fix",
+            "changed_symbols": symbols,
+            "revision_symbols": revision_symbols,
+            "verified_value_count": 0,
+            "verified_fields": [],
+            "refresh": refresh,
+        }
+
+    target_date = f"{target_dt[:4]}-{target_dt[4:6]}-{target_dt[6:8]}"
+    qlib_frame = adapter.get_features(
+        symbols,
+        fields,
+        start_time=target_date,
+        end_time=target_date,
+    )
+    if qlib_frame is None or qlib_frame.empty:
+        return {
+            "status": "failed",
+            "error": "Qlib value readback returned no rows after mutation refresh",
+            "changed_symbols": symbols,
+            "refresh": refresh,
+        }
+    if isinstance(qlib_frame.index, pd.MultiIndex):
+        qlib_rows = qlib_frame.reset_index()
+    else:
+        qlib_rows = qlib_frame.copy()
+    symbol_column = "instrument" if "instrument" in qlib_rows.columns else "ts_code"
+    mismatches: list[dict[str, object]] = []
+    verified = 0
+    for symbol in symbols:
+        changed_fields = {
+            field
+            for item in changed
+            if str(item["symbol"]) == symbol
+            for field in item.get("fields", [])
+        }
+        read_columns = sorted({field for field in changed_fields if field in _CANONICAL_TO_QLIB_READBACK})
+        if hasattr(store, "load_daily_window"):
+            canonical = store.load_daily_window(
+                symbol,
+                start_date=target_dt,
+                end_date=target_dt,
+                columns=read_columns,
+            )
+        else:
+            canonical = store.load_daily(symbol)
+        if canonical is None or canonical.empty or "trade_date" not in canonical.columns:
+            mismatches.append({"symbol": symbol, "field": "*", "reason": "canonical_row_missing"})
+            continue
+        canonical_rows = canonical.loc[_target_date_values(canonical["trade_date"]) == target_dt]
+        qlib_symbol_rows = qlib_rows.loc[qlib_rows[symbol_column].astype(str) == symbol]
+        if canonical_rows.empty or qlib_symbol_rows.empty:
+            mismatches.append({"symbol": symbol, "field": "*", "reason": "readback_row_missing"})
+            continue
+        raw_row = canonical_rows.iloc[-1]
+        qlib_row = qlib_symbol_rows.iloc[-1]
+        by_qlib: dict[str, str] = {}
+        for raw_field in ("open", "high", "low", "close", "factor", "adj_factor", "volume", "vol", "amount"):
+            qlib_field = _CANONICAL_TO_QLIB_READBACK[raw_field]
+            if raw_field not in changed_fields or raw_field not in raw_row:
+                continue
+            # Multiple supplier aliases may map to one Qlib field. Prefer a
+            # populated value, while retaining null only as a fallback when
+            # every alias is null.
+            previous = by_qlib.get(qlib_field)
+            if previous is None or (pd.isna(raw_row[previous]) and pd.notna(raw_row[raw_field])):
+                by_qlib[qlib_field] = raw_field
+        for qlib_field, raw_field in by_qlib.items():
+            if qlib_field not in qlib_row:
+                continue
+            expected = pd.to_numeric(pd.Series([raw_row[raw_field]]), errors="coerce").iloc[0]
+            if raw_field in {"volume", "vol"} and pd.notna(expected):
+                expected = float(expected) * 100.0
+            actual = pd.to_numeric(pd.Series([qlib_row[qlib_field]]), errors="coerce").iloc[0]
+            same = (pd.isna(expected) and pd.isna(actual)) or (
+                pd.notna(expected) and pd.notna(actual) and bool(np.isclose(float(expected), float(actual), rtol=1e-10, atol=1e-12))
+            )
+            if not same:
+                mismatches.append({"symbol": symbol, "field": qlib_field, "reason": "value_mismatch"})
+            else:
+                verified += 1
+    return {
+        "status": "failed" if mismatches else "success",
+        "mode": "mutation_fix",
+        "changed_symbols": symbols,
+        "revision_symbols": revision_symbols,
+        "verified_fields": fields,
+        "verified_value_count": verified,
+        "mismatches": mismatches,
+        "refresh": refresh,
+        **({"error": "Qlib value readback mismatch"} if mismatches else {}),
+    }
+
+
 # Index codes refreshed daily alongside stock data
 _INDEX_CODES = [
     "000001.SH", "000300.SH", "000905.SH", "000852.SH",
@@ -462,6 +653,8 @@ def _do_raw_fetch(
     target_dt: str,
     *,
     since_date: str | None = None,
+    run_id: str | None = None,
+    audit_store: SourceAuditStore | None = None,
 ) -> dict:
     """
     Fetch raw data from ``since_date`` through the target date.
@@ -480,11 +673,16 @@ def _do_raw_fetch(
         fetch_start = str(since_date or target_dt).replace("-", "")
         target_dt = str(target_dt).replace("-", "")
         if fetch_start == target_dt:
-            collector.update_daily(
+            collector_result = collector.update_daily(
                 target_dt,
                 codes=codes,
                 include_financial=True,
                 force=True,
+                **(
+                    {"run_id": run_id, "audit_store": audit_store}
+                    if run_id is not None and audit_store is not None
+                    else {}
+                ),
             )
         else:
             # This path may fetch prior dates, and is only reachable for an
@@ -498,13 +696,141 @@ def _do_raw_fetch(
                 include_moneyflow=True,
                 include_margin=True,
             )
+            collector_result = {
+                "status": "legacy_untrusted",
+                "mutations": [],
+                "reason": "historical path does not yet emit source receipts",
+            }
         elapsed = time.time() - t0
+        required_missing_by_endpoint = (
+            collector_result.get("required_endpoint_missing_symbols", {})
+            if isinstance(collector_result, dict)
+            else {}
+        )
+        required_missing_by_endpoint = {
+            str(endpoint): sorted({str(symbol) for symbol in symbols})
+            for endpoint, symbols in required_missing_by_endpoint.items()
+        }
+        requested_missing = sorted(
+            {symbol for symbols in required_missing_by_endpoint.values() for symbol in symbols}
+        )
+        required_field_missing = (
+            collector_result.get("required_field_missing_symbols", {})
+            if isinstance(collector_result, dict)
+            else {}
+        )
+        required_field_missing = {
+            str(endpoint): {
+                str(field): sorted({str(symbol) for symbol in symbols})
+                for field, symbols in fields.items()
+            }
+            for endpoint, fields in required_field_missing.items()
+        }
+        missing_required_values = sorted(
+            {
+                f"{endpoint}:{field}:{symbol}"
+                for endpoint, fields in required_field_missing.items()
+                for field, symbols in fields.items()
+                for symbol in symbols
+            }
+        )
+        suspended_missing: list[str] = []
+        unexplained_missing = list(requested_missing)
+        suspension_receipt_id = None
+        suspension_query_status = "not_required"
+        if requested_missing and fetch_start == target_dt:
+            from qsys.ops.data_coverage import fetch_suspension_evidence
+
+            suspension_evidence = fetch_suspension_evidence(
+                symbols=set(requested_missing), start_date=target_dt, end_date=target_dt
+            )
+            suspension_query_status = str(suspension_evidence["status"])
+            raw_suspension_frame = suspension_evidence["raw_frame"]
+            if audit_store is not None and run_id is not None:
+                suspension_receipt_id = audit_store.record_fetch(
+                    run_id=run_id,
+                    source="tushare",
+                    endpoint="suspend_d",
+                    status=suspension_query_status,
+                    requested_scope={
+                        "date_start": target_dt,
+                        "date_end": target_dt,
+                        "symbol_count": len(requested_missing),
+                        "symbols_sha256": stable_scope_hash(requested_missing),
+                    },
+                    returned_rows=len(raw_suspension_frame),
+                    attempt_count=max(1, int(suspension_evidence["attempt_count"])),
+                    payload_frame=(
+                        raw_suspension_frame
+                        if suspension_query_status in {"success", "partial"}
+                        else None
+                    ),
+                    published_at=None,
+                    error=suspension_evidence["errors"] or None,
+                    **normalized_response_metadata(raw_suspension_frame),
+                )
+            suspended = suspension_evidence["suspended_dates_by_symbol"]
+            target_display = f"{target_dt[:4]}-{target_dt[4:6]}-{target_dt[6:8]}"
+            if suspension_query_status in {"success", "empty"}:
+                suspended_missing = sorted(
+                    symbol for symbol in requested_missing if target_display in suspended.get(symbol, set())
+                )
+            unexplained_missing = sorted(set(requested_missing) - set(suspended_missing))
+        scope_coverage = {
+            "status": "success" if not unexplained_missing and not missing_required_values else "failed",
+            "requested_count": len(codes),
+            "missing_count": len(requested_missing),
+            "suspended_exception_count": len(suspended_missing),
+            "suspended_exceptions": suspended_missing,
+            "unexplained_missing": unexplained_missing,
+            "suspension_query_status": suspension_query_status,
+            "suspension_receipt_id": suspension_receipt_id,
+            "required_endpoint_missing_symbols": required_missing_by_endpoint,
+            "required_field_missing_symbols": required_field_missing,
+            "required_field_missing_count": len(missing_required_values),
+            "suspended_exceptions_by_endpoint": {
+                endpoint: sorted(set(symbols).intersection(suspended_missing))
+                for endpoint, symbols in required_missing_by_endpoint.items()
+            },
+            "unexplained_missing_by_endpoint": {
+                endpoint: sorted(set(symbols).intersection(unexplained_missing))
+                for endpoint, symbols in required_missing_by_endpoint.items()
+            },
+        }
+        if audit_store is not None and run_id is not None:
+            collector_status = (
+                collector_result.get("status") if isinstance(collector_result, dict) else "success"
+            )
+            audit_store.append_event(
+                run_id,
+                "canonical_commit",
+                {
+                    "status": (
+                        "success"
+                        if collector_status in {"success", "empty", "noop"}
+                        else "failed"
+                    ),
+                    "mutation_count": len(
+                        collector_result.get("mutations", [])
+                        if isinstance(collector_result, dict)
+                        else []
+                    ),
+                },
+            )
+            audit_store.append_event(run_id, "source_scope_coverage", scope_coverage)
         return {
             "status": "success",
             "codes_fetched": len(codes),
             "since_date": fetch_start,
             "target_date": target_dt,
             "path": "single_day_trade_date" if fetch_start == target_dt else "history_range",
+            "collector_status": (
+                collector_result.get("status") if isinstance(collector_result, dict) else "success"
+            ),
+            "mutation_count": len(
+                collector_result.get("mutations", []) if isinstance(collector_result, dict) else []
+            ),
+            "source_scope_coverage": scope_coverage,
             "elapsed_s": round(elapsed, 1),
         }
     except Exception as e:
@@ -540,9 +866,11 @@ def _readiness_check(
 def _write_audit(audit_dir: Path, report: dict):
     """Write per-day audit record as JSON."""
     audit_dir.mkdir(parents=True, exist_ok=True)
+    report = {**report, "trust_state": LEGACY_UNTRUSTED}
     date_str = report.get("target_date", "unknown")
     universe = str(report.get("universe") or "csi800")
-    path = audit_dir / f"sync_{universe}_{date_str}.json"
+    run_suffix = f"_{report['run_id']}" if report.get("run_id") else ""
+    path = audit_dir / f"sync_{universe}_{date_str}{run_suffix}.json"
     path.write_text(json.dumps(report, indent=2, sort_keys=True, ensure_ascii=False) + "\n", encoding="utf-8")
     log.info(f"Audit: {path}")
     return path
@@ -555,6 +883,8 @@ def _abort_if_stage_failed(
     summary: dict,
     do_apply: bool,
     audit_dir: Path = Path("data/audit"),
+    evidence: dict | None = None,
+    outer_owned_terminal: bool = False,
 ) -> None:
     """Persist a failed-stage audit and stop before stale data can look ready."""
 
@@ -565,7 +895,87 @@ def _abort_if_stage_failed(
     report["ended_at"] = datetime.now().isoformat()
     if do_apply:
         _write_audit(audit_dir, report)
+        if evidence:
+            evidence["store"].append_event(
+                evidence["run_id"],
+                "inner_stage_failed",
+                {"stage": stage, "summary": summary},
+            )
+            if not outer_owned_terminal:
+                evidence["store"].finalize_run(
+                    run_id=evidence["run_id"],
+                    source="tushare",
+                    scope_key=evidence["universe"],
+                    range_start=evidence["target_date"],
+                    range_end=evidence["target_date"],
+                    fields=["*"],
+                    gates={
+                        "fetch": False,
+                        "raw_payloads": False,
+                        "canonical_commit": False,
+                        "qlib_readback": False,
+                        "readiness": False,
+                        "contiguous_range": False,
+                    },
+                    receipt_root=evidence["receipt_root"],
+                    trust_state="untrusted",
+                )
     raise RuntimeError(f"{stage} failed: {summary.get('error', 'unknown error')}")
+
+
+def _finalize_market_evidence(
+    *,
+    audit_store: SourceAuditStore,
+    run_id: str,
+    universe: str,
+    range_start: str,
+    range_end: str,
+    gates: dict,
+    receipt_root: Path,
+    prior_trusted: bool,
+    unchanged: bool,
+    previous_open_session: str | None,
+    allow_trusted: bool,
+) -> dict:
+    if unchanged:
+        return audit_store.finalize_unchanged(
+            run_id=run_id,
+            gates=gates,
+            receipt_root=receipt_root,
+            prior_trusted=allow_trusted and prior_trusted and all(gates.values()),
+        )
+    return audit_store.finalize_run(
+        run_id=run_id,
+        source="tushare",
+        scope_key=universe,
+        range_start=range_start,
+        range_end=range_end,
+        fields=TRUSTED_DAILY_FIELDS,
+        gates=gates,
+        receipt_root=receipt_root,
+        trust_state=TRUSTED if allow_trusted and all(gates.values()) else "untrusted",
+        previous_open_session=previous_open_session,
+    )
+
+
+def _publish_wrapper_terminal_gates(
+    *, audit_store: SourceAuditStore, run_id: str, payload: dict
+) -> None:
+    """Publish inner gates without taking terminal receipt ownership."""
+
+    audit_store.append_event(run_id, "inner_terminal_gates", payload)
+    gates = dict(payload.get("gates") or {})
+    passed = all(gates.values()) and (
+        bool(payload.get("prior_trusted")) if payload.get("mode") == "unchanged" else True
+    )
+    if passed:
+        return
+    audit_store.append_event(
+        run_id,
+        "inner_terminal_gate_failed",
+        {"gates": gates, "outer_owned_terminal": True},
+    )
+    raise SystemExit(2)
 
 
 def _load_last_audit(audit_dir: Path, universe: str = "csi800") -> dict | None:
@@ -644,7 +1054,7 @@ def _notify_telegram(report: dict) -> None:
         log.warning(f"Telegram notification failed (exception): {exc}")
 
 
-def main() -> None:
+def _main_under_writer_lock(writer_lock: data_writer_lock) -> None:
     parser = argparse.ArgumentParser(description="CSI daily incremental data sync")
     parser.add_argument(
         "--universe",
@@ -661,7 +1071,15 @@ def main() -> None:
     parser.add_argument("--no-qlib-convert", action="store_true", help="Skip qlib conversion after raw fetch")
     parser.add_argument("--apply", action="store_true", help="Apply data changes (default is dry-run)")
     parser.add_argument("--force-fetch", action="store_true", help="Skip pre-check, force fetch all stocks")
+    parser.add_argument("--run-id", default=None, help="Explicit shared run identity from the canonical wrapper")
+    parser.add_argument(
+        "--wrapper-managed-finalize",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
     args = parser.parse_args()
+    if args.wrapper_managed_finalize and not writer_lock.inherited:
+        parser.error("--wrapper-managed-finalize requires a verified inherited writer lock fd")
     universe = args.universe
 
     # Resolve target date
@@ -670,7 +1088,7 @@ def main() -> None:
     sync_start = sync_window["start_date"]
     target_date = f"{target_dt[:4]}-{target_dt[4:6]}-{target_dt[6:]}"
     do_apply = args.apply
-    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_id = validate_run_id(args.run_id or new_run_id("data_sync"))
 
     log.info("=" * 60)
     log.info(
@@ -693,6 +1111,32 @@ def main() -> None:
         "overall_status": "unknown",
     }
     audit_dir = Path(cfg.get_path("root")) / "audit"
+    source_audit = SourceAuditStore(audit_dir / "audit.db") if do_apply else None
+    receipt_root = audit_dir / "source_runs"
+    evidence = (
+        {
+            "store": source_audit,
+            "run_id": run_id,
+            "universe": universe,
+            "target_date": target_dt,
+            "receipt_root": receipt_root,
+        }
+        if source_audit is not None
+        else None
+    )
+    if source_audit is not None:
+        source_audit.append_event(
+            run_id,
+            "run_started",
+            {"entrypoint": "scripts/ops/sync_csi800_daily.py", "universe": universe, "target_date": target_dt},
+        )
+        global _CRASH_EVIDENCE
+        _CRASH_EVIDENCE = {
+            "store": source_audit,
+            "run_id": run_id,
+            "receipt_root": receipt_root,
+            "entrypoint": "scripts/ops/sync_csi800_daily.py",
+        }
 
     # Step 0: Initialize Qlib
     t0 = time.time()
@@ -748,13 +1192,50 @@ def main() -> None:
         report["steps"]["pre_check"] = step2
         log.info(f"Pre-check: {status_check['already_up_to_date']}/{status_check['total']} stocks already have {target_dt}")
 
+    prior_scope_trusted_at_start = bool(
+        source_audit
+        and source_audit.has_trusted_range(
+            source="tushare",
+            scope_key=universe,
+            range_start=target_dt,
+            range_end=target_dt,
+            fields=TRUSTED_DAILY_FIELDS,
+        )
+    )
+    untrusted_preexisting_symbols = (
+        []
+        if args.force_fetch or prior_scope_trusted_at_start
+        else sorted(status_check["have"])
+    )
+    if source_audit is not None and untrusted_preexisting_symbols:
+        source_audit.append_event(
+            run_id,
+            "preexisting_untrusted_scope",
+            {
+                "symbol_count": len(untrusted_preexisting_symbols),
+                "symbols_sha256": stable_scope_hash(untrusted_preexisting_symbols),
+                "recovery": "rerun_with_force_fetch",
+            },
+        )
+
     # Step 3: Raw data fetch
     t0 = time.time()
     raw_summary = {"skipped": True, "reason": "all_up_to_date", "elapsed_s": 0}
+    precheck_noop = False
     if do_apply:
         fetch_codes = codes if sync_start < target_dt else status_check["missing"]
         if not fetch_codes:
+            precheck_noop = True
             log.info("All stocks up to date, skipping raw fetch.")
+            if source_audit is not None:
+                source_audit.append_event(
+                    run_id,
+                    "precheck_noop",
+                    {
+                        "target_date": target_dt,
+                        "reason": "canonical_precheck_already_up_to_date",
+                    },
+                )
         else:
             if sync_start < target_dt:
                 log.info(
@@ -767,6 +1248,8 @@ def main() -> None:
                 fetch_codes,
                 target_dt,
                 since_date=sync_start,
+                run_id=run_id,
+                audit_store=source_audit,
             )
         report["steps"]["raw_fetch"] = raw_summary
     else:
@@ -780,6 +1263,8 @@ def main() -> None:
         summary=raw_summary,
         do_apply=do_apply,
         audit_dir=audit_dir,
+        evidence=evidence,
+        outer_owned_terminal=args.wrapper_managed_finalize,
     )
 
     # Step 4: Index daily update (always applies when do_apply, no separate dry-run for this)
@@ -821,6 +1306,40 @@ def main() -> None:
         summary=qlib_summary,
         do_apply=do_apply,
         audit_dir=audit_dir,
+        evidence=evidence,
+        outer_owned_terminal=args.wrapper_managed_finalize,
+    )
+
+    # Exact insert/update receipts, rather than a date watermark, select the
+    # symbols that require dump_fix and value readback.  This is what makes a
+    # same-key source revision visible in Qlib.
+    mutations = source_audit.changed_mutations(run_id) if source_audit is not None else []
+    if args.no_qlib_convert and mutations:
+        mutation_refresh = {
+            "status": "skipped",
+            "reason": "qlib conversion disabled by operator",
+            "changed_symbols": sorted({str(item["symbol"]) for item in mutations}),
+            "verified_value_count": 0,
+        }
+    else:
+        mutation_refresh = _refresh_and_verify_changed_symbols(
+            adapter,
+            store,
+            mutations,
+            target_dt=target_dt,
+            apply=do_apply,
+        )
+    report["steps"]["mutation_qlib_refresh"] = mutation_refresh
+    if source_audit is not None:
+        source_audit.append_event(run_id, "qlib_readback", mutation_refresh)
+    _abort_if_stage_failed(
+        report,
+        stage="mutation_qlib_refresh",
+        summary=mutation_refresh,
+        do_apply=do_apply,
+        audit_dir=audit_dir,
+        evidence=evidence,
+        outer_owned_terminal=args.wrapper_managed_finalize,
     )
 
     # Step 6: Reconcile same-date canonical rows against non-empty Qlib rows.
@@ -849,6 +1368,8 @@ def main() -> None:
         summary=same_date_summary,
         do_apply=do_apply,
         audit_dir=audit_dir,
+        evidence=evidence,
+        outer_owned_terminal=args.wrapper_managed_finalize,
     )
 
     # Step 7: Refresh instrument files after same-date repair is verified.
@@ -888,6 +1409,8 @@ def main() -> None:
         summary=refresh_summary,
         do_apply=do_apply,
         audit_dir=audit_dir,
+        evidence=evidence,
+        outer_owned_terminal=args.wrapper_managed_finalize,
     )
 
     # Step 8: Readiness check
@@ -908,6 +1431,12 @@ def main() -> None:
     }
     report["overall_status"] = overall
     report["ended_at"] = datetime.now().isoformat()
+    if source_audit is not None:
+        source_audit.append_event(
+            run_id,
+            "daily_readiness",
+            {"status": "success" if not readiness_report.blocking_issues else "failed"},
+        )
 
     # Print JSON report to stdout (parsable by systemd/journald)
     print(json.dumps(report, indent=2, sort_keys=True, ensure_ascii=False))
@@ -915,6 +1444,106 @@ def main() -> None:
     # Write audit
     if do_apply:
         _write_audit(audit_dir, report)
+
+    evidence_result = None
+    if source_audit is not None:
+        evidence_summary = source_audit.run_evidence_summary(run_id)
+        field_receipts = source_audit.evaluate_field_receipts(
+            run_id=run_id,
+            field_endpoints=TRUSTED_DAILY_FIELD_ENDPOINTS,
+        )
+        canonical_events = [
+            event
+            for event in evidence_summary["events"]
+            if event["event_type"] == "canonical_commit"
+        ]
+        scope_events = [
+            event
+            for event in evidence_summary["events"]
+            if event["event_type"] == "source_scope_coverage"
+        ]
+        scope_payload = scope_events[-1]["payload"] if scope_events else {}
+        suspension_receipt_id = scope_payload.get("suspension_receipt_id")
+        suspension_evidence_ok = (
+            not scope_payload.get("missing_count")
+            if not suspension_receipt_id
+            else source_audit.verify_fetch_receipt(
+                run_id=run_id, receipt_id=str(suspension_receipt_id)
+            )["status"] == "success"
+        )
+        source_scope_ok = (
+            bool(scope_events)
+            and scope_payload.get("status") == "success"
+            and suspension_evidence_ok
+            and not untrusted_preexisting_symbols
+        )
+        prior_trusted = source_audit.has_trusted_range(
+            source="tushare",
+            scope_key=universe,
+            range_start=target_dt,
+            range_end=target_dt,
+            fields=TRUSTED_DAILY_FIELDS,
+        )
+        gates = {
+            "fetch": prior_trusted if precheck_noop else field_receipts["status"] == "success"
+            and source_scope_ok,
+            "raw_payloads": prior_trusted if precheck_noop else field_receipts["status"] == "success",
+            "canonical_commit": prior_trusted if precheck_noop else bool(canonical_events)
+            and canonical_events[-1]["payload"].get("status") == "success",
+            "qlib_readback": mutation_refresh.get("status") == "success",
+            "readiness": not readiness_report.blocking_issues,
+            "contiguous_range": sync_window["mode"] == "daily_single_day",
+        }
+        previous_open_session = _previous_open_session(store, target_dt)
+        if not precheck_noop:
+            gates["contiguous_range"] = bool(gates["contiguous_range"]) and source_audit.can_advance_contiguous(
+                source="tushare",
+                scope_key=universe,
+                range_start=sync_start,
+                target_date=target_dt,
+                fields=TRUSTED_DAILY_FIELDS,
+                previous_open_session=previous_open_session,
+            )
+        if args.wrapper_managed_finalize:
+            try:
+                _publish_wrapper_terminal_gates(
+                    audit_store=source_audit,
+                    run_id=run_id,
+                    payload={
+                        "mode": "unchanged" if precheck_noop else "advance",
+                        "gates": gates,
+                        "prior_trusted": prior_trusted,
+                        "source": "tushare",
+                        "scope_key": universe,
+                        "range_start": sync_start,
+                        "range_end": target_dt,
+                        "fields": list(TRUSTED_DAILY_FIELDS),
+                        "previous_open_session": previous_open_session,
+                    },
+                )
+            except SystemExit:
+                log.error("Inner market evidence gates failed; wrapper owns crash receipt")
+                raise
+            log.info("Inner market evidence gates passed; wrapper owns terminal finalize")
+        else:
+            evidence_result = _finalize_market_evidence(
+                audit_store=source_audit,
+                run_id=run_id,
+                universe=universe,
+                range_start=sync_start,
+                range_end=target_dt,
+                gates=gates,
+                receipt_root=receipt_root,
+                prior_trusted=prior_trusted,
+                unchanged=precheck_noop,
+                previous_open_session=previous_open_session,
+                allow_trusted=True,
+            )
+        if evidence_result is not None:
+            log.info("Source evidence: %s", evidence_result)
+        if evidence_result is not None and evidence_result.get("trust_state") not in {TRUSTED, "trusted_unchanged"}:
+            log.error("Core market evidence did not pass terminal trust gates")
+            sys.exit(2)
 
     # Step 9: Telegram notification (non-blocking, apply only)
     if do_apply:
@@ -928,6 +1557,30 @@ def main() -> None:
         sys.exit(2)
     elif readiness_report.warnings:
         log.info(f"Warnings only ({len(readiness_report.warnings)}), exiting 0")
+
+
+def main() -> None:
+    data_root = Path(cfg.get_path("root"))
+    global _CRASH_EVIDENCE
+    _CRASH_EVIDENCE = None
+    with data_writer_lock.from_environment(data_root) as writer_lock:
+        try:
+            _main_under_writer_lock(writer_lock)
+        except Exception as exc:
+            # An inherited, inode-verified writer lock means data_sync.py owns
+            # the sole terminal receipt for this run.  The child must leave
+            # only journal evidence for the parent crash handler.
+            if _CRASH_EVIDENCE is not None and not writer_lock.inherited:
+                try:
+                    _CRASH_EVIDENCE["store"].record_crash_receipt(
+                        run_id=_CRASH_EVIDENCE["run_id"],
+                        receipt_root=_CRASH_EVIDENCE["receipt_root"],
+                        entrypoint=_CRASH_EVIDENCE["entrypoint"],
+                        error=repr(exc),
+                    )
+                except Exception as receipt_exc:
+                    log.error("Failed to persist crash receipt: %s", receipt_exc)
+            raise
 
 
 if __name__ == "__main__":
