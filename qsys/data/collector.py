@@ -303,6 +303,9 @@ class TushareCollector:
             fields=self._get_interface_fields("income"),
         )
         if df is not None and not df.empty:
+            missing = {"ts_code", "ann_date"} - set(df.columns)
+            if missing:
+                raise RuntimeError(f"income response missing fields: {sorted(missing)}")
             income_dfs.append(df)
             
         # 2. Balancesheet
@@ -314,6 +317,9 @@ class TushareCollector:
             fields=self._get_interface_fields("balancesheet"),
         )
         if df is not None and not df.empty:
+            missing = {"ts_code", "ann_date"} - set(df.columns)
+            if missing:
+                raise RuntimeError(f"balancesheet response missing fields: {sorted(missing)}")
             balance_dfs.append(df)
             
         # 3. Cashflow
@@ -325,6 +331,9 @@ class TushareCollector:
             fields=self._get_interface_fields("cashflow"),
         )
         if df is not None and not df.empty:
+            missing = {"ts_code", "ann_date"} - set(df.columns)
+            if missing:
+                raise RuntimeError(f"cashflow response missing fields: {sorted(missing)}")
             cashflow_dfs.append(df)
             
         # 4. Fina Indicator
@@ -336,6 +345,9 @@ class TushareCollector:
             fields=self._get_interface_fields("fina_indicator"),
         )
         if df is not None and not df.empty:
+            missing = {"ts_code", "ann_date"} - set(df.columns)
+            if missing:
+                raise RuntimeError(f"fina_indicator response missing fields: {sorted(missing)}")
             fina_dfs.append(df)
 
         income = pd.concat(income_dfs, ignore_index=True) if income_dfs else pd.DataFrame()
@@ -427,6 +439,115 @@ class TushareCollector:
             merged.loc[cr_missing, "current_ratio"] = merged.loc[cr_missing, "total_cur_assets"] / denom[cr_missing]
 
         return merged
+
+
+    def _discover_financial_announcement_codes(
+        self,
+        target_date: str,
+        requested_codes: set[str],
+    ) -> set[str]:
+        """Find requested symbols with a disclosure event on ``target_date``.
+
+        Tushare's ordinary income/balancesheet/cashflow/fina_indicator APIs
+        require ``ts_code``.  ``disclosure_date`` is the non-VIP, market-wide
+        discovery endpoint: ``actual_date`` is the primary publication-date
+        signal, while the ``ann_date`` union catches revisions represented by
+        the endpoint's alternate date predicate.  The two are intentionally
+        only candidate discovery: disclosure_date's ``ann_date`` is not
+        treated as financial visibility.  The financial rows themselves must
+        still have their own report ``ann_date`` equal to the target for PIT
+        safety.
+        """
+        target_date = _normalize_date(target_date)
+        requested_codes = {str(code) for code in requested_codes if str(code).strip()}
+        if target_date is None or not requested_codes:
+            return set()
+
+        cfg_item = self._get_interface_config("disclosure_date")
+        fields = cfg_item.get("fields") if isinstance(cfg_item, dict) else None
+        if isinstance(fields, list):
+            fields = ",".join(fields)
+        fields = fields or "ts_code,ann_date,end_date,pre_date,actual_date"
+        api = self._get_interface_api("disclosure_date")
+
+        candidates: set[str] = set()
+        for date_field in ("actual_date", "ann_date"):
+            frame = self._fetch_with_retry(
+                api,
+                **{date_field: target_date, "fields": fields},
+            )
+            if frame is None or frame.empty:
+                continue
+            required = {"ts_code", date_field}
+            missing = required - set(frame.columns)
+            if missing:
+                raise RuntimeError(
+                    f"disclosure_date {date_field} response missing fields: "
+                    f"{sorted(missing)}"
+                )
+            dates = (
+                frame[date_field]
+                .astype(str)
+                .str.strip()
+                .str.replace("-", "", regex=False)
+                .str.slice(0, 8)
+            )
+            matching = frame.loc[dates == target_date, "ts_code"].astype(str)
+            candidates.update(set(matching).intersection(requested_codes))
+        return candidates
+
+    def _fetch_financials_for_daily(self, target_date: str, requested_codes: set[str]):
+        """Fetch only requested reports announced on a single target date."""
+        target_date = _normalize_date(target_date)
+        requested_codes = {str(code) for code in requested_codes if str(code).strip()}
+        candidates = self._discover_financial_announcement_codes(
+            target_date,
+            requested_codes,
+        )
+        frames = []
+        for index, code in enumerate(sorted(candidates)):
+            # Match the historical per-stock fetcher's conservative pacing:
+            # each candidate expands to four financial API calls, so an
+            # unthrottled loop can exceed Tushare's request-rate contract on
+            # heavy reporting dates.
+            if index > 0:
+                time.sleep(0.3)
+            # Ordinary financial endpoints are deliberately called per
+            # candidate with ts_code; no unsupported market-wide ann_date
+            # query is allowed here.
+            frame = self._fetch_financials(
+                target_date,
+                target_date,
+                ts_code=code,
+            )
+            if frame is None or frame.empty:
+                continue
+            required = {"ts_code", "ann_date"}
+            missing = required - set(frame.columns)
+            if missing:
+                raise RuntimeError(
+                    f"financial response for {code} missing fields: {sorted(missing)}"
+                )
+            ann_dates = (
+                frame["ann_date"]
+                .astype(str)
+                .str.strip()
+                .str.replace("-", "", regex=False)
+                .str.slice(0, 8)
+            )
+            frame = frame.loc[
+                ann_dates.eq(target_date)
+                & frame["ts_code"].astype(str).isin(requested_codes)
+            ].copy()
+            if not frame.empty:
+                frames.append(frame)
+        if not frames:
+            return pd.DataFrame()
+        merged = pd.concat(frames, ignore_index=True)
+        subset = ["ts_code", "ann_date"]
+        if "end_date" in merged.columns:
+            subset.append("end_date")
+        return merged.drop_duplicates(subset=subset, keep="last")
 
 
     def _merge_financials(self, daily_df, fin_df):
@@ -590,7 +711,14 @@ class TushareCollector:
                 log.warning(f"{code} dropping {bad_count} rows due to price sanity checks")
                 df = df[~bad]
         if 'close' in df.columns:
-            pct = df['close'].pct_change().abs()
+            # ``update_daily`` validates one cross-sectional frame containing
+            # many symbols.  A plain pct_change() compares adjacent symbols
+            # after sorting by date and reports thousands of fictitious price
+            # moves.  Price continuity is meaningful only within a symbol.
+            if 'ts_code' in df.columns:
+                pct = df.groupby('ts_code', sort=False)['close'].pct_change().abs()
+            else:
+                pct = df['close'].pct_change().abs()
             extreme = int((pct > 0.25).sum())
             if extreme > 0:
                 log.warning(f"{code} found {extreme} extreme moves >25%")
@@ -621,11 +749,31 @@ class TushareCollector:
     def _fetch_with_retry(self, api_func, **kwargs):
         return fetch_with_retry(api_func, self.max_retries, log.warning, **kwargs)
 
-    def update_daily(self, date: str):
+    def update_daily(
+        self,
+        date: str,
+        *,
+        codes: Optional[list[str]] = None,
+        include_financial: bool = True,
+        force: bool = False,
+    ):
         """
-        Update all stocks for a specific date.
+        Update stocks for one specific date using trade-date batch APIs.
+
+        ``codes`` only limits what is written; the source requests remain
+        market-wide because the trade-date APIs are the efficient and stable
+        Tushare shape.  ``include_financial`` discovers disclosure candidates
+        by date, then fetches only candidate reports whose report ``ann_date``
+        is ``date``; this lets the existing PIT merge carry disclosures
+        forward without pulling historical reports.  ``force`` is used by a
+        targeted repair when the global watermark is already at ``date``.
+
         date format: YYYYMMDD
         """
+        date = _normalize_date(date)
+        if date is None:
+            raise ValueError("daily update requires a target trade date")
+        requested_codes = set(str(code) for code in (codes or []) if str(code).strip())
         cal = self.store.get_calendar()
         latest_open_date = None
         if cal is not None and not cal.empty and 'is_open' in cal.columns and 'cal_date' in cal.columns:
@@ -641,7 +789,7 @@ class TushareCollector:
                 date = latest_open_date
 
         local_latest = self.store.get_global_latest_date()
-        if local_latest is not None and local_latest >= date:
+        if local_latest is not None and local_latest >= date and not force and not requested_codes:
             log.info(f"Local data already up to date at {local_latest}, skipping Tushare fetch")
             return
 
@@ -687,6 +835,24 @@ class TushareCollector:
                 log.warning(f"No daily data for {date}")
                 return
 
+            # A trade-date endpoint should already be exact, but enforce the
+            # boundary before any merge/write so an unexpected wider response
+            # cannot mutate another date during a daily repair.
+            if "trade_date" not in df_daily.columns or "ts_code" not in df_daily.columns:
+                raise RuntimeError("daily response missing ts_code/trade_date")
+            daily_dates = df_daily["trade_date"].astype(str).str.replace("-", "", regex=False).str[:8]
+            df_daily = df_daily.loc[daily_dates == date].copy()
+            if requested_codes:
+                df_daily = df_daily[df_daily["ts_code"].astype(str).isin(requested_codes)].copy()
+            if df_daily.empty:
+                log.warning(f"No requested stocks have daily data for {date}")
+                return
+            if not requested_codes:
+                # ``update_daily(date)`` is the existing full-market API;
+                # use the exact symbols returned for this session as the
+                # financial candidate allow-list.
+                requested_codes = set(df_daily["ts_code"].astype(str))
+
             # Merge
             if "amount" in df_daily.columns:
                 df_daily["amount"] = pd.to_numeric(df_daily["amount"], errors="coerce") * 1000
@@ -729,6 +895,14 @@ class TushareCollector:
             else:
                 log.warning(f"{date} margin data empty")
 
+            # Financial statements are sparse events.  Discover candidates
+            # market-wide, then call each ordinary financial endpoint with its
+            # required ts_code and retain only report ann_date == target.
+            fin_df = pd.DataFrame()
+            if include_financial:
+                fin_df = self._fetch_financials_for_daily(date, requested_codes)
+                df_daily = self._merge_financials(df_daily, fin_df)
+
             # Fill missing adj_factor with 1.0 (new listings might miss it?)
             if 'adj_factor' in df_daily.columns:
                 df_daily['adj_factor'] = df_daily['adj_factor'].fillna(1.0)
@@ -750,15 +924,20 @@ class TushareCollector:
             count = 0
             for code in codes:
                 row = df_daily[df_daily['ts_code'] == code].copy()
+                if "trade_date" not in row.columns:
+                    raise RuntimeError(f"daily row for {code} missing trade_date")
                 existing_df = self.store.load_daily(code)
+                previous = None
+                if existing_df is not None and not existing_df.empty:
+                    existing_dates = existing_df["trade_date"].astype(str).str.replace("-", "", regex=False).str[:8]
+                    previous_rows = existing_df.loc[existing_dates < date]
+                    if not previous_rows.empty:
+                        previous = previous_rows.sort_values("trade_date").iloc[-1]
                 for col in self.financial_cols:
                     if col not in row.columns:
                         row[col] = np.nan
-                if existing_df is not None and not existing_df.empty:
-                    last_row = existing_df.iloc[-1]
-                    for col in self.financial_cols:
-                        if col in row.columns and row[col].isna().all():
-                            row.loc[:, col] = last_row.get(col)
+                    if previous is not None and row[col].isna().any():
+                        row.loc[row[col].isna(), col] = previous.get(col)
                 self.store.save_daily(row, code, existing_df=existing_df)
                 count += 1
                 if count % 500 == 0:

@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
 
 from scripts import data_sync
+import scripts.ops.sync_csi800_daily as daily_sync
 from scripts.ops.sync_csi800_daily import (
     _abort_if_stage_failed,
     _canonical_symbols_with_data_on_date,
@@ -294,6 +296,145 @@ def test_paused_or_suspended_canonical_rows_do_not_trigger_repair():
 
     assert summary["status"] == "success"
     assert summary["canonical_symbols_with_data_count"] == 0
+    assert summary["canonical_exclusion_count"] == len(symbols)
+    assert {item["ts_code"] for item in summary["canonical_exclusions"]} == set(symbols)
     assert summary["missing_symbols"] == []
     assert summary["residual_symbols"] == []
     assert summary["verified_no_gap"] is True
+
+
+def test_canonical_exclusions_are_audited_with_reasons():
+    import pandas as pd
+
+    target = "20260821"
+
+    class Store:
+        frames = {
+            "PAUSED.SZ": pd.DataFrame(
+                {"trade_date": [target], "close": [10.0], "paused": [1]}
+            ),
+            "SUSPENDED.SZ": pd.DataFrame(
+                {"trade_date": [target], "close": [10.0], "is_suspended": ["true"]}
+            ),
+            "NO_ROW.SZ": pd.DataFrame({"trade_date": ["20260820"], "close": [10.0]}),
+            "NO_CLOSE.SZ": pd.DataFrame({"trade_date": [target]}),
+            "NULL_CLOSE.SZ": pd.DataFrame({"trade_date": [target], "close": [None]}),
+        }
+
+        def load_daily(self, symbol):
+            return self.frames[symbol]
+
+    available, exclusions = daily_sync._canonical_symbol_availability_on_date(
+        Store(), list(Store.frames), target
+    )
+    assert available == set()
+    assert exclusions == [
+        {"ts_code": "NO_CLOSE.SZ", "reasons": ["missing_close_column"]},
+        {"ts_code": "NO_ROW.SZ", "reasons": ["missing_target_row"]},
+        {"ts_code": "NULL_CLOSE.SZ", "reasons": ["null_close"]},
+        {"ts_code": "PAUSED.SZ", "reasons": ["paused"]},
+        {"ts_code": "SUSPENDED.SZ", "reasons": ["is_suspended"]},
+    ]
+
+
+def test_main_ignores_stale_qlib_watermark_unless_repair_is_explicit(tmp_path):
+    target = "20260821"
+    collectors = []
+    adapters = []
+
+    class Collector:
+        def __init__(self):
+            self.daily_calls = []
+            self.history_calls = []
+
+        def update_daily(self, *args, **kwargs):
+            self.daily_calls.append((args, kwargs))
+
+        def update_universe_history(self, **kwargs):
+            self.history_calls.append(kwargs)
+
+    class Adapter:
+        def __init__(self):
+            self.qlib_dir = tmp_path / "qlib"
+            self.incremental_calls = []
+            self.fix_calls = []
+
+        def init_qlib(self):
+            pass
+
+        def convert_incremental(self, since):
+            self.incremental_calls.append(since)
+
+        def convert_fix(self, since):
+            self.fix_calls.append(since)
+
+        def _refresh_universe_instruments(self, **_kwargs):
+            pass
+
+    class Store:
+        pass
+
+    def collector_factory():
+        value = Collector()
+        collectors.append(value)
+        return value
+
+    def adapter_factory():
+        value = Adapter()
+        adapters.append(value)
+        return value
+
+    snapshot = SimpleNamespace(
+        instruments=["000001.SZ", "000002.SZ"],
+        to_dict=lambda: {"snapshot_semantics": "pit"},
+    )
+    health = SimpleNamespace(ok=True, blocking_issues=[], warnings=[])
+    reports = []
+    common = {
+        "QlibAdapter": adapter_factory,
+        "TushareCollector": collector_factory,
+        "StockDataStore": Store,
+        "_resolve_target_date": lambda _value: target,
+        "_check_stock_data_status": lambda *_args: {
+            "have": [], "missing": ["000001.SZ", "000002.SZ"],
+            "total": 2, "already_up_to_date": 0, "need_fetch": 2,
+        },
+        "_update_index_daily": lambda *_args: {},
+        "_repair_same_date_qlib_gap": lambda *_args, **_kwargs: {
+            "status": "success", "verified_no_gap": True,
+            "canonical_exclusions": [], "canonical_exclusion_count": 0,
+        },
+        "_readiness_check": lambda *_args, **_kwargs: health,
+        "_write_audit": lambda _audit_dir, report: reports.append(report),
+        "_notify_telegram": lambda *_args, **_kwargs: None,
+    }
+    pit_path = "qsys.ops.pit_universe_snapshot.resolve_csi1800_pit_snapshot"
+    registry_path = "qsys.ops.pit_universe_snapshot.write_current_qlib_registry"
+    with patch.multiple(daily_sync, **common), patch.object(
+        daily_sync.cfg, "get_path", return_value=str(tmp_path)
+    ), patch(pit_path, return_value=snapshot), patch(registry_path, return_value={"status": "success"}):
+        with patch.object(sys, "argv", ["sync", "--apply", "--universe", "csi1800", "--target-date", target]):
+            daily_sync.main()
+        with patch.object(
+            sys,
+            "argv",
+            ["sync", "--apply", "--universe", "csi1800", "--target-date", target,
+             "--repair-start-date", "20260820"],
+        ):
+            daily_sync.main()
+
+    assert collectors[0].daily_calls
+    assert collectors[0].daily_calls[0][0] == (target,)
+    assert collectors[0].history_calls == []
+    assert adapters[0].incremental_calls == ["2026-08-21"]
+    assert reports[0]["sync_window"] == {
+        "mode": "daily_single_day", "start_date": target, "target_date": target
+    }
+    assert collectors[1].daily_calls == []
+    assert collectors[1].history_calls[0]["start_date"] == "20260820"
+    assert adapters[1].incremental_calls == ["2026-08-20"]
+    assert reports[1]["sync_window"] == {
+        "mode": "explicit_historical_repair",
+        "start_date": "20260820",
+        "target_date": target,
+    }
