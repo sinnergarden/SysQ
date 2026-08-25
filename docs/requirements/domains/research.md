@@ -51,6 +51,10 @@ UC-5（Signal Analytics）、UC-6（Signal Combination）、UC-7（Signal Backte
 ### Supporting Tools
 - `scripts/research/compute_labels.py` — 标签计算（UC-3）
 - `scripts/research/rebuild_pit_universes.py` — 从冻结快照重建 hash-bound PIT universe
+- `scripts/research/build_corporate_action_artifact.py` — 生成与 signal/strategy
+  解耦的、完整 PIT universe corporate-action artifact（UC_RESEARCH_BACKTEST）。
+  它只是 backtest 的 supporting tool；canonical backtest entrypoint 仍是
+  `scripts/research/backtest_from_signal.py`。
 
 ### Legacy Entrypoints
 - `scripts/research/run_backtest.py` — 旧版回测入口，待收束
