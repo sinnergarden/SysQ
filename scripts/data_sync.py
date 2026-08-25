@@ -32,26 +32,33 @@ def _run_market_child(cmd: list[str], *, do_apply: bool, writer_lock) -> None:
     subprocess.run(cmd, **kwargs)
 
 
-def _start_wrapper_evidence(*, data_root: Path, run_id: str, universe: str, target_date: str):
+def _start_wrapper_evidence(
+    *,
+    data_root: Path,
+    run_id: str,
+    universe: str,
+    target_date: str,
+    range_start: str | None = None,
+):
     from qsys.data.source_audit import SourceAuditStore
 
     audit_dir = data_root / "audit"
     store = SourceAuditStore(audit_dir / "audit.db")
     receipt_root = audit_dir / "source_runs"
-    store.append_event(
-        run_id,
-        "run_started",
-        {
-            "entrypoint": "scripts/data_sync.py",
-            "universe": universe,
-            "target_date": str(target_date).replace("-", ""),
-        },
-    )
+    lineage = {
+        "entrypoint": "scripts/data_sync.py",
+        "universe": universe,
+        "target_date": str(target_date).replace("-", ""),
+    }
+    if range_start is not None:
+        lineage["range_start"] = str(range_start).replace("-", "")
+    store.append_event(run_id, "run_started", lineage)
     return store, receipt_root
 
 
 def _prepare_applied_market_child(
-    cmd: list[str], *, data_root: Path, universe: str, target_date: str
+    cmd: list[str], *, data_root: Path, universe: str, target_date: str,
+    range_start: str | None = None,
 ):
     from qsys.data.source_audit import new_run_id
 
@@ -62,6 +69,7 @@ def _prepare_applied_market_child(
         run_id=run_id,
         universe=universe,
         target_date=target_date,
+        range_start=range_start,
     )
     crash_evidence = {
         "store": audit_store,
@@ -80,14 +88,23 @@ def _attach_explicit_resume(
     resume_from_run_id: str,
     universe: str,
     target_date: str,
+    range_start: str | None = None,
 ) -> dict[str, str]:
     """Validate one explicit failed wrapper run and bind it to the fresh run."""
 
+    audit_store.seal_interrupted_run_for_resume(
+        run_id=resume_from_run_id,
+        expected_entrypoint="scripts/data_sync.py",
+        universe=universe,
+        target_date=target_date,
+        range_start=range_start,
+    )
     proof = audit_store.validate_resume_run(
         resume_from_run_id=resume_from_run_id,
         expected_entrypoint="scripts/data_sync.py",
         universe=universe,
         target_date=target_date,
+        range_start=range_start,
     )
     audit_store.append_event(
         run_id,
@@ -98,6 +115,7 @@ def _attach_explicit_resume(
             "entrypoint": proof["entrypoint"],
             "universe": proof["universe"],
             "target_date": proof["target_date"],
+            **({"range_start": proof["range_start"]} if "range_start" in proof else {}),
         },
     )
     cmd.extend(
@@ -149,6 +167,7 @@ def _finalize_wrapper_evidence(
         receipt_root=receipt_root,
         trust_state="trusted" if all(terminal_gates.values()) else "untrusted",
         previous_open_session=terminal.get("previous_open_session"),
+        allow_initial_history=bool(terminal.get("allow_initial_history")),
     )
 
 
@@ -242,6 +261,11 @@ def _main_under_writer_lock(writer_lock=None):
     p.add_argument("--config", default=None)
     p.add_argument("--universe", default=None)
     p.add_argument("--target-date", default=None)
+    p.add_argument(
+        "--repair-start-date",
+        default=None,
+        help="Explicit full-history evidence start; normal daily runs leave this unset",
+    )
     p.add_argument("--apply", action="store_true")
     p.add_argument(
         "--force-fetch",
@@ -328,6 +352,7 @@ def _main_under_writer_lock(writer_lock=None):
         p.error("--shareholder-history-lookback-days must be positive")
     universe = args.universe
     target_date = args.target_date
+    repair_start_date = args.repair_start_date
     do_apply = args.apply
     sync_run_id = None
     wrapper_audit = None
@@ -353,6 +378,11 @@ def _main_under_writer_lock(writer_lock=None):
 
         data_root = Path(cfg.get_path("root")).resolve() if do_apply else None
         if c.get("tasks", {}).get("qlib_bin", True):
+            from scripts.ops.sync_csi800_daily import _resolve_sync_window
+
+            repair_start_date = _resolve_sync_window(
+                target_date, repair_start_date
+            )["start_date"] if repair_start_date else None
             cmd = [
                 sys.executable,
                 str(PROJ / "scripts/ops/sync_csi800_daily.py"),
@@ -361,6 +391,8 @@ def _main_under_writer_lock(writer_lock=None):
                 "--target-date",
                 target_date,
             ]
+            if repair_start_date:
+                cmd.extend(["--repair-start-date", repair_start_date])
             if do_apply and args.force_fetch:
                 cmd.append("--force-fetch")
             if do_apply:
@@ -369,6 +401,7 @@ def _main_under_writer_lock(writer_lock=None):
                     data_root=data_root,
                     universe=universe,
                     target_date=target_date,
+                    range_start=repair_start_date,
                 )
                 if args.resume_from_run_id:
                     _attach_explicit_resume(
@@ -378,6 +411,7 @@ def _main_under_writer_lock(writer_lock=None):
                         resume_from_run_id=args.resume_from_run_id,
                         universe=universe,
                         target_date=target_date,
+                        range_start=repair_start_date,
                     )
             _run_market_child(cmd, do_apply=do_apply, writer_lock=writer_lock)
     elif universe in {"csi800", "csi1800"}:
@@ -387,6 +421,12 @@ def _main_under_writer_lock(writer_lock=None):
             from scripts.ops.sync_csi800_daily import _resolve_target_date
 
             target_date = _resolve_target_date(None)
+        if repair_start_date:
+            from scripts.ops.sync_csi800_daily import _resolve_sync_window
+
+            repair_start_date = _resolve_sync_window(
+                target_date, repair_start_date
+            )["start_date"]
         cmd = [
             sys.executable,
             str(PROJ / "scripts/ops/sync_csi800_daily.py"),
@@ -395,6 +435,8 @@ def _main_under_writer_lock(writer_lock=None):
             "--target-date",
             target_date,
         ]
+        if repair_start_date:
+            cmd.extend(["--repair-start-date", repair_start_date])
         if do_apply and args.force_fetch:
             cmd.append("--force-fetch")
         if do_apply:
@@ -406,6 +448,7 @@ def _main_under_writer_lock(writer_lock=None):
                 data_root=data_root,
                 universe=universe,
                 target_date=target_date,
+                range_start=repair_start_date,
             )
             if args.resume_from_run_id:
                 _attach_explicit_resume(
@@ -415,6 +458,7 @@ def _main_under_writer_lock(writer_lock=None):
                     resume_from_run_id=args.resume_from_run_id,
                     universe=universe,
                     target_date=target_date,
+                    range_start=repair_start_date,
                 )
         _run_market_child(cmd, do_apply=do_apply, writer_lock=writer_lock)
     else:

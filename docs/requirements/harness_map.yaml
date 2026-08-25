@@ -28,6 +28,7 @@ usecases:
       - harness/checks/check_shareholder_data_freshness.py
       - tests/test_source_audit.py
       - tests/test_data_sync_csi1800.py
+      - tests/test_daily_incremental_fastpath.py
       - tests/ops/test_universe_history.py
     allowed_paths:
       - scripts/data_sync.py

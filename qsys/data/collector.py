@@ -22,6 +22,36 @@ from qsys.data.source_audit import (
 import numpy as np
 
 
+HISTORY_FIELD_ENDPOINTS = {
+    "open": "daily",
+    "high": "daily",
+    "low": "daily",
+    "close": "daily",
+    "volume": "daily",
+    "amount": "daily",
+    "factor": "adj_factor",
+    "pe": "daily_basic",
+    "pb": "daily_basic",
+    "total_mv": "daily_basic",
+    "turnover_rate": "daily_basic",
+    "circ_mv": "daily_basic",
+    "rzye": "margin",
+    "rzmre": "margin",
+    "rzche": "margin",
+    "roe": "fina_indicator",
+    "grossprofit_margin": "fina_indicator",
+    "debt_to_assets": "fina_indicator",
+    "n_cashflow_act": "cashflow",
+    "n_income": "income",
+    "revenue": "income",
+    "oper_cost": "income",
+    "total_assets": "balancesheet",
+    "ann_date": "income",
+    "end_date": "income",
+    "report_type": "income",
+}
+
+
 def _supplier_request_sha256(
     kwargs: Mapping[str, object], *, request_variant: str | None = None,
 ) -> str:
@@ -354,9 +384,12 @@ class TushareCollector:
             "symbol_count": 1,
             "symbols_sha256": stable_scope_hash([ts_code]),
         }
+        if start_date != end_date:
+            requested_scope["symbols"] = [ts_code]
 
         def fetch_statement(endpoint_name: str) -> pd.DataFrame:
-            frame, _ = self._fetch_daily_endpoint_with_receipt(
+            fields = tuple(self._get_interface_field_list(endpoint_name))
+            frame, receipt_id = self._fetch_daily_endpoint_with_receipt(
                 endpoint_name,
                 run_id=run_id,
                 audit_store=audit_store,
@@ -365,12 +398,23 @@ class TushareCollector:
                 scope_key=scope_key,
                 universe=universe,
                 identity_columns=("ts_code", "ann_date"),
-                evidence_fields=tuple(self._get_interface_field_list(endpoint_name)),
+                evidence_fields=(),
                 ts_code=ts_code,
                 start_date=start_date,
                 end_date=end_date,
                 fields=self._get_interface_fields(endpoint_name),
             )
+            if audit_store is not None and run_id is not None and receipt_id is not None:
+                audit_store.record_field_receipt_links(
+                    run_id=run_id, receipt_id=receipt_id, fields=fields,
+                )
+                if endpoint_name == "income":
+                    audit_store.record_field_receipt_links(
+                        run_id=run_id,
+                        receipt_id=receipt_id,
+                        dataset="income_sidecar",
+                        fields=("ann_date", "end_date", "report_type", "n_income", "revenue", "oper_cost"),
+                    )
             return frame
 
         income_dfs = []
@@ -1520,27 +1564,83 @@ class TushareCollector:
             return [c.strip() for c in key.split(",") if c.strip()]
         return [key]
 
-    def update_universe_history(self, universe='csi300', start_date='20100101', end_date=None, incremental=True, include_basic=True, include_limit=True, include_adj=True, batch_size=50, include_moneyflow=True, include_margin=True):
+    def _fetch_history_stock_endpoint(
+        self,
+        endpoint: str,
+        codes: list[str],
+        start_date: str,
+        end_date: str,
+        *,
+        run_id: str | None,
+        audit_store,
+        resume_proof: Mapping[str, object] | None,
+        scope_key: str,
+        universe: str,
+        evidence_fields: tuple[str, ...] = (),
+        required_endpoint: bool = True,
+    ) -> pd.DataFrame:
+        """Fetch one per-symbol range endpoint as durable resumable shards."""
+
+        frames: list[pd.DataFrame] = []
+        for code in codes:
+            requested_scope = {
+                "date_start": start_date,
+                "date_end": end_date,
+                "symbol_count": 1,
+                "symbols": [code],
+                "symbols_sha256": stable_scope_hash([code]),
+            }
+            frame, _ = self._fetch_daily_endpoint_with_receipt(
+                endpoint,
+                run_id=run_id,
+                audit_store=audit_store,
+                requested_scope=requested_scope,
+                resume_proof=resume_proof,
+                scope_key=scope_key,
+                universe=universe,
+                evidence_fields=evidence_fields,
+                required_endpoint=required_endpoint,
+                ts_code=code,
+                start_date=start_date,
+                end_date=end_date,
+                fields=self._get_interface_fields(endpoint),
+            )
+            if frame is not None and not frame.empty:
+                frames.append(frame)
+        return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+
+    def update_universe_history(
+        self, universe='csi300', start_date='20100101', end_date=None,
+        incremental=True, include_basic=True, include_limit=True,
+        include_adj=True, batch_size=50, include_moneyflow=True,
+        include_margin=True, *, run_id: str | None = None, audit_store=None,
+        resume_proof: Mapping[str, object] | None = None,
+        scope_key: str | None = None, evidence_universe: str | None = None,
+    ):
         start_ts = time.time()
         start_date = _normalize_date(start_date)
         if end_date is None:
             end_date = datetime.now().strftime('%Y%m%d')
         end_date = _normalize_date(end_date)
         log.info(f"Fetching universe {universe} from {start_date} to {end_date}...")
-        codes = self.get_universe(universe)
+        codes = sorted({str(code) for code in self.get_universe(universe)})
         if not codes:
             log.warning("No codes found for universe.")
-            return
+            return {"status": "failed", "reason": "empty_universe", "mutations": []}
+        audited = run_id is not None or audit_store is not None or resume_proof is not None
+        if audited and (run_id is None or audit_store is None or not scope_key or not evidence_universe):
+            raise ValueError("audited history requires run_id, audit_store, scope_key, and evidence_universe")
         log.info(f"Found {len(codes)} stocks in universe {universe}. Starting update...")
         batch_size = batch_size or self.batch_size
         code_batches = [codes[i:i + batch_size] for i in range(0, len(codes), batch_size)]
         total_batches = len(code_batches)
+        mutations: list[dict] = []
         for i, batch_codes in enumerate(code_batches):
             batch_no = i + 1
             batch_str = ",".join(batch_codes)
             batch_start_ts = time.time()
             log.info(f"Processing batch {batch_no}/{total_batches} ({len(batch_codes)} stocks)...")
-            self._update_batch_by_year(
+            batch_result = self._update_batch_by_year(
                 batch_codes,
                 batch_str,
                 start_date,
@@ -1550,7 +1650,13 @@ class TushareCollector:
                 include_adj=include_adj,
                 include_moneyflow=include_moneyflow,
                 include_margin=include_margin,
+                run_id=run_id,
+                audit_store=audit_store,
+                resume_proof=resume_proof,
+                scope_key=str(scope_key or "ad_hoc"),
+                evidence_universe=str(evidence_universe or "ad_hoc"),
             )
+            mutations.extend(batch_result.get("mutations", []))
             batch_elapsed = time.time() - batch_start_ts
             avg_elapsed = (time.time() - start_ts) / batch_no
             eta_seconds = max(int(avg_elapsed * (total_batches - batch_no)), 0)
@@ -1559,8 +1665,20 @@ class TushareCollector:
             )
         total_elapsed = time.time() - start_ts
         log.info(f"Universe {universe} update completed in {total_elapsed:.1f}s.")
+        return {
+            "status": "success",
+            "mutations": mutations,
+            "evidence_field_endpoints": dict(HISTORY_FIELD_ENDPOINTS) if audited else {},
+            "range_start": start_date,
+            "range_end": end_date,
+            "symbol_count": len(codes),
+            "symbols_sha256": stable_scope_hash(codes),
+        }
 
-    def _fetch_financials_batch(self, code_str, start_date, end_date):
+    def _fetch_financials_batch(
+        self, code_str, start_date, end_date, *, run_id=None, audit_store=None,
+        resume_proof=None, scope_key="ad_hoc", universe="ad_hoc",
+    ):
         start_date = _normalize_date(start_date)
         end_date = _normalize_date(end_date)
         if start_date is None or end_date is None or not code_str:
@@ -1580,7 +1698,16 @@ class TushareCollector:
             if i > 0:
                 time.sleep(0.3)
                 
-            df = self._fetch_financials(start_date, end_date, ts_code=code)
+            df = self._fetch_financials(
+                start_date,
+                end_date,
+                ts_code=code,
+                run_id=run_id,
+                audit_store=audit_store,
+                resume_proof=resume_proof,
+                scope_key=scope_key,
+                universe=universe,
+            )
             if df is not None and not df.empty:
                 frames.append(df)
             
@@ -1598,7 +1725,12 @@ class TushareCollector:
         return merged
 
 
-    def _update_batch_by_year(self, code_list, code_str, start_date, end_date, include_basic=True, include_limit=True, include_adj=True, include_moneyflow=True, include_margin=True):
+    def _update_batch_by_year(
+        self, code_list, code_str, start_date, end_date, include_basic=True,
+        include_limit=True, include_adj=True, include_moneyflow=True,
+        include_margin=True, *, run_id=None, audit_store=None,
+        resume_proof=None, scope_key="ad_hoc", evidence_universe="ad_hoc",
+    ):
         """
         [Optimization] 
         1. Fetch Financials, DailyBasic, StkLimit for the FULL period (per stock loop or batch period).
@@ -1606,27 +1738,56 @@ class TushareCollector:
         3. Merge and Save.
         """
         # 1. Financials (Outside Loop)
-        fin_df_all = self._fetch_financials_batch(code_str, start_date, end_date)
+        audited = run_id is not None and audit_store is not None
+        fin_df_all = self._fetch_financials_batch(
+            code_str, start_date, end_date, run_id=run_id,
+            audit_store=audit_store, resume_proof=resume_proof,
+            scope_key=scope_key, universe=evidence_universe,
+        )
         
         # 2. Daily Basic (Outside Loop) -> Using the new Optimized Fetch (Stock Loop)
         df_basic_all = pd.DataFrame()
         if include_basic:
             # This will use _fetch_by_stock_loop which is FAST for subset of stocks
-            df_basic_all = self._fetch_by_date_range("daily_basic", code_list, start_date, end_date)
+            df_basic_all = self._fetch_history_stock_endpoint(
+                "daily_basic", code_list, start_date, end_date,
+                run_id=run_id, audit_store=audit_store,
+                resume_proof=resume_proof, scope_key=scope_key,
+                universe=evidence_universe,
+                evidence_fields=("pe", "pb", "total_mv", "turnover_rate", "circ_mv"),
+            ) if audited else self._fetch_by_date_range(
+                "daily_basic", code_list, start_date, end_date
+            )
             if df_basic_all is not None and not df_basic_all.empty:
                 df_basic_all["trade_date"] = df_basic_all["trade_date"].astype(str)
         
         # 3. Limit (Outside Loop)
         df_limit_all = pd.DataFrame()
         if include_limit:
-             df_limit_all = self._fetch_by_date_range("stk_limit", code_list, start_date, end_date)
+             df_limit_all = self._fetch_history_stock_endpoint(
+                 "stk_limit", code_list, start_date, end_date,
+                 run_id=run_id, audit_store=audit_store,
+                 resume_proof=resume_proof, scope_key=scope_key,
+                 universe=evidence_universe, required_endpoint=False,
+             ) if audited else self._fetch_by_date_range(
+                 "stk_limit", code_list, start_date, end_date
+             )
              if df_limit_all is not None and not df_limit_all.empty:
                 df_limit_all["trade_date"] = df_limit_all["trade_date"].astype(str)
 
         # 4. Margin (Outside Loop) — fetch once for the full period instead of per chunk
         df_margin_all = pd.DataFrame()
         if include_margin:
-            df_margin_all = self._fetch_by_date_range("margin", code_list, start_date, end_date)
+            df_margin_all = self._fetch_history_stock_endpoint(
+                "margin", code_list, start_date, end_date,
+                run_id=run_id, audit_store=audit_store,
+                resume_proof=resume_proof, scope_key=scope_key,
+                universe=evidence_universe,
+                evidence_fields=("rzye", "rzmre", "rzche"),
+                required_endpoint=False,
+            ) if audited else self._fetch_by_date_range(
+                "margin", code_list, start_date, end_date
+            )
             if df_margin_all is not None and not df_margin_all.empty and "trade_date" in df_margin_all.columns:
                 df_margin_all["trade_date"] = df_margin_all["trade_date"].astype(str)
 
@@ -1659,7 +1820,12 @@ class TushareCollector:
             chunk_end = chunk_end_dt.strftime('%Y%m%d')
 
             # Filter valid codes (Listed before chunk end)
-            if list_date_map:
+            if audited:
+                # The request scope must also evidence pre-listing emptiness;
+                # supplier rows stay empty until the instrument exists.
+                valid_codes = list(code_list)
+                valid_code_str = code_str
+            elif list_date_map:
                 valid_codes = []
                 for code in code_list:
                     l_date = list_date_map.get(code)
@@ -1674,14 +1840,38 @@ class TushareCollector:
                 valid_code_str = code_str
 
             try:
+                requested_scope = {
+                    "date_start": chunk_start,
+                    "date_end": chunk_end,
+                    "symbol_count": len(valid_codes),
+                    "symbols": sorted(valid_codes),
+                    "symbols_sha256": stable_scope_hash(valid_codes),
+                }
                 # 1. Daily (Batch)
-                df_daily = self._fetch_with_retry(
-                    self._get_interface_api("daily"),
-                    ts_code=valid_code_str,
-                    start_date=chunk_start,
-                    end_date=chunk_end,
-                    fields=self._get_interface_fields("daily"),
-                )
+                if audited:
+                    df_daily, daily_receipt_id = self._fetch_daily_endpoint_with_receipt(
+                        "daily", run_id=run_id, audit_store=audit_store,
+                        requested_scope=requested_scope,
+                        resume_proof=resume_proof, scope_key=scope_key,
+                        universe=evidence_universe,
+                        evidence_fields=("open", "high", "low", "close", "volume", "amount"),
+                        required_column_groups=(
+                            ("open",), ("high",), ("low",), ("close",),
+                            ("vol", "volume"),
+                        ),
+                        ts_code=valid_code_str, start_date=chunk_start,
+                        end_date=chunk_end,
+                        fields=self._get_interface_fields("daily"),
+                    )
+                else:
+                    daily_receipt_id = None
+                    df_daily = self._fetch_with_retry(
+                        self._get_interface_api("daily"),
+                        ts_code=valid_code_str,
+                        start_date=chunk_start,
+                        end_date=chunk_end,
+                        fields=self._get_interface_fields("daily"),
+                    )
                 
                 if df_daily is None or df_daily.empty:
                     curr_dt = chunk_end_dt + timedelta(days=1)
@@ -1690,24 +1880,51 @@ class TushareCollector:
                 # 2. Adj (Batch)
                 df_adj = pd.DataFrame()
                 if include_adj:
-                    df_adj = self._fetch_with_retry(
-                        self._get_interface_api("adj_factor"),
-                        ts_code=valid_code_str,
-                        start_date=chunk_start,
-                        end_date=chunk_end,
-                        fields=self._get_interface_fields("adj_factor"),
-                    )
+                    if audited:
+                        df_adj, _ = self._fetch_daily_endpoint_with_receipt(
+                            "adj_factor", run_id=run_id,
+                            audit_store=audit_store,
+                            requested_scope=requested_scope,
+                            resume_proof=resume_proof, scope_key=scope_key,
+                            universe=evidence_universe,
+                            evidence_fields=("factor",),
+                            required_column_groups=(("adj_factor", "factor"),),
+                            ts_code=valid_code_str, start_date=chunk_start,
+                            end_date=chunk_end,
+                            fields=self._get_interface_fields("adj_factor"),
+                        )
+                    else:
+                        df_adj = self._fetch_with_retry(
+                            self._get_interface_api("adj_factor"),
+                            ts_code=valid_code_str,
+                            start_date=chunk_start,
+                            end_date=chunk_end,
+                            fields=self._get_interface_fields("adj_factor"),
+                        )
 
                 # 3. MoneyFlow (Batch)
                 df_moneyflow = pd.DataFrame()
                 if include_moneyflow:
-                    df_moneyflow = self._fetch_with_retry(
-                        self._get_interface_api("moneyflow"),
-                        ts_code=valid_code_str,
-                        start_date=chunk_start,
-                        end_date=chunk_end,
-                        fields=self._get_interface_fields("moneyflow"),
-                    )
+                    if audited:
+                        df_moneyflow, _ = self._fetch_daily_endpoint_with_receipt(
+                            "moneyflow", run_id=run_id,
+                            audit_store=audit_store,
+                            requested_scope=requested_scope,
+                            resume_proof=resume_proof, scope_key=scope_key,
+                            universe=evidence_universe,
+                            required_endpoint=False,
+                            ts_code=valid_code_str, start_date=chunk_start,
+                            end_date=chunk_end,
+                            fields=self._get_interface_fields("moneyflow"),
+                        )
+                    else:
+                        df_moneyflow = self._fetch_with_retry(
+                            self._get_interface_api("moneyflow"),
+                            ts_code=valid_code_str,
+                            start_date=chunk_start,
+                            end_date=chunk_end,
+                            fields=self._get_interface_fields("moneyflow"),
+                        )
 
                 # 3.5 Margin — subset from pre-fetched full-period data
                 df_margin = pd.DataFrame()
@@ -1788,17 +2005,45 @@ class TushareCollector:
                     ignore_columns += self.financial_cols
 
                 # Save
-                self._save_batch_results(df_daily, valid_codes, ignore_columns=ignore_columns)
+                bundle_receipt_id = daily_receipt_id
+                if audited:
+                    bundle_receipt_id = audit_store.record_fetch(
+                        run_id=run_id,
+                        source="tushare",
+                        endpoint="daily_bundle",
+                        status="success",
+                        requested_scope=requested_scope,
+                        returned_rows=len(df_daily),
+                        attempt_count=1,
+                        payload_kind="derived",
+                        published_at=None,
+                        observed_at=utc_now(),
+                        **normalized_response_metadata(df_daily),
+                    )
+                chunk_mutations = self._save_batch_results(
+                    df_daily, valid_codes, ignore_columns=ignore_columns,
+                    run_id=run_id, audit_store=audit_store,
+                    bundle_receipt_id=bundle_receipt_id,
+                )
+                mutations.extend(chunk_mutations)
 
             except Exception as e:
                 log.error(f"Failed batch chunk {chunk_start}-{chunk_end}: {e}")
+                if audited:
+                    raise
 
             # Next chunk
             curr_dt = chunk_end_dt + timedelta(days=1)
 
-    def _save_batch_results(self, df_big, code_list, ignore_columns=None):
+        return {"status": "success", "mutations": mutations}
+
+    def _save_batch_results(
+        self, df_big, code_list, ignore_columns=None, *, run_id=None,
+        audit_store=None, bundle_receipt_id=None,
+    ):
         if df_big is None or df_big.empty:
-            return
+            return []
+        mutations: list[dict] = []
         grouped = df_big.groupby('ts_code')
         financial_like_cols = [
             *self.financial_cols,
@@ -1818,7 +2063,19 @@ class TushareCollector:
                 for col in financial_like_cols:
                     if col in df_part.columns:
                         df_part[col] = df_part[col].ffill()
-            self.store.save_daily(df_part, code, existing_df=None)
+            saved = self.store.save_daily(df_part, code, existing_df=None) or []
+            saved = [
+                mutation
+                for mutation in saved
+                if mutation.get("mutation_type") != "noop"
+            ]
+            for mutation in saved:
+                mutation["endpoint"] = "daily_bundle"
+                mutation["fetch_receipt_id"] = bundle_receipt_id
+            if audit_store is not None and run_id is not None:
+                audit_store.record_mutations(run_id=run_id, mutations=saved)
+            mutations.extend(saved)
+        return mutations
 
     def update_history(self, code: str, start_date='20100101', end_date=None, incremental=True, include_basic=True, include_limit=True, include_adj=True, include_moneyflow=True, include_margin=True):
         """

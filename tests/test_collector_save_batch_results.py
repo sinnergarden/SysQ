@@ -25,6 +25,7 @@ def _build_collector():
         "current_ratio",
     ]
     collector.store = Mock()
+    collector.store.save_daily.return_value = []
     collector._validate_and_clean = lambda df, code, ignore_columns=None: df
     return collector
 

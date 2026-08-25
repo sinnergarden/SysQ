@@ -424,6 +424,82 @@ def test_verified_success_and_observed_empty_clone_into_fresh_run(tmp_path: Path
         )
 
 
+def test_historical_resume_requires_exact_range_start(tmp_path: Path) -> None:
+    audit_root = tmp_path / "audit"
+    store = SourceAuditStore(audit_root / "audit.db")
+    run_id = "history-failed"
+    store.append_event(run_id, "run_started", {
+        "entrypoint": "scripts/data_sync.py",
+        "universe": "csi1800",
+        "target_date": "20260821",
+        "range_start": "20140313",
+    })
+    store.record_crash_receipt(
+        run_id=run_id, receipt_root=audit_root / "source_runs",
+        entrypoint="scripts/data_sync.py", error="injected",
+    )
+
+    proof = store.validate_resume_run(
+        resume_from_run_id=run_id, expected_entrypoint="scripts/data_sync.py",
+        universe="csi1800", target_date="20260821", range_start="20140313",
+    )
+    assert proof["range_start"] == "20140313"
+    with pytest.raises(ValueError, match="lineage mismatch"):
+        store.validate_resume_run(
+            resume_from_run_id=run_id,
+            expected_entrypoint="scripts/data_sync.py",
+            universe="csi1800",
+            target_date="20260821",
+            range_start="20140314",
+        )
+    with pytest.raises(ValueError, match="lineage mismatch"):
+        store.validate_resume_run(
+            resume_from_run_id=run_id,
+            expected_entrypoint="scripts/data_sync.py",
+            universe="csi1800",
+            target_date="20260821",
+        )
+
+
+def test_interrupted_run_without_terminal_can_be_sealed_then_resumed(tmp_path: Path) -> None:
+    audit_root = tmp_path / "audit"
+    store = SourceAuditStore(audit_root / "audit.db")
+    run_id = "history-interrupted"
+    store.append_event(run_id, "run_started", {
+        "entrypoint": "scripts/data_sync.py", "universe": "csi1800",
+        "target_date": "20260821", "range_start": "20140313",
+    })
+    _record_fetch(
+        store, run_id=run_id, status="success",
+        scope=_resume_scope("daily"),
+    )
+
+    store.seal_interrupted_run_for_resume(
+        run_id=run_id,
+        expected_entrypoint="scripts/data_sync.py",
+        universe="csi1800",
+        target_date="20260821",
+        range_start="20140313",
+    )
+
+    receipt = audit_root / "source_runs" / run_id / "receipt.json"
+    terminal = json.loads(receipt.read_text(encoding="utf-8"))
+    assert terminal["trust_state"] == "untrusted"
+    assert any(
+        row["event_type"] == "crash"
+        and row["payload"].get("error") == "interrupted_without_terminal_receipt"
+        for row in terminal["audit_journal"]
+    )
+    proof = store.validate_resume_run(
+        resume_from_run_id=run_id,
+        expected_entrypoint="scripts/data_sync.py",
+        universe="csi1800",
+        target_date="20260821",
+        range_start="20140313",
+    )
+    assert proof["resume_from_run_id"] == run_id
+
+
 @pytest.mark.parametrize(
     "tamper,match",
     [
@@ -988,6 +1064,26 @@ def test_failed_terminal_gate_leaves_watermark_byte_for_byte_unchanged(tmp_path:
     after = store.watermark_snapshot_bytes()
     assert result["watermark_advanced"] is False
     assert before == after
+
+
+def test_explicit_initial_history_can_seed_one_verified_range(tmp_path: Path) -> None:
+    store = SourceAuditStore(tmp_path / "audit.db")
+    _record_fetch(store, run_id="history-seed", status="success", scope={"range": "full"})
+    result = store.finalize_run(
+        run_id="history-seed", source="tushare", scope_key="csi1800",
+        range_start="20140313", range_end="20260731", fields=["close"],
+        gates={
+            "fetch": True, "raw_payloads": True, "canonical_commit": True,
+            "qlib_readback": True, "readiness": True, "contiguous_range": True,
+        },
+        receipt_root=tmp_path / "receipts",
+        allow_initial_history=True,
+    )
+    assert result["watermark_advanced"] is True
+    assert store.has_trusted_range(
+        source="tushare", scope_key="csi1800",
+        range_start="20140313", range_end="20260731", fields=["close"],
+    )
 
 
 def test_same_day_runs_do_not_overwrite_and_legacy_cannot_be_trusted(tmp_path: Path) -> None:

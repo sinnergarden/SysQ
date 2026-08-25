@@ -18,6 +18,7 @@ from qsys.pit_certification import (
     _canonical_bytes,
     _canonical_materialization_identity,
     _checkpoint_set_payload,
+    _proofs_cover_scope,
     _scope_rows,
     _sha256_bytes,
     certify_pit_baseline,
@@ -40,6 +41,27 @@ REAL_DEPENDENCIES = ROOT / "configs/audit/feature_dependencies/v3a_plus_liquidit
 REAL_REQUEST = yaml.safe_load(
     (ROOT / "configs/audit/csi1800_s180_baseline_v1_r1.yaml").read_text(encoding="utf-8")
 )
+
+
+def test_receipt_shards_must_cover_the_instrument_interval_without_gap() -> None:
+    def proof(left: str, right: str, symbols: list[str]) -> dict:
+        return {"receipt": {"requested_scope": {
+            "date_start": left, "date_end": right, "symbols": symbols,
+        }}}
+
+    scope = {
+        "instrument": "000001.SZ", "date_start": "20200101", "date_end": "20201231",
+    }
+    covered = _proofs_cover_scope([
+        proof("20200101", "20200630", ["000001.SZ"]),
+        proof("20200630", "20201231", ["000001.SZ"]),
+        proof("20200101", "20201231", ["000002.SZ"]),
+    ], scope)
+    assert len(covered) == 2
+    assert _proofs_cover_scope([
+        proof("20200101", "20200629", ["000001.SZ"]),
+        proof("20200701", "20201231", ["000001.SZ"]),
+    ], scope) == []
 
 
 def _write(path: Path, value: str | bytes) -> Path:
@@ -914,6 +936,64 @@ def test_terminal_proof_failures_block_coverage(
     assert result["status"] == "BLOCKED"
     coverage = pd.read_parquet(Path(result["output_dir"]) / "coverage.parquet")
     assert set(coverage.loc[coverage["scope_kind"] == "feature_dependency", "status"]) == {"MISSING"}
+
+
+def test_each_field_watermark_must_match_terminal_hash_even_when_run_is_cached(
+    tiny_project: tuple[Path, Path, Path], tmp_path: Path,
+) -> None:
+    project, request, database = tiny_project
+    dependencies_path = project / "dependencies.yaml"
+    dependencies = yaml.safe_load(dependencies_path.read_text(encoding="utf-8"))
+    dependencies["features"][0]["dependencies"][0]["leaf_fields"] = ["close", "open"]
+    dependencies_path.write_text(yaml.safe_dump(dependencies, sort_keys=False), encoding="utf-8")
+
+    terminal_path = project / "source_runs/evidence-1/receipt.json"
+    terminal = json.loads(terminal_path.read_text(encoding="utf-8"))
+    second = dict(terminal["fetch_receipts"][0])
+    second["receipt_id"] = "receipt-2"
+    terminal["fetch_receipts"].append(second)
+    terminal["field_receipt_links"].append({
+        "run_id": "evidence-1", "dataset": "canonical_daily",
+        "field_name": "$open", "receipt_id": "receipt-2",
+    })
+    terminal_path.write_text(json.dumps(terminal, sort_keys=True) + "\n", encoding="utf-8")
+    good_hash = sha256_file(terminal_path)
+    with sqlite3.connect(database) as conn:
+        first = conn.execute(
+            "SELECT * FROM fetch_receipts WHERE receipt_id='receipt-1'"
+        ).fetchone()
+        conn.execute(
+            "INSERT INTO fetch_receipts SELECT ?,run_id,source,endpoint,status,"
+            "requested_scope_json,returned_rows,response_hash,response_columns_json,"
+            "response_date_min,response_date_max,attempt_count,payload_kind,payload_path,"
+            "payload_sha256,published_at,observed_at,error_json FROM fetch_receipts "
+            "WHERE receipt_id='receipt-1'",
+            ("receipt-2",),
+        )
+        assert first is not None
+        conn.execute(
+            "INSERT INTO field_receipt_links VALUES(?,?,?,?)",
+            ("evidence-1", "canonical_daily", "open", "receipt-2"),
+        )
+        conn.execute(
+            "UPDATE trusted_watermarks SET terminal_receipt_sha256=? WHERE field_name='close'",
+            (good_hash,),
+        )
+        conn.execute(
+            "INSERT INTO trusted_watermarks VALUES(?,?,?,?,?,?,?,?)",
+            ("tushare", "open", "tiny", "20200101", "20200131", "evidence-1",
+             "0" * 64, "2020-02-01T00:00:00Z"),
+        )
+
+    result = certify_pit_baseline(
+        request_path=request, audit_db=database, output_root=tmp_path / "bad_second_hash",
+        evidence_run_ids=["evidence-1"], project_root=project,
+    )
+
+    assert result["status"] == "BLOCKED"
+    coverage = pd.read_parquet(Path(result["output_dir"]) / "coverage.parquet")
+    open_rows = coverage.loc[coverage["field"] == "open"]
+    assert set(open_rows["status"]) == {"MISSING"}
 
 
 def test_mutation_role_receipt_cannot_cover_evidence_scope(

@@ -26,6 +26,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -41,7 +42,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from qsys.config import cfg
-from qsys.data.collector import TushareCollector
+from qsys.data.collector import HISTORY_FIELD_ENDPOINTS, TushareCollector
 from qsys.data.storage import StockDataStore
 from qsys.data.source_audit import (
     LEGACY_UNTRUSTED,
@@ -69,6 +70,32 @@ TRUSTED_DAILY_FIELD_ENDPOINTS = {
     "factor": "adj_factor",
 }
 _CRASH_EVIDENCE: dict | None = None
+
+
+def _load_csi1800_research_union(data_root: Path) -> tuple[list[str], dict]:
+    """Load the immutable CSI1800 PIT research union for historical evidence."""
+
+    artifact = data_root / "research" / "universes" / "csi1800_pit_v2"
+    registry_path = artifact / "csi1800_pit_union.txt"
+    manifest_path = artifact / "manifest.json"
+    if not registry_path.is_file() or not manifest_path.is_file():
+        raise RuntimeError(f"CSI1800 PIT research union is incomplete: {artifact}")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    digest = hashlib.sha256(registry_path.read_bytes()).hexdigest()
+    if digest != manifest.get("registry_sha256"):
+        raise RuntimeError("CSI1800 PIT research union registry hash mismatch")
+    rows = [line.split() for line in registry_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    if not rows or any(len(row) < 3 for row in rows):
+        raise RuntimeError("CSI1800 PIT research union registry is malformed")
+    codes = sorted({row[0].strip().upper() for row in rows})
+    if not codes or len(codes) != int(manifest.get("n_registry_instruments") or 0):
+        raise RuntimeError("CSI1800 PIT research union is empty or malformed")
+    return codes, {
+        "snapshot_semantics": "immutable_csi1800_pit_research_union",
+        "artifact_dir": str(artifact),
+        "registry_sha256": digest,
+        "constituent_count": len(codes),
+    }
 
 
 def _resolve_target_date(
@@ -424,7 +451,117 @@ _CANONICAL_TO_QLIB_READBACK = {
     "volume": "$volume",
     "vol": "$volume",
     "amount": "$amount",
+    "turnover_rate": "$turnover_rate",
+    "pe": "$pe",
+    "pb": "$pb",
+    "total_mv": "$total_mv",
+    "circ_mv": "$circ_mv",
+    "margin_balance": "$margin_balance",
+    "margin_buy_amount": "$margin_buy_amount",
+    "margin_repay_amount": "$margin_repay_amount",
+    "net_income": "$net_income",
+    "revenue": "$revenue",
+    "total_assets": "$total_assets",
+    "equity": "$equity",
+    "op_cashflow": "$op_cashflow",
+    "roe": "$roe",
+    "grossprofit_margin": "$grossprofit_margin",
+    "debt_to_assets": "$debt_to_assets",
+    "current_ratio": "$current_ratio",
 }
+
+
+def _expected_qlib_value(raw_field: str, value):
+    expected = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    if pd.isna(expected):
+        return expected
+    if raw_field in {"volume", "vol"}:
+        return float(expected) * 100.0
+    if raw_field in {"total_mv", "circ_mv"}:
+        return float(expected) * 10000.0
+    return expected
+
+
+def _historical_mutation_readback(adapter, store, changed: list[dict]) -> dict:
+    """Verify each exact historical mutation at its own date."""
+
+    mismatches: list[dict[str, object]] = []
+    verified = 0
+    verified_fields: set[str] = set()
+    for symbol in sorted({str(item["symbol"]) for item in changed}):
+        items = [item for item in changed if str(item["symbol"]) == symbol]
+        raw_fields = sorted({
+            field for item in items for field in item.get("fields", [])
+            if field in _CANONICAL_TO_QLIB_READBACK
+        })
+        if not raw_fields:
+            continue
+        if any(str(item.get("date_start")) != str(item.get("date_end")) for item in items):
+            mismatches.append({"symbol": symbol, "field": "*", "reason": "mutation_scope_not_exact"})
+            continue
+        start = min(str(item["date_start"]) for item in items)
+        end = max(str(item["date_end"]) for item in items)
+        qlib_fields = sorted({_CANONICAL_TO_QLIB_READBACK[field] for field in raw_fields})
+        verified_fields.update(qlib_fields)
+        qlib_frame = adapter.get_features(
+            [symbol], qlib_fields,
+            start_time=f"{start[:4]}-{start[4:6]}-{start[6:8]}",
+            end_time=f"{end[:4]}-{end[4:6]}-{end[6:8]}",
+        )
+        canonical = store.load_daily_window(
+            symbol, start_date=start, end_date=end, columns=raw_fields,
+        )
+        if qlib_frame is None or qlib_frame.empty or canonical is None or canonical.empty:
+            mismatches.append({"symbol": symbol, "field": "*", "reason": "readback_row_missing"})
+            continue
+        qlib_rows = qlib_frame.reset_index() if isinstance(qlib_frame.index, pd.MultiIndex) else qlib_frame.copy()
+        date_column = next((name for name in ("datetime", "date", "trade_date") if name in qlib_rows), None)
+        symbol_column = "instrument" if "instrument" in qlib_rows else "ts_code"
+        if date_column is None or symbol_column not in qlib_rows:
+            mismatches.append({"symbol": symbol, "field": "*", "reason": "readback_identity_missing"})
+            continue
+        qlib_dates = _target_date_values(qlib_rows[date_column])
+        canonical_dates = _target_date_values(canonical["trade_date"])
+        for item in items:
+            mutation_date = str(item["date_start"])
+            raw_rows = canonical.loc[canonical_dates == mutation_date]
+            q_rows = qlib_rows.loc[
+                (qlib_rows[symbol_column].astype(str) == symbol) & (qlib_dates == mutation_date)
+            ]
+            if raw_rows.empty or q_rows.empty:
+                mismatches.append({"symbol": symbol, "date": mutation_date, "field": "*", "reason": "readback_row_missing"})
+                continue
+            raw_row = raw_rows.iloc[-1]
+            qlib_row = q_rows.iloc[-1]
+            by_qlib: dict[str, str] = {}
+            for raw_field in item.get("fields", []):
+                qlib_field = _CANONICAL_TO_QLIB_READBACK.get(raw_field)
+                if qlib_field is None or raw_field not in raw_row:
+                    continue
+                previous = by_qlib.get(qlib_field)
+                if previous is None or (pd.isna(raw_row[previous]) and pd.notna(raw_row[raw_field])):
+                    by_qlib[qlib_field] = raw_field
+            for qlib_field, raw_field in by_qlib.items():
+                if qlib_field not in qlib_row:
+                    mismatches.append({"symbol": symbol, "date": mutation_date, "field": qlib_field, "reason": "readback_field_missing"})
+                    continue
+                expected = _expected_qlib_value(raw_field, raw_row[raw_field])
+                actual = pd.to_numeric(pd.Series([qlib_row[qlib_field]]), errors="coerce").iloc[0]
+                same = (pd.isna(expected) and pd.isna(actual)) or (
+                    pd.notna(expected) and pd.notna(actual)
+                    and bool(np.isclose(float(expected), float(actual), rtol=1e-10, atol=1e-12))
+                )
+                if same:
+                    verified += 1
+                else:
+                    mismatches.append({"symbol": symbol, "date": mutation_date, "field": qlib_field, "reason": "value_mismatch"})
+    return {
+        "status": "failed" if mismatches else "success",
+        "verified_fields": sorted(verified_fields),
+        "verified_value_count": verified,
+        "mismatches": mismatches,
+        **({"error": "historical Qlib value readback mismatch"} if mismatches else {}),
+    }
 
 
 def _refresh_and_verify_changed_symbols(
@@ -434,6 +571,7 @@ def _refresh_and_verify_changed_symbols(
     *,
     target_dt: str,
     apply: bool,
+    history_mode: bool = False,
 ) -> dict:
     """Drive Qlib dump_fix from exact mutations, then read back changed values."""
 
@@ -482,6 +620,16 @@ def _refresh_and_verify_changed_symbols(
             "revision_symbols": revision_symbols,
             "verified_value_count": 0,
             "verified_fields": [],
+            "refresh": refresh,
+        }
+
+    if history_mode:
+        verification = _historical_mutation_readback(adapter, store, changed)
+        return {
+            **verification,
+            "mode": "historical_mutation_fix",
+            "changed_symbols": symbols,
+            "revision_symbols": revision_symbols,
             "refresh": refresh,
         }
 
@@ -547,9 +695,7 @@ def _refresh_and_verify_changed_symbols(
         for qlib_field, raw_field in by_qlib.items():
             if qlib_field not in qlib_row:
                 continue
-            expected = pd.to_numeric(pd.Series([raw_row[raw_field]]), errors="coerce").iloc[0]
-            if raw_field in {"volume", "vol"} and pd.notna(expected):
-                expected = float(expected) * 100.0
+            expected = _expected_qlib_value(raw_field, raw_row[raw_field])
             actual = pd.to_numeric(pd.Series([qlib_row[qlib_field]]), errors="coerce").iloc[0]
             same = (pd.isna(expected) and pd.isna(actual)) or (
                 pd.notna(expected) and pd.notna(actual) and bool(np.isclose(float(expected), float(actual), rtol=1e-10, atol=1e-12))
@@ -721,8 +867,6 @@ def _do_raw_fetch(
     try:
         fetch_start = str(since_date or target_dt).replace("-", "")
         target_dt = str(target_dt).replace("-", "")
-        if resume_proof is not None and fetch_start != target_dt:
-            raise ValueError("resume is only supported for one target-date shard path")
         if fetch_start == target_dt:
             evidence_kwargs = (
                 {
@@ -745,20 +889,23 @@ def _do_raw_fetch(
         else:
             # This path may fetch prior dates, and is only reachable for an
             # explicit historical repair window.
-            collector.update_universe_history(
+            collector_result = collector.update_universe_history(
                 universe=codes,  # pass the list directly (get_universe handles list)
                 start_date=fetch_start,
                 end_date=target_dt,
                 incremental=False,
-                batch_size=200,
+                # Keep the collector's proven 50-symbol shard size.  Larger
+                # quarter batches can hit supplier row limits and silently
+                # turn a complete-looking receipt into truncated evidence.
+                batch_size=50,
                 include_moneyflow=True,
                 include_margin=True,
+                run_id=run_id,
+                audit_store=audit_store,
+                resume_proof=resume_proof,
+                scope_key=str(scope_key or universe or "ad_hoc"),
+                evidence_universe=str(universe or scope_key or "ad_hoc"),
             )
-            collector_result = {
-                "status": "legacy_untrusted",
-                "mutations": [],
-                "reason": "historical path does not yet emit source receipts",
-            }
         elapsed = time.time() - t0
         required_missing_by_endpoint = (
             collector_result.get("required_endpoint_missing_symbols", {})
@@ -921,6 +1068,11 @@ def _do_raw_fetch(
             "mutation_count": len(
                 collector_result.get("mutations", []) if isinstance(collector_result, dict) else []
             ),
+            "evidence_field_endpoints": (
+                collector_result.get("evidence_field_endpoints", {})
+                if isinstance(collector_result, dict)
+                else {}
+            ),
             "source_scope_coverage": scope_coverage,
             "elapsed_s": round(elapsed, 1),
         }
@@ -1027,6 +1179,8 @@ def _finalize_market_evidence(
     unchanged: bool,
     previous_open_session: str | None,
     allow_trusted: bool,
+    fields: tuple[str, ...] = TRUSTED_DAILY_FIELDS,
+    allow_initial_history: bool = False,
 ) -> dict:
     if unchanged:
         return audit_store.finalize_unchanged(
@@ -1041,11 +1195,12 @@ def _finalize_market_evidence(
         scope_key=universe,
         range_start=range_start,
         range_end=range_end,
-        fields=TRUSTED_DAILY_FIELDS,
+        fields=fields,
         gates=gates,
         receipt_root=receipt_root,
         trust_state=TRUSTED if allow_trusted and all(gates.values()) else "untrusted",
         previous_open_session=previous_open_session,
+        allow_initial_history=allow_initial_history,
     )
 
 
@@ -1189,8 +1344,7 @@ def _main_under_writer_lock(writer_lock: data_writer_lock) -> None:
     target_dt = _resolve_target_date(args.target_date)
     sync_window = _resolve_sync_window(target_dt, args.repair_start_date)
     sync_start = sync_window["start_date"]
-    if args.resume_from_run_id and sync_start != target_dt:
-        parser.error("resume is only supported for the single target-date path")
+    is_history_repair = sync_window["mode"] == "explicit_historical_repair"
     target_date = f"{target_dt[:4]}-{target_dt[4:6]}-{target_dt[6:]}"
     do_apply = args.apply
     run_id = validate_run_id(args.run_id or new_run_id("data_sync"))
@@ -1230,10 +1384,17 @@ def _main_under_writer_lock(writer_lock: data_writer_lock) -> None:
         else None
     )
     if source_audit is not None:
+        inner_lineage = {
+            "entrypoint": "scripts/ops/sync_csi800_daily.py",
+            "universe": universe,
+            "target_date": target_dt,
+        }
+        if sync_start != target_dt:
+            inner_lineage["range_start"] = sync_start
         source_audit.append_event(
             run_id,
             "run_started",
-            {"entrypoint": "scripts/ops/sync_csi800_daily.py", "universe": universe, "target_date": target_dt},
+            inner_lineage,
         )
         global _CRASH_EVIDENCE
         _CRASH_EVIDENCE = {
@@ -1251,6 +1412,7 @@ def _main_under_writer_lock(writer_lock: data_writer_lock) -> None:
             expected_entrypoint="scripts/data_sync.py",
             universe=universe,
             target_date=target_dt,
+            range_start=sync_start if sync_start != target_dt else None,
             expected_receipt_sha256=args.resume_from_receipt_sha256,
         )
         source_audit.append_event(
@@ -1275,7 +1437,10 @@ def _main_under_writer_lock(writer_lock: data_writer_lock) -> None:
     collector = TushareCollector()
     store = StockDataStore()
     report["sync_window"] = dict(sync_window)
-    if universe == "csi1800":
+    if universe == "csi1800" and is_history_repair:
+        codes, step1 = _load_csi1800_research_union(Path(cfg.get_path("root")))
+        step1["elapsed_s"] = round(time.time() - t0, 1)
+    elif universe == "csi1800":
         from qsys.ops.pit_universe_snapshot import resolve_csi1800_pit_snapshot
 
         pit_snapshot = resolve_csi1800_pit_snapshot(
@@ -1333,7 +1498,7 @@ def _main_under_writer_lock(writer_lock: data_writer_lock) -> None:
     )
     untrusted_preexisting_symbols = (
         []
-        if args.force_fetch or prior_scope_trusted_at_start
+        if args.force_fetch or prior_scope_trusted_at_start or sync_start < target_dt
         else sorted(status_check["have"])
     )
     if source_audit is not None and untrusted_preexisting_symbols:
@@ -1460,6 +1625,7 @@ def _main_under_writer_lock(writer_lock: data_writer_lock) -> None:
             mutations,
             target_dt=target_dt,
             apply=do_apply,
+            history_mode=is_history_repair,
         )
     report["steps"]["mutation_qlib_refresh"] = mutation_refresh
     if source_audit is not None:
@@ -1511,7 +1677,7 @@ def _main_under_writer_lock(writer_lock: data_writer_lock) -> None:
             adapter._refresh_universe_instruments(universe="csi800")
             adapter._refresh_universe_instruments(universe="csi300")
             registry_result = None
-            if universe == "csi1800":
+            if universe == "csi1800" and not is_history_repair:
                 from qsys.ops.pit_universe_snapshot import write_current_qlib_registry
 
                 registry_result = write_current_qlib_registry(
@@ -1580,9 +1746,20 @@ def _main_under_writer_lock(writer_lock: data_writer_lock) -> None:
     evidence_result = None
     if source_audit is not None:
         evidence_summary = source_audit.run_evidence_summary(run_id)
-        field_receipts = source_audit.evaluate_field_receipts(
-            run_id=run_id,
-            field_endpoints=TRUSTED_DAILY_FIELD_ENDPOINTS,
+        history_mode = is_history_repair
+        evidence_field_endpoints = (
+            dict(raw_summary.get("evidence_field_endpoints") or HISTORY_FIELD_ENDPOINTS)
+            if history_mode
+            else dict(TRUSTED_DAILY_FIELD_ENDPOINTS)
+        )
+        field_receipts = (
+            source_audit.evaluate_history_field_receipts(
+                run_id=run_id, field_endpoints=evidence_field_endpoints
+            )
+            if history_mode
+            else source_audit.evaluate_field_receipts(
+                run_id=run_id, field_endpoints=evidence_field_endpoints
+            )
         )
         canonical_events = [
             event
@@ -1609,12 +1786,13 @@ def _main_under_writer_lock(writer_lock: data_writer_lock) -> None:
             and suspension_evidence_ok
             and not untrusted_preexisting_symbols
         )
+        evidence_fields = tuple(evidence_field_endpoints)
         prior_trusted = source_audit.has_trusted_range(
             source="tushare",
             scope_key=universe,
             range_start=target_dt,
             range_end=target_dt,
-            fields=TRUSTED_DAILY_FIELDS,
+            fields=evidence_fields,
         )
         gates = {
             "fetch": prior_trusted if precheck_noop else field_receipts["status"] == "success"
@@ -1624,16 +1802,16 @@ def _main_under_writer_lock(writer_lock: data_writer_lock) -> None:
             and canonical_events[-1]["payload"].get("status") == "success",
             "qlib_readback": mutation_refresh.get("status") == "success",
             "readiness": not readiness_report.blocking_issues,
-            "contiguous_range": sync_window["mode"] == "daily_single_day",
+            "contiguous_range": True,
         }
         previous_open_session = _previous_open_session(store, target_dt)
-        if not precheck_noop:
+        if not precheck_noop and not history_mode:
             gates["contiguous_range"] = bool(gates["contiguous_range"]) and source_audit.can_advance_contiguous(
                 source="tushare",
                 scope_key=universe,
                 range_start=sync_start,
                 target_date=target_dt,
-                fields=TRUSTED_DAILY_FIELDS,
+                fields=evidence_fields,
                 previous_open_session=previous_open_session,
             )
         if args.wrapper_managed_finalize:
@@ -1649,8 +1827,9 @@ def _main_under_writer_lock(writer_lock: data_writer_lock) -> None:
                         "scope_key": universe,
                         "range_start": sync_start,
                         "range_end": target_dt,
-                        "fields": list(TRUSTED_DAILY_FIELDS),
+                        "fields": list(evidence_fields),
                         "previous_open_session": previous_open_session,
+                        "allow_initial_history": history_mode,
                     },
                 )
             except SystemExit:
@@ -1670,6 +1849,8 @@ def _main_under_writer_lock(writer_lock: data_writer_lock) -> None:
                 unchanged=precheck_noop,
                 previous_open_session=previous_open_session,
                 allow_trusted=True,
+                fields=evidence_fields,
+                allow_initial_history=history_mode,
             )
         if evidence_result is not None:
             log.info("Source evidence: %s", evidence_result)

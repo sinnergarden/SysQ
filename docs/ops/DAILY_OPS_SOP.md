@@ -116,10 +116,30 @@ python scripts/data_sync.py \
   --apply --resume-from-run-id <failed_run_id>
 ```
 
-resume 只适用于单个 target-date 的 applied CSI800/CSI1800 正式 wrapper 路径，且与
+resume 适用于 applied CSI800/CSI1800 正式 wrapper 的单日同步和显式历史修复，且与
 `--force-fetch` 互斥；系统不会猜测 latest run 或按文件时间选择来源。旧 run 必须是同一
-wrapper 入口、universe、target-date 的 failed/untrusted terminal receipt，trusted run、
-历史多日 repair、scope 不匹配或 receipt/payload 被修改都会被拒绝或重新远端请求。
+wrapper 入口、universe、target-date 和 repair-start-date 的 failed/untrusted terminal
+receipt；trusted run、scope 不匹配或 receipt/payload 被修改都会被拒绝或重新远端请求。
+
+历史修复首次运行和中断续跑分别为：
+
+```bash
+python scripts/data_sync.py \
+  --universe csi1800 \
+  --target-date YYYY-MM-DD \
+  --repair-start-date YYYY-MM-DD \
+  --apply
+
+python scripts/data_sync.py \
+  --universe csi1800 \
+  --target-date YYYY-MM-DD \
+  --repair-start-date YYYY-MM-DD \
+  --apply --resume-from-run-id <failed_run_id>
+```
+
+CSI1800 历史修复只使用 immutable historical union 作为请求集合，不把 3131 只历史 union
+写成 current registry。每个远端请求都是精确 shard；正常恢复不要删除 raw evidence，也不要
+改用 `--force-fetch`。
 
 wrapper 每次 resume 仍创建新的 shared run_id，并在同一个 writer lock 内运行完整 market
 child、outer repairs 和 readiness。已验证且持久化的 success/empty supplier shard 会克隆到

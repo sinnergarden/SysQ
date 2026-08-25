@@ -65,6 +65,7 @@ stable
 - `harness/checks/check_no_latest_model_resolution.py`
 - `tests/test_source_audit.py`：source/field scope、PIT timestamps、mutation hash、连续水位
 - `tests/test_data_sync_csi1800.py`：required endpoint/scope、Qlib readback、terminal ownership
+- `tests/test_daily_incremental_fastpath.py`：历史请求 exact-shard identity、payload 校验与 resume
 - `tests/ops/test_universe_history.py`：canonical history mutation 的保守 scope 与 crash recovery
 - `validate_daily_stage_manifest()`：独立复核日期、策略、stage status；子进程 exit 0 不能代替 manifest
 - preopen 内部任一阶段失败必须非零退出，且成功后才写 active attempt
