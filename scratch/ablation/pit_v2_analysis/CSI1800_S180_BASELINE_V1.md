@@ -1,5 +1,10 @@
 # CSI1800 S180 accounting baseline v1
 
+> **已退休。** 本文记录的是旧 signal + Top5-candidate corporate-action v2 的历史
+> accounting-complete 对照。当前唯一可信 benchmark 是
+> `CSI1800_S180_baseline_v1_r1`；详见
+> `scratch/ablation/pit_v2_analysis/CSI1800_S180_BASELINE_V1_R1.md`。
+
 ## 结论
 
 `CSI1800_S180_baseline_v1` 通过 execution/accounting 层验收，可作为后续 Top-tail、feature 和 model 研究的统一基准。冻结的 PIT universe、signal、model lineage 与策略参数均未改变。
