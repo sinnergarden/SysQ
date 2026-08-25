@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pandas as pd
 import pytest
 
+from qsys.data.collector import TushareCollector
+from qsys.data.source_audit import SourceAuditStore
 from qsys.ops.shareholder_sync import (
     _calendar_year_chunks,
     _paged_call,
@@ -27,6 +31,75 @@ CONTRACT = {
         "top10_holder_stale_days": {"max_median_days": 250, "max_row_days": 365},
     },
 }
+
+
+def test_historical_shareholder_pages_emit_exact_durable_receipts(tmp_path: Path) -> None:
+    holder = pd.DataFrame({
+        "ts_code": ["000001.SZ"], "ann_date": ["20200315"],
+        "end_date": ["20191231"], "holder_num": [1000],
+    })
+    top10 = pd.DataFrame({
+        "ts_code": ["000001.SZ"], "ann_date": ["20200430"],
+        "end_date": ["20191231"], "holder_name": ["holder"],
+        "hold_ratio": [10.0],
+    })
+
+    collector = TushareCollector.__new__(TushareCollector)
+    collector.max_retries = 1
+    collector._collector_interfaces = {}
+    collector.pro = SimpleNamespace(
+        stk_holdernumber=lambda **_kwargs: holder.copy(),
+        top10_holders=lambda **kwargs: (
+            top10.copy() if kwargs.get("period") == "20200331" else pd.DataFrame()
+        ),
+    )
+    audit_root = tmp_path / "audit"
+    audit = SourceAuditStore(audit_root / "audit.db")
+    run_id = "shareholder-history"
+    audit.append_event(run_id, "run_started", {
+        "entrypoint": "scripts/data_sync.py", "universe": "csi1800",
+        "target_date": "20200331", "range_start": "20200101",
+    })
+
+    holder_rows, top10_rows, _ = fetch_shareholder_backfill(
+        collector,
+        start_date="2020-01-01",
+        end_date="2020-04-30",
+        run_id=run_id,
+        audit_store=audit,
+        scope_key="csi1800",
+        universe="csi1800",
+        evidence_symbols=["000001.SZ", "000002.SZ"],
+    )
+
+    assert len(holder_rows) == 1
+    assert len(top10_rows) == 1
+    with sqlite3.connect(audit_root / "audit.db") as conn:
+        receipts = conn.execute(
+            "SELECT endpoint,status,requested_scope_json,payload_path,response_date_max "
+            "FROM fetch_receipts "
+            "WHERE run_id=? ORDER BY rowid",
+            (run_id,),
+        ).fetchall()
+        links = set(conn.execute(
+            "SELECT dataset,field_name FROM field_receipt_links WHERE run_id=?",
+            (run_id,),
+        ).fetchall())
+    assert {row[0] for row in receipts} == {"stk_holdernumber", "top10_holders"}
+    for _, _, scope_json, _, _ in receipts:
+        scope = json.loads(scope_json)
+        assert scope["symbols"] == ["000001.SZ", "000002.SZ"]
+        assert scope["symbol_count"] == 2
+        assert scope["checkpoint_key"]
+        assert "offset=" in scope["request_variant"]
+    assert any(row[1] == "success" and row[3] for row in receipts)
+    top10_receipt = next(
+        row for row in receipts if row[0] == "top10_holders" and row[1] == "success"
+    )
+    assert top10_receipt[4] == "20200430"
+    assert json.loads(top10_receipt[2])["date_end"] == "20200331"
+    assert ("shareholder_holdernumber", "holder_num") in links
+    assert ("shareholder_top10", "hold_ratio") in links
 
 
 def test_normalises_corrupt_period_and_aggregates_top10() -> None:

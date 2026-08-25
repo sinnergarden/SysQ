@@ -1309,3 +1309,20 @@ def test_certifier_has_no_producer_or_workflow_imports() -> None:
         cwd=ROOT, check=False, capture_output=True, text=True,
     )
     assert probe.returncode == 0, probe.stderr
+
+
+def test_real_shareholder_dependencies_remain_fail_closed() -> None:
+    dependencies = yaml.safe_load(REAL_DEPENDENCIES.read_text(encoding="utf-8"))
+    shareholder = [
+        dependency
+        for feature in dependencies["features"]
+        for dependency in feature["dependencies"]
+        if str(dependency["dataset"]).startswith("shareholder_")
+    ]
+
+    assert shareholder
+    assert all(
+        "SHAREHOLDER_REVISION_CAPABILITY_UNVERIFIED"
+        in dependency.get("blocker_codes", [])
+        for dependency in shareholder
+    )

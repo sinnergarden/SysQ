@@ -357,6 +357,7 @@ def _main_under_writer_lock(writer_lock=None):
     sync_run_id = None
     wrapper_audit = None
     receipt_root = None
+    wrapper_resume_proof = None
     if args.config:
         import yaml
         c = yaml.safe_load(Path(args.config).read_text())
@@ -404,7 +405,7 @@ def _main_under_writer_lock(writer_lock=None):
                     range_start=repair_start_date,
                 )
                 if args.resume_from_run_id:
-                    _attach_explicit_resume(
+                    wrapper_resume_proof = _attach_explicit_resume(
                         cmd,
                         audit_store=wrapper_audit,
                         run_id=sync_run_id,
@@ -451,7 +452,7 @@ def _main_under_writer_lock(writer_lock=None):
                 range_start=repair_start_date,
             )
             if args.resume_from_run_id:
-                _attach_explicit_resume(
+                wrapper_resume_proof = _attach_explicit_resume(
                     cmd,
                     audit_store=wrapper_audit,
                     run_id=sync_run_id,
@@ -520,6 +521,12 @@ def _main_under_writer_lock(writer_lock=None):
     data_root = Path(cfg.get_path("root")).resolve()
     audit_run_root = _data_sync_run_root(data_root, run_id)
     report = {}
+    historical_evidence_symbols = symbols
+    if repair_start_date and universe == "csi1800":
+        from scripts.ops.sync_csi800_daily import _load_csi1800_research_union
+
+        historical_evidence_symbols, registry = _load_csi1800_research_union(data_root)
+        report["historical_evidence_registry"] = registry
     if not args.skip_universe_history_catchup:
         from qsys.ops.universe_history import (
             UniverseHistoryCatchupError,
@@ -608,6 +615,11 @@ def _main_under_writer_lock(writer_lock=None):
         freshness = normalise_shareholder_freshness(
             financial_config.get("feature_freshness", {}).get("shareholder")
         )
+        shareholder_history_start = (
+            f"{repair_start_date[:4]}-{repair_start_date[4:6]}-{repair_start_date[6:8]}"
+            if repair_start_date
+            else args.shareholder_start_date
+        )
         shareholder_result = run_shareholder_history_repair(
             data_root=data_root,
             symbols=symbols,
@@ -617,12 +629,18 @@ def _main_under_writer_lock(writer_lock=None):
             output_dir=(
                 audit_run_root / "shareholder_repair"
             ),
-            start_date=args.shareholder_start_date,
+            start_date=shareholder_history_start,
             required_history_start_date=(
                 _shareholder_required_history_start_date(
                     resolved_target, args.shareholder_history_lookback_days
                 )
             ),
+            run_id=run_id if repair_start_date else None,
+            audit_store=wrapper_audit if repair_start_date else None,
+            resume_proof=wrapper_resume_proof if repair_start_date else None,
+            scope_key=universe,
+            evidence_universe=universe,
+            evidence_symbols=historical_evidence_symbols,
         )
         report["shareholder_repair"] = shareholder_result
         if shareholder_result["status"] not in {"healthy", "success"}:
@@ -630,6 +648,32 @@ def _main_under_writer_lock(writer_lock=None):
                 f"{universe} shareholder history repair failed: "
                 f"{shareholder_result['summary_path']}"
             )
+        if repair_start_date:
+            holder_evidence = wrapper_audit.evaluate_history_field_receipts(
+                run_id=run_id,
+                dataset="shareholder_holdernumber",
+                field_endpoints={
+                    "ann_date": "stk_holdernumber",
+                    "holder_num": "stk_holdernumber",
+                },
+            )
+            top10_evidence = wrapper_audit.evaluate_history_field_receipts(
+                run_id=run_id,
+                dataset="shareholder_top10",
+                field_endpoints={
+                    "ann_date": "top10_holders",
+                    "hold_ratio": "top10_holders",
+                },
+            )
+            report["shareholder_source_evidence"] = {
+                "holdernumber": holder_evidence,
+                "top10": top10_evidence,
+            }
+            if (
+                holder_evidence["status"] != "success"
+                or top10_evidence["status"] != "success"
+            ):
+                raise RuntimeError("shareholder historical source evidence failed")
 
     from qsys.data.health import inspect_qlib_data_health
 
