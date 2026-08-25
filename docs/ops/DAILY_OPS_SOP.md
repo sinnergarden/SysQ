@@ -569,3 +569,29 @@ Monitoring 告警触发点：
 - **不在 reconciliation gap 未处理时推进 production execution**；production/broker mode 下 gap 默认 blocking。
 - **production stage batch 必须显式确认 `--allow-production`**，且不代表无人值守实盘。
 - **不在 blocked 时生成假推荐或假 plan**。
+
+---
+
+## 13. Read-only PIT Baseline Certification
+
+baseline certifier 不属于 daily producer，也不会拉数、修复或推进 watermark。operator 必须显式
+给出 coverage evidence run IDs；可选 mutation run IDs 只断言指定 mutation run 存在。certifier
+仍会审查 SQLite 中完整 mutation ledger，不能借省略参数漏掉 mutation。禁止按 latest 或 mtime 猜测：
+
+```bash
+python scripts/research/certify_pit_baseline.py \
+  --request configs/audit/csi1800_s180_baseline_v1_r1.yaml \
+  --audit-db data/audit/audit.db \
+  --evidence-run-id <run-id> \
+  --mutation-run-id <run-id> \
+  --output-root data/research/pit_certifications
+```
+
+退出 0 表示 `CERTIFIED`；退出 2 表示完整报告已生成但为 `BLOCKED`/`REAUDIT_REQUIRED`；
+退出 1 是输入或运行错误。零 evidence run 是合法审计请求，会生成 hash-linked `BLOCKED`
+receipt。报告位于 `<output-root>/<baseline_id>/<audit_id>/`，同一 audit identity 不允许覆盖。
+先查看 `exceptions.parquet` 的 source/dataset/endpoint/field/instrument/date 定位列，再选择新的显式
+evidence run 重审。若新 evidence 的每个相交字段 watermark 都覆盖 mutation 日期，且其 aware UTC
+`updated_at` 不早于 mutation `ingested_at`，mutation 会标记为 `ACCOUNTED`；UNKNOWN、无效/naive
+时间或多字段中任一字段证据较旧仍要求重审。certifier 本身不承担 producer 的 checkpoint/resume
+或重拉职责。

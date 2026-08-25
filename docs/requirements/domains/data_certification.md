@@ -11,6 +11,8 @@ date 交集是否具备可复核的 PIT 信任链。不负责采集、修复、�
 
 draft
 
+entrypoint 已实现；首个真实 `CERTIFIED` baseline 前不升级 stable。
+
 ### Source
 
 正式治理 use case；从 UC_DAILY_OPS 的 evidence producer 和 UC_DIAGNOSTICS 的只读检查
@@ -43,16 +45,22 @@ Qlib readback 和 terminal watermark 做交集验证，产出不可变 certifica
 - 显式 source / dataset / fields / instruments / date range；
 - `data/audit/audit.db` 中 append-only receipts、mutations、journal、trusted watermarks；
 - `docs/requirements/contracts/tushare_daily.yaml` endpoint capability contract；
-- 后续 PR 提供的 coverage/exceptions Parquet（本阶段未实现）。
+- 显式 baseline request、96-feature dependency assertion、coverage evidence run IDs；
+- 可选 mutation run IDs 只做存在性断言，实际交集始终覆盖完整 mutation ledger。
+- mutation 只有在每个相交 dependency scope 的 selected-evidence coverage、字段 watermark 日期范围
+  和 aware UTC `updated_at >= ingested_at` 都成立时才为 `ACCOUNTED`；UNKNOWN 或任一字段未满足均重审。
+- terminal coverage 必须回链 receipt 中精确 normalized field link；声明 source manifest 时三处
+  backlink 均须非空一致，formal shareholder dependency 必须同时具备 config 与 signal sidecar lineage。
 
 ### Outputs
 
-- 后续 canonical certifier 生成的不可变 certification artifact；
-- fail-closed exceptions（任何未覆盖交集均不得被 min/max watermark 吞并）。
+- `<output-root>/<baseline_id>/<audit_id>/audit_scope.json`；
+- 同目录的 `coverage.parquet`、`exceptions.parquet`、`audit_receipt.json`；
+- `CERTIFIED`、`BLOCKED` 或 `REAUDIT_REQUIRED`，并保留可定位的 fail-closed exceptions。
 
 ### Canonical Entrypoints
 
-- `scripts/research/certify_pit_baseline.py`（仅预留登记；本阶段不实现）。
+- `scripts/research/certify_pit_baseline.py`（已实现，只读）。
 
 该 entrypoint 必须只读，不得 import/call daily fetch、repair、research runner 或 production
 runner。daily evidence 仍由 `UC_DAILY_OPS` 的既有 entrypoint 生产。
@@ -62,12 +70,13 @@ runner。daily evidence 仍由 `UC_DAILY_OPS` 的既有 entrypoint 生产。
 - `data/audit/audit.db` — 最小 SQLite evidence SOT；
 - `data/audit/source_runs/{run_id}/receipt.json` — per-run immutable export；
 - `data/raw/evidence/tushare/{endpoint}/{run_id}/{receipt_id}.parquet` — supplier raw response；
-- future certification artifact / coverage exception Parquet — 本阶段未实现，不能写成已交付。
+- `<output-root>/<baseline_id>/<audit_id>/{audit_scope.json,coverage.parquet,exceptions.parquet,audit_receipt.json}`。
 
 ### Required Checks
 
 - `harness/checks/check_usecase_registry.py`
 - `tests/test_source_audit.py`
+- `tests/test_pit_baseline_certification.py`
 
 ### Execution Guidance For Future Audit Tasks
 
@@ -97,10 +106,13 @@ reviewer_agent
 ### Allowed Paths
 
 - `scripts/research/certify_pit_baseline.py`
-- `qsys/data/source_audit.py`
+- `qsys/pit_certification.py`
+- `configs/audit/csi1800_s180_baseline_v1_r1.yaml`
+- `configs/audit/feature_dependencies/v3a_plus_liquidity_financial_rc_v1.yaml`
 - `docs/requirements/`
 - `docs/CONTRACTS.md`
-- `tests/test_source_audit.py`
+- `docs/ops/DAILY_OPS_SOP.md`
+- `tests/test_pit_baseline_certification.py`
 
 ### Forbidden Paths
 
@@ -109,8 +121,18 @@ reviewer_agent
 - `qsys/model/`, `qsys/signal/`, `qsys/backtest/`
 - `qsys/broker/`, `qsys/trader/`, `qsys/ledger/`
 
-### Open Questions
+### Operator Command
 
-- coverage/exceptions Parquet 与 certification artifact schema 在后续 certifier PR 定义；
-- 在此之前，daily terminal watermark 只证明对应连续范围的 ingestion evidence 闭环，
-  不等价于一份历史 PIT baseline certification。
+```bash
+python scripts/research/certify_pit_baseline.py \
+  --request configs/audit/csi1800_s180_baseline_v1_r1.yaml \
+  --audit-db data/audit/audit.db \
+  --evidence-run-id <explicit-run-id> \
+  --mutation-run-id <explicit-run-id> \
+  --output-root data/research/pit_certifications
+```
+
+不得猜测 latest/mtime。零 evidence run 仍生成完整 `BLOCKED` 报告并退出 2；输入错误退出 1。
+同一 deterministic audit 目录禁止覆盖；所有文件先在 baseline root 唯一 staging 中完成并校验，
+再在 flock 下原子发布。watermark 必须能回链 trusted terminal receipt、精确六 gates、raw supplier
+payload 以及与 consumed instruments/date 完全一致的 requested scope，否则 coverage 为 missing。

@@ -346,16 +346,25 @@ usecases:
     artifacts:
       - data/audit/audit.db
       - data/audit/source_runs/{run_id}/receipt.json
-      - future certification artifact (not implemented in this phase)
+      - <output-root>/<baseline_id>/<audit_id>/audit_scope.json
+      - <output-root>/<baseline_id>/<audit_id>/coverage.parquet
+      - <output-root>/<baseline_id>/<audit_id>/exceptions.parquet
+      - <output-root>/<baseline_id>/<audit_id>/audit_receipt.json
     checks:
       - harness/checks/check_usecase_registry.py
+      - harness/checks/check_no_latest_model_resolution.py
+      - harness/checks/check_model_resolution_boundary.py
       - tests/test_source_audit.py
+      - tests/test_pit_baseline_certification.py
     allowed_paths:
       - scripts/research/certify_pit_baseline.py
-      - qsys/data/source_audit.py
+      - qsys/pit_certification.py
+      - configs/audit/csi1800_s180_baseline_v1_r1.yaml
+      - configs/audit/feature_dependencies/v3a_plus_liquidity_financial_rc_v1.yaml
       - docs/requirements/
       - docs/CONTRACTS.md
-      - tests/test_source_audit.py
+      - docs/ops/DAILY_OPS_SOP.md
+      - tests/test_pit_baseline_certification.py
     forbidden_paths:
       - scripts/data_sync.py
       - scripts/run_daily.py

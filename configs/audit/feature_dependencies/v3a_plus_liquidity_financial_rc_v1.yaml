@@ -1,0 +1,1202 @@
+schema_version: feature_dependency_assertion_v1
+dependency_version: v3a_plus_liquidity_financial_rc_v1
+feature_list_id: v3a_plus_liquidity_financial_rc
+feature_count: 96
+features_sha256: 707364b53ec71d68503ca67702999a5c375af166a3ba390912a0a53b9ef0d25e
+lookback_contract:
+  runtime_max_lookback_trading_sessions: 756
+  input_warmup_calendar_days: 1461
+  provenance: runtime_feature_builders_plus_explicit_conservative_input_warmup
+features:
+- feature: $roe
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: fina_indicator
+    leaf_fields:
+    - roe
+    visibility: announcement_date_asof
+    pit_status: evidence_required
+    blocker_codes:
+    - FINANCIAL_FALLBACK_PROVENANCE_UNBOUND
+- feature: $grossprofit_margin
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: fina_indicator
+    leaf_fields:
+    - grossprofit_margin
+    visibility: announcement_date_asof
+    pit_status: evidence_required
+    blocker_codes:
+    - FINANCIAL_FALLBACK_PROVENANCE_UNBOUND
+- feature: $debt_to_assets
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: fina_indicator
+    leaf_fields:
+    - debt_to_assets
+    visibility: announcement_date_asof
+    pit_status: evidence_required
+    blocker_codes:
+    - FINANCIAL_FALLBACK_PROVENANCE_UNBOUND
+- feature: $op_cashflow
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: cashflow
+    leaf_fields:
+    - n_cashflow_act
+    visibility: announcement_date_asof
+    pit_status: evidence_required
+- feature: operating_cf_to_profit
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: cashflow
+    leaf_fields:
+    - n_cashflow_act
+    visibility: announcement_date_asof
+    pit_status: evidence_required
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: income
+    leaf_fields:
+    - n_income
+    visibility: announcement_date_asof
+    pit_status: evidence_required
+- feature: net_margin
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: income
+    leaf_fields:
+    - n_income
+    - revenue
+    visibility: announcement_date_asof
+    pit_status: evidence_required
+- feature: roa
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: income
+    leaf_fields:
+    - n_income
+    visibility: announcement_date_asof
+    pit_status: evidence_required
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: balancesheet
+    leaf_fields:
+    - total_assets
+    visibility: announcement_date_asof
+    pit_status: evidence_required
+- feature: roe_delta_252d
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: fina_indicator
+    leaf_fields:
+    - roe
+    visibility: announcement_date_asof
+    pit_status: evidence_required
+    blocker_codes:
+    - FINANCIAL_FALLBACK_PROVENANCE_UNBOUND
+- feature: grossprofit_margin_delta_252d
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: fina_indicator
+    leaf_fields:
+    - grossprofit_margin
+    visibility: announcement_date_asof
+    pit_status: evidence_required
+    blocker_codes:
+    - FINANCIAL_FALLBACK_PROVENANCE_UNBOUND
+- feature: debt_to_assets_delta_252d
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: fina_indicator
+    leaf_fields:
+    - debt_to_assets
+    visibility: announcement_date_asof
+    pit_status: evidence_required
+    blocker_codes:
+    - FINANCIAL_FALLBACK_PROVENANCE_UNBOUND
+- feature: op_cashflow_delta_252d
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: cashflow
+    leaf_fields:
+    - n_cashflow_act
+    visibility: announcement_date_asof
+    pit_status: evidence_required
+- feature: revenue_yoy
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: income
+    leaf_fields:
+    - revenue
+    visibility: announcement_date_asof
+    pit_status: evidence_required
+- feature: profit_yoy
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: income
+    leaf_fields:
+    - n_income
+    visibility: announcement_date_asof
+    pit_status: evidence_required
+- feature: $pe
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: daily_basic
+    leaf_fields:
+    - pe
+    visibility: completed_session
+    pit_status: evidence_required
+- feature: $pb
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: daily_basic
+    leaf_fields:
+    - pb
+    visibility: completed_session
+    pit_status: evidence_required
+- feature: pe_rank_252d
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: daily_basic
+    leaf_fields:
+    - pe
+    visibility: completed_session
+    pit_status: evidence_required
+- feature: pb_rank_252d
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: daily_basic
+    leaf_fields:
+    - pb
+    visibility: completed_session
+    pit_status: evidence_required
+- feature: pe_delta_120d
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: daily_basic
+    leaf_fields:
+    - pe
+    visibility: completed_session
+    pit_status: evidence_required
+- feature: pb_delta_120d
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: daily_basic
+    leaf_fields:
+    - pb
+    visibility: completed_session
+    pit_status: evidence_required
+- feature: pe_percentile_756d
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: daily_basic
+    leaf_fields:
+    - pe
+    visibility: completed_session
+    pit_status: evidence_required
+- feature: pb_percentile_756d
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: daily_basic
+    leaf_fields:
+    - pb
+    visibility: completed_session
+    pit_status: evidence_required
+- feature: pe_distance_from_756d_low
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: daily_basic
+    leaf_fields:
+    - pe
+    visibility: completed_session
+    pit_status: evidence_required
+- feature: pb_distance_from_756d_low
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: daily_basic
+    leaf_fields:
+    - pb
+    visibility: completed_session
+    pit_status: evidence_required
+- feature: pe_repair_room_to_median
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: daily_basic
+    leaf_fields:
+    - pe
+    visibility: completed_session
+    pit_status: evidence_required
+- feature: pb_repair_room_to_median
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: daily_basic
+    leaf_fields:
+    - pb
+    visibility: completed_session
+    pit_status: evidence_required
+- feature: earnings_yield_proxy
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: income
+    leaf_fields:
+    - n_income
+    visibility: announcement_date_asof
+    pit_status: evidence_required
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: daily_basic
+    leaf_fields:
+    - total_mv
+    visibility: completed_session
+    pit_status: evidence_required
+- feature: peg_proxy
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: daily_basic
+    leaf_fields:
+    - pe
+    visibility: completed_session
+    pit_status: evidence_required
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: income
+    leaf_fields:
+    - n_income
+    visibility: announcement_date_asof
+    pit_status: evidence_required
+- feature: up_day_ratio_60d
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: daily
+    leaf_fields:
+    - close
+    visibility: completed_session
+    pit_status: evidence_required
+- feature: up_day_ratio_120d
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: daily
+    leaf_fields:
+    - close
+    visibility: completed_session
+    pit_status: evidence_required
+- feature: trend_smoothness_60d
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: daily
+    leaf_fields:
+    - close
+    visibility: completed_session
+    pit_status: evidence_required
+- feature: trend_smoothness_120d
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: daily
+    leaf_fields:
+    - close
+    visibility: completed_session
+    pit_status: evidence_required
+- feature: max_pullback_120d
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: daily
+    leaf_fields:
+    - close
+    visibility: completed_session
+    pit_status: evidence_required
+- feature: volatility_adjusted_return_60d
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: daily
+    leaf_fields:
+    - close
+    visibility: completed_session
+    pit_status: evidence_required
+- feature: volatility_adjusted_return_120d
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: daily
+    leaf_fields:
+    - close
+    visibility: completed_session
+    pit_status: evidence_required
+- feature: rps_60d
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: daily
+    leaf_fields:
+    - close
+    visibility: completed_session
+    pit_status: evidence_required
+- feature: rps_120d
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: daily
+    leaf_fields:
+    - close
+    visibility: completed_session
+    pit_status: evidence_required
+- feature: rps_20d
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: daily
+    leaf_fields:
+    - close
+    visibility: completed_session
+    pit_status: evidence_required
+- feature: rps_20d_minus_rps_60d
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: daily
+    leaf_fields:
+    - close
+    visibility: completed_session
+    pit_status: evidence_required
+- feature: rps_industry_60d
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: daily
+    leaf_fields:
+    - close
+    visibility: completed_session
+    pit_status: evidence_required
+  - source: tushare
+    dataset: stock_basic_classification
+    endpoint: stock_basic
+    leaf_fields:
+    - industry
+    visibility: current_snapshot_without_effective_time
+    pit_status: unknown
+    blocker_codes:
+    - STATIC_CLASSIFICATION_NOT_PIT_BOUND
+- feature: rps_industry_120d
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: daily
+    leaf_fields:
+    - close
+    visibility: completed_session
+    pit_status: evidence_required
+  - source: tushare
+    dataset: stock_basic_classification
+    endpoint: stock_basic
+    leaf_fields:
+    - industry
+    visibility: current_snapshot_without_effective_time
+    pit_status: unknown
+    blocker_codes:
+    - STATIC_CLASSIFICATION_NOT_PIT_BOUND
+- feature: price_percentile_252d
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: daily
+    leaf_fields:
+    - close
+    visibility: completed_session
+    pit_status: evidence_required
+- feature: distance_to_252d_low
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: daily
+    leaf_fields:
+    - close
+    visibility: completed_session
+    pit_status: evidence_required
+- feature: volume_up_down_ratio_60d
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: daily
+    leaf_fields:
+    - close
+    - volume
+    visibility: completed_session
+    pit_status: evidence_required
+- feature: above_avg_volume_ratio_60d
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: daily
+    leaf_fields:
+    - volume
+    visibility: completed_session
+    pit_status: evidence_required
+- feature: amount_ratio_20d
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: daily
+    leaf_fields:
+    - amount
+    visibility: completed_session
+    pit_status: evidence_required
+- feature: amount_ratio_60d
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: daily
+    leaf_fields:
+    - amount
+    visibility: completed_session
+    pit_status: evidence_required
+- feature: volume_spike_20d
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: daily
+    leaf_fields:
+    - volume
+    visibility: completed_session
+    pit_status: evidence_required
+- feature: volume_stability_60d
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: daily
+    leaf_fields:
+    - volume
+    visibility: completed_session
+    pit_status: evidence_required
+- feature: revenue_yoy_accel
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: income
+    leaf_fields:
+    - revenue
+    visibility: announcement_date_asof
+    pit_status: evidence_required
+- feature: profit_yoy_accel
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: income
+    leaf_fields:
+    - n_income
+    visibility: announcement_date_asof
+    pit_status: evidence_required
+- feature: roe_delta_756d
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: fina_indicator
+    leaf_fields:
+    - roe
+    visibility: announcement_date_asof
+    pit_status: evidence_required
+    blocker_codes:
+    - FINANCIAL_FALLBACK_PROVENANCE_UNBOUND
+- feature: net_margin_delta_756d
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: income
+    leaf_fields:
+    - n_income
+    - revenue
+    visibility: announcement_date_asof
+    pit_status: evidence_required
+- feature: ocf_margin
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: cashflow
+    leaf_fields:
+    - n_cashflow_act
+    visibility: announcement_date_asof
+    pit_status: evidence_required
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: income
+    leaf_fields:
+    - revenue
+    visibility: announcement_date_asof
+    pit_status: evidence_required
+- feature: ret_20d
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: daily
+    leaf_fields:
+    - close
+    visibility: completed_session
+    pit_status: evidence_required
+- feature: ret_60d
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: daily
+    leaf_fields:
+    - close
+    visibility: completed_session
+    pit_status: evidence_required
+- feature: ret_120d
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: daily
+    leaf_fields:
+    - close
+    visibility: completed_session
+    pit_status: evidence_required
+- feature: volume_ratio_20d
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: daily
+    leaf_fields:
+    - volume
+    visibility: completed_session
+    pit_status: evidence_required
+- feature: volume_ratio_60d
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: daily
+    leaf_fields:
+    - volume
+    visibility: completed_session
+    pit_status: evidence_required
+- feature: distance_to_120d_high
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: daily
+    leaf_fields:
+    - close
+    visibility: completed_session
+    pit_status: evidence_required
+- feature: distance_to_250d_high
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: daily
+    leaf_fields:
+    - close
+    visibility: completed_session
+    pit_status: evidence_required
+- feature: continuation_candidate_score
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: daily
+    leaf_fields:
+    - close
+    visibility: completed_session
+    pit_status: evidence_required
+- feature: repair_candidate_score
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: daily
+    leaf_fields:
+    - close
+    visibility: completed_session
+    pit_status: evidence_required
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: daily_basic
+    leaf_fields:
+    - pe
+    visibility: completed_session
+    pit_status: evidence_required
+- feature: overheat_risk_score
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: daily
+    leaf_fields:
+    - close
+    - volume
+    visibility: completed_session
+    pit_status: evidence_required
+- feature: value_trap_risk_score
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: daily
+    leaf_fields:
+    - close
+    visibility: completed_session
+    pit_status: evidence_required
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: daily_basic
+    leaf_fields:
+    - pe
+    visibility: completed_session
+    pit_status: evidence_required
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: fina_indicator
+    leaf_fields:
+    - roe
+    visibility: announcement_date_asof
+    pit_status: evidence_required
+    blocker_codes:
+    - FINANCIAL_FALLBACK_PROVENANCE_UNBOUND
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: income
+    leaf_fields:
+    - n_income
+    - revenue
+    visibility: announcement_date_asof
+    pit_status: evidence_required
+- feature: margin_eligible
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: margin
+    leaf_fields:
+    - rzye
+    visibility: completed_session_lag_1
+    pit_status: evidence_required
+- feature: margin_balance_to_float_mv
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: margin
+    leaf_fields:
+    - rzye
+    visibility: completed_session_lag_1
+    pit_status: evidence_required
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: daily_basic
+    leaf_fields:
+    - circ_mv
+    - total_mv
+    visibility: completed_session
+    pit_status: evidence_required
+- feature: margin_balance_chg_20d
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: margin
+    leaf_fields:
+    - rzye
+    visibility: completed_session_lag_1
+    pit_status: evidence_required
+- feature: margin_balance_chg_60d
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: margin
+    leaf_fields:
+    - rzye
+    visibility: completed_session_lag_1
+    pit_status: evidence_required
+- feature: margin_buy_intensity_20d
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: margin
+    leaf_fields:
+    - rzmre
+    visibility: completed_session_lag_1
+    pit_status: evidence_required
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: daily
+    leaf_fields:
+    - amount
+    visibility: completed_session
+    pit_status: evidence_required
+- feature: margin_repay_to_buy_20d
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: margin
+    leaf_fields:
+    - rzche
+    - rzmre
+    visibility: completed_session_lag_1
+    pit_status: evidence_required
+- feature: margin_crowding_score
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: margin
+    leaf_fields:
+    - rzye
+    visibility: completed_session_lag_1
+    pit_status: evidence_required
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: daily_basic
+    leaf_fields:
+    - circ_mv
+    - total_mv
+    visibility: completed_session
+    pit_status: evidence_required
+- feature: margin_trend_confirm_score
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: margin
+    leaf_fields:
+    - rzye
+    visibility: completed_session_lag_1
+    pit_status: evidence_required
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: daily
+    leaf_fields:
+    - close
+    visibility: completed_session
+    pit_status: evidence_required
+- feature: margin_overheat_risk_score
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: margin
+    leaf_fields:
+    - rzye
+    visibility: completed_session_lag_1
+    pit_status: evidence_required
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: daily_basic
+    leaf_fields:
+    - circ_mv
+    - total_mv
+    visibility: completed_session
+    pit_status: evidence_required
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: daily
+    leaf_fields:
+    - close
+    visibility: completed_session
+    pit_status: evidence_required
+- feature: holder_num_chg_qoq
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: shareholder_holdernumber
+    endpoint: stk_holdernumber
+    leaf_fields:
+    - holder_num
+    - ann_date
+    visibility: announcement_date_asof
+    pit_status: evidence_required
+- feature: holder_num_chg_2q
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: shareholder_holdernumber
+    endpoint: stk_holdernumber
+    leaf_fields:
+    - holder_num
+    - ann_date
+    visibility: announcement_date_asof
+    pit_status: evidence_required
+- feature: avg_shares_per_holder_chg_qoq
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: shareholder_holdernumber
+    endpoint: stk_holdernumber
+    leaf_fields:
+    - holder_num
+    - ann_date
+    visibility: announcement_date_asof
+    pit_status: evidence_required
+- feature: top10_holder_ratio_chg_qoq
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: shareholder_top10
+    endpoint: top10_holders
+    leaf_fields:
+    - hold_ratio
+    - ann_date
+    visibility: announcement_date_asof
+    pit_status: evidence_required
+- feature: holder_concentration_score
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: shareholder_holdernumber
+    endpoint: stk_holdernumber
+    leaf_fields:
+    - holder_num
+    - ann_date
+    visibility: announcement_date_asof
+    pit_status: evidence_required
+  - source: tushare
+    dataset: shareholder_top10
+    endpoint: top10_holders
+    leaf_fields:
+    - hold_ratio
+    - ann_date
+    visibility: announcement_date_asof
+    pit_status: evidence_required
+- feature: holder_squeeze_score
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: shareholder_holdernumber
+    endpoint: stk_holdernumber
+    leaf_fields:
+    - holder_num
+    - ann_date
+    visibility: announcement_date_asof
+    pit_status: evidence_required
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: daily
+    leaf_fields:
+    - close
+    visibility: completed_session
+    pit_status: evidence_required
+- feature: holder_price_confirm_score
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: shareholder_holdernumber
+    endpoint: stk_holdernumber
+    leaf_fields:
+    - holder_num
+    - ann_date
+    visibility: announcement_date_asof
+    pit_status: evidence_required
+  - source: tushare
+    dataset: shareholder_top10
+    endpoint: top10_holders
+    leaf_fields:
+    - hold_ratio
+    - ann_date
+    visibility: announcement_date_asof
+    pit_status: evidence_required
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: daily
+    leaf_fields:
+    - close
+    visibility: completed_session
+    pit_status: evidence_required
+- feature: holder_num_stale_days
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: shareholder_holdernumber
+    endpoint: stk_holdernumber
+    leaf_fields:
+    - holder_num
+    - ann_date
+    visibility: announcement_date_asof
+    pit_status: evidence_required
+- feature: top10_holder_stale_days
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: shareholder_top10
+    endpoint: top10_holders
+    leaf_fields:
+    - hold_ratio
+    - ann_date
+    visibility: announcement_date_asof
+    pit_status: evidence_required
+- feature: top10_holder_ratio
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: shareholder_top10
+    endpoint: top10_holders
+    leaf_fields:
+    - hold_ratio
+    - ann_date
+    visibility: announcement_date_asof
+    pit_status: evidence_required
+- feature: amount_log
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: daily
+    leaf_fields:
+    - amount
+    visibility: completed_session
+    pit_status: evidence_required
+- feature: amount_zscore_20
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: daily
+    leaf_fields:
+    - amount
+    visibility: completed_session
+    pit_status: evidence_required
+- feature: turnover_rate
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: daily_basic
+    leaf_fields:
+    - turnover_rate
+    visibility: completed_session
+    pit_status: evidence_required
+- feature: turnover_acceleration
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: daily_basic
+    leaf_fields:
+    - turnover_rate
+    visibility: completed_session
+    pit_status: evidence_required
+- feature: illiquidity
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: daily
+    leaf_fields:
+    - close
+    - amount
+    visibility: completed_session
+    pit_status: evidence_required
+- feature: volume_shock_3
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: daily
+    leaf_fields:
+    - volume
+    visibility: completed_session
+    pit_status: evidence_required
+- feature: volume_shock_5
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: daily
+    leaf_fields:
+    - volume
+    visibility: completed_session
+    pit_status: evidence_required
+- feature: amount_log_ind_zscore
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: daily
+    leaf_fields:
+    - amount
+    visibility: completed_session
+    pit_status: evidence_required
+  - source: tushare
+    dataset: stock_basic_classification
+    endpoint: stock_basic
+    leaf_fields:
+    - industry
+    visibility: current_snapshot_without_effective_time
+    pit_status: unknown
+    blocker_codes:
+    - STATIC_CLASSIFICATION_NOT_PIT_BOUND
+- feature: turnover_rate_ind_zscore
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: canonical_daily
+    endpoint: daily_basic
+    leaf_fields:
+    - turnover_rate
+    visibility: completed_session
+    pit_status: evidence_required
+  - source: tushare
+    dataset: stock_basic_classification
+    endpoint: stock_basic
+    leaf_fields:
+    - industry
+    visibility: current_snapshot_without_effective_time
+    pit_status: unknown
+    blocker_codes:
+    - STATIC_CLASSIFICATION_NOT_PIT_BOUND
+- feature: ttm_revenue_yoy
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: income_sidecar
+    endpoint: income
+    leaf_fields:
+    - revenue
+    - end_date
+    - report_type
+    - ann_date
+    visibility: announcement_date_asof
+    pit_status: unknown
+    blocker_codes:
+    - UNBOUND_SOURCE_ARTIFACT
+    - REVISION_VISIBILITY_UNPROVEN
+- feature: single_q_revenue_yoy
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: income_sidecar
+    endpoint: income
+    leaf_fields:
+    - revenue
+    - end_date
+    - report_type
+    - ann_date
+    visibility: announcement_date_asof
+    pit_status: unknown
+    blocker_codes:
+    - UNBOUND_SOURCE_ARTIFACT
+    - REVISION_VISIBILITY_UNPROVEN
+- feature: is_profitable_ttm
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: income_sidecar
+    endpoint: income
+    leaf_fields:
+    - n_income
+    - end_date
+    - report_type
+    - ann_date
+    visibility: announcement_date_asof
+    pit_status: unknown
+    blocker_codes:
+    - UNBOUND_SOURCE_ARTIFACT
+    - REVISION_VISIBILITY_UNPROVEN
+- feature: gross_margin_delta_yoy
+  required: true
+  dependencies:
+  - source: tushare
+    dataset: income_sidecar
+    endpoint: income
+    leaf_fields:
+    - revenue
+    - oper_cost
+    - end_date
+    - report_type
+    - ann_date
+    visibility: announcement_date_asof
+    pit_status: unknown
+    blocker_codes:
+    - UNBOUND_SOURCE_ARTIFACT
+    - REVISION_VISIBILITY_UNPROVEN
