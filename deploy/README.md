@@ -53,13 +53,15 @@ QSYS_TELEGRAM_ALLOWED_CHAT_ID=你的chat_id
 EOF
 chmod 600 /home/liuming/.openclaw/.env
 
-# 2. 从明确 revision 创建/更新 runtime，并完成所有路径与 PIT-only 检查
+# 2. 从明确的 40-hex commit revision 创建/更新 runtime，并完成所有路径与 PIT-only 检查
+#    将同一个 40-hex 值用于下面两个参数；不得填写 HEAD、branch、tag 或 latest。
+REVISION="<40-hex-commit>"
 python scripts/deploy_csi1800_pit_runtime.py \
-  --revision "$(git rev-parse HEAD)"
+  --revision "$REVISION"
 
-# 3. 安装 service/timer、daemon-reload 并 enable timer（不启动同步）
+# 3. 人工确认后安装 service/timer、daemon-reload 并 enable timer（不启动同步）
 python scripts/deploy_csi1800_pit_runtime.py \
-  --revision "$(git rev-parse HEAD)" --apply
+  --revision "$REVISION" --apply --confirm-deploy "$REVISION"
 
 # 4. 其余兼容/候选 units 可按需复制到 user 目录
 cp deploy/systemd/qsys-csi800-daily-sync.service ~/.config/systemd/user/

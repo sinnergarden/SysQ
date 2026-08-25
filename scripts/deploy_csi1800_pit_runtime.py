@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -21,6 +22,7 @@ from pathlib import Path
 SERVICE_NAME = "qsys-csi1800-pit-daily-sync.service"
 TIMER_NAME = "qsys-csi1800-pit-daily-sync.timer"
 DEFAULT_PYTHON = Path("/home/liuming/.openclaw/workspace/.mamba/envs/dl/bin/python")
+COMMIT_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 
 
 class DeploymentError(RuntimeError):
@@ -64,6 +66,11 @@ def _validate_repo(repo: Path) -> None:
 
 
 def _resolve_revision(cfg: DeploymentConfig) -> str:
+    if not COMMIT_SHA_RE.fullmatch(cfg.revision):
+        raise DeploymentError(
+            "revision must be an explicit 40-hex commit SHA; "
+            "HEAD, branches, tags, and latest are not accepted"
+        )
     result = _run_git(cfg.repo, "rev-parse", "--verify", f"{cfg.revision}^{{commit}}")
     resolved = result.stdout.strip()
     if not resolved:
@@ -161,16 +168,28 @@ def validate_runtime_contract(cfg: DeploymentConfig) -> None:
         raise DeploymentError(f"runtime is not a registered source worktree: {runtime}")
     _assert_clean_detached(runtime)
 
+    runtime_service_file = runtime / "deploy" / "systemd" / SERVICE_NAME
+    runtime_timer_file = runtime / "deploy" / "systemd" / TIMER_NAME
     required_files = {
         "runtime entrypoint": runtime / "scripts" / "data_sync.py",
         "fixed Python interpreter": cfg.python,
         "QSYS_SETTINGS_FILE": cfg.settings_file,
-        "systemd service unit": cfg.service_file,
-        "systemd timer unit": cfg.timer_file,
+        "runtime revision service unit": runtime_service_file,
+        "runtime revision timer unit": runtime_timer_file,
+        "selected systemd service unit": cfg.service_file,
+        "selected systemd timer unit": cfg.timer_file,
     }
     for label, path in required_files.items():
         if not path.is_file():
             raise DeploymentError(f"{label} is missing: {path}")
+    if cfg.service_file.read_bytes() != runtime_service_file.read_bytes():
+        raise DeploymentError(
+            "selected service unit does not match the pinned runtime revision"
+        )
+    if cfg.timer_file.read_bytes() != runtime_timer_file.read_bytes():
+        raise DeploymentError(
+            "selected timer unit does not match the pinned runtime revision"
+        )
     if not os.access(cfg.python, os.X_OK):
         raise DeploymentError(f"fixed Python interpreter is not executable: {cfg.python}")
     if not cfg.data_root.is_dir():
@@ -229,15 +248,31 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     script_repo = Path(__file__).resolve().parents[1]
     parser.add_argument("--repo", type=Path, default=script_repo)
-    parser.add_argument("--revision", required=True, help="explicit commit/tag resolving to a commit")
+    parser.add_argument(
+        "--revision",
+        required=True,
+        help="explicit 40-hex commit SHA (HEAD, branch, tag, and latest are rejected)",
+    )
     parser.add_argument("--runtime", type=Path, default=script_repo.parent / f"{script_repo.name}-runtime")
     parser.add_argument("--python", type=Path, default=DEFAULT_PYTHON)
     parser.add_argument("--settings-file", type=Path, default=script_repo / "config/settings.yaml")
     parser.add_argument("--data-root", type=Path, default=script_repo / "data")
-    parser.add_argument("--service-file", type=Path, default=script_repo / "deploy/systemd" / SERVICE_NAME)
-    parser.add_argument("--timer-file", type=Path, default=script_repo / "deploy/systemd" / TIMER_NAME)
+    parser.add_argument(
+        "--service-file",
+        type=Path,
+        help="optional override; bytes must match the pinned runtime unit",
+    )
+    parser.add_argument(
+        "--timer-file",
+        type=Path,
+        help="optional override; bytes must match the pinned runtime unit",
+    )
     parser.add_argument("--systemd-user-dir", type=Path, default=Path("~/.config/systemd/user"))
     parser.add_argument("--apply", action="store_true", help="install units and enable timer after preflight")
+    parser.add_argument(
+        "--confirm-deploy",
+        help="required with --apply; must exactly equal the explicit 40-hex --revision",
+    )
     parser.add_argument("--dry-run", action="store_true", help="explicit preflight-only mode (the default)")
     return parser
 
@@ -246,11 +281,23 @@ def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.apply and args.dry_run:
         raise SystemExit("--apply and --dry-run are mutually exclusive")
+    if args.apply:
+        if not args.confirm_deploy:
+            print("deployment preflight failed: --apply requires --confirm-deploy", file=sys.stderr)
+            return 2
+        if args.confirm_deploy != args.revision:
+            print(
+                "deployment preflight failed: --confirm-deploy must equal --revision",
+                file=sys.stderr,
+            )
+            return 2
     repo = _canonical(args.repo)
     # Keep the operator-supplied runtime path unresolved until
     # ``materialize_runtime`` has had a chance to reject a symlink.  Resolving
     # it here would erase the very condition the fail-closed check protects.
     runtime = args.runtime.expanduser().absolute()
+    service_file = args.service_file or (runtime / "deploy" / "systemd" / SERVICE_NAME)
+    timer_file = args.timer_file or (runtime / "deploy" / "systemd" / TIMER_NAME)
     cfg = DeploymentConfig(
         repo=repo,
         revision=args.revision,
@@ -262,8 +309,8 @@ def main(argv: list[str] | None = None) -> int:
         python=args.python.expanduser().absolute(),
         settings_file=_canonical(args.settings_file),
         data_root=_canonical(args.data_root),
-        service_file=_canonical(args.service_file),
-        timer_file=_canonical(args.timer_file),
+        service_file=_canonical(service_file),
+        timer_file=_canonical(timer_file),
         systemd_user_dir=_canonical(args.systemd_user_dir),
     )
     try:

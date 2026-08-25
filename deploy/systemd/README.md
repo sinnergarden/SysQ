@@ -65,9 +65,10 @@ Install or update the pair:
 
 ```bash
 python scripts/deploy_csi1800_pit_runtime.py \
-  --revision "$(git rev-parse HEAD)"
+  --revision "<40-hex-commit>"
 python scripts/deploy_csi1800_pit_runtime.py \
-  --revision "$(git rev-parse HEAD)" --apply
+  --revision "<40-hex-commit>" --apply \
+  --confirm-deploy "<40-hex-commit>"
 systemctl --user disable --now qsys-csi800-daily-sync.timer
 systemctl --user stop qsys-csi800-daily-sync.service
 systemctl --user show qsys-csi800-daily-sync.service -p ActiveState -p SubState

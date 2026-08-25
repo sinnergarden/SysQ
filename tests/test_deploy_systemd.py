@@ -119,23 +119,26 @@ def _git(repo: Path, *args: str) -> None:
     subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True)
 
 
+def _git_stdout(repo: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", "-C", str(repo), *args], check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+
 def _fixture_config(tmp_path: Path) -> DeploymentConfig:
     repo = tmp_path / "source"
     (repo / "scripts").mkdir(parents=True)
     (repo / "config").mkdir()
     (repo / "data").mkdir()
+    (repo / "deploy/systemd").mkdir(parents=True)
+    runtime = tmp_path / "runtime"
+    stable_python = tmp_path / "python"
+    stable_python.symlink_to(Path(sys.executable))
     (repo / "scripts/data_sync.py").write_text("# canonical entrypoint\n", encoding="utf-8")
     (repo / "config/settings.yaml").write_text("settings: test\n", encoding="utf-8")
-    _git(repo, "init", "-q")
-    _git(repo, "config", "user.email", "test@example.invalid")
-    _git(repo, "config", "user.name", "Qsys test")
-    _git(repo, "add", ".")
-    _git(repo, "commit", "-qm", "fixture")
-
-    runtime = tmp_path / "runtime"
-    service = tmp_path / "service"
-    timer = tmp_path / "timer"
-    service.write_text(
+    service_template = repo / "deploy/systemd" / SERVICE_NAME
+    timer_template = repo / "deploy/systemd" / TIMER_NAME
+    service_template.write_text(
         "\n".join(
             [
                 "[Service]",
@@ -145,10 +148,10 @@ def _fixture_config(tmp_path: Path) -> DeploymentConfig:
                 f"Environment=QSYS_DATA_ROOT={repo / 'data'}",
                 f"ExecStartPre=/usr/bin/test -d {runtime}",
                 f"ExecStartPre=/usr/bin/test -f {runtime}/scripts/data_sync.py",
-                f"ExecStartPre=/usr/bin/test -x {sys.executable}",
+                f"ExecStartPre=/usr/bin/test -x {stable_python}",
                 f"ExecStartPre=/usr/bin/test -f {repo / 'config/settings.yaml'}",
                 f"ExecStartPre=/usr/bin/test -d {repo / 'data'}",
-                f"ExecStart={sys.executable} \\",
+                f"ExecStart={stable_python} \\",
                 f"    {runtime}/scripts/data_sync.py \\",
                 "    --universe csi1800 --apply",
             ]
@@ -156,12 +159,23 @@ def _fixture_config(tmp_path: Path) -> DeploymentConfig:
         + "\n",
         encoding="utf-8",
     )
-    timer.write_text(f"[Timer]\nUnit={SERVICE_NAME}\n", encoding="utf-8")
+    timer_template.write_text(f"[Timer]\nUnit={SERVICE_NAME}\n", encoding="utf-8")
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.email", "test@example.invalid")
+    _git(repo, "config", "user.name", "Qsys test")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", "fixture")
+    revision = _git_stdout(repo, "rev-parse", "HEAD")
+
+    service = tmp_path / "service"
+    timer = tmp_path / "timer"
+    service.write_bytes(service_template.read_bytes())
+    timer.write_bytes(timer_template.read_bytes())
     return DeploymentConfig(
         repo=repo,
-        revision="HEAD",
+        revision=revision,
         runtime=runtime,
-        python=Path(sys.executable),
+        python=stable_python,
         settings_file=repo / "config/settings.yaml",
         data_root=repo / "data",
         service_file=service,
@@ -200,6 +214,7 @@ def test_ignored_runtime_files_do_not_block_safe_revision_update(tmp_path: Path)
     (cfg.repo / ".gitignore").write_text("__pycache__/\n", encoding="utf-8")
     _git(cfg.repo, "add", ".gitignore")
     _git(cfg.repo, "commit", "-qm", "ignore runtime bytecode")
+    cfg = DeploymentConfig(**{**cfg.__dict__, "revision": _git_stdout(cfg.repo, "rev-parse", "HEAD")})
     materialize_runtime(cfg)
     cache = cfg.runtime / "scripts/__pycache__"
     cache.mkdir()
@@ -226,29 +241,59 @@ def test_valid_runtime_materializes_and_passes_contract(tmp_path: Path):
     validate_runtime_contract(cfg)
 
 
+@pytest.mark.parametrize("revision", ["HEAD", "main", "latest", "a" * 39, "g" * 40])
+def test_revision_requires_explicit_40_hex_commit(tmp_path: Path, revision: str):
+    cfg = _fixture_config(tmp_path)
+    cfg = DeploymentConfig(**{**cfg.__dict__, "revision": revision})
+    with pytest.raises(DeploymentError, match="explicit 40-hex"):
+        materialize_runtime(cfg)
+
+
 def test_cli_preserves_stable_python_symlink_used_by_unit(tmp_path: Path):
     cfg = _fixture_config(tmp_path)
-    stable_python = tmp_path / "python"
-    stable_python.symlink_to(Path(sys.executable))
-    cfg.service_file.write_text(
-        cfg.service_file.read_text(encoding="utf-8").replace(
-            str(sys.executable), str(stable_python)
-        ),
-        encoding="utf-8",
-    )
 
     assert deploy_main([
         "--repo", str(cfg.repo),
-        "--revision", "HEAD",
+        "--revision", cfg.revision,
         "--runtime", str(cfg.runtime),
-        "--python", str(stable_python),
+        "--python", str(cfg.python),
+        "--settings-file", str(cfg.settings_file),
+        "--data-root", str(cfg.data_root),
+        "--systemd-user-dir", str(cfg.systemd_user_dir),
+        "--dry-run",
+    ]) == 0
+
+
+def test_unit_override_must_match_pinned_runtime_bytes(tmp_path: Path):
+    cfg = _fixture_config(tmp_path)
+    materialize_runtime(cfg)
+    cfg.service_file.write_text(
+        cfg.service_file.read_text(encoding="utf-8").replace(
+            "--universe csi1800", "--universe csi800"
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(DeploymentError, match="does not match the pinned runtime revision"):
+        validate_runtime_contract(cfg)
+
+
+def test_apply_requires_matching_operator_confirmation(tmp_path: Path):
+    cfg = _fixture_config(tmp_path)
+    common = [
+        "--repo", str(cfg.repo),
+        "--revision", cfg.revision,
+        "--runtime", str(cfg.runtime),
+        "--python", str(cfg.python),
         "--settings-file", str(cfg.settings_file),
         "--data-root", str(cfg.data_root),
         "--service-file", str(cfg.service_file),
         "--timer-file", str(cfg.timer_file),
         "--systemd-user-dir", str(cfg.systemd_user_dir),
-        "--dry-run",
-    ]) == 0
+        "--apply",
+    ]
+    assert deploy_main(common) == 2
+    assert deploy_main(common + ["--confirm-deploy", "0" * 40]) == 2
+    assert not cfg.runtime.exists()
 
 
 def test_apply_enables_timer_but_never_starts_service(tmp_path: Path, monkeypatch):
@@ -271,6 +316,7 @@ def test_apply_enables_timer_but_never_starts_service(tmp_path: Path, monkeypatc
         ["systemctl", "--user", "daemon-reload"],
         ["systemctl", "--user", "enable", TIMER_NAME],
     ]
+    assert all("start" not in call and "--now" not in call for call in calls)
     assert (cfg.systemd_user_dir / SERVICE_NAME).is_file()
     assert (cfg.systemd_user_dir / TIMER_NAME).is_file()
 
@@ -279,5 +325,6 @@ def test_docs_materialize_and_validate_before_enable():
     docs = (SYSTEMD / "README.md").read_text(encoding="utf-8")
     materialize = docs.index("deploy_csi1800_pit_runtime.py")
     apply = docs.index("--apply", materialize)
+    confirm = docs.index("--confirm-deploy", apply)
     enable = docs.index("enable --now qsys-csi1800-pit-daily-sync.timer")
-    assert materialize < apply < enable
+    assert materialize < apply < confirm < enable
