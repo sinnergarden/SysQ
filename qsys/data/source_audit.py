@@ -133,6 +133,107 @@ def stable_scope_hash(values: Iterable[str]) -> str:
     return hashlib.sha256(_json_text(normalized).encode("utf-8")).hexdigest()
 
 
+def fetch_checkpoint_key(
+    *,
+    source: str,
+    endpoint: str,
+    contract_version: str,
+    scope_key: str,
+    universe: str,
+    date_start: str,
+    date_end: str,
+    symbols_sha256: str,
+    request_variant: str | None = None,
+    request_sha256: str | None = None,
+    schema_version: int = AUDIT_SCHEMA_VERSION,
+) -> str:
+    """Return the stable identity of one resumable remote request shard."""
+
+    normalized_start = _normalise_trade_date(date_start)
+    normalized_end = _normalise_trade_date(date_end)
+    if (
+        not re.fullmatch(r"\d{8}", normalized_start)
+        or not re.fullmatch(r"\d{8}", normalized_end)
+        or normalized_start > normalized_end
+    ):
+        raise ValueError("fetch checkpoint identity has an invalid date range")
+    if not re.fullmatch(r"[0-9a-f]{64}", str(symbols_sha256)):
+        raise ValueError("fetch checkpoint identity has an invalid symbols_sha256")
+    payload = {
+        "schema_version": int(schema_version),
+        "source": str(source),
+        "endpoint": str(endpoint),
+        "contract_version": str(contract_version),
+        "scope_key": str(scope_key),
+        "universe": str(universe),
+        "date_start": normalized_start,
+        "date_end": normalized_end,
+        "symbols_sha256": str(symbols_sha256),
+    }
+    if request_variant is not None:
+        if not str(request_variant).strip():
+            raise ValueError("fetch checkpoint request_variant cannot be empty")
+        payload["request_variant"] = str(request_variant)
+    if request_sha256 is not None:
+        if not re.fullmatch(r"[0-9a-f]{64}", str(request_sha256)):
+            raise ValueError("fetch checkpoint identity has an invalid request_sha256")
+        payload["request_sha256"] = str(request_sha256)
+    if not all(str(value).strip() for value in payload.values()):
+        raise ValueError("fetch checkpoint identity has an empty component")
+    return hashlib.sha256(_json_text(payload).encode("utf-8")).hexdigest()
+
+
+def checkpoint_requested_scope(
+    requested_scope: Mapping[str, Any],
+    *,
+    source: str,
+    endpoint: str,
+    contract_version: str,
+    scope_key: str,
+    universe: str,
+    request_variant: str | None = None,
+    request_sha256: str | None = None,
+) -> dict[str, Any]:
+    """Attach a deterministic checkpoint key without changing request semantics."""
+
+    scope = dict(requested_scope)
+    scope["scope_key"] = str(scope_key)
+    scope["universe"] = str(universe)
+    effective_variant = (
+        request_variant
+        if request_variant is not None
+        else scope.get("request_variant")
+    )
+    if effective_variant is not None:
+        scope["request_variant"] = str(effective_variant)
+    effective_request_sha256 = (
+        request_sha256
+        if request_sha256 is not None
+        else scope.get("request_sha256")
+    )
+    if (
+        request_sha256 is not None
+        and scope.get("request_sha256") is not None
+        and str(scope["request_sha256"]) != str(request_sha256)
+    ):
+        raise ValueError("requested_scope request_sha256 mismatch")
+    if effective_request_sha256 is not None:
+        scope["request_sha256"] = str(effective_request_sha256)
+    scope["checkpoint_key"] = fetch_checkpoint_key(
+        source=source,
+        endpoint=endpoint,
+        contract_version=contract_version,
+        scope_key=scope_key,
+        universe=universe,
+        date_start=str(scope.get("date_start") or ""),
+        date_end=str(scope.get("date_end") or ""),
+        symbols_sha256=str(scope.get("symbols_sha256") or ""),
+        request_variant=effective_variant,
+        request_sha256=effective_request_sha256,
+    )
+    return scope
+
+
 def redact_secrets(value: Any) -> Any:
     """Recursively redact credentials before they reach SQLite or JSON."""
 
@@ -301,6 +402,8 @@ class SourceAuditStore:
     def __init__(self, db_path: str | Path):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._resume_validation_token = uuid.uuid4().hex
+        self._validated_resume_cache: dict[tuple[str, str], dict[str, Any]] = {}
         self._init_schema()
 
     def _connect(self) -> sqlite3.Connection:
@@ -418,6 +521,426 @@ class SourceAuditStore:
                 "INSERT INTO audit_journal(run_id,event_type,payload_json,created_at) VALUES(?,?,?,?)",
                 (run_id, event_type, _json_text(payload or {}), utc_now()),
             )
+
+    def validate_resume_run(
+        self,
+        *,
+        resume_from_run_id: str,
+        expected_entrypoint: str,
+        universe: str,
+        target_date: str,
+        expected_receipt_sha256: str | None = None,
+    ) -> dict[str, str]:
+        """Validate one immutable failed terminal snapshot against the SQLite SOT."""
+
+        resume_from_run_id = validate_run_id(resume_from_run_id)
+        data_root = self._data_root()
+        receipt_path = resolve_under(
+            data_root,
+            data_root / "audit" / "source_runs" / resume_from_run_id / "receipt.json",
+        )
+        if not receipt_path.is_file():
+            raise ValueError(f"resume source receipt missing: {resume_from_run_id}")
+        receipt_bytes = receipt_path.read_bytes()
+        receipt_sha256 = hashlib.sha256(receipt_bytes).hexdigest()
+        if expected_receipt_sha256 is not None:
+            if not re.fullmatch(r"[0-9a-f]{64}", str(expected_receipt_sha256)):
+                raise ValueError("expected resume receipt SHA-256 is invalid")
+            if receipt_sha256 != str(expected_receipt_sha256):
+                raise ValueError("resume source receipt SHA-256 mismatch")
+        try:
+            receipt = json.loads(receipt_bytes)
+        except json.JSONDecodeError as exc:
+            raise ValueError("resume source receipt is invalid JSON") from exc
+        trust_state = str(receipt.get("trust_state") or "")
+        if receipt.get("run_id") != resume_from_run_id:
+            raise ValueError("resume source receipt run_id mismatch")
+        if receipt.get("schema_version") != AUDIT_SCHEMA_VERSION:
+            raise ValueError("resume source receipt schema_version mismatch")
+        if trust_state.startswith("trusted"):
+            raise ValueError("trusted terminal run cannot be used as resume source")
+        if trust_state != "untrusted":
+            raise ValueError(f"resume source is not an explicit failed run: {trust_state!r}")
+        expected_lineage = {
+            "entrypoint": str(expected_entrypoint),
+            "universe": str(universe),
+            "target_date": _normalise_trade_date(target_date),
+        }
+        if (
+            not expected_lineage["entrypoint"]
+            or not expected_lineage["universe"]
+            or not re.fullmatch(r"\d{8}", expected_lineage["target_date"])
+        ):
+            raise ValueError("expected resume run_started lineage is invalid")
+        journal = receipt.get("audit_journal")
+        fetch_rows = receipt.get("fetch_receipts")
+        field_links = receipt.get("field_receipt_links")
+        if not isinstance(journal, list):
+            raise ValueError("resume source terminal audit_journal is invalid")
+        if not isinstance(fetch_rows, list):
+            raise ValueError("resume source terminal fetch_receipts is invalid")
+        if not isinstance(field_links, list):
+            raise ValueError("resume source terminal field_receipt_links is invalid")
+
+        with self._connect() as conn:
+            db_journal = {}
+            trusted_in_db = False
+            for row in conn.execute(
+                "SELECT * FROM audit_journal WHERE run_id=? ORDER BY seq",
+                (resume_from_run_id,),
+            ).fetchall():
+                decoded = dict(row)
+                decoded["payload"] = json.loads(decoded.pop("payload_json"))
+                db_journal[int(decoded["seq"])] = decoded
+                if decoded["event_type"] == "terminal_gate_passed":
+                    trusted_in_db = True
+                if (
+                    decoded["event_type"] == "watermark_unchanged"
+                    and decoded["payload"].get("prior_trusted") is True
+                ):
+                    trusted_in_db = True
+            if trusted_in_db:
+                raise ValueError("trusted terminal run cannot be used as resume source")
+
+            db_fetches: dict[str, dict[str, Any]] = {}
+            for row in conn.execute(
+                "SELECT * FROM fetch_receipts WHERE run_id=? ORDER BY rowid",
+                (resume_from_run_id,),
+            ).fetchall():
+                decoded = dict(row)
+                decoded["requested_scope"] = json.loads(
+                    decoded.pop("requested_scope_json")
+                )
+                decoded["response_columns"] = json.loads(
+                    decoded.pop("response_columns_json")
+                )
+                # Mirror the immutable receipt decoder byte-for-byte.  The
+                # existing v1 export retains a null error_json key while also
+                # exposing error=null; compatibility is intentional here.
+                if decoded["error_json"]:
+                    decoded["error"] = json.loads(decoded.pop("error_json"))
+                else:
+                    decoded["error"] = None
+                db_fetches[str(decoded["receipt_id"])] = decoded
+
+            db_links = {
+                (
+                    str(row["run_id"]),
+                    str(row["dataset"]),
+                    str(row["field_name"]),
+                    str(row["receipt_id"]),
+                )
+                for row in conn.execute(
+                    "SELECT * FROM field_receipt_links WHERE run_id=?",
+                    (resume_from_run_id,),
+                ).fetchall()
+            }
+
+        matched = False
+        terminal_failure_marker = False
+        for event in journal:
+            if not isinstance(event, Mapping):
+                continue
+            try:
+                seq = int(event.get("seq"))
+            except (TypeError, ValueError):
+                continue
+            exact_db_event = dict(event) == db_journal.get(seq)
+            event_type = event.get("event_type")
+            payload = event.get("payload")
+            if exact_db_event and (
+                event_type in {"crash", "terminal_gate_failed"}
+                or (
+                    event_type == "watermark_unchanged"
+                    and isinstance(payload, Mapping)
+                    and payload.get("prior_trusted") is False
+                )
+            ):
+                terminal_failure_marker = True
+            if event_type != "run_started":
+                continue
+            payload = event.get("payload")
+            if not isinstance(payload, Mapping):
+                continue
+            try:
+                lineage = {
+                    "entrypoint": str(payload.get("entrypoint") or ""),
+                    "universe": str(payload.get("universe") or ""),
+                    "target_date": _normalise_trade_date(payload.get("target_date")),
+                }
+            except (TypeError, ValueError):
+                continue
+            if not re.fullmatch(r"\d{8}", lineage["target_date"]):
+                continue
+            if lineage == expected_lineage and exact_db_event:
+                matched = True
+        if not matched:
+            raise ValueError("resume source run_started lineage mismatch")
+        if not terminal_failure_marker:
+            raise ValueError("resume source terminal failure marker is missing or unverified")
+
+        terminal_receipt_ids: set[str] = set()
+        receipt_index: dict[tuple[str, str, str, str, str], dict[str, Any]] = {}
+        for row in fetch_rows:
+            if not isinstance(row, Mapping):
+                raise ValueError("resume source terminal fetch row is invalid")
+            receipt_id = str(row.get("receipt_id") or "")
+            if not receipt_id or receipt_id in terminal_receipt_ids:
+                raise ValueError("resume source terminal has duplicate/unknown receipt")
+            terminal_receipt_ids.add(receipt_id)
+            db_row = db_fetches.get(receipt_id)
+            if (
+                db_row is None
+                or row.get("run_id") != resume_from_run_id
+                or dict(row) != db_row
+            ):
+                raise ValueError("resume source terminal fetch row does not match SQLite")
+            if row.get("status") not in {"success", "empty"}:
+                continue
+            if row.get("payload_kind") != "raw_supplier":
+                continue
+            scope = row.get("requested_scope")
+            if not isinstance(scope, Mapping):
+                raise ValueError("resume source terminal fetch scope is invalid")
+            lookup_key = (
+                str(row.get("source") or ""),
+                str(row.get("endpoint") or ""),
+                str(row.get("contract_version") or ""),
+                str(scope.get("checkpoint_key") or ""),
+                _json_text(scope),
+            )
+            receipt_index[lookup_key] = dict(row)
+
+        links_by_receipt: dict[str, list[dict[str, str]]] = {}
+        terminal_link_keys: set[tuple[str, str, str, str]] = set()
+        for link in field_links:
+            if not isinstance(link, Mapping):
+                raise ValueError("resume source terminal field link is invalid")
+            link_key = (
+                str(link.get("run_id") or ""),
+                str(link.get("dataset") or ""),
+                str(link.get("field_name") or ""),
+                str(link.get("receipt_id") or ""),
+            )
+            if (
+                link_key in terminal_link_keys
+                or link_key not in db_links
+                or link_key[0] != resume_from_run_id
+                or link_key[3] not in terminal_receipt_ids
+                or dict(link) != {
+                    "run_id": link_key[0],
+                    "dataset": link_key[1],
+                    "field_name": link_key[2],
+                    "receipt_id": link_key[3],
+                }
+            ):
+                raise ValueError("resume source terminal field link does not match SQLite")
+            terminal_link_keys.add(link_key)
+            links_by_receipt.setdefault(link_key[3], []).append(dict(link))
+
+        proof = {
+            "resume_from_run_id": resume_from_run_id,
+            "receipt_path": str(receipt_path),
+            "receipt_sha256": receipt_sha256,
+            "validation_token": self._resume_validation_token,
+            **expected_lineage,
+        }
+        self._validated_resume_cache[(resume_from_run_id, receipt_sha256)] = {
+            "proof": dict(proof),
+            "receipt_index": receipt_index,
+            "links_by_receipt": links_by_receipt,
+            "validated_current_runs": set(),
+        }
+        return proof
+
+    def reuse_fetch_shard(
+        self,
+        *,
+        run_id: str,
+        resume_proof: Mapping[str, Any],
+        source: str,
+        endpoint: str,
+        contract_version: str,
+        requested_scope: Mapping[str, Any],
+    ) -> dict[str, Any] | None:
+        """Clone one verified durable remote shard into the fresh run."""
+
+        run_id = validate_run_id(run_id)
+        resume_from_run_id = validate_run_id(str(resume_proof.get("resume_from_run_id") or ""))
+        if run_id == resume_from_run_id:
+            raise ValueError("resume must create a fresh run_id")
+        receipt_sha256 = str(resume_proof.get("receipt_sha256") or "")
+        cache = self._validated_resume_cache.get(
+            (resume_from_run_id, receipt_sha256)
+        )
+        if cache is None or dict(resume_proof) != cache["proof"]:
+            raise ValueError("resume proof was not validated by this audit store")
+        validated_proof = cache["proof"]
+        expected_current_lineage = {
+            "entrypoint": validated_proof["entrypoint"],
+            "universe": validated_proof["universe"],
+            "target_date": validated_proof["target_date"],
+        }
+        if run_id not in cache["validated_current_runs"]:
+            with self._connect() as conn:
+                current_events = conn.execute(
+                    """SELECT payload_json FROM audit_journal
+                       WHERE run_id=? AND event_type='run_started' ORDER BY seq""",
+                    (run_id,),
+                ).fetchall()
+            current_lineage_ok = False
+            for event in current_events:
+                try:
+                    payload = json.loads(event["payload_json"])
+                    candidate = {
+                        "entrypoint": str(payload.get("entrypoint") or ""),
+                        "universe": str(payload.get("universe") or ""),
+                        "target_date": _normalise_trade_date(payload.get("target_date")),
+                    }
+                except (AttributeError, TypeError, json.JSONDecodeError):
+                    continue
+                if candidate == expected_current_lineage:
+                    current_lineage_ok = True
+                    break
+            if not current_lineage_ok:
+                raise ValueError("current run_started lineage does not match resume proof")
+            cache["validated_current_runs"].add(run_id)
+        expected_scope = dict(requested_scope)
+        checkpoint_key = str(expected_scope.get("checkpoint_key") or "")
+        if not checkpoint_key:
+            raise ValueError("resumable requested_scope is missing checkpoint_key")
+        expected_checkpoint_key = fetch_checkpoint_key(
+            source=source,
+            endpoint=endpoint,
+            contract_version=contract_version,
+            scope_key=str(expected_scope.get("scope_key") or ""),
+            universe=str(expected_scope.get("universe") or ""),
+            date_start=str(expected_scope.get("date_start") or ""),
+            date_end=str(expected_scope.get("date_end") or ""),
+            symbols_sha256=str(expected_scope.get("symbols_sha256") or ""),
+            request_variant=expected_scope.get("request_variant"),
+            request_sha256=expected_scope.get("request_sha256"),
+        )
+        if checkpoint_key != expected_checkpoint_key:
+            raise ValueError("resumable requested_scope checkpoint_key mismatch")
+        lookup_key = (
+            str(source),
+            str(endpoint),
+            str(contract_version),
+            checkpoint_key,
+            _json_text(expected_scope),
+        )
+        selected = cache["receipt_index"].get(lookup_key)
+        if selected is None:
+            return None
+        try:
+            frame = self._verified_reusable_frame(selected)
+        except Exception:
+            return None
+        if frame is None:
+            return None
+
+        receipt_id = uuid.uuid4().hex
+        reused_at = utc_now()
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                """INSERT INTO fetch_receipts(
+                    receipt_id,run_id,source,endpoint,contract_version,status,
+                    requested_scope_json,returned_rows,response_hash,response_columns_json,
+                    response_date_min,response_date_max,attempt_count,payload_kind,payload_path,payload_sha256,
+                    published_at,observed_at,error_json
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    receipt_id, run_id, selected["source"], selected["endpoint"],
+                    selected["contract_version"], selected["status"],
+                    _json_text(selected["requested_scope"]), selected["returned_rows"],
+                    selected["response_hash"], _json_text(selected["response_columns"]),
+                    selected["response_date_min"], selected["response_date_max"],
+                    selected["attempt_count"], selected["payload_kind"],
+                    selected["payload_path"], selected["payload_sha256"],
+                    selected["published_at"], selected["observed_at"], None,
+                ),
+            )
+            old_links = cache["links_by_receipt"].get(selected["receipt_id"], [])
+            for link in old_links:
+                conn.execute(
+                    "INSERT INTO field_receipt_links(run_id,dataset,field_name,receipt_id) VALUES(?,?,?,?)",
+                    (run_id, link["dataset"], link["field_name"], receipt_id),
+                )
+            conn.execute(
+                "INSERT INTO audit_journal(run_id,event_type,payload_json,created_at) VALUES(?,?,?,?)",
+                (
+                    run_id,
+                    "fetch_shard_reused",
+                    _json_text({
+                        "resume_from_run_id": resume_from_run_id,
+                        "source_receipt_id": selected["receipt_id"],
+                        "receipt_id": receipt_id,
+                        "source": source,
+                        "endpoint": endpoint,
+                        "checkpoint_key": checkpoint_key,
+                        "reused_at": reused_at,
+                    }),
+                    reused_at,
+                ),
+            )
+        return {
+            "frame": frame,
+            "receipt_id": receipt_id,
+            "status": str(selected["status"]),
+            "source_receipt_id": str(selected["receipt_id"]),
+        }
+
+    def _verified_reusable_frame(self, row: Mapping[str, Any]) -> pd.DataFrame | None:
+        response_columns = row.get("response_columns")
+        if not isinstance(response_columns, list):
+            return None
+        if row.get("error") is not None:
+            return None
+        if not str(row.get("receipt_id") or "").strip():
+            return None
+        try:
+            if int(row.get("attempt_count")) < 1:
+                return None
+        except (TypeError, ValueError):
+            return None
+        if not isinstance(row.get("observed_at"), str) or not row["observed_at"].strip():
+            return None
+        if row.get("published_at") is not None and not isinstance(row["published_at"], str):
+            return None
+        if row["status"] == "empty":
+            if (
+                int(row["returned_rows"]) != 0
+                or row["payload_path"] is not None
+                or row["payload_sha256"] is not None
+            ):
+                return None
+            frame = pd.DataFrame(columns=response_columns)
+        else:
+            if not row["payload_path"] or not row["payload_sha256"]:
+                return None
+            data_root = self._data_root()
+            relative_path = Path(str(row["payload_path"]))
+            if relative_path.is_absolute():
+                return None
+            path = resolve_under(data_root, data_root / relative_path)
+            if not path.is_file():
+                return None
+            if hashlib.sha256(path.read_bytes()).hexdigest() != row["payload_sha256"]:
+                return None
+            frame = pd.read_parquet(path)
+            if frame.empty or len(frame) != int(row["returned_rows"]):
+                return None
+        metadata = normalized_response_metadata(frame)
+        if (
+            metadata["response_hash"] != row["response_hash"]
+            or metadata["response_columns"] != response_columns
+            or metadata["response_date_min"] != row["response_date_min"]
+            or metadata["response_date_max"] != row["response_date_max"]
+        ):
+            return None
+        return frame
 
     def record_fetch(
         self,
