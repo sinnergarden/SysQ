@@ -90,6 +90,45 @@ def _resolve_target_date(
     )
 
 
+def _normalize_date_arg(value: str, *, name: str) -> str:
+    """Normalize an operator date and reject ambiguous values."""
+
+    normalized = str(value).strip().replace("-", "")
+    if len(normalized) != 8 or not normalized.isdigit():
+        raise ValueError(f"{name} must be YYYYMMDD")
+    try:
+        datetime.strptime(normalized, "%Y%m%d")
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a valid YYYYMMDD date") from exc
+    return normalized
+
+
+def _resolve_sync_window(
+    target_dt: str,
+    repair_start_date: str | None = None,
+) -> dict[str, str]:
+    """Resolve an explicit daily or operator-requested historical window.
+
+    Normal daily runs are deliberately independent of Qlib's watermark.  A
+    historical range is available only when an operator explicitly supplies
+    ``--repair-start-date``.
+    """
+
+    target = _normalize_date_arg(target_dt, name="target date")
+    if repair_start_date is None:
+        start = target
+        mode = "daily_single_day"
+    else:
+        start = _normalize_date_arg(repair_start_date, name="repair-start-date")
+        if start > target:
+            raise ValueError(
+                "repair-start-date must be on or before target date "
+                f"({start} > {target})"
+            )
+        mode = "explicit_historical_repair" if start < target else "daily_single_day"
+    return {"mode": mode, "start_date": start, "target_date": target}
+
+
 def _check_stock_data_status(store: StockDataStore, codes: list[str], target_dt: str) -> dict:
     """
     Per-stock latest date check.
@@ -160,12 +199,12 @@ def _truthy_flags(values: pd.Series) -> pd.Series:
     return numeric.ne(0) | text.isin({"true", "t", "yes", "y", "on"})
 
 
-def _canonical_symbols_with_data_on_date(
+def _canonical_symbol_availability_on_date(
     store: StockDataStore,
     symbols: list[str],
     target_dt: str,
-) -> set[str]:
-    """Return symbols with an actual canonical row on ``target_dt``.
+) -> tuple[set[str], list[dict[str, object]]]:
+    """Return available symbols and auditable exclusions for ``target_dt``.
 
     The canonical store is the source of truth for raw availability.  Only a
     non-null numeric close is eligible for the same-date comparison. Explicit
@@ -175,6 +214,7 @@ def _canonical_symbols_with_data_on_date(
 
     target_dt = str(target_dt).replace("-", "")[:8]
     available: set[str] = set()
+    exclusions: list[dict[str, object]] = []
     for symbol in sorted(set(symbols)):
         try:
             frame = store.load_daily(symbol)
@@ -182,20 +222,42 @@ def _canonical_symbols_with_data_on_date(
             raise RuntimeError(
                 f"Failed to inspect canonical data for {symbol} on {target_dt}: {exc}"
             ) from exc
+        reasons: list[str] = []
         if frame is None or frame.empty or "trade_date" not in frame.columns:
+            exclusions.append({"ts_code": symbol, "reasons": ["missing_target_row"]})
             continue
         target_rows = frame.loc[_target_date_values(frame["trade_date"]) == target_dt]
         if target_rows.empty:
+            exclusions.append({"ts_code": symbol, "reasons": ["missing_target_row"]})
             continue
         if "close" not in target_rows.columns:
+            exclusions.append({"ts_code": symbol, "reasons": ["missing_close_column"]})
             continue
         close = pd.to_numeric(target_rows["close"], errors="coerce")
+        if close.isna().any():
+            reasons.append("null_close")
         eligible = close.notna()
         for flag_column in ("paused", "is_suspended"):
             if flag_column in target_rows.columns:
-                eligible &= ~_truthy_flags(target_rows[flag_column])
+                flagged = _truthy_flags(target_rows[flag_column])
+                if flagged.any():
+                    reasons.append(flag_column)
+                eligible &= ~flagged
         if eligible.any():
             available.add(symbol)
+        else:
+            exclusions.append({"ts_code": symbol, "reasons": sorted(set(reasons))})
+    return available, exclusions
+
+
+def _canonical_symbols_with_data_on_date(
+    store: StockDataStore,
+    symbols: list[str],
+    target_dt: str,
+) -> set[str]:
+    """Compatibility wrapper returning only the available symbol set."""
+
+    available, _ = _canonical_symbol_availability_on_date(store, symbols, target_dt)
     return available
 
 
@@ -267,7 +329,9 @@ def _repair_same_date_qlib_gap(
     the caller must abort before readiness can be reported.
     """
 
-    canonical = _canonical_symbols_with_data_on_date(store, symbols, target_dt)
+    canonical, canonical_exclusions = _canonical_symbol_availability_on_date(
+        store, symbols, target_dt
+    )
     qlib_before = _qlib_symbols_with_data_on_date(adapter, symbols, target_dt)
     missing_before = sorted(canonical - qlib_before)
     summary = {
@@ -277,6 +341,8 @@ def _repair_same_date_qlib_gap(
         "qlib_symbols_with_data_before_count": len(qlib_before),
         "missing_symbols": missing_before,
         "missing_count": len(missing_before),
+        "canonical_exclusions": canonical_exclusions,
+        "canonical_exclusion_count": len(canonical_exclusions),
         "repaired_symbols": [],
         "qlib_symbols_with_data_after_count": len(qlib_before),
         "residual_symbols": missing_before,
@@ -311,62 +377,6 @@ def _repair_same_date_qlib_gap(
     if missing_after:
         summary["error"] = "same-date Qlib gap remains after convert_fix_symbols"
     return summary
-
-
-def _resolve_catchup_start(
-    adapter: QlibAdapter,
-    store: StockDataStore,
-    target_dt: str,
-) -> str:
-    """Return the first open session missing from the qlib materialized view.
-
-    The qlib calendar is the durable watermark for the last completed
-    conversion.  The canonical trade calendar is used to step forward because
-    a stale qlib calendar cannot resolve sessions that have not been converted
-    yet.  If the two calendars cannot establish a safe interval, fail closed
-    instead of guessing with weekday dates.
-    """
-    cal_path = adapter.qlib_dir / "calendars" / "day.txt"
-    if not cal_path.exists():
-        return target_dt
-
-    qlib_dates = [
-        line.strip().replace("-", "")
-        for line in cal_path.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    ]
-    if not qlib_dates:
-        return target_dt
-
-    qlib_latest = max(qlib_dates)
-    if qlib_latest >= target_dt:
-        return target_dt
-
-    calendar = store.get_calendar()
-    if calendar is None or calendar.empty:
-        raise ValueError(
-            "Cannot resolve catch-up window: canonical trade calendar is empty"
-        )
-    required = {"cal_date", "is_open"}
-    if not required.issubset(calendar.columns):
-        raise ValueError(
-            "Cannot resolve catch-up window: canonical trade calendar lacks "
-            f"columns {sorted(required - set(calendar.columns))}"
-        )
-
-    open_dates = sorted(
-        calendar.loc[calendar["is_open"] == 1, "cal_date"]
-        .astype(str)
-        .str.replace("-", "", regex=False)
-        .loc[lambda values: (values > qlib_latest) & (values <= target_dt)]
-        .tolist()
-    )
-    if not open_dates:
-        raise ValueError(
-            "Cannot resolve catch-up window from canonical calendar: "
-            f"qlib_latest={qlib_latest}, target={target_dt}"
-        )
-    return open_dates[0]
 
 
 # Index codes refreshed daily alongside stock data
@@ -458,8 +468,8 @@ def _do_raw_fetch(
 
     A true single-day repair uses ``update_daily``: all six market-wide
     trade-date endpoints are fetched once, and only the requested universe is
-    written.  A multi-day/catch-up window deliberately keeps the historical
-    path because it has different range and merge semantics.
+    written.  An explicitly requested multi-day repair deliberately keeps the
+    historical path because it has different range and merge semantics.
     """
     if not codes:
         return {"status": "skipped", "reason": "all_stocks_already_up_to_date"}
@@ -477,9 +487,8 @@ def _do_raw_fetch(
                 force=True,
             )
         else:
-            # Keep history/catch-up behavior unchanged.  In particular, this
-            # path may fetch prior dates and is never used for a single-day
-            # missing-symbol repair.
+            # This path may fetch prior dates, and is only reachable for an
+            # explicit historical repair window.
             collector.update_universe_history(
                 universe=codes,  # pass the list directly (get_universe handles list)
                 start_date=fetch_start,
@@ -644,6 +653,11 @@ def main() -> None:
         help="CSI800 current constituents or immutable as-of CSI1800 snapshot",
     )
     parser.add_argument("--target-date", default=None, help="Target trade date (YYYY-MM-DD or YYYYMMDD)")
+    parser.add_argument(
+        "--repair-start-date",
+        default=None,
+        help="Explicit historical repair start (YYYY-MM-DD or YYYYMMDD); must be <= target date",
+    )
     parser.add_argument("--no-qlib-convert", action="store_true", help="Skip qlib conversion after raw fetch")
     parser.add_argument("--apply", action="store_true", help="Apply data changes (default is dry-run)")
     parser.add_argument("--force-fetch", action="store_true", help="Skip pre-check, force fetch all stocks")
@@ -652,6 +666,8 @@ def main() -> None:
 
     # Resolve target date
     target_dt = _resolve_target_date(args.target_date)
+    sync_window = _resolve_sync_window(target_dt, args.repair_start_date)
+    sync_start = sync_window["start_date"]
     target_date = f"{target_dt[:4]}-{target_dt[4:6]}-{target_dt[6:]}"
     do_apply = args.apply
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -688,12 +704,7 @@ def main() -> None:
     t0 = time.time()
     collector = TushareCollector()
     store = StockDataStore()
-    catchup_start = _resolve_catchup_start(adapter, store, target_dt)
-    report["catchup_window"] = {
-        "start_date": catchup_start,
-        "target_date": target_dt,
-        "is_catchup": catchup_start < target_dt,
-    }
+    report["sync_window"] = dict(sync_window)
     if universe == "csi1800":
         from qsys.ops.pit_universe_snapshot import resolve_csi1800_pit_snapshot
 
@@ -741,21 +752,21 @@ def main() -> None:
     t0 = time.time()
     raw_summary = {"skipped": True, "reason": "all_up_to_date", "elapsed_s": 0}
     if do_apply:
-        fetch_codes = codes if catchup_start < target_dt else status_check["missing"]
+        fetch_codes = codes if sync_start < target_dt else status_check["missing"]
         if not fetch_codes:
             log.info("All stocks up to date, skipping raw fetch.")
         else:
-            if catchup_start < target_dt:
+            if sync_start < target_dt:
                 log.info(
-                    "Catch-up window detected: %s -> %s; fetching full universe",
-                    catchup_start,
+                    "Explicit historical repair: %s -> %s; fetching full universe",
+                    sync_start,
                     target_dt,
                 )
             raw_summary = _do_raw_fetch(
                 collector,
                 fetch_codes,
                 target_dt,
-                since_date=catchup_start,
+                since_date=sync_start,
             )
         report["steps"]["raw_fetch"] = raw_summary
     else:
@@ -784,7 +795,7 @@ def main() -> None:
     qlib_summary = {"mode": "skipped", "status": "skipped"}
     if do_apply and not args.no_qlib_convert:
         since = (
-            f"{catchup_start[:4]}-{catchup_start[4:6]}-{catchup_start[6:]}"
+            f"{sync_start[:4]}-{sync_start[4:6]}-{sync_start[6:]}"
         )
         try:
             t1 = time.time()
