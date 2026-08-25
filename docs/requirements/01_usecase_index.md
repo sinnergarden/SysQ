@@ -26,6 +26,7 @@
 | UC_UI_ANALYSIS | UI Analysis | ui_analysis | draft | ui_agent |
 | UC_CANDIDATE_PROMOTION | Candidate Promotion | promotion | stable | operator_agent |
 | UC_DIAGNOSTICS | Diagnostics | diagnostics | draft | reviewer_agent |
+| UC_PIT_DATA_CERTIFICATION | PIT Data Certification | data_certification | draft | reviewer_agent |
 | UC_STOCK_FUNDAMENTAL_RESEARCH | Stock Fundamental Research | stock_research | draft | stock_research_agent |
 | UC_TEMPORARY_REQUESTS | Temporary Requests | temporary_requests | experimental | main_agent |
 
@@ -44,5 +45,6 @@
 | ui_analysis | 只读可视化层（含 single-stock review） |
 | promotion | 晋级候选、shadow/prod pointer |
 | diagnostics | 质量检查与 harness 验证 |
+| data_certification | 对既有 source evidence 做只读 PIT baseline 认证；不调度采集或 daily |
 | stock_research | 基本面/消息面 agent 研究（prompt-based） |
 | temporary_requests | 临时/实验性请求 |

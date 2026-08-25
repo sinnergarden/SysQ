@@ -11,6 +11,7 @@ from qsys.data.storage import StockDataStore
 from qsys.data._collector_utils import _normalize_date, _dedupe_list
 from qsys.data._merge_helpers import merge_trade_frames, prepare_financial_frame
 from qsys.data._fetch_strategies import fetch_with_retry, fetch_by_stock_loop, fetch_by_date_loop
+from qsys.data.source_audit import normalized_response_metadata, stable_scope_hash, utc_now
 import numpy as np
 
 class TushareCollector:
@@ -749,6 +750,84 @@ class TushareCollector:
     def _fetch_with_retry(self, api_func, **kwargs):
         return fetch_with_retry(api_func, self.max_retries, log.warning, **kwargs)
 
+    def _fetch_daily_endpoint_with_receipt(
+        self,
+        endpoint_name: str,
+        *,
+        run_id: str | None,
+        audit_store,
+        requested_scope: dict,
+        evidence_fields: tuple[str, ...] = (),
+        required_column_groups: tuple[tuple[str, ...], ...] = (),
+        required_endpoint: bool = True,
+        **kwargs,
+    ) -> tuple[pd.DataFrame, str | None]:
+        """Fetch one endpoint and append a normalized, secret-safe receipt."""
+
+        api = self._get_interface_api(endpoint_name)
+        attempt_count = 0
+
+        def counted_api(**call_kwargs):
+            nonlocal attempt_count
+            attempt_count += 1
+            return api(**call_kwargs)
+
+        try:
+            frame = self._fetch_with_retry(counted_api, **kwargs)
+        except Exception as exc:
+            receipt_id = None
+            if audit_store is not None and run_id is not None:
+                empty_meta = normalized_response_metadata(pd.DataFrame())
+                receipt_id = audit_store.record_fetch(
+                    run_id=run_id,
+                    source="tushare",
+                    endpoint=endpoint_name,
+                    status="failure",
+                    requested_scope=requested_scope,
+                    returned_rows=0,
+                    attempt_count=max(1, attempt_count),
+                    published_at=None,
+                    error=str(exc),
+                    **empty_meta,
+                )
+                if evidence_fields:
+                    audit_store.record_field_receipt_links(
+                        run_id=run_id, receipt_id=receipt_id, fields=evidence_fields
+                    )
+            if required_endpoint:
+                raise
+            return pd.DataFrame(), receipt_id
+
+        frame = frame if frame is not None else pd.DataFrame()
+        status = "empty" if frame.empty else "success"
+        required_keys = {"ts_code", "trade_date"}
+        if not frame.empty and not required_keys.issubset(frame.columns):
+            status = "partial"
+        if not frame.empty and any(not set(group).intersection(frame.columns) for group in required_column_groups):
+            status = "partial"
+        receipt_id = None
+        if audit_store is not None and run_id is not None:
+            receipt_id = audit_store.record_fetch(
+                run_id=run_id,
+                source="tushare",
+                endpoint=endpoint_name,
+                status=status,
+                requested_scope=requested_scope,
+                returned_rows=len(frame),
+                attempt_count=max(1, attempt_count),
+                # Tushare does not expose a trustworthy publication timestamp
+                # for these responses.  Do not infer one from trade_date.
+                published_at=None,
+                observed_at=utc_now(),
+                payload_frame=frame if status in {"success", "partial"} else None,
+                **normalized_response_metadata(frame),
+            )
+            if evidence_fields:
+                audit_store.record_field_receipt_links(
+                    run_id=run_id, receipt_id=receipt_id, fields=evidence_fields
+                )
+        return frame, receipt_id
+
     def update_daily(
         self,
         date: str,
@@ -756,7 +835,9 @@ class TushareCollector:
         codes: Optional[list[str]] = None,
         include_financial: bool = True,
         force: bool = False,
-    ):
+        run_id: str | None = None,
+        audit_store=None,
+    ) -> dict:
         """
         Update stocks for one specific date using trade-date batch APIs.
 
@@ -774,6 +855,7 @@ class TushareCollector:
         if date is None:
             raise ValueError("daily update requires a target trade date")
         requested_codes = set(str(code) for code in (codes or []) if str(code).strip())
+        canonical_mutations: list[dict] = []
         cal = self.store.get_calendar()
         latest_open_date = None
         if cal is not None and not cal.empty and 'is_open' in cal.columns and 'cal_date' in cal.columns:
@@ -791,40 +873,121 @@ class TushareCollector:
         local_latest = self.store.get_global_latest_date()
         if local_latest is not None and local_latest >= date and not force and not requested_codes:
             log.info(f"Local data already up to date at {local_latest}, skipping Tushare fetch")
-            return
+            return {"status": "noop", "fetch_receipt_id": None, "mutations": []}
 
         log.info(f"Fetching daily data for {date}")
         
         try:
-            df_daily = self._fetch_with_retry(
-                self._get_interface_api("daily"),
+            request_scope = {
+                "date_start": date,
+                "date_end": date,
+                "symbol_count": len(requested_codes),
+                "symbols_sha256": stable_scope_hash(requested_codes),
+            }
+            df_daily, daily_receipt_id = self._fetch_daily_endpoint_with_receipt(
+                "daily",
+                run_id=run_id,
+                audit_store=audit_store,
+                requested_scope=request_scope,
+                evidence_fields=("open", "high", "low", "close", "volume"),
+                required_column_groups=(("open",), ("high",), ("low",), ("close",), ("vol", "volume")),
                 trade_date=date,
                 fields=self._get_interface_fields("daily"),
             )
 
-            df_basic = self._fetch_with_retry(
-                self._get_interface_api("daily_basic"),
+            df_basic, _ = self._fetch_daily_endpoint_with_receipt(
+                "daily_basic",
+                run_id=run_id,
+                audit_store=audit_store,
+                requested_scope=request_scope,
+                required_endpoint=False,
                 trade_date=date,
                 fields=self._get_interface_fields("daily_basic"),
             )
             if df_basic is None or df_basic.empty:
                 log.warning(f"{date} daily_basic empty")
 
-            df_adj = self._fetch_with_retry(
-                self._get_interface_api("adj_factor"),
+            df_adj, _ = self._fetch_daily_endpoint_with_receipt(
+                "adj_factor",
+                run_id=run_id,
+                audit_store=audit_store,
+                requested_scope=request_scope,
+                evidence_fields=("factor",),
+                required_column_groups=(("adj_factor", "factor"),),
                 trade_date=date,
                 fields=self._get_interface_fields("adj_factor"),
             )
 
-            df_limit = self._fetch_with_retry(
-                self._get_interface_api("stk_limit"),
+            def _returned_symbols_for_target(frame: pd.DataFrame) -> set[str]:
+                if frame is None or frame.empty or not {"ts_code", "trade_date"}.issubset(frame.columns):
+                    return set()
+                dates = frame["trade_date"].astype(str).str.replace("-", "", regex=False).str[:8]
+                return set(frame.loc[dates == date, "ts_code"].dropna().astype(str))
+
+            required_endpoint_missing_symbols = {
+                "daily": sorted(requested_codes - _returned_symbols_for_target(df_daily)),
+                "adj_factor": sorted(requested_codes - _returned_symbols_for_target(df_adj)),
+            }
+
+            def _missing_required_values(
+                frame: pd.DataFrame, field_sources: dict[str, tuple[str, ...]]
+            ) -> dict[str, list[str]]:
+                result = {field: [] for field in field_sources}
+                if not requested_codes:
+                    return result
+                if frame is None or frame.empty or not {"ts_code", "trade_date"}.issubset(frame.columns):
+                    return {field: sorted(requested_codes) for field in field_sources}
+                dates = frame["trade_date"].astype(str).str.replace("-", "", regex=False).str[:8]
+                target_rows = frame.loc[
+                    dates == date
+                ].copy()
+                target_rows["ts_code"] = target_rows["ts_code"].astype(str)
+                for field, source_columns in field_sources.items():
+                    available = pd.Series(False, index=target_rows.index)
+                    for column in source_columns:
+                        if column in target_rows.columns:
+                            available |= pd.to_numeric(
+                                target_rows[column], errors="coerce"
+                            ).notna()
+                    symbols_with_value = set(
+                        target_rows.loc[available, "ts_code"].astype(str)
+                    )
+                    result[field] = sorted(requested_codes - symbols_with_value)
+                return result
+
+            required_field_missing_symbols = {
+                "daily": _missing_required_values(
+                    df_daily,
+                    {
+                        "open": ("open",),
+                        "high": ("high",),
+                        "low": ("low",),
+                        "close": ("close",),
+                        "volume": ("volume", "vol"),
+                    },
+                ),
+                "adj_factor": _missing_required_values(
+                    df_adj, {"factor": ("factor", "adj_factor")}
+                ),
+            }
+
+            df_limit, _ = self._fetch_daily_endpoint_with_receipt(
+                "stk_limit",
+                run_id=run_id,
+                audit_store=audit_store,
+                requested_scope=request_scope,
+                required_endpoint=False,
                 trade_date=date,
                 fields=self._get_interface_fields("stk_limit"),
             )
             if df_limit is None or df_limit.empty:
                 log.warning(f"{date} stk_limit empty")
-            df_moneyflow = self._fetch_with_retry(
-                self._get_interface_api("moneyflow"),
+            df_moneyflow, _ = self._fetch_daily_endpoint_with_receipt(
+                "moneyflow",
+                run_id=run_id,
+                audit_store=audit_store,
+                requested_scope=request_scope,
+                required_endpoint=False,
                 trade_date=date,
                 fields=self._get_interface_fields("moneyflow"),
             )
@@ -833,7 +996,13 @@ class TushareCollector:
 
             if df_daily.empty:
                 log.warning(f"No daily data for {date}")
-                return
+                return {
+                    "status": "empty",
+                    "fetch_receipt_id": daily_receipt_id,
+                    "mutations": [],
+                    "required_endpoint_missing_symbols": required_endpoint_missing_symbols,
+                    "required_field_missing_symbols": required_field_missing_symbols,
+                }
 
             # A trade-date endpoint should already be exact, but enforce the
             # boundary before any merge/write so an unexpected wider response
@@ -846,7 +1015,14 @@ class TushareCollector:
                 df_daily = df_daily[df_daily["ts_code"].astype(str).isin(requested_codes)].copy()
             if df_daily.empty:
                 log.warning(f"No requested stocks have daily data for {date}")
-                return
+                return {
+                    "status": "success",
+                    "fetch_receipt_id": daily_receipt_id,
+                    "mutations": [],
+                    "reason": "source_response_has_no_requested_symbols",
+                    "required_endpoint_missing_symbols": required_endpoint_missing_symbols,
+                    "required_field_missing_symbols": required_field_missing_symbols,
+                }
             if not requested_codes:
                 # ``update_daily(date)`` is the existing full-market API;
                 # use the exact symbols returned for this session as the
@@ -877,8 +1053,12 @@ class TushareCollector:
                 df_daily = self._merge_trade_frames(df_daily, df_moneyflow, keys=["ts_code", "trade_date"])
 
             # Margin financing (两融) - fetch and merge
-            margin_df = self._fetch_with_retry(
-                self._get_interface_api("margin"),
+            margin_df, _ = self._fetch_daily_endpoint_with_receipt(
+                "margin",
+                run_id=run_id,
+                audit_store=audit_store,
+                requested_scope=request_scope,
+                required_endpoint=False,
                 trade_date=date,
                 fields=self._get_interface_fields("margin"),
             )
@@ -918,6 +1098,21 @@ class TushareCollector:
             if margin_df is None or margin_df.empty:
                 ignore_columns += self.margin_cols
             df_daily = self._validate_and_clean(df_daily, "ALL", ignore_columns=ignore_columns)
+            bundle_receipt_id = daily_receipt_id
+            if audit_store is not None and run_id is not None:
+                bundle_receipt_id = audit_store.record_fetch(
+                    run_id=run_id,
+                    source="tushare",
+                    endpoint="daily_bundle",
+                    status="empty" if df_daily.empty else "success",
+                    requested_scope=request_scope,
+                    returned_rows=len(df_daily),
+                    attempt_count=1,
+                    payload_kind="derived",
+                    published_at=None,
+                    observed_at=utc_now(),
+                    **normalized_response_metadata(df_daily),
+                )
             codes = df_daily['ts_code'].unique()
             log.info(f"Saving data for {len(codes)} stocks...")
             
@@ -938,12 +1133,29 @@ class TushareCollector:
                         row[col] = np.nan
                     if previous is not None and row[col].isna().any():
                         row.loc[row[col].isna(), col] = previous.get(col)
-                self.store.save_daily(row, code, existing_df=existing_df)
+                mutations = self.store.save_daily(row, code, existing_df=existing_df) or []
+                for mutation in mutations:
+                    mutation["endpoint"] = "daily_bundle"
+                    mutation["fetch_receipt_id"] = bundle_receipt_id
+                # Feather commit happens inside save_daily.  Evidence is
+                # appended only afterwards; SQLite failure propagates and the
+                # terminal gate stays closed even though canonical recovery
+                # may be required.
+                if audit_store is not None and run_id is not None:
+                    audit_store.record_mutations(run_id=run_id, mutations=mutations)
+                canonical_mutations.extend(mutations)
                 count += 1
                 if count % 500 == 0:
                     log.info(f"Saved {count}/{len(codes)}")
             
             log.info(f"Daily update for {date} completed.")
+            return {
+                "status": "success",
+                "fetch_receipt_id": daily_receipt_id,
+                "mutations": canonical_mutations,
+                "required_endpoint_missing_symbols": required_endpoint_missing_symbols,
+                "required_field_missing_symbols": required_field_missing_symbols,
+            }
             
         except Exception as e:
             log.error(f"Update daily failed: {e}")

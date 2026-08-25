@@ -12,6 +12,44 @@ from typing import Any, Iterable
 import pandas as pd
 
 
+class UniverseHistoryCatchupError(RuntimeError):
+    """Catch-up failure carrying any conservative canonical write scope."""
+
+    def __init__(self, message: str, *, result: dict[str, Any]):
+        super().__init__(message)
+        self.result = result
+
+
+def _write_catchup_summary(result: dict[str, Any], output_dir: Path) -> Path:
+    """Durably expose mutation scope before a collector may partially write."""
+
+    summary_path = output_dir / "universe_history_catchup.json"
+    result["summary_path"] = str(summary_path)
+    descriptor, temporary = tempfile.mkstemp(
+        dir=output_dir, prefix=".universe_history_catchup.", suffix=".json.tmp"
+    )
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(result, handle, indent=2, ensure_ascii=False, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        Path(temporary).replace(summary_path)
+        directory_fd = os.open(output_dir, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    except Exception:
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+        Path(temporary).unlink(missing_ok=True)
+        raise
+    return summary_path
+
+
 def _resolve_data_root(
     *, project_root: Path | None = None, data_root: Path | None = None
 ) -> Path:
@@ -278,58 +316,78 @@ def run_universe_history_catchup(
         "apply": apply,
         "before": before,
         "backfilled_symbols": before["deficient_symbols"],
+        "canonical_mutated_symbols": [],
+        "canonical_mutation_range": None,
+        "canonical_mutation_scope_semantics": "none",
     }
-    if apply and before["deficient_symbols"]:
-        backup_dir = output_dir / "before"
-        backup_dir.mkdir(parents=True, exist_ok=True)
-        canonical = resolved_data_root / "canonical" / "daily"
-        for symbol in before["canonical_deficient_symbols"]:
-            source = canonical / f"{symbol}.feather"
-            if source.is_file():
-                shutil.copy2(source, backup_dir / source.name)
-        if before["canonical_deficient_symbols"]:
-            if collector is None:
-                from qsys.data.collector import TushareCollector
+    try:
+        if apply and before["deficient_symbols"]:
+            backup_dir = output_dir / "before"
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            canonical = resolved_data_root / "canonical" / "daily"
+            for symbol in before["canonical_deficient_symbols"]:
+                source = canonical / f"{symbol}.feather"
+                if source.is_file():
+                    shutil.copy2(source, backup_dir / source.name)
+            if before["canonical_deficient_symbols"]:
+                planned_symbols = sorted(before["canonical_deficient_symbols"])
+                # The collector has no changed-symbol return value.  Once this
+                # call begins, its complete planned scope is conservatively
+                # treated as possibly mutated, including on partial failure.
+                result["canonical_mutated_symbols"] = planned_symbols
+                result["canonical_mutation_range"] = {
+                    "range_start": before["required_start"],
+                    "range_end": before["as_of_date"],
+                }
+                result["canonical_mutation_scope_semantics"] = (
+                    "conservative_planned_scope_after_write_started"
+                )
+                result["status"] = "canonical_write_started"
+                _write_catchup_summary(result, output_dir)
+                if collector is None:
+                    from qsys.data.collector import TushareCollector
 
-                collector = TushareCollector()
-            collector.update_universe_history(
-                universe=before["canonical_deficient_symbols"],
-                start_date=before["required_start"],
-                end_date=as_of_date,
-                incremental=False,
-                batch_size=50,
-                include_moneyflow=True,
-                include_margin=True,
-            )
-        if adapter is None:
-            from qsys.data.adapter import QlibAdapter
+                    collector = TushareCollector()
+                collector.update_universe_history(
+                    universe=planned_symbols,
+                    start_date=before["required_start"],
+                    end_date=as_of_date,
+                    incremental=False,
+                    batch_size=50,
+                    include_moneyflow=True,
+                    include_margin=True,
+                )
+            if adapter is None:
+                from qsys.data.adapter import QlibAdapter
 
-            adapter = QlibAdapter(
-                qlib_dir=resolved_data_root / "qlib_bin",
-                raw_dir=canonical,
+                adapter = QlibAdapter(
+                    qlib_dir=resolved_data_root / "qlib_bin",
+                    raw_dir=canonical,
+                )
+            result["qlib_rebuild"] = adapter.convert_fix_symbols(
+                before["deficient_symbols"], refresh_universes=[]
             )
-        result["qlib_rebuild"] = adapter.convert_fix_symbols(
-            before["deficient_symbols"], refresh_universes=[]
-        )
-        result["registry_repair"] = repair_qlib_instrument_history_spans(
+            result["registry_repair"] = repair_qlib_instrument_history_spans(
+                data_root=resolved_data_root,
+                symbols=before["deficient_symbols"],
+            )
+            result["backup_dir"] = str(backup_dir)
+
+        after = inspect_universe_history(
             data_root=resolved_data_root,
-            symbols=before["deficient_symbols"],
+            symbols=symbols,
+            as_of_date=as_of_date,
+            lookback_calendar_days=lookback_calendar_days,
         )
-        result["backup_dir"] = str(backup_dir)
-
-    after = inspect_universe_history(
-        data_root=resolved_data_root,
-        symbols=symbols,
-        as_of_date=as_of_date,
-        lookback_calendar_days=lookback_calendar_days,
-    )
-    result["after"] = after
-    if apply:
-        result["status"] = "success" if after["status"] == "pass" else "failed"
-    summary_path = output_dir / "universe_history_catchup.json"
-    summary_path.write_text(
-        json.dumps(result, indent=2, ensure_ascii=False, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    result["summary_path"] = str(summary_path)
-    return result
+        result["after"] = after
+        if apply:
+            result["status"] = "success" if after["status"] == "pass" else "failed"
+        _write_catchup_summary(result, output_dir)
+        return result
+    except Exception as exc:
+        result["status"] = "failed"
+        result["error"] = repr(exc)
+        _write_catchup_summary(result, output_dir)
+        raise UniverseHistoryCatchupError(
+            f"universe history catch-up failed: {exc}", result=result
+        ) from exc

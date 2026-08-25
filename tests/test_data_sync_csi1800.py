@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+import hashlib
+import json
+import os
+import sqlite3
 import sys
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -9,19 +14,24 @@ import pytest
 
 from scripts import data_sync
 import scripts.ops.sync_csi800_daily as daily_sync
+from qsys.data.source_audit import SourceAuditStore, data_writer_lock
 from scripts.ops.sync_csi800_daily import (
     _abort_if_stage_failed,
     _canonical_symbols_with_data_on_date,
+    _publish_wrapper_terminal_gates,
     _repair_same_date_qlib_gap,
     _write_audit,
 )
 
 
-def test_data_sync_routes_csi1800_to_canonical_sync_entrypoint():
+def test_dry_run_does_not_forward_force_fetch_to_canonical_sync_entrypoint():
     with patch.object(
         sys,
         "argv",
-        ["data_sync.py", "--universe", "csi1800", "--target-date", "2026-08-21"],
+        [
+            "data_sync.py", "--universe", "csi1800",
+            "--target-date", "2026-08-21", "--force-fetch",
+        ],
     ), patch("scripts.data_sync.subprocess.run") as run:
         data_sync.main()
 
@@ -31,6 +41,240 @@ def test_data_sync_routes_csi1800_to_canonical_sync_entrypoint():
         "--universe", "csi1800", "--target-date", "2026-08-21"
     ]
     assert run.call_args.kwargs["check"] is True
+
+
+def test_applied_wrapper_passes_verified_lock_fd_and_one_run_id(tmp_path: Path):
+    with patch.object(
+        sys,
+        "argv",
+        [
+            "data_sync.py", "--universe", "csi1800",
+            "--target-date", "2026-08-21", "--apply", "--force-fetch",
+        ],
+    ), patch(
+        "scripts.data_sync.subprocess.run",
+        side_effect=subprocess.CalledProcessError(2, "sync"),
+    ) as run, patch(
+        "qsys.config.cfg.get_path", return_value=str(tmp_path)
+    ), pytest.raises(subprocess.CalledProcessError):
+        data_sync.main()
+
+    command = run.call_args.args[0]
+    assert command.count("--run-id") == 1
+    run_id = command[command.index("--run-id") + 1]
+    assert run_id.startswith("data_sync_")
+    assert "--wrapper-managed-finalize" in command
+    assert command.count("--force-fetch") == 1
+    inherited_fd = run.call_args.kwargs["pass_fds"][0]
+    assert run.call_args.kwargs["env"]["QSYS_DATA_WRITER_LOCK_FD"] == str(inherited_fd)
+    receipts = list((tmp_path / "audit" / "source_runs" / run_id).glob("receipt.json"))
+    assert len(receipts) == 1
+    assert json.loads(receipts[0].read_text())["trust_state"] == "untrusted"
+
+
+def test_applied_config_wrapper_forwards_force_fetch_to_shared_child(tmp_path: Path):
+    config = tmp_path / "sync.yaml"
+    config.write_text(
+        "\n".join(
+            [
+                "universe: csi800",
+                "date_range:",
+                "  end_date: '2026-08-21'",
+                "execution:",
+                "  apply: true",
+                "tasks:",
+                "  qlib_bin: true",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    with patch.object(
+        sys,
+        "argv",
+        ["data_sync.py", "--config", str(config), "--force-fetch"],
+    ), patch(
+        "scripts.data_sync.subprocess.run",
+        side_effect=subprocess.CalledProcessError(2, "sync"),
+    ) as run, patch(
+        "qsys.config.cfg.get_path", return_value=str(tmp_path)
+    ), pytest.raises(subprocess.CalledProcessError):
+        data_sync.main()
+
+    command = run.call_args.args[0]
+    assert command.count("--force-fetch") == 1
+    assert command.count("--run-id") == 1
+    assert "--wrapper-managed-finalize" in command
+    assert command[command.index("--universe") + 1] == "csi800"
+
+
+def test_inner_wrapper_mode_rejects_non_inherited_lock(tmp_path: Path):
+    with data_writer_lock(tmp_path) as direct_lock, patch.object(
+        sys,
+        "argv",
+        ["sync", "--apply", "--wrapper-managed-finalize", "--run-id", "lock-test"],
+    ), pytest.raises(SystemExit):
+        daily_sync._main_under_writer_lock(direct_lock)
+
+
+def test_wrapper_finalizes_only_after_outer_readiness_event(tmp_path: Path):
+    audit = SourceAuditStore(tmp_path / "audit" / "audit.db")
+    run_id = "wrapper-finalize"
+    receipt_root = tmp_path / "audit" / "source_runs"
+    gates = {
+        "fetch": True, "raw_payloads": True, "canonical_commit": True,
+        "qlib_readback": True, "readiness": True, "contiguous_range": True,
+    }
+    direct_run_id = "direct-inner-run"
+    audit.append_event(direct_run_id, "run_started", {"entrypoint": "inner"})
+    direct = audit.finalize_run(
+        run_id=direct_run_id,
+        source="tushare",
+        scope_key="csi1800",
+        range_start="20260820",
+        range_end="20260820",
+        fields=["open", "high", "low", "close", "volume", "factor"],
+        gates=gates,
+        receipt_root=receipt_root,
+        trust_state="trusted",
+    )
+    assert direct["trust_state"] == "trusted"
+    audit.append_event(run_id, "run_started", {"entrypoint": "inner"})
+    _publish_wrapper_terminal_gates(
+        audit_store=audit,
+        run_id=run_id,
+        payload={
+            "mode": "advance", "gates": gates, "prior_trusted": False,
+            "source": "tushare", "scope_key": "csi1800",
+            "range_start": "20260821", "range_end": "20260821",
+            "fields": ["open", "high", "low", "close", "volume", "factor"],
+            "previous_open_session": "20260820",
+        },
+    )
+    assert not (receipt_root / run_id / "receipt.json").exists()
+
+    result = data_sync._finalize_wrapper_evidence(
+        audit_store=audit,
+        run_id=run_id,
+        receipt_root=receipt_root,
+        final_readiness_ok=True,
+    )
+    assert result["trust_state"] == "trusted"
+    receipt_path = Path(result["receipt_path"])
+    receipt = json.loads(receipt_path.read_text())
+    assert receipt["audit_journal"][-1]["event_type"] == "outer_readiness"
+    outer_receipt_sha256 = hashlib.sha256(receipt_path.read_bytes()).hexdigest()
+    with sqlite3.connect(tmp_path / "audit" / "audit.db") as connection:
+        watermark_lineage = connection.execute(
+            """SELECT DISTINCT run_id,terminal_receipt_sha256
+               FROM trusted_watermarks
+               WHERE source='tushare' AND scope_key='csi1800'"""
+        ).fetchall()
+    assert watermark_lineage == [(run_id, outer_receipt_sha256)]
+    assert watermark_lineage[0][0] != direct_run_id
+    assert audit.has_trusted_range(
+        source="tushare", scope_key="csi1800",
+        range_start="20260821", range_end="20260821",
+        fields=["open", "high", "low", "close", "volume", "factor"],
+    )
+
+
+def test_outer_history_mutation_is_not_borrowed_into_target_certificate(tmp_path: Path):
+    audit = SourceAuditStore(tmp_path / "audit" / "audit.db")
+    audit.append_event("history-run", "run_started", {"entrypoint": "wrapper"})
+    with pytest.raises(RuntimeError, match="mutated untrusted core scope"):
+        data_sync._block_untrusted_history_mutation(
+            audit_store=audit,
+            run_id="history-run",
+            result={
+                "apply": True,
+                "canonical_mutated_symbols": ["000002.SZ"],
+                "canonical_mutation_range": {
+                    "range_start": "2022-08-21", "range_end": "2026-08-21"
+                },
+                "canonical_mutation_scope_semantics": (
+                    "conservative_planned_scope_after_write_started"
+                ),
+            },
+        )
+    events = audit.run_evidence_summary("history-run")["events"]
+    assert events[-1]["event_type"] == "untrusted_outer_repair_scope"
+    assert audit.watermark_snapshot_bytes() == b"[]\n"
+
+
+def test_qlib_only_history_repair_does_not_block_target_certificate(tmp_path: Path):
+    audit = SourceAuditStore(tmp_path / "audit" / "audit.db")
+    audit.append_event("qlib-only", "run_started", {"entrypoint": "wrapper"})
+
+    data_sync._validate_universe_history_result(
+        audit_store=audit,
+        run_id="qlib-only",
+        universe="csi1800",
+        result={
+            "status": "success",
+            "apply": True,
+            "backfilled_symbols": ["000002.SZ"],
+            "canonical_mutated_symbols": [],
+            "summary_path": str(tmp_path / "summary.json"),
+        },
+    )
+
+    assert not any(
+        event["event_type"] == "untrusted_outer_repair_scope"
+        for event in audit.run_evidence_summary("qlib-only")["events"]
+    )
+
+
+def test_failed_history_after_check_records_scope_before_status_failure(tmp_path: Path):
+    audit = SourceAuditStore(tmp_path / "audit" / "audit.db")
+    audit.append_event("after-failed", "run_started", {"entrypoint": "wrapper"})
+    with pytest.raises(RuntimeError, match="mutated untrusted core scope"):
+        data_sync._validate_universe_history_result(
+            audit_store=audit,
+            run_id="after-failed",
+            universe="csi1800",
+            result={
+                "status": "failed",
+                "apply": True,
+                "canonical_mutated_symbols": ["000002.SZ"],
+                "canonical_mutation_range": {
+                    "range_start": "2022-08-21", "range_end": "2026-08-21"
+                },
+                "canonical_mutation_scope_semantics": (
+                    "conservative_planned_scope_after_write_started"
+                ),
+                "summary_path": str(tmp_path / "summary.json"),
+            },
+        )
+    assert audit.run_evidence_summary("after-failed")["events"][-1][
+        "event_type"
+    ] == "untrusted_outer_repair_scope"
+
+
+def test_inner_unexpected_exception_after_run_started_exports_crash_receipt(tmp_path: Path):
+    class CrashingAdapter:
+        def init_qlib(self):
+            raise RuntimeError("unexpected init crash")
+
+    with patch.object(
+        sys,
+        "argv",
+        ["sync", "--apply", "--run-id", "inner-crash", "--target-date", "20260821"],
+    ), patch.object(
+        daily_sync.cfg, "get_path", return_value=str(tmp_path)
+    ), patch.object(
+        daily_sync, "_resolve_target_date", return_value="20260821"
+    ), patch.object(
+        daily_sync, "QlibAdapter", CrashingAdapter
+    ), pytest.raises(RuntimeError, match="unexpected init crash"):
+        daily_sync.main()
+
+    receipt_path = tmp_path / "audit" / "source_runs" / "inner-crash" / "receipt.json"
+    receipt = json.loads(receipt_path.read_text())
+    assert receipt["trust_state"] == "untrusted"
+    assert receipt["audit_journal"][-1]["event_type"] == "crash"
+    audit = SourceAuditStore(tmp_path / "audit" / "audit.db")
+    assert audit.watermark_snapshot_bytes() == b"[]\n"
 
 
 def test_shareholder_history_start_uses_target_and_positive_lookback():
@@ -73,6 +317,8 @@ def test_repair_audits_follow_external_data_root(tmp_path: Path):
 
     assert result == data_root / "audit" / "data_sync" / "20260823_210000"
     assert runtime not in result.parents
+    with pytest.raises(ValueError, match="invalid run_id"):
+        data_sync._data_sync_run_root(data_root, "../escape")
 
 
 def test_failed_raw_stage_is_audited_and_blocks(tmp_path: Path):
@@ -117,6 +363,107 @@ def test_failed_registry_refresh_is_audited_and_blocks(tmp_path: Path):
     audit = tmp_path / "sync_csi1800_20260821.json"
     assert audit.is_file()
     assert report["failure_stage"] == "refresh_instruments"
+
+
+def _wrapper_evidence(tmp_path: Path, run_id: str) -> tuple[SourceAuditStore, dict]:
+    store = SourceAuditStore(tmp_path / "audit" / "audit.db")
+    store.append_event(run_id, "run_started", {"entrypoint": "wrapper"})
+    evidence = {
+        "store": store,
+        "run_id": run_id,
+        "universe": "csi1800",
+        "target_date": "20260821",
+        "receipt_root": tmp_path / "audit" / "source_runs",
+    }
+    return store, evidence
+
+
+def test_wrapper_stage_failure_leaves_terminal_receipt_to_outer(tmp_path: Path):
+    store, evidence = _wrapper_evidence(tmp_path, "wrapper-stage-fail")
+    with pytest.raises(RuntimeError, match="raw_fetch failed"):
+        _abort_if_stage_failed(
+            {"universe": "csi1800", "target_date": "20260821"},
+            stage="raw_fetch",
+            summary={"status": "failed", "error": "source timeout"},
+            do_apply=True,
+            audit_dir=tmp_path / "legacy",
+            evidence=evidence,
+            outer_owned_terminal=True,
+        )
+    receipt_root = evidence["receipt_root"]
+    assert not list(receipt_root.glob("**/receipt.json"))
+
+    store.record_crash_receipt(
+        run_id="wrapper-stage-fail",
+        receipt_root=receipt_root,
+        entrypoint="scripts/data_sync.py",
+        error="child exit 2",
+    )
+    receipts = list(receipt_root.glob("**/receipt.json"))
+    assert len(receipts) == 1
+    assert json.loads(receipts[0].read_text())["trust_state"] == "untrusted"
+
+
+def test_inherited_inner_exception_does_not_export_crash_receipt(tmp_path: Path):
+    store, evidence = _wrapper_evidence(tmp_path, "inherited-inner-fail")
+
+    def fail_after_start(_writer_lock):
+        daily_sync._CRASH_EVIDENCE = {
+            **evidence,
+            "entrypoint": "scripts/ops/sync_csi800_daily.py",
+        }
+        raise RuntimeError("inner stage failed")
+
+    with data_writer_lock(tmp_path) as outer_lock, patch.dict(
+        os.environ,
+        {"QSYS_DATA_WRITER_LOCK_FD": str(outer_lock.fileno())},
+    ), patch.object(
+        daily_sync.cfg, "get_path", return_value=str(tmp_path)
+    ), patch.object(
+        daily_sync, "_main_under_writer_lock", side_effect=fail_after_start
+    ), pytest.raises(RuntimeError, match="inner stage failed"):
+        daily_sync.main()
+
+    receipt_root = evidence["receipt_root"]
+    assert not list(receipt_root.glob("**/receipt.json"))
+    store.record_crash_receipt(
+        run_id="inherited-inner-fail",
+        receipt_root=receipt_root,
+        entrypoint="scripts/data_sync.py",
+        error="child exit 2",
+    )
+    assert len(list(receipt_root.glob("**/receipt.json"))) == 1
+
+
+def test_wrapper_gate_failure_leaves_terminal_receipt_to_outer(tmp_path: Path):
+    store, evidence = _wrapper_evidence(tmp_path, "wrapper-gate-fail")
+    gates = {
+        "fetch": True,
+        "raw_payloads": True,
+        "canonical_commit": True,
+        "qlib_readback": True,
+        "readiness": False,
+        "contiguous_range": True,
+    }
+    with pytest.raises(SystemExit) as stopped:
+        _publish_wrapper_terminal_gates(
+            audit_store=store,
+            run_id="wrapper-gate-fail",
+            payload={"mode": "advance", "prior_trusted": False, "gates": gates},
+        )
+    assert stopped.value.code == 2
+    receipt_root = evidence["receipt_root"]
+    assert not list(receipt_root.glob("**/receipt.json"))
+
+    store.record_crash_receipt(
+        run_id="wrapper-gate-fail",
+        receipt_root=receipt_root,
+        entrypoint="scripts/data_sync.py",
+        error="child exit 2",
+    )
+    receipts = list(receipt_root.glob("**/receipt.json"))
+    assert len(receipts) == 1
+    assert json.loads(receipts[0].read_text())["trust_state"] == "untrusted"
 
 
 def test_same_date_canonical_gap_is_repaired_and_verified():
@@ -412,7 +759,15 @@ def test_main_ignores_stale_qlib_watermark_unless_repair_is_explicit(tmp_path):
     registry_path = "qsys.ops.pit_universe_snapshot.write_current_qlib_registry"
     with patch.multiple(daily_sync, **common), patch.object(
         daily_sync.cfg, "get_path", return_value=str(tmp_path)
-    ), patch(pit_path, return_value=snapshot), patch(registry_path, return_value={"status": "success"}):
+    ), patch(pit_path, return_value=snapshot), patch(registry_path, return_value={"status": "success"}), patch.object(
+        daily_sync.SourceAuditStore,
+        "evaluate_field_receipts",
+        return_value={"status": "success", "fields": {}},
+    ), patch.object(
+        daily_sync.SourceAuditStore,
+        "finalize_run",
+        return_value={"status": "trusted", "trust_state": "trusted", "watermark_advanced": True},
+    ):
         with patch.object(sys, "argv", ["sync", "--apply", "--universe", "csi1800", "--target-date", target]):
             daily_sync.main()
         with patch.object(

@@ -1,0 +1,83 @@
+schema_version: 1
+contract_id: tushare_daily_v1
+source: tushare
+dataset: canonical_daily
+timestamp_semantics:
+  published_at: null_when_source_does_not_expose_a_trustworthy_publication_time
+  observed_at: response_observation_time_utc
+  ingested_at: canonical_feather_commit_time_utc
+endpoints:
+  daily:
+    capability: trade_date_market_snapshot
+    required_for_trusted_daily: true
+    trusted_fields: [open, high, low, close, volume]
+    expected_scope: requested_symbols_must_be_present_or_have_suspend_d_evidence
+    key_fields: [ts_code, trade_date]
+  daily_basic:
+    capability: trade_date_market_snapshot
+    required_for_trusted_daily: false
+    expected_scope: sparse_or_empty_is_explicitly_receipted
+    key_fields: [ts_code, trade_date]
+  adj_factor:
+    capability: trade_date_market_snapshot
+    required_for_trusted_daily: true
+    trusted_fields: [factor]
+    expected_scope: requested_symbols_must_be_present_or_have_suspend_d_evidence
+    key_fields: [ts_code, trade_date]
+  stk_limit:
+    capability: trade_date_market_snapshot
+    required_for_trusted_daily: false
+    expected_scope: sparse_or_empty_is_explicitly_receipted
+    key_fields: [ts_code, trade_date]
+  moneyflow:
+    capability: trade_date_market_snapshot
+    required_for_trusted_daily: false
+    expected_scope: sparse_or_empty_is_explicitly_receipted
+    key_fields: [ts_code, trade_date]
+  margin:
+    capability: trade_date_market_snapshot_with_source_eligibility
+    required_for_trusted_daily: false
+    expected_scope: eligible_symbols_only_empty_is_explicitly_receipted
+    key_fields: [ts_code, trade_date]
+  daily_bundle:
+    capability: normalized_merged_canonical_candidate
+    required_for_trusted_daily: true
+    expected_scope: hashes_the_post_merge_pre_commit_candidate_frame
+    key_fields: [ts_code, trade_date]
+  suspend_d:
+    capability: per_symbol_suspension_exception_evidence
+    required_for_trusted_daily: only_when_required_endpoint_has_requested_symbol_gaps
+    expected_scope: every_queried_gap_must_complete_and_raw_response_must_verify
+    key_fields: [ts_code, trade_date]
+trust_rules:
+  sqlite_user_version: 1
+  sqlite_sot: data/audit/audit.db
+  immutable_run_receipt: data/audit/source_runs/{run_id}/receipt.json
+  raw_supplier_payload: data/raw/evidence/tushare/{endpoint}/{run_id}/{receipt_id}.parquet
+  required_terminal_gates:
+    - fetch
+    - raw_payloads
+    - canonical_commit
+    - qlib_readback
+    - readiness
+    - contiguous_range
+  watermark_key: [source, field_name, scope_key]
+  terminal_receipt_backlink: terminal_receipt_sha256
+  field_receipt_links:
+    open: daily
+    high: daily
+    low: daily
+    close: daily
+    volume: daily
+    factor: adj_factor
+  optional_endpoint_failure_does_not_block_core: [daily_basic, stk_limit, moneyflow, margin]
+  single_writer_scope: canonical_commit_through_qlib_readback_readiness_and_finalize
+  required_supplier_non_null:
+    daily: [open, high, low, close, volume]
+    adj_factor: [factor]
+  suspension_response_identity: exact_query_symbol_and_requested_date_range
+  backward_watermark_expansion: forbidden_without_separate_certification
+  wrapper_finalize: outer_only_after_all_repairs_and_final_readiness
+  unreceipted_outer_core_history_mutation: untrusted_and_requires_new_run
+  unexpected_crash_receipt: immutable_untrusted_no_watermark
+  legacy_date_named_audit: legacy_untrusted

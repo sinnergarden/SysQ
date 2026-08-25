@@ -60,6 +60,70 @@ systemd 传入的 `--output-root runs` 只控制 batch summary 位置。正式�
 `daily_manifest.json`。
 `--no-notify` 跳过 Telegram 通知（debug-run 默认行为，也可手动指定）。
 
+### 2.3 CSI1800 data evidence runbook
+
+正式 CSI1800 日同步使用 wrapper；显式 `target-date` 是要认证的已完成交易日，不能回退
+到较早日期或把盘中未完成日期当作完成日：
+
+```bash
+python scripts/data_sync.py \
+  --universe csi1800 \
+  --target-date YYYY-MM-DD \
+  --apply
+```
+
+wrapper 为整个 market child、history/margin/financial/shareholder repair、Qlib mutation
+和最终 readiness 持有同一个 `data/audit/data_sync.lock`。出现
+`data sync already holds writer lock` 时，先确认另一正式运行是否仍在执行；不要删除 lock
+文件或绕过锁并发写。inner 只发布 source/field gates，只有 wrapper 在所有外层 repair 和
+readiness 完成后拥有 terminal receipt 与 watermark 的最终写入权。
+
+每次运行的不可变 receipt 位于
+`data/audit/source_runs/{run_id}/receipt.json`，其中 `trust_state=trusted` 才能支持对应
+source/field/range 水位；crash、partial、failed gate 和 legacy receipt 都是 untrusted。
+supplier 原始响应位于
+`data/raw/evidence/tushare/{endpoint}/{run_id}/{receipt_id}.parquet`，receipt 中的相对路径
+和 SHA-256 是复核链接；不要编辑或覆盖。SQLite SOT 位于 `data/audit/audit.db`。
+
+若 universe-history catch-up 实际开始写 canonical，当前 target-day source receipt 不能替
+这段历史背书。运行会先写 `untrusted_outer_repair_scope`（planned symbols 是 collector
+无 changed-set 返回时的保守上界），阻断水位并非零退出。即使 after-check 随后失败或
+collector 只写了一部分，该 scope 仍保留；修复后必须重新执行完整 wrapper，产生新的
+run_id 和证据链。纯 Qlib/registry rebuild 的 `canonical_mutated_symbols=[]`，不会借此阻断。
+
+crash 恢复先检查 receipt 和 journal，确认不确定的 canonical 范围。仅在需要重新取得目标
+日 supplier response 时，通过正式 wrapper 强制拉取：
+
+```bash
+python scripts/data_sync.py \
+  --universe csi1800 \
+  --target-date YYYY-MM-DD \
+  --apply --force-fetch
+```
+
+`--force-fetch` 只在 applied CSI800/CSI1800 路径转发给使用 shared run-id 的 market child；
+同一个 wrapper 继续持有 data-root writer lock，并在 outer repairs 与最终 readiness 完成后
+才生成唯一 terminal receipt、推进对应 trusted watermark。不要单独运行 inner 来建立正式
+恢复证据链。
+
+水位未推进时，不要手工改 SQLite 或复制旧 receipt。先检查本 run 的 terminal gates 和事件：
+
+```bash
+jq '{run_id,trust_state,terminal_gates,audit_journal}' \
+  data/audit/source_runs/<run_id>/receipt.json
+
+sqlite3 data/audit/audit.db \
+  "SELECT seq,event_type,payload_json FROM audit_journal WHERE run_id='<run_id>' ORDER BY seq;"
+
+sqlite3 data/audit/audit.db \
+  "SELECT source,field_name,scope_key,range_start,trusted_through,run_id FROM trusted_watermarks ORDER BY source,field_name,scope_key;"
+```
+
+按失败 gate 排查：`fetch/raw_payloads` 看 required daily/adj_factor/suspend_d receipt 与
+requested scope；`canonical_commit` 看 mutation journal；`qlib_readback` 看 target rows；
+`readiness` 看 coverage；`contiguous_range` 检查上一开市日水位。任何缺口都应通过新 run
+补证，而不是用 min/max 吞 gap。
+
 
 ---
 

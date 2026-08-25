@@ -605,31 +605,88 @@ def classify_historical_recommended_action(*, raw_has_gap: bool, qlib_has_gap: b
     return "none"
 
 
-def fetch_suspended_dates_by_symbol(*, symbols: set[str], start_date: str, end_date: str) -> dict[str, set[str]]:
+def fetch_suspension_evidence(*, symbols: set[str], start_date: str, end_date: str) -> dict[str, Any]:
+    """Fetch per-symbol ``suspend_d`` responses without hiding query failures."""
+
     if not symbols:
-        return {}
+        return {
+            "status": "empty",
+            "suspended_dates_by_symbol": {},
+            "raw_frame": pd.DataFrame(),
+            "errors": [],
+            "attempt_count": 0,
+        }
     try:
         from qsys.data.collector import TushareCollector
 
         collector = TushareCollector()
-    except Exception:
-        return {}
+    except Exception as exc:
+        return {
+            "status": "failure",
+            "suspended_dates_by_symbol": {},
+            "raw_frame": pd.DataFrame(),
+            "errors": [f"collector_init: {exc}"],
+            "attempt_count": 0,
+        }
 
     suspended: dict[str, set[str]] = defaultdict(set)
+    raw_frames: list[pd.DataFrame] = []
+    errors: list[str] = []
+    attempt_count = 0
     start_text = start_date.replace("-", "")
     end_text = end_date.replace("-", "")
     for symbol in sorted(symbols):
+        attempt_count += 1
         try:
             frame = collector.pro.suspend_d(ts_code=symbol, start_date=start_text, end_date=end_text)
-        except Exception:
+        except Exception as exc:
+            errors.append(f"{symbol}: {exc}")
             continue
-        if frame is None or frame.empty or "trade_date" not in frame.columns:
+        if frame is None or frame.empty:
             continue
-        for value in frame["trade_date"].tolist():
-            date_text = _normalize_date(value)
-            if date_text is not None:
-                suspended[symbol].add(date_text)
-    return {symbol: dates for symbol, dates in suspended.items() if dates}
+        raw_frames.append(frame.copy())
+        if not {"ts_code", "trade_date"}.issubset(frame.columns):
+            errors.append(f"{symbol}: response missing ts_code/trade_date")
+            continue
+        response_symbol_values = frame["ts_code"].astype("string")
+        response_symbols = set(response_symbol_values.dropna().astype(str))
+        if response_symbol_values.isna().any() or not response_symbol_values.eq(symbol).all():
+            errors.append(
+                f"{symbol}: response symbol mismatch {sorted(response_symbols)}"
+            )
+            continue
+        normalized_dates = [_normalize_date(value) for value in frame["trade_date"].tolist()]
+        if any(
+            value is None or value < _normalize_date(start_text) or value > _normalize_date(end_text)
+            for value in normalized_dates
+        ):
+            errors.append(f"{symbol}: response date outside requested range")
+            continue
+        suspended[symbol].update(value for value in normalized_dates if value is not None)
+    raw_frame = pd.concat(raw_frames, ignore_index=True) if raw_frames else pd.DataFrame()
+    status = "partial" if errors and not raw_frame.empty else "failure" if errors else "success" if not raw_frame.empty else "empty"
+    return {
+        "status": status,
+        "suspended_dates_by_symbol": {
+            symbol: dates for symbol, dates in suspended.items() if dates
+        },
+        "raw_frame": raw_frame,
+        "errors": errors,
+        "attempt_count": attempt_count,
+    }
+
+
+def fetch_suspended_dates_by_symbol(*, symbols: set[str], start_date: str, end_date: str) -> dict[str, set[str]]:
+    """Compatibility wrapper for the historical coverage report."""
+
+    evidence = fetch_suspension_evidence(
+        symbols=symbols, start_date=start_date, end_date=end_date
+    )
+    return (
+        evidence["suspended_dates_by_symbol"]
+        if evidence["status"] in {"success", "empty"}
+        else {}
+    )
 
 
 def apply_suspension_overrides(

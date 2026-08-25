@@ -55,6 +55,7 @@ docs/schema/       → 部分 artifact 的字段级 schema
 | Contract | Producer | Consumer | Grain | Primary Use | Write Owner |
 |---|---|---|---|---|---|
 | Data Readiness | data sync、readiness check | DailyRunner、train、backtest、UI | per target_date / per data_domain / per universe | 判断数据是否满足执行要求 | data sync pipeline |
+| Source Ingestion Evidence | daily source ingestion | readiness、future PIT certifier | per run / source / endpoint / field / instrument / date | 证明 source response 到 canonical/Qlib/readiness 的闭环 | data sync pipeline |
 | Universe | data sync、universe build | Research、Backtest、Signal、UI | per universe_id / per date | 定义可用股票池 | data sync pipeline |
 | Feature | feature engineering | Model training、Prediction | per feature_set_id / per as_of_date / per instrument | 模型和信号的数值输入 | research pipeline |
 | Label | label generation | Model training、Signal evaluation | per label_id / per label_date / per instrument | 训练目标和评估口径 | research pipeline |
@@ -123,6 +124,82 @@ docs/schema/       → 部分 artifact 的字段级 schema
 - 不负责生成 feature。
 - 不决定 portfolio 权重。
 - 不负责成交判断。
+
+### 4.3 Source Ingestion Evidence Contract
+
+**Purpose**: 为 daily ingestion 保留可复核的 append-only evidence；证明一次 source
+响应产生了哪些 canonical symbol/date/field mutation，并在 Qlib refresh/value readback
+与 readiness 通过后，最后推进 source/field/scope/range trusted watermark。
+
+**SOT and exports**:
+
+- `data/audit/audit.db` 是 stdlib SQLite SOT，仅含极小的 `fetch_receipts`、
+  `field_receipt_links`、`canonical_mutations`、`audit_journal`、`trusted_watermarks`；
+  schema 固定 `PRAGMA user_version=1`，未知/未版本化的既有 schema fail closed；
+- `data/audit/source_runs/{run_id}/receipt.json` 是每 run 不可覆盖的人读导出，不是第二 SOT；
+- `data/raw/evidence/tushare/{endpoint}/{run_id}/{receipt_id}.parquet` 保存本次 supplier
+  原始 DataFrame（未 merge/clean）的不可覆盖 payload；它不是每日整库 snapshot；
+- `sync_{universe}_{date}.json` 等 legacy audit 仅 compatibility，信任状态固定为
+  `legacy_untrusted`，不得据此认证或推进 watermark；
+- endpoint capability/字段契约见
+  `docs/requirements/contracts/tushare_daily.yaml`。
+
+**Timestamp semantics**:
+
+- `published_at` 是 source 可证明的发布时间；source 不提供时必须为 null，禁止拿
+  `trade_date`、`ann_date` 或本机时间猜测；
+- `observed_at` 是响应被本系统观察到的 UTC 时间；
+- `ingested_at` 是 canonical feather 原子提交完成后记录 mutation 的 UTC 时间。
+
+**Receipt semantics**:
+
+- fetch outcome 只能是 `success` / `empty` / `partial` / `failure`，同时记录 normalized
+  response SHA-256、columns、响应日期 min/max 与实际 attempt count；success/partial supplier
+  receipt 还必须回链 raw Parquet relative path/SHA-256/schema，empty/failure 无 payload；secret
+  在进入 SQLite 和 JSON 前递归脱敏；
+- canonical mutation 粒度是 dataset/source/endpoint/fetch receipt × symbol × affected date
+  × exact affected fields；只保存受影响窗口的 before/after SHA-256，不保存整份值；
+- insert 的全部 canonical candidate fields（包括 null/missingness）都属于 affected；
+  same-key 无变化为 `noop`，值变化为 `update`。
+- daily core 字段按 field→supplier endpoint 独立判定：OHLCV/volume 只由 `daily`
+  receipt 支持，factor 只由 `adj_factor` receipt 支持；optional daily_basic、stk_limit、
+  moneyflow、margin 的 empty/failure 不阻断 core，但也不得借 core watermark 声称自身 trusted；
+- `daily` 与 `adj_factor` 的 requested PIT symbol 缺口均进入 scope gate。只有同 run 的
+  `suspend_d` supplier receipt（含 observed response/hash/raw payload linkage）可把缺口分类为
+  合法停牌；查询失败、payload tamper 或未解释缺口均 fail closed。
+- required value coverage 基于 merge/clean/fill 之前的 supplier response：目标日、requested
+  symbol 的 open/high/low/close/volume 与 factor 必须逐字段非空；`fillna(1.0)` 等 legacy
+  canonical fallback 不能把上游缺值认证为 trusted。`suspend_d` 响应必须逐 query 匹配
+  ts_code 且日期落在请求范围，wrong/mixed symbol、缺列或越界日期均为失败证据。
+
+**Terminal watermark invariant**:
+
+只有显式 `fetch`、`raw_payloads`、`canonical_commit`、`qlib_readback`、`readiness`、`contiguous_range`
+全部通过，且 trust state 为 `trusted`，才允许在最后一个 SQLite 事务推进 watermark。
+watermark 必须保存 immutable terminal receipt SHA-256 回链。任一 gate 失败时，确定性
+watermark snapshot 必须 byte-for-byte 不变。范围不连续时必须失败，不能用 min/max
+吞掉内部 gap。receipt 只陈述 gates/evidence，不反向声称 watermark 已推进。
+已存在 watermark 禁止向更早的 range_start 反向扩展；历史段须由后续独立 certification
+机制证明，不能用 min(range_start)/max(range_end) 猜测连续。
+同一 data root 的 official wrapper 持有单 writer flock，child 只接受经 `pass_fds` 继承且
+inode 与该 data-root lockfile 相同的 FD。inner wrapper-mode 只记录 market gates；outer
+history/margin/shareholder/Qlib mutation 与最终 readiness 完成后才唯一 terminal finalize。
+若 outer universe-history 实际修改无 source receipt 的 OHLCV/factor 历史范围，本 run 记录
+`untrusted_outer_repair_scope` 并阻断 target-day certification，修复后须新 run 重做证据链。
+canonical feather 已提交但 SQLite evidence 失败时保留 terminal-untrusted recovery case，
+不得推进 watermark。
+`run_started` 后的 unexpected exception 会 best-effort 追加 crash event 并以 O_EXCL 语义
+导出 untrusted receipt；已有 terminal receipt 永不覆盖，crash 路径永不推进 watermark。
+
+**Certification boundary**:
+
+`UC_PIT_DATA_CERTIFICATION` 的 future certifier 只消费这些 evidence，按 source × field ×
+instrument × date 求交集；它不 fetch、不 repair、不调度 daily/research，也不把 daily
+watermark 自动等同于历史 PIT baseline certification。
+
+本阶段 raw supplier payload 覆盖 daily market endpoints；financial per-stock endpoint 尚未
+接入 receipt/payload，因此 financial 字段不得被本阶段 daily trusted watermark 或 future
+certifier 认证。
 
 ---
 
