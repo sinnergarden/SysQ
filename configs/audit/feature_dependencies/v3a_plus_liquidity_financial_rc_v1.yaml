@@ -897,6 +897,8 @@ features:
     - ann_date
     visibility: announcement_date_asof
     pit_status: evidence_required
+    blocker_codes:
+    - SHAREHOLDER_REVISION_CAPABILITY_UNVERIFIED
 - feature: holder_num_chg_2q
   required: true
   dependencies:
@@ -908,6 +910,8 @@ features:
     - ann_date
     visibility: announcement_date_asof
     pit_status: evidence_required
+    blocker_codes:
+    - SHAREHOLDER_REVISION_CAPABILITY_UNVERIFIED
 - feature: avg_shares_per_holder_chg_qoq
   required: true
   dependencies:
@@ -919,6 +923,8 @@ features:
     - ann_date
     visibility: announcement_date_asof
     pit_status: evidence_required
+    blocker_codes:
+    - SHAREHOLDER_REVISION_CAPABILITY_UNVERIFIED
 - feature: top10_holder_ratio_chg_qoq
   required: true
   dependencies:
@@ -930,6 +936,8 @@ features:
     - ann_date
     visibility: announcement_date_asof
     pit_status: evidence_required
+    blocker_codes:
+    - SHAREHOLDER_REVISION_CAPABILITY_UNVERIFIED
 - feature: holder_concentration_score
   required: true
   dependencies:
@@ -941,6 +949,8 @@ features:
     - ann_date
     visibility: announcement_date_asof
     pit_status: evidence_required
+    blocker_codes:
+    - SHAREHOLDER_REVISION_CAPABILITY_UNVERIFIED
   - source: tushare
     dataset: shareholder_top10
     endpoint: top10_holders
@@ -949,6 +959,8 @@ features:
     - ann_date
     visibility: announcement_date_asof
     pit_status: evidence_required
+    blocker_codes:
+    - SHAREHOLDER_REVISION_CAPABILITY_UNVERIFIED
 - feature: holder_squeeze_score
   required: true
   dependencies:
@@ -960,6 +972,8 @@ features:
     - ann_date
     visibility: announcement_date_asof
     pit_status: evidence_required
+    blocker_codes:
+    - SHAREHOLDER_REVISION_CAPABILITY_UNVERIFIED
   - source: tushare
     dataset: canonical_daily
     endpoint: daily
@@ -978,6 +992,8 @@ features:
     - ann_date
     visibility: announcement_date_asof
     pit_status: evidence_required
+    blocker_codes:
+    - SHAREHOLDER_REVISION_CAPABILITY_UNVERIFIED
   - source: tushare
     dataset: shareholder_top10
     endpoint: top10_holders
@@ -986,6 +1002,8 @@ features:
     - ann_date
     visibility: announcement_date_asof
     pit_status: evidence_required
+    blocker_codes:
+    - SHAREHOLDER_REVISION_CAPABILITY_UNVERIFIED
   - source: tushare
     dataset: canonical_daily
     endpoint: daily
@@ -1004,6 +1022,8 @@ features:
     - ann_date
     visibility: announcement_date_asof
     pit_status: evidence_required
+    blocker_codes:
+    - SHAREHOLDER_REVISION_CAPABILITY_UNVERIFIED
 - feature: top10_holder_stale_days
   required: true
   dependencies:
@@ -1015,6 +1035,8 @@ features:
     - ann_date
     visibility: announcement_date_asof
     pit_status: evidence_required
+    blocker_codes:
+    - SHAREHOLDER_REVISION_CAPABILITY_UNVERIFIED
 - feature: top10_holder_ratio
   required: true
   dependencies:
@@ -1026,6 +1048,8 @@ features:
     - ann_date
     visibility: announcement_date_asof
     pit_status: evidence_required
+    blocker_codes:
+    - SHAREHOLDER_REVISION_CAPABILITY_UNVERIFIED
 - feature: amount_log
   required: true
   dependencies:

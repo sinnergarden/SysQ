@@ -49,6 +49,34 @@ endpoints:
     required_for_trusted_daily: only_when_required_endpoint_has_requested_symbol_gaps
     expected_scope: every_queried_gap_must_complete_and_raw_response_must_verify
     key_fields: [ts_code, trade_date]
+  income:
+    capability: per_symbol_report_history_with_announcement_date
+    revision_capability: update_flag_timeline_requires_separate_audit
+    key_fields: [ts_code, ann_date, end_date]
+  balancesheet:
+    capability: per_symbol_report_history_with_announcement_date
+    revision_capability: update_flag_timeline_requires_separate_audit
+    key_fields: [ts_code, ann_date, end_date]
+  cashflow:
+    capability: per_symbol_report_history_with_announcement_date
+    revision_capability: update_flag_timeline_requires_separate_audit
+    key_fields: [ts_code, ann_date, end_date]
+  fina_indicator:
+    capability: per_symbol_derived_report_history_with_announcement_date
+    revision_capability: historical_revision_timeline_unverified
+    key_fields: [ts_code, ann_date, end_date]
+  stk_holdernumber:
+    capability: paged_announcement_date_history
+    revision_capability: historical_revision_timeline_unverified
+    key_fields: [ts_code, ann_date]
+  top10_holders:
+    capability: paged_report_period_history_with_announcement_date
+    revision_capability: historical_revision_timeline_unverified
+    key_fields: [ts_code, ann_date, end_date]
+  stock_basic:
+    capability: current_classification_snapshot_only
+    revision_capability: no_historical_industry_timeline
+    key_fields: [ts_code]
 trust_rules:
   sqlite_user_version: 1
   sqlite_sot: data/audit/audit.db

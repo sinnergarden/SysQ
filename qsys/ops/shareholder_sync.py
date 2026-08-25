@@ -563,6 +563,73 @@ def _paged_call(api: Any, *, limit: int, **kwargs: Any) -> pd.DataFrame:
     return pd.concat(pages, ignore_index=True) if pages else pd.DataFrame()
 
 
+def _audited_paged_call(
+    collector: Any,
+    *,
+    endpoint: str,
+    dataset: str,
+    fields: tuple[str, ...],
+    response_fields: str,
+    limit: int,
+    requested_scope: dict[str, Any],
+    request_variant: str,
+    run_id: str,
+    audit_store: Any,
+    resume_proof: dict[str, Any] | None,
+    scope_key: str,
+    universe: str,
+    **kwargs: Any,
+) -> pd.DataFrame:
+    """Fetch one paged event query as exact durable supplier shards."""
+
+    pages: list[pd.DataFrame] = []
+    offset = 0
+    previous_fingerprint: str | None = None
+    for _ in range(100):
+        page, receipt_id = collector._fetch_daily_endpoint_with_receipt(
+            endpoint,
+            run_id=run_id,
+            audit_store=audit_store,
+            requested_scope=requested_scope,
+            resume_proof=resume_proof,
+            scope_key=scope_key,
+            universe=universe,
+            request_variant=f"{request_variant}:offset={offset}",
+            identity_columns=("ts_code", "ann_date"),
+            evidence_fields=(),
+            limit=limit,
+            offset=offset,
+            fields=response_fields,
+            **kwargs,
+        )
+        if receipt_id is None:
+            raise RuntimeError(f"{endpoint} did not emit a source receipt")
+        audit_store.record_field_receipt_links(
+            run_id=run_id,
+            receipt_id=receipt_id,
+            dataset=dataset,
+            fields=fields,
+        )
+        if page is None or page.empty:
+            break
+        fingerprint = _canonical_frame_hash(
+            page.assign(_row_number=range(len(page))),
+            sorted(page.columns.tolist()) + ["_row_number"],
+        )
+        if fingerprint == previous_fingerprint:
+            raise RuntimeError(
+                f"shareholder API pagination repeated offset={offset}; aborting"
+            )
+        previous_fingerprint = fingerprint
+        pages.append(page)
+        if len(page) < limit:
+            break
+        offset += limit
+    else:
+        raise RuntimeError("shareholder API pagination exceeded 100 pages")
+    return pd.concat(pages, ignore_index=True) if pages else pd.DataFrame()
+
+
 def _quarter_ends(start_date: str, end_date: str) -> list[str]:
     start = pd.Timestamp(start_date) - pd.Timedelta(days=180)
     end = pd.Timestamp(end_date)
@@ -593,18 +660,60 @@ def _calendar_year_chunks(start_date: str, end_date: str) -> list[tuple[str, str
 
 
 def fetch_shareholder_backfill(
-    collector: Any, *, start_date: str, end_date: str
+    collector: Any, *, start_date: str, end_date: str,
+    run_id: str | None = None, audit_store: Any | None = None,
+    resume_proof: dict[str, Any] | None = None,
+    scope_key: str = "ad_hoc", universe: str = "ad_hoc",
+    evidence_symbols: Iterable[str] = (),
 ) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, Any]]:
     """Fetch missed holder data with bounded, paged Tushare calls."""
 
     holder_pages: list[pd.DataFrame] = []
     holder_chunks: list[dict[str, Any]] = []
+    audited = run_id is not None or audit_store is not None or resume_proof is not None
+    if audited and (run_id is None or audit_store is None):
+        raise ValueError("audited shareholder backfill requires run_id and audit_store")
+    evidence_codes = sorted({
+        str(value).strip().upper() for value in evidence_symbols if str(value).strip()
+    })
+    if audited and not evidence_codes:
+        raise ValueError("audited shareholder backfill requires evidence_symbols")
+
+    def evidence_scope(left: str, right: str) -> dict[str, Any]:
+        from qsys.data.source_audit import stable_scope_hash
+
+        return {
+            "date_start": left.replace("-", ""),
+            "date_end": right.replace("-", ""),
+            "symbol_count": len(evidence_codes),
+            "symbols": evidence_codes,
+            "symbols_sha256": stable_scope_hash(evidence_codes),
+        }
+
     for chunk_start, chunk_end in _calendar_year_chunks(start_date, end_date):
-        page = _paged_call(
-            collector.pro.stk_holdernumber,
-            limit=3000,
-            start_date=pd.Timestamp(chunk_start).strftime("%Y%m%d"),
-            end_date=pd.Timestamp(chunk_end).strftime("%Y%m%d"),
+        request_kwargs = {
+            "start_date": pd.Timestamp(chunk_start).strftime("%Y%m%d"),
+            "end_date": pd.Timestamp(chunk_end).strftime("%Y%m%d"),
+        }
+        page = (
+            _audited_paged_call(
+                collector,
+                endpoint="stk_holdernumber",
+                dataset="shareholder_holdernumber",
+                fields=("ann_date", "holder_num"),
+                response_fields="ts_code,ann_date,end_date,holder_num",
+                limit=3000,
+                requested_scope=evidence_scope(chunk_start, chunk_end),
+                request_variant=f"calendar_year:{chunk_start}:{chunk_end}",
+                run_id=str(run_id),
+                audit_store=audit_store,
+                resume_proof=resume_proof,
+                scope_key=scope_key,
+                universe=universe,
+                **request_kwargs,
+            )
+            if audited
+            else _paged_call(collector.pro.stk_holdernumber, limit=3000, **request_kwargs)
         )
         holder_pages.append(page)
         holder_chunks.append(
@@ -620,10 +729,28 @@ def fetch_shareholder_backfill(
     top10_pages: list[pd.DataFrame] = []
     periods = _quarter_ends(start_date, end_date)
     for period in periods:
-        page = _paged_call(
-            collector.pro.top10_holders,
-            limit=6000,
-            period=period,
+        quarter = pd.Period(period, freq="Q-DEC")
+        quarter_start = quarter.start_time.strftime("%Y-%m-%d")
+        quarter_end = quarter.end_time.strftime("%Y-%m-%d")
+        page = (
+            _audited_paged_call(
+                collector,
+                endpoint="top10_holders",
+                dataset="shareholder_top10",
+                fields=("ann_date", "hold_ratio"),
+                response_fields="ts_code,ann_date,end_date,holder_name,hold_ratio",
+                limit=6000,
+                requested_scope=evidence_scope(quarter_start, quarter_end),
+                request_variant=f"report_period:{period}",
+                run_id=str(run_id),
+                audit_store=audit_store,
+                resume_proof=resume_proof,
+                scope_key=scope_key,
+                universe=universe,
+                period=period,
+            )
+            if audited
+            else _paged_call(collector.pro.top10_holders, limit=6000, period=period)
         )
         if page is not None and not page.empty:
             top10_pages.append(page)
@@ -696,6 +823,12 @@ def run_shareholder_history_repair(
     collector: Any | None = None,
     start_date: str | None = None,
     required_history_start_date: str | None = None,
+    run_id: str | None = None,
+    audit_store: Any | None = None,
+    resume_proof: dict[str, Any] | None = None,
+    scope_key: str = "ad_hoc",
+    evidence_universe: str = "ad_hoc",
+    evidence_symbols: Iterable[str] = (),
 ) -> dict[str, Any]:
     """Repair canonical shareholder PIT sidecars and emit an immutable audit.
 
@@ -813,8 +946,21 @@ def run_shareholder_history_repair(
                     collector, start_date=resolved_start, end_date=resolved_end
                 )
             else:
+                evidence_kwargs = (
+                    {
+                        "run_id": run_id,
+                        "audit_store": audit_store,
+                        "resume_proof": resume_proof,
+                        "scope_key": scope_key,
+                        "universe": evidence_universe,
+                        "evidence_symbols": evidence_symbols,
+                    }
+                    if run_id is not None or audit_store is not None or resume_proof is not None
+                    else {}
+                )
                 holder_raw, top10_raw, fetch = fetch_shareholder_backfill(
-                    collector, start_date=resolved_start, end_date=resolved_end
+                    collector, start_date=resolved_start, end_date=resolved_end,
+                    **evidence_kwargs,
                 )
             fetch["status"] = "success"
             summary["fetch"] = fetch

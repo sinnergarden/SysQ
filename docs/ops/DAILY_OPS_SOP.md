@@ -141,6 +141,12 @@ CSI1800 历史修复只使用 immutable historical union 作为请求集合，�
 写成 current registry。每个远端请求都是精确 shard；正常恢复不要删除 raw evidence，也不要
 改用 `--force-fetch`。
 
+同一显式历史修复中的 shareholder 年度/报告期分页也使用该 historical union identity，并把
+每页 raw response 落为可校验 shard。中断后继续引用最新失败 run；不要另跑 shareholder
+脚本，也不要删除已验证分片后重拉。该 receipt 目前只证明 source capture 和可恢复性；在
+historical revision timeline 未证明前，不推进 shareholder PIT watermark，也不作为 baseline
+coverage。
+
 wrapper 每次 resume 仍创建新的 shared run_id，并在同一个 writer lock 内运行完整 market
 child、outer repairs 和 readiness。已验证且持久化的 success/empty supplier shard 会克隆到
 新 run 并保留原始 observed/published metadata；partial、failure、缺失或 hash 不符的 shard

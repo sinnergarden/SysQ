@@ -54,4 +54,4 @@ source_manifest:
 portable_datapack:
   source_contracts:
     - path: docs/requirements/contracts/tushare_daily.yaml
-      sha256: 3f306b41be31ab08cc57d125cf092c84d3488529365446293a145541fb358526
+      sha256: 4362d96dfafa9b554e77380f70ca4fdfc0e974434854e6ae35afd97deab8c4b4
