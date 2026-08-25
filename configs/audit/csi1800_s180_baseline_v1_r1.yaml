@@ -1,0 +1,52 @@
+schema_version: pit_baseline_request_v1
+baseline_id: csi1800_s180_baseline_v1_r1
+scope_key: csi1800
+feature_list_id: v3a_plus_liquidity_financial_rc
+feature_dependencies_path: configs/audit/feature_dependencies/v3a_plus_liquidity_financial_rc_v1.yaml
+
+# These are the conservative feature-frame bounds asserted by the request.
+# Checkpoint window manifests independently verify the endpoints.  Dependency
+# lookback is expanded separately by the versioned flat assertion.
+feature_input_scope:
+  date_start: "2018-03-13"
+  date_end: "2026-07-31"
+  provenance: checkpoint_min_train_start_to_max_predict_end_v1
+
+identities:
+  research_config:
+    path: configs/research/60d/financial_rc_180d_rolling_5y_to_202607_v3_pit_csi1800_postbootstrap_r1.yaml
+    sha256: c7c2fdbf8f894c827ae83ccda7d777d92c0e33375271b33dc7ec35384b54048e
+  signal_manifest:
+    path: data/research/signals/fwd_ret_180d_raw_pit_csi1800__daily_zscore/rolling__financial_rc_180d_rolling_5y_to_202607_v3_pit_csi1800_postbootstrap_r1__v3a_growth_financial_180d_pit_csi1800_postbootstrap_r1__fwd_ret_180d_raw_pit_csi1800__daily_zscore__2021-01-01_2026-07-31/manifest.json
+    sha256: 61914eb32c4abeb4fbcef3c278f1e83c656369154a5cffc837dcca385b510ff3
+  signal_predictions:
+    path: data/research/signals/fwd_ret_180d_raw_pit_csi1800__daily_zscore/rolling__financial_rc_180d_rolling_5y_to_202607_v3_pit_csi1800_postbootstrap_r1__v3a_growth_financial_180d_pit_csi1800_postbootstrap_r1__fwd_ret_180d_raw_pit_csi1800__daily_zscore__2021-01-01_2026-07-31/predictions.parquet
+    sha256: e1af06d09d83901f9da9f7bd3c368ede0fd3350b1282624a30f8d34a2e95f205
+  universe_manifest:
+    path: data/research/universes/csi1800_pit_v2/manifest.json
+    sha256: 70065082299a682a4c3443fafcee21e57fe62f159ce18c0002895a960683c579
+  universe_membership:
+    path: data/research/universes/csi1800_pit_v2/membership.parquet
+    sha256: 567137db93fb9b2bbdb9220f6d0ed813fec233da87948a953a255b2e08b386df
+  universe_registry:
+    path: data/research/universes/csi1800_pit_v2/csi1800_pit_union.txt
+    sha256: b911afeeb6519524fe47e0c8a5ab1a53ea44181c645fa3b66d12370eba748bea
+  backtest_manifest:
+    path: data/research/backtests/CSI1800_S180_baseline_v1_r1/manifest.json
+    sha256: 07b744698e3a664847e2e0ccbe41c9319a151ee0b313eb57c34ae20c7b75ef84
+
+checkpoints:
+  path: data/research/experiments/financial_rc_180d_rolling_5y_to_202607_v3_pit_csi1800_postbootstrap_r1/window_checkpoints
+  checkpoint_count: 68
+  checkpoint_set_sha256: e79ea3af9ca32b343677a4c5b187538fe5e8ef845ff9277e76cd101261f3e497
+  base_identity_sha256: c0fafd2fd68b1c6821df4a7b94bfd926d9443e1b0b7ab4a2d52637d397760cf6
+  model:
+    mode: ephemeral_per_window
+    path: null
+
+# This digest is carried by research/checkpoint/signal/backtest manifests, but
+# no independently resolvable source artifact exists.  The certifier must emit
+# UNRESOLVED_SOURCE_MANIFEST rather than treating the digest as evidence.
+source_manifest:
+  sha256: 780ba40ec5ce8a5f5b5c88b02e1e171e0d67c3c2b02639b22ed0a2b889abc237
+  path: null

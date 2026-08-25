@@ -193,12 +193,27 @@ canonical feather 已提交但 SQLite evidence 失败时保留 terminal-untruste
 
 **Certification boundary**:
 
-`UC_PIT_DATA_CERTIFICATION` 的 future certifier 只消费这些 evidence，按 source × field ×
-instrument × date 求交集；它不 fetch、不 repair、不调度 daily/research，也不把 daily
-watermark 自动等同于历史 PIT baseline certification。
+`UC_PIT_DATA_CERTIFICATION` 的只读 certifier 只用显式 evidence runs 建立 coverage，并读取
+SQLite 中完整 canonical mutation ledger，按 source/dataset/endpoint × field × instrument ×
+inclusive date 求交集；mutation run IDs 仅用于显式存在性断言，不能遗漏未选 mutation。它不 fetch、不 repair、
+不调度 daily/research，也不把 daily watermark 自动等同于历史 PIT baseline certification。
+正式入口是 `scripts/research/certify_pit_baseline.py`。feature 顺序与 hash 只以
+`FeatureListRegistry.contract()` 为准；versioned dependency assertion 可把一个 feature 展开为
+多个 supplier scope。无法判定的非 noop mutation 始终产生 `REAUDIT_REQUIRED`。相交 mutation
+只有在每个相交的精确 consumed scope 都有本次 selected evidence 的已验证 coverage、对应字段
+watermark 覆盖 mutation 日期范围，且 aware UTC `watermark.updated_at >= mutation.ingested_at`
+时才记为 `ACCOUNTED`；多字段必须逐字段满足，否则仍为 `REAUDIT_REQUIRED`，但不会自动声称
+baseline invalid。输出目录由不含 created_at 的 audit identity
+确定；全 mutation ledger digest 必须进入 identity。watermark 只有在其 immutable terminal receipt
+hash、trusted state、精确六 gates、linked raw supplier payload、精确 normalized
+`(run_id,dataset,field_name,receipt_id)` field link 与 requested symbol/date scope 全部复核后才可形成
+coverage。request 声明 source manifest 时，research config、signal manifest 与 selected backtest
+source backlink 都必须非空且精确一致；formal shareholder dependencies 还必须同时绑定 config 与
+signal sidecar lineage。四个 artifact 先写唯一 staging，hash 复核后在 baseline-root flock 下
+原子发布到不存在的 final 目录，禁止覆盖或留下半成品 final。
 
 本阶段 raw supplier payload 覆盖 daily market endpoints；financial per-stock endpoint 尚未
-接入 receipt/payload，因此 financial 字段不得被本阶段 daily trusted watermark 或 future
+接入 receipt/payload，因此 financial 字段不得被本阶段 daily trusted watermark 或本
 certifier 认证。
 
 ---
