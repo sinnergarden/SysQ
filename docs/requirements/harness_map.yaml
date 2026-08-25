@@ -298,11 +298,17 @@ usecases:
       - prompts/stock_research/final_stock_memo.md
     artifacts:
       - research_memos/{ts_code}/{date}/stock_research_memo.md
+      - research_memos/s180_top10/{signal_date}/{run_identity}/top10_fundamental_audit.md
+      - research_memos/s180_top10/{signal_date}/{run_identity}/top10_fundamental_audit.json
     checks:
-      - TBD: stock research memo schema check
+      - harness/checks/check_top10_signal_artifact.py
+      - harness/checks/check_stock_research_memo.py
     allowed_paths:
+      - .claude/skills/sysq-stock-research/
       - prompts/stock_research/
       - docs/requirements/
+      - harness/checks/check_stock_research_memo.py
+      - tests/harness/
       - research_memos/
     forbidden_paths:
       - qsys/ledger/
