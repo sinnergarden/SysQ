@@ -21,7 +21,11 @@ placeholders when copied to another host.
 
 ## Install
 
-Copy the service and timer files into your systemd unit directory, then replace the placeholders before enabling them.
+For the CSI1800 PIT unit, first materialize and validate a clean detached
+runtime from an explicit source revision. The preflight is fail-closed: a
+missing, dirty, non-worktree, or incomplete runtime stops before systemd is
+changed. Only then install/enable the timer with `--apply`; this command does
+not start the full data sync.
 
 ## Suggested schedule
 
@@ -60,11 +64,11 @@ mutable `latest` pointer.
 Install or update the pair:
 
 ```bash
-install -m 0644 deploy/systemd/qsys-csi1800-pit-daily-sync.service \
-  ~/.config/systemd/user/qsys-csi1800-pit-daily-sync.service
-install -m 0644 deploy/systemd/qsys-csi1800-pit-daily-sync.timer \
-  ~/.config/systemd/user/qsys-csi1800-pit-daily-sync.timer
-systemctl --user daemon-reload
+python scripts/deploy_csi1800_pit_runtime.py \
+  --revision "<40-hex-commit>"
+python scripts/deploy_csi1800_pit_runtime.py \
+  --revision "<40-hex-commit>" --apply \
+  --confirm-deploy "<40-hex-commit>"
 systemctl --user disable --now qsys-csi800-daily-sync.timer
 systemctl --user stop qsys-csi800-daily-sync.service
 systemctl --user show qsys-csi800-daily-sync.service -p ActiveState -p SubState

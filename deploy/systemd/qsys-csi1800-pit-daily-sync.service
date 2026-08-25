@@ -14,6 +14,11 @@ Environment=QSYS_DATA_ROOT=/home/liuming/.openclaw/workspace/SysQ/data
 Environment=HTTP_PROXY=http://172.31.144.1:12334
 Environment=HTTPS_PROXY=http://172.31.144.1:12334
 EnvironmentFile=/home/liuming/.openclaw/.env
+ExecStartPre=/usr/bin/test -d /home/liuming/.openclaw/workspace/SysQ-runtime
+ExecStartPre=/usr/bin/test -f /home/liuming/.openclaw/workspace/SysQ-runtime/scripts/data_sync.py
+ExecStartPre=/usr/bin/test -x /home/liuming/.openclaw/workspace/.mamba/envs/dl/bin/python
+ExecStartPre=/usr/bin/test -f /home/liuming/.openclaw/workspace/SysQ/config/settings.yaml
+ExecStartPre=/usr/bin/test -d /home/liuming/.openclaw/workspace/SysQ/data
 ExecStart=/home/liuming/.openclaw/workspace/.mamba/envs/dl/bin/python \
     /home/liuming/.openclaw/workspace/SysQ-runtime/scripts/data_sync.py \
     --universe csi1800 --apply
