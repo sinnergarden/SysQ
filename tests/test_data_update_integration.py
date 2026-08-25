@@ -312,7 +312,9 @@ class TestDataUpdateIntegration(unittest.TestCase):
         collector = TushareCollector()
         collector.__dict__["pro"] = DummyBatchPro()
         collector._fetch_with_retry = lambda api_func, **kwargs: api_func(**kwargs)
-        collector._fetch_financials_batch = lambda code_str, start_date, end_date: pd.DataFrame()
+        collector._fetch_financials_batch = (
+            lambda code_str, start_date, end_date, **_kwargs: pd.DataFrame()
+        )
 
         def fake_fetch_by_date_range(interface_name, ts_codes, start_date, end_date):
             if interface_name == "margin":
@@ -326,13 +328,18 @@ class TestDataUpdateIntegration(unittest.TestCase):
 
         saved = {}
 
-        def fake_save_batch_results(df_big, code_list, ignore_columns=None):
+        expected_mutation = {"symbol": "000001.SZ", "mutation_type": "update"}
+
+        def fake_save_batch_results(
+            df_big, code_list, ignore_columns=None, **_kwargs
+        ):
             saved["df"] = df_big.copy()
             saved["codes"] = code_list
+            return [expected_mutation]
 
         collector._save_batch_results = fake_save_batch_results
 
-        collector._update_batch_by_year(
+        result = collector._update_batch_by_year(
             ["000001.SZ"],
             "000001.SZ",
             "20260320",
@@ -347,6 +354,7 @@ class TestDataUpdateIntegration(unittest.TestCase):
         self.assertIn("df", saved)
         self.assertIn("ts_code", saved["df"].columns)
         self.assertEqual(saved["codes"], ["000001.SZ"])
+        self.assertEqual(result, {"status": "success", "mutations": [expected_mutation]})
 
 
 if __name__ == "__main__":
