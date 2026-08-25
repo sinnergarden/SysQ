@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import threading
 
 import pytest
 
@@ -222,6 +223,100 @@ def test_child_failure_preserves_completed_checkpoint_state(tmp_path: Path) -> N
     assert state["status"] == "failed"
     assert state["completed_windows"] == 1
     assert state["last_exit_code"] == 2
+
+
+def test_failed_supervisor_releases_lock_for_resume(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    state_path = tmp_path / "state.json"
+    with pytest.raises(SupervisorError, match="child failed with exit code 2"):
+        run_supervisor(
+            config_path=config,
+            checkpoint_batch_size=1,
+            run_state_path=state_path,
+            child_runner=FakeChildren([
+                _progress(1, 13),
+                ChildResult(2, "child error"),
+            ]),
+            terminal_validator=_validator,
+            revision="rev-1",
+        )
+
+    resumed = run_supervisor(
+        config_path=config,
+        checkpoint_batch_size=1,
+        run_state_path=state_path,
+        child_runner=FakeChildren([
+            *_all_progress(13, start=2),
+            ChildResult(0, "done"),
+        ]),
+        terminal_validator=_validator,
+        revision="rev-1",
+    )
+    assert resumed["status"] == "complete"
+    assert resumed["completed_windows"] == 13
+
+
+def test_concurrent_supervisor_is_rejected_without_state_or_checkpoint_mutation(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    state_path = tmp_path / "state.json"
+    checkpoint = tmp_path / "checkpoints" / "sentinel"
+    checkpoint.parent.mkdir()
+    checkpoint.write_bytes(b"checkpoint-before")
+    child_started = threading.Event()
+    release_child = threading.Event()
+    first_outcome: list[object] = []
+
+    def blocking_child(command, cwd, on_started):
+        on_started(12345)
+        child_started.set()
+        assert release_child.wait(timeout=5)
+        return ChildResult(0, "done")
+
+    def run_first() -> None:
+        try:
+            first_outcome.append(
+                run_supervisor(
+                    config_path=config,
+                    checkpoint_batch_size=1,
+                    run_state_path=state_path,
+                    child_runner=blocking_child,
+                    terminal_validator=_validator,
+                    revision="rev-1",
+                )
+            )
+        except BaseException as exc:  # pragma: no cover - asserted below
+            first_outcome.append(exc)
+
+    first_thread = threading.Thread(target=run_first)
+    first_thread.start()
+    assert child_started.wait(timeout=5)
+    state_before = state_path.read_bytes()
+    checkpoint_before = checkpoint.read_bytes()
+    lock_metadata = json.loads(Path(f"{state_path}.lock").read_text())
+    state_payload = json.loads(state_before)
+    assert lock_metadata["state_path"] == str(state_path.resolve())
+    assert lock_metadata["run_identity"] == state_payload["run_identity"]
+
+    with pytest.raises(SupervisorError, match="supervisor lock is already held"):
+        run_supervisor(
+            config_path=config,
+            checkpoint_batch_size=1,
+            run_state_path=state_path,
+            child_runner=FakeChildren([]),
+            terminal_validator=_validator,
+            revision="rev-1",
+        )
+
+    assert state_path.read_bytes() == state_before
+    assert checkpoint.read_bytes() == checkpoint_before
+    release_child.set()
+    first_thread.join(timeout=5)
+    assert not first_thread.is_alive()
+    assert len(first_outcome) == 1
+    assert isinstance(first_outcome[0], dict)
+    assert first_outcome[0]["status"] == "complete"
 
 
 def test_max_restarts_stops_without_deleting_checkpoints(tmp_path: Path) -> None:

@@ -17,6 +17,8 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import errno
+import fcntl
 import hashlib
 import json
 import os
@@ -40,6 +42,73 @@ CHECKPOINT_EXIT = 75
 
 class SupervisorError(RuntimeError):
     """A fail-closed supervisor protocol or artifact error."""
+
+
+class _SupervisorFileLock:
+    """Process-lifetime lock for one supervisor state path.
+
+    ``flock`` is the synchronization primitive.  The metadata is diagnostic
+    only and is never consulted to decide ownership, so a PID from another
+    namespace cannot make a second supervisor appear safe to start.
+    """
+
+    def __init__(self, path: Path, *, initial_metadata: dict[str, Any]) -> None:
+        self.path = path
+        self.initial_metadata = initial_metadata
+        self._handle = None
+
+    def __enter__(self) -> "_SupervisorFileLock":
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            handle = self.path.open("a+", encoding="utf-8")
+        except OSError as exc:
+            raise SupervisorError(
+                f"cannot open supervisor lock file: {self.path}"
+            ) from exc
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            handle.close()
+            if exc.errno in (errno.EACCES, errno.EAGAIN):
+                raise SupervisorError(
+                    f"supervisor lock is already held: {self.path}"
+                ) from exc
+            raise SupervisorError(
+                f"cannot acquire supervisor lock: {self.path}"
+            ) from exc
+        self._handle = handle
+        try:
+            self.write_metadata(self.initial_metadata)
+        except BaseException:
+            self.release()
+            raise
+        return self
+
+    def write_metadata(self, metadata: dict[str, Any]) -> None:
+        """Write audit metadata after the kernel lock has been acquired."""
+        if self._handle is None:
+            raise SupervisorError("supervisor lock is not held")
+        self._handle.seek(0)
+        self._handle.truncate()
+        self._handle.write(
+            json.dumps(metadata, indent=2, ensure_ascii=False, sort_keys=True)
+            + "\n"
+        )
+        self._handle.flush()
+        os.fsync(self._handle.fileno())
+
+    def release(self) -> None:
+        handle = self._handle
+        self._handle = None
+        if handle is None:
+            return
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            handle.close()
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        self.release()
 
 
 @dataclass(frozen=True)
@@ -388,7 +457,7 @@ def _fail(state: dict[str, Any], state_path: Path, reason: str, *, exit_code: in
     _atomic_write_json(state_path, state)
 
 
-def run_supervisor(
+def _run_supervisor_impl(
     *,
     config_path: str | Path,
     checkpoint_batch_size: int = 1,
@@ -399,6 +468,7 @@ def run_supervisor(
     child_runner: ChildRunner | None = None,
     terminal_validator: Callable[..., dict[str, Any]] | None = None,
     revision: str | None = None,
+    supervisor_lock: _SupervisorFileLock,
 ) -> dict[str, Any]:
     """Run/resume a bounded rolling research process to terminal completion."""
     if checkpoint_batch_size <= 0:
@@ -434,6 +504,17 @@ def run_supervisor(
         "experiment_id": config.experiment_id,
         "total_windows": total_windows,
     }
+    supervisor_lock.write_metadata({
+        "schema_version": "checkpoint_supervisor_lock_v1",
+        "state_path": str(state_path),
+        "lock_path": str(supervisor_lock.path),
+        "run_identity": run_identity,
+        "config_sha256": config_sha,
+        "revision": revision,
+        "experiment_id": config.experiment_id,
+        "acquired_at": supervisor_lock.initial_metadata["acquired_at"],
+        "updated_at": _utc_now(),
+    })
 
     if state_path.exists():
         state = _read_json(state_path)
@@ -566,6 +647,49 @@ def run_supervisor(
         })
         _atomic_write_json(state_path, state)
         return state
+
+
+def run_supervisor(
+    *,
+    config_path: str | Path,
+    checkpoint_batch_size: int = 1,
+    run_state_path: str | Path,
+    log_file: str | Path | None = None,
+    max_restarts: int | None = None,
+    project_root: str | Path | None = None,
+    child_runner: ChildRunner | None = None,
+    terminal_validator: Callable[..., dict[str, Any]] | None = None,
+    revision: str | None = None,
+) -> dict[str, Any]:
+    """Run/resume a bounded rolling research process to terminal completion.
+
+    The lock is acquired before reading or writing the state file and remains
+    held through child execution, checkpoint updates, and terminal validation.
+    """
+    state_path = Path(run_state_path).resolve()
+    lock_path = Path(f"{state_path}.lock")
+    lock = _SupervisorFileLock(
+        lock_path,
+        initial_metadata={
+            "schema_version": "checkpoint_supervisor_lock_v1",
+            "state_path": str(state_path),
+            "lock_path": str(lock_path),
+            "acquired_at": _utc_now(),
+        },
+    )
+    with lock:
+        return _run_supervisor_impl(
+            config_path=config_path,
+            checkpoint_batch_size=checkpoint_batch_size,
+            run_state_path=state_path,
+            log_file=log_file,
+            max_restarts=max_restarts,
+            project_root=project_root,
+            child_runner=child_runner,
+            terminal_validator=terminal_validator,
+            revision=revision,
+            supervisor_lock=lock,
+        )
 
 
 def main(argv: list[str] | None = None) -> int:
