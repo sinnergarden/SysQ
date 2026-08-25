@@ -18,12 +18,38 @@ from qsys.data.source_audit import SourceAuditStore, data_writer_lock
 from scripts.ops.sync_csi800_daily import (
     _abort_if_stage_failed,
     _canonical_symbols_with_data_on_date,
+    _load_csi1800_research_union,
     _publish_wrapper_terminal_gates,
     _repair_same_date_qlib_gap,
     _write_audit,
 )
 
 DUMMY_RECEIPT_SHA = "a" * 64
+
+
+def test_historical_evidence_uses_manifest_bound_registry_not_membership_union(
+    tmp_path: Path,
+) -> None:
+    artifact = tmp_path / "research/universes/csi1800_pit_v2"
+    artifact.mkdir(parents=True)
+    registry = artifact / "csi1800_pit_union.txt"
+    registry.write_text(
+        "000001.SZ\t20200101\t20201231\n"
+        "000001.SZ\t20210101\t20211231\n"
+        "000002.SZ\t20200101\t20211231\n",
+        encoding="utf-8",
+    )
+    (artifact / "manifest.json").write_text(json.dumps({
+        "registry_sha256": hashlib.sha256(registry.read_bytes()).hexdigest(),
+        "n_registry_instruments": 2,
+        "n_unique_instruments": 99,
+    }), encoding="utf-8")
+
+    codes, manifest = _load_csi1800_research_union(tmp_path)
+
+    assert codes == ["000001.SZ", "000002.SZ"]
+    assert manifest["constituent_count"] == 2
+    assert manifest["registry_sha256"] == hashlib.sha256(registry.read_bytes()).hexdigest()
 
 
 def test_dry_run_does_not_forward_force_fetch_to_canonical_sync_entrypoint():
@@ -317,7 +343,7 @@ def test_inner_resume_argument_contract(
     assert match in capsys.readouterr().err
 
 
-def test_inner_rejects_historical_resume_before_work() -> None:
+def test_inner_historical_resume_reaches_receipt_validation_before_supplier_work() -> None:
     inherited = SimpleNamespace(inherited=True)
     with patch.object(
         sys,
@@ -331,8 +357,14 @@ def test_inner_rejects_historical_resume_before_work() -> None:
         ],
     ), patch.object(
         daily_sync, "_resolve_target_date", return_value="20260821"
-    ), pytest.raises(SystemExit):
+    ), patch.object(
+        daily_sync, "QlibAdapter"
+    ) as adapter, patch.object(
+        daily_sync, "TushareCollector"
+    ) as collector, pytest.raises(ValueError, match="receipt missing"):
         daily_sync._main_under_writer_lock(inherited)
+    adapter.assert_not_called()
+    collector.assert_not_called()
 
 
 def test_inner_rejects_wrapper_receipt_sha_mismatch_before_qlib_or_supplier_work(
@@ -1110,9 +1142,17 @@ def test_main_ignores_stale_qlib_watermark_unless_repair_is_explicit(tmp_path):
     registry_path = "qsys.ops.pit_universe_snapshot.write_current_qlib_registry"
     with patch.multiple(daily_sync, **common), patch.object(
         daily_sync.cfg, "get_path", return_value=str(tmp_path)
+    ), patch.object(
+        daily_sync,
+        "_load_csi1800_research_union",
+        return_value=(list(snapshot.instruments), {"snapshot_semantics": "pit_union"}),
     ), patch(pit_path, return_value=snapshot), patch(registry_path, return_value={"status": "success"}), patch.object(
         daily_sync.SourceAuditStore,
         "evaluate_field_receipts",
+        return_value={"status": "success", "fields": {}},
+    ), patch.object(
+        daily_sync.SourceAuditStore,
+        "evaluate_history_field_receipts",
         return_value={"status": "success", "fields": {}},
     ), patch.object(
         daily_sync.SourceAuditStore,
@@ -1138,6 +1178,7 @@ def test_main_ignores_stale_qlib_watermark_unless_repair_is_explicit(tmp_path):
     }
     assert collectors[1].daily_calls == []
     assert collectors[1].history_calls[0]["start_date"] == "20260820"
+    assert collectors[1].history_calls[0]["batch_size"] == 50
     assert adapters[1].incremental_calls == ["2026-08-20"]
     assert reports[1]["sync_window"] == {
         "mode": "explicit_historical_repair",

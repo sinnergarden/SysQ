@@ -568,6 +568,7 @@ def _terminal_proof_valid(
     *, audit_db: Path, watermark: Mapping[str, Any], receipt: Mapping[str, Any],
     link: Mapping[str, Any],
     scope_start: str, scope_end: str, consumed_instruments: Sequence[str],
+    terminal_cache: dict[str, Any] | None = None,
 ) -> bool:
     run_id = str(watermark.get("run_id") or "")
     if (
@@ -575,54 +576,67 @@ def _terminal_proof_valid(
         or not all(char.isalnum() or char in "_.-" for char in run_id)
     ):
         return False
-    audit_root = audit_db.resolve().parent
-    terminal_path = audit_root / "source_runs" / run_id / "receipt.json"
-    try:
-        _reject_symlink_components(terminal_path.absolute())
-        resolved = terminal_path.resolve(strict=True)
-        if audit_root != resolved and audit_root not in resolved.parents:
+    expected_terminal_sha = str(watermark.get("terminal_receipt_sha256") or "")
+    if len(expected_terminal_sha) != 64:
+        return False
+    cache = terminal_cache if terminal_cache is not None else {}
+    cache_key = (run_id, expected_terminal_sha)
+    terminal_index = cache.get(cache_key)
+    if terminal_index is None:
+        audit_root = audit_db.resolve().parent
+        terminal_path = audit_root / "source_runs" / run_id / "receipt.json"
+        try:
+            _reject_symlink_components(terminal_path.absolute())
+            resolved = terminal_path.resolve(strict=True)
+            if audit_root != resolved and audit_root not in resolved.parents:
+                return False
+            if sha256_file(resolved) != expected_terminal_sha:
+                return False
+            terminal = json.loads(resolved.read_text(encoding="utf-8"))
+        except (OSError, ValueError, json.JSONDecodeError, CertificationError):
             return False
-        expected_terminal_sha = str(watermark.get("terminal_receipt_sha256") or "")
-        if len(expected_terminal_sha) != 64 or sha256_file(resolved) != expected_terminal_sha:
+        gates = terminal.get("terminal_gates")
+        terminal_fetches = terminal.get("fetch_receipts")
+        terminal_links = terminal.get("field_receipt_links")
+        if (
+            terminal.get("run_id") != run_id
+            or terminal.get("trust_state") != "trusted"
+            or not isinstance(gates, dict)
+            or set(gates) != REQUIRED_TERMINAL_GATES
+            or any(gates[name] is not True for name in REQUIRED_TERMINAL_GATES)
+            or not isinstance(terminal_fetches, list)
+            or not isinstance(terminal_links, list)
+        ):
             return False
-        terminal = json.loads(resolved.read_text(encoding="utf-8"))
-    except (OSError, ValueError, json.JSONDecodeError, CertificationError):
-        return False
-    gates = terminal.get("terminal_gates")
-    if (
-        terminal.get("run_id") != run_id
-        or terminal.get("trust_state") != "trusted"
-        or not isinstance(gates, dict)
-        or set(gates) != REQUIRED_TERMINAL_GATES
-        or any(gates[name] is not True for name in REQUIRED_TERMINAL_GATES)
-    ):
-        return False
-    terminal_fetches = terminal.get("fetch_receipts")
-    if not isinstance(terminal_fetches, list):
-        return False
-    embedded = next(
-        (row for row in terminal_fetches if row.get("receipt_id") == receipt.get("receipt_id")),
-        None,
-    )
+        terminal_index = {
+            "fetches": {
+                str(row.get("receipt_id")): row
+                for row in terminal_fetches
+                if isinstance(row, dict) and row.get("receipt_id")
+            },
+            "links": {
+                (
+                    str(row.get("run_id") or ""),
+                    str(row.get("dataset") or ""),
+                    normalize_field(row.get("field_name")),
+                    str(row.get("receipt_id") or ""),
+                )
+                for row in terminal_links
+                if isinstance(row, dict)
+            },
+        }
+        cache[cache_key] = terminal_index
+    embedded = terminal_index["fetches"].get(str(receipt.get("receipt_id") or ""))
     if embedded is None:
         return False
-    terminal_links = terminal.get("field_receipt_links")
     expected_link = (
         str(link.get("run_id") or ""), str(link.get("dataset") or ""),
         normalize_field(link.get("field_name")), str(link.get("receipt_id") or ""),
     )
     if (
-        not isinstance(terminal_links, list)
-        or None in expected_link
+        None in expected_link
         or not all(expected_link[index] for index in (0, 1, 3))
-        or not any(
-            isinstance(row, dict)
-            and (
-                str(row.get("run_id") or ""), str(row.get("dataset") or ""),
-                normalize_field(row.get("field_name")), str(row.get("receipt_id") or ""),
-            ) == expected_link
-            for row in terminal_links
-        )
+        or expected_link not in terminal_index["links"]
     ):
         return False
     for name in (
@@ -634,26 +648,78 @@ def _terminal_proof_valid(
     requested = receipt.get("requested_scope")
     if embedded.get("requested_scope") != requested or not isinstance(requested, dict):
         return False
-    if (
-        receipt.get("status") != "success"
-        or receipt.get("payload_kind") != "raw_supplier"
-        or receipt.get("payload_verified") is not True
-    ):
+    if receipt.get("payload_kind") != "raw_supplier":
+        return False
+    status = receipt.get("status")
+    if status != "success" or receipt.get("payload_verified") is not True:
         return False
     try:
         requested_start = _normal_date(requested["date_start"])
         requested_end = _normal_date(requested["date_end"])
+    except (KeyError, CertificationError):
+        return False
+    if requested_start > requested_end:
+        return False
+    try:
         response_start = _normal_date(receipt["response_date_min"])
         response_end = _normal_date(receipt["response_date_max"])
     except (KeyError, CertificationError):
         return False
+    if not requested_start <= response_start <= response_end <= requested_end:
+        return False
     expected_instruments = sorted({str(value).strip() for value in consumed_instruments if str(value).strip()})
+    symbols = requested.get("symbols")
+    if symbols is None:
+        requested_symbols = expected_instruments
+    elif isinstance(symbols, list):
+        requested_symbols = sorted({str(value).strip() for value in symbols if str(value).strip()})
+    else:
+        return False
     return (
-        requested_start <= scope_start <= scope_end <= requested_end
-        and requested_start <= response_start <= response_end <= requested_end
-        and requested.get("symbol_count") == len(expected_instruments)
-        and requested.get("symbols_sha256") == stable_scope_hash(expected_instruments)
+        requested_start <= requested_end
+        and set(requested_symbols).issubset(expected_instruments)
+        and requested.get("symbol_count") == len(requested_symbols)
+        and requested.get("symbols_sha256") == stable_scope_hash(requested_symbols)
     )
+
+
+def _proofs_cover_scope(
+    proofs: Sequence[Mapping[str, Any]], scope: Mapping[str, Any]
+) -> list[dict[str, Any]]:
+    """Return the exact receipt shards whose requested intervals cover a scope."""
+
+    instrument = str(scope["instrument"])
+    start = _normal_date(scope["date_start"])
+    end = _normal_date(scope["date_end"])
+    candidates: list[tuple[str, str, dict[str, Any]]] = []
+    for proof in proofs:
+        receipt = proof.get("receipt")
+        requested = receipt.get("requested_scope") if isinstance(receipt, Mapping) else None
+        if not isinstance(requested, Mapping):
+            continue
+        symbols = requested.get("symbols")
+        if symbols is not None and instrument not in {str(value) for value in symbols}:
+            continue
+        try:
+            left = max(start, _normal_date(requested["date_start"]))
+            right = min(end, _normal_date(requested["date_end"]))
+        except (KeyError, CertificationError):
+            continue
+        if left <= right:
+            candidates.append((left, right, dict(proof)))
+    candidates.sort(key=lambda item: (item[0], item[1]))
+    cursor = start
+    used: list[dict[str, Any]] = []
+    for left, right, proof in candidates:
+        if left > cursor:
+            break
+        if right < cursor:
+            continue
+        used.append(proof)
+        if right >= end:
+            return used
+        cursor = (datetime.strptime(right, "%Y%m%d") + timedelta(days=1)).strftime("%Y%m%d")
+    return []
 
 
 def _coverage_for_scopes(
@@ -666,6 +732,7 @@ def _coverage_for_scopes(
     scope_start = min(str(scope["date_start"]) for scope in scopes)
     scope_end = max(str(scope["date_end"]) for scope in scopes)
     candidates: dict[tuple[str, str, str, str], list[tuple[dict[str, Any], dict[str, Any], dict[str, Any]]]] = {}
+    terminal_cache: dict[str, Any] = {}
     for link in links:
         receipt = receipts.get(link["receipt_id"])
         if receipt is None:
@@ -680,6 +747,7 @@ def _coverage_for_scopes(
             audit_db=audit_db, watermark=watermark, receipt=receipt, link=link,
             scope_start=scope_start, scope_end=scope_end,
             consumed_instruments=consumed_instruments,
+            terminal_cache=terminal_cache,
         ):
             key = (receipt["source"], link["dataset"], receipt["endpoint"], str(field))
             candidates.setdefault(key, []).append((link, receipt, watermark))
@@ -690,23 +758,21 @@ def _coverage_for_scopes(
         chosen = None
         valid_proofs: list[dict[str, Any]] = []
         for link, receipt, watermark in candidates.get(key, []):
-            response_start = receipt.get("response_date_min")
-            response_end = receipt.get("response_date_max")
             if (
-                receipt.get("status") == "success" and receipt.get("payload_verified")
-                and response_start and response_end
+                receipt.get("status") == "success"
                 and _range_covers(
                     watermark.get("range_start"), watermark.get("trusted_through"),
                     scope.get("date_start"), scope.get("date_end"),
                 )
                 and watermark.get("terminal_receipt_sha256")
             ):
-                proof = {"link": link, "receipt": receipt, "watermark": watermark}
-                valid_proofs.append(proof)
-                if chosen is None:
-                    chosen = (link, receipt)
-        if valid_proofs:
-            proofs[scope_index] = valid_proofs
+                valid_proofs.append(
+                    {"link": link, "receipt": receipt, "watermark": watermark}
+                )
+        covering = _proofs_cover_scope(valid_proofs, scope)
+        if covering:
+            proofs[scope_index] = covering
+            chosen = (covering[0]["link"], covering[0]["receipt"])
         rows.append({
             **scope,
             "evidence_run_id": chosen[0]["run_id"] if chosen else None,

@@ -105,7 +105,7 @@ def test_raw_fetch_multi_day_keeps_history_path():
     assert collector.history_calls[0]["start_date"] == "20260820"
 
 
-def test_raw_fetch_propagates_resume_scope_and_rejects_historical_resume(tmp_path: Path):
+def test_raw_fetch_propagates_resume_scope_for_daily_and_history(tmp_path: Path):
     class Collector:
         def __init__(self):
             self.daily_calls = []
@@ -149,17 +149,75 @@ def test_raw_fetch_propagates_resume_scope_and_rejects_historical_resume(tmp_pat
     assert result["status"] == "success"
 
     historical = Collector()
-    failed = _do_raw_fetch(
+    history_result = _do_raw_fetch(
         historical,
         ["000001.SZ"],
         TARGET,
         since_date="20260820",
         resume_proof=proof,
     )
-    assert failed["status"] == "failed"
-    assert "only supported" in failed["error"]
+    assert history_result["status"] == "success"
     assert historical.daily_calls == []
-    assert historical.history_calls == []
+    assert historical.history_calls[0]["resume_proof"] is proof
+    assert historical.history_calls[0]["start_date"] == "20260820"
+
+
+def test_history_stock_endpoint_uses_one_durable_exact_symbol_shard() -> None:
+    collector = TushareCollector.__new__(TushareCollector)
+    collector._collector_interfaces = {
+        "daily_basic": {"fields": ["ts_code", "trade_date", "pe"]}
+    }
+    calls = []
+
+    def fetch(endpoint, **kwargs):
+        calls.append((endpoint, kwargs))
+        code = kwargs["requested_scope"]["symbols"][0]
+        return pd.DataFrame({
+            "ts_code": [code], "trade_date": ["20200102"], "pe": [10.0],
+        }), f"receipt-{code}"
+
+    collector._fetch_daily_endpoint_with_receipt = fetch
+    result = collector._fetch_history_stock_endpoint(
+        "daily_basic", ["000001.SZ", "000002.SZ"], "20200101", "20201231",
+        run_id="history-run", audit_store=object(), resume_proof={"proof": True},
+        scope_key="csi1800", universe="csi1800", evidence_fields=("pe",),
+    )
+
+    assert result["ts_code"].tolist() == ["000001.SZ", "000002.SZ"]
+    assert [call[1]["requested_scope"]["symbols"] for call in calls] == [
+        ["000001.SZ"], ["000002.SZ"],
+    ]
+    assert all(call[1]["resume_proof"] == {"proof": True} for call in calls)
+
+
+def test_historical_income_receipt_links_canonical_and_income_sidecar(tmp_path: Path) -> None:
+    collector = TushareCollector.__new__(TushareCollector)
+    collector.max_retries = 1
+    collector._collector_interfaces = {
+        "income": {"fields": "ts_code,ann_date,end_date,report_type,n_income,revenue,oper_cost"},
+        "balancesheet": {"fields": "ts_code,ann_date,end_date,total_assets"},
+        "cashflow": {"fields": "ts_code,ann_date,end_date,n_cashflow_act"},
+        "fina_indicator": {"fields": "ts_code,ann_date,end_date,roe"},
+    }
+    collector._get_interface_api = lambda _endpoint: (lambda **_kwargs: pd.DataFrame())
+    collector._fetch_with_retry = lambda api, **kwargs: api(**kwargs)
+    audit = SourceAuditStore(tmp_path / "audit" / "audit.db")
+    run_id = "history-income"
+
+    collector._fetch_financials(
+        "20140313", "20260821", ts_code="000001.SZ",
+        run_id=run_id, audit_store=audit,
+        scope_key="csi1800", universe="csi1800",
+    )
+
+    with sqlite3.connect(tmp_path / "audit" / "audit.db") as conn:
+        links = set(conn.execute(
+            "SELECT dataset,field_name FROM field_receipt_links WHERE run_id=?",
+            (run_id,),
+        ).fetchall())
+    assert ("canonical_daily", "revenue") in links
+    assert ("income_sidecar", "revenue") in links
+    assert ("income_sidecar", "report_type") in links
 
 
 def _build_daily_collector(store, calls):
@@ -858,6 +916,40 @@ def test_mutation_refresh_dump_fixes_only_updates_but_reads_back_inserts_too():
     assert result["revision_symbols"] == ["000002.SZ"]
     assert result["verified_value_count"] == 2
     assert result["status"] == "success"
+
+
+def test_historical_mutation_readback_uses_mutation_date_not_target_date():
+    mutation_date = "20200102"
+    mutations = [{
+        "symbol": "000001.SZ", "date_start": mutation_date,
+        "date_end": mutation_date, "fields": ["close"], "mutation_type": "update",
+    }]
+
+    class Store:
+        def load_daily_window(self, symbol, *, start_date, end_date, columns):
+            assert symbol == "000001.SZ"
+            assert (start_date, end_date, columns) == (mutation_date, mutation_date, ["close"])
+            return pd.DataFrame({"trade_date": [mutation_date], "close": [11.0]})
+
+    class Adapter:
+        def convert_fix_symbols(self, symbols, refresh_universes=None):
+            return {"status": "success", "symbols_count": len(symbols)}
+
+        def get_features(self, symbols, fields, start_time=None, end_time=None):
+            assert (start_time, end_time) == ("2020-01-02", "2020-01-02")
+            index = pd.MultiIndex.from_tuples(
+                [(pd.Timestamp("2020-01-02"), "000001.SZ")],
+                names=["datetime", "instrument"],
+            )
+            return pd.DataFrame({"$close": [11.0]}, index=index)
+
+    result = _refresh_and_verify_changed_symbols(
+        Adapter(), Store(), mutations, target_dt=TARGET, apply=True, history_mode=True,
+    )
+
+    assert result["status"] == "success"
+    assert result["mode"] == "historical_mutation_fix"
+    assert result["verified_value_count"] == 1
 
 
 def test_real_store_insert_volume_alias_reads_back_one_qlib_volume(tmp_path):

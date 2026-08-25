@@ -522,6 +522,70 @@ class SourceAuditStore:
                 (run_id, event_type, _json_text(payload or {}), utc_now()),
             )
 
+    def seal_interrupted_run_for_resume(
+        self,
+        *,
+        run_id: str,
+        expected_entrypoint: str,
+        universe: str,
+        target_date: str,
+        range_start: str | None = None,
+    ) -> None:
+        """Seal a lineage-matched interrupted writer run before explicit resume."""
+
+        run_id = validate_run_id(run_id)
+        data_root = self._data_root()
+        receipt_root = data_root / "audit" / "source_runs"
+        receipt_path = resolve_under(
+            data_root, receipt_root / run_id / "receipt.json",
+        )
+        if receipt_path.is_file():
+            return
+        expected = {
+            "entrypoint": str(expected_entrypoint),
+            "universe": str(universe),
+            "target_date": _normalise_trade_date(target_date),
+        }
+        if range_start is not None:
+            expected["range_start"] = _normalise_trade_date(range_start)
+        matched = False
+        with self._connect() as conn:
+            events = conn.execute(
+                "SELECT event_type,payload_json FROM audit_journal WHERE run_id=? ORDER BY seq",
+                (run_id,),
+            ).fetchall()
+            if conn.execute(
+                "SELECT 1 FROM trusted_watermarks WHERE run_id=? LIMIT 1", (run_id,),
+            ).fetchone() is not None:
+                raise ValueError("trusted run cannot be sealed for resume")
+        for event in events:
+            payload = json.loads(event["payload_json"])
+            if event["event_type"] == "terminal_gate_passed" or (
+                event["event_type"] == "watermark_unchanged"
+                and payload.get("prior_trusted") is True
+            ):
+                raise ValueError("trusted run cannot be sealed for resume")
+            if event["event_type"] != "run_started":
+                continue
+            candidate = {
+                "entrypoint": str(payload.get("entrypoint") or ""),
+                "universe": str(payload.get("universe") or ""),
+                "target_date": _normalise_trade_date(payload.get("target_date")),
+            }
+            payload_range = str(payload.get("range_start") or "").strip()
+            if payload_range:
+                candidate["range_start"] = _normalise_trade_date(payload_range)
+            if candidate == expected:
+                matched = True
+        if not matched:
+            raise ValueError("interrupted resume source run_started lineage mismatch")
+        self.record_crash_receipt(
+            run_id=run_id,
+            receipt_root=receipt_root,
+            entrypoint=expected_entrypoint,
+            error="interrupted_without_terminal_receipt",
+        )
+
     def validate_resume_run(
         self,
         *,
@@ -529,6 +593,7 @@ class SourceAuditStore:
         expected_entrypoint: str,
         universe: str,
         target_date: str,
+        range_start: str | None = None,
         expected_receipt_sha256: str | None = None,
     ) -> dict[str, str]:
         """Validate one immutable failed terminal snapshot against the SQLite SOT."""
@@ -566,6 +631,8 @@ class SourceAuditStore:
             "universe": str(universe),
             "target_date": _normalise_trade_date(target_date),
         }
+        if range_start is not None:
+            expected_lineage["range_start"] = _normalise_trade_date(range_start)
         if (
             not expected_lineage["entrypoint"]
             or not expected_lineage["universe"]
@@ -668,6 +735,9 @@ class SourceAuditStore:
                     "universe": str(payload.get("universe") or ""),
                     "target_date": _normalise_trade_date(payload.get("target_date")),
                 }
+                payload_range = str(payload.get("range_start") or "").strip()
+                if payload_range:
+                    lineage["range_start"] = _normalise_trade_date(payload_range)
             except (TypeError, ValueError):
                 continue
             if not re.fullmatch(r"\d{8}", lineage["target_date"]):
@@ -781,6 +851,8 @@ class SourceAuditStore:
             "universe": validated_proof["universe"],
             "target_date": validated_proof["target_date"],
         }
+        if "range_start" in validated_proof:
+            expected_current_lineage["range_start"] = validated_proof["range_start"]
         if run_id not in cache["validated_current_runs"]:
             with self._connect() as conn:
                 current_events = conn.execute(
@@ -797,6 +869,9 @@ class SourceAuditStore:
                         "universe": str(payload.get("universe") or ""),
                         "target_date": _normalise_trade_date(payload.get("target_date")),
                     }
+                    payload_range = str(payload.get("range_start") or "").strip()
+                    if payload_range:
+                        candidate["range_start"] = _normalise_trade_date(payload_range)
                 except (AttributeError, TypeError, json.JSONDecodeError):
                     continue
                 if candidate == expected_current_lineage:
@@ -1055,8 +1130,15 @@ class SourceAuditStore:
                 raise ValueError("field receipt linkage must reference the same run")
             for field_name in sorted({str(field) for field in fields if str(field)}):
                 conn.execute(
-                    "INSERT INTO field_receipt_links(run_id,dataset,field_name,receipt_id) VALUES(?,?,?,?)",
-                    (run_id, dataset, field_name, receipt_id),
+                    """INSERT INTO field_receipt_links(run_id,dataset,field_name,receipt_id)
+                       SELECT ?,?,?,? WHERE NOT EXISTS (
+                         SELECT 1 FROM field_receipt_links
+                         WHERE run_id=? AND dataset=? AND field_name=? AND receipt_id=?
+                       )""",
+                    (
+                        run_id, dataset, field_name, receipt_id,
+                        run_id, dataset, field_name, receipt_id,
+                    ),
                 )
 
     def evaluate_field_receipts(
@@ -1091,6 +1173,63 @@ class SourceAuditStore:
                     "reason": reason,
                 }
         return {"status": "success" if all(v["status"] == "success" for v in fields.values()) else "failed", "fields": fields}
+
+    def evaluate_history_field_receipts(
+        self,
+        *,
+        run_id: str,
+        field_endpoints: Mapping[str, str],
+        dataset: str = "canonical_daily",
+    ) -> dict[str, Any]:
+        """Validate every completed shard for a historical field request."""
+
+        run_id = validate_run_id(run_id)
+        data_root = self._data_root()
+        fields: dict[str, dict[str, Any]] = {}
+        with self._connect() as conn:
+            for field_name, endpoint in field_endpoints.items():
+                rows = conn.execute(
+                    """SELECT f.receipt_id,f.status,f.returned_rows,f.payload_path,f.payload_sha256
+                       FROM field_receipt_links l JOIN fetch_receipts f ON f.receipt_id=l.receipt_id
+                       WHERE l.run_id=? AND l.dataset=? AND l.field_name=? AND f.endpoint=?
+                       ORDER BY f.rowid""",
+                    (run_id, dataset, field_name, endpoint),
+                ).fetchall()
+                passed = bool(rows)
+                reason = "missing_field_receipt" if not rows else "ok"
+                for row in rows:
+                    if row["status"] not in {"success", "empty"}:
+                        passed = False
+                        reason = f"endpoint_status_{row['status']}"
+                        break
+                    if row["status"] == "success":
+                        path = resolve_under(data_root, data_root / str(row["payload_path"]))
+                        if (
+                            not path.is_file()
+                            or hashlib.sha256(path.read_bytes()).hexdigest()
+                            != row["payload_sha256"]
+                        ):
+                            passed = False
+                            reason = "payload_invalid"
+                            break
+                    elif int(row["returned_rows"]) != 0:
+                        passed = False
+                        reason = "empty_receipt_has_rows"
+                        break
+                fields[field_name] = {
+                    "status": "success" if passed else "failed",
+                    "endpoint": endpoint,
+                    "receipt_count": len(rows),
+                    "reason": reason,
+                }
+        return {
+            "status": (
+                "success"
+                if fields and all(value["status"] == "success" for value in fields.values())
+                else "failed"
+            ),
+            "fields": fields,
+        }
 
     def verify_payloads(self, run_id: str) -> dict[str, Any]:
         run_id = validate_run_id(run_id)
@@ -1433,6 +1572,7 @@ class SourceAuditStore:
         receipt_root: str | Path,
         trust_state: str = TRUSTED,
         previous_open_session: str | None = None,
+        allow_initial_history: bool = False,
     ) -> dict[str, Any]:
         """Export immutable evidence then atomically advance trusted watermarks last."""
 
@@ -1457,7 +1597,7 @@ class SourceAuditStore:
                     (source, scope_key),
                 ).fetchone()[0]
             )
-        if existing_count == 0 and range_start != range_end:
+        if existing_count == 0 and range_start != range_end and not allow_initial_history:
             effective_gates["contiguous_range"] = False
             all_passed = False
         effective_trust = trust_state if all_passed else "untrusted"
