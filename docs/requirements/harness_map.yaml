@@ -349,7 +349,10 @@ usecases:
       - <output-root>/<baseline_id>/<audit_id>/audit_scope.json
       - <output-root>/<baseline_id>/<audit_id>/coverage.parquet
       - <output-root>/<baseline_id>/<audit_id>/exceptions.parquet
+      - <output-root>/<baseline_id>/<audit_id>/evidence_snapshot.json
       - <output-root>/<baseline_id>/<audit_id>/audit_receipt.json
+      - <explicit-datapack-output>/manifest.json
+      - <explicit-datapack-output>/checksums.sha256
     checks:
       - harness/checks/check_usecase_registry.py
       - harness/checks/check_no_latest_model_resolution.py
@@ -359,6 +362,7 @@ usecases:
     allowed_paths:
       - scripts/research/certify_pit_baseline.py
       - qsys/pit_certification.py
+      - qsys/pit_datapack.py
       - configs/audit/csi1800_s180_baseline_v1_r1.yaml
       - configs/audit/feature_dependencies/v3a_plus_liquidity_financial_rc_v1.yaml
       - docs/requirements/

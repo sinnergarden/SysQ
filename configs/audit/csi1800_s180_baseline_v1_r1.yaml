@@ -50,3 +50,8 @@ checkpoints:
 source_manifest:
   sha256: 780ba40ec5ce8a5f5b5c88b02e1e171e0d67c3c2b02639b22ed0a2b889abc237
   path: null
+
+portable_datapack:
+  source_contracts:
+    - path: docs/requirements/contracts/tushare_daily.yaml
+      sha256: 3f306b41be31ab08cc57d125cf092c84d3488529365446293a145541fb358526

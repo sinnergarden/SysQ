@@ -621,3 +621,19 @@ evidence run 重审。若新 evidence 的每个相交字段 watermark 都覆盖 
 `updated_at` 不早于 mutation `ingested_at`，mutation 会标记为 `ACCOUNTED`；UNKNOWN、无效/naive
 时间或多字段中任一字段证据较旧仍要求重审。certifier 本身不承担 producer 的 checkpoint/resume
 或重拉职责。
+
+完成正式 `CERTIFIED` 后，可把该 audit identity 导出为可直接复制到移动硬盘的目录。必须显式
+填写 certification 目录，不能解析 latest；目标目录必须不存在：
+
+```bash
+python scripts/research/certify_pit_baseline.py \
+  --export-datapack-from data/research/pit_certifications/<baseline-id>/<audit-id> \
+  --datapack-output data/exports/QsysDataPack_<cutoff>_<audit-id>
+
+python scripts/research/certify_pit_baseline.py \
+  --verify-datapack data/exports/QsysDataPack_<cutoff>_<audit-id>
+```
+
+DataPack 是普通目录，包含 `manifest.json` 与 `checksums.sha256`；校验通过后可用系统 `tar`
+工具归档。它不包含 Qlib，恢复时先校验并复制 canonical/universe/corporate-action 数据，再通过
+现有 Qlib rebuild 流程重建缓存。校验成功不等于产生了新的 certification，已有包也禁止覆盖。

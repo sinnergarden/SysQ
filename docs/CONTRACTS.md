@@ -209,8 +209,16 @@ hash、trusted state、精确六 gates、linked raw supplier payload、精确 no
 `(run_id,dataset,field_name,receipt_id)` field link 与 requested symbol/date scope 全部复核后才可形成
 coverage。request 声明 source manifest 时，research config、signal manifest 与 selected backtest
 source backlink 都必须非空且精确一致；formal shareholder dependencies 还必须同时绑定 config 与
-signal sidecar lineage。四个 artifact 先写唯一 staging，hash 复核后在 baseline-root flock 下
+signal sidecar lineage。五个 artifact（含可携带 `evidence_snapshot.json`）先写唯一 staging，hash 复核后在 baseline-root flock 下
 原子发布到不存在的 final 目录，禁止覆盖或留下半成品 final。
+只有没有 coverage/mutation blocker 时，certifier 才对全部 consumed instrument 的 canonical
+文件记录 path/SHA-256/size 并纳入 audit identity；缺文件或导出前发生变化均阻断 DataPack。
+
+Portable DataPack 只能从显式 `CERTIFIED` receipt 导出，逐文件复核后写入不可覆盖目录及
+`manifest.json` / `checksums.sha256`。它包含 certification proof、选中 raw evidence、consumed
+canonical instrument files、PIT universe、corporate actions 与 lineage identity；Qlib 固定排除，
+因为它是可从 canonical 重建的 materialized view。DataPack 校验只证明搬运完整性，不产生新的
+PIT certification。
 
 本阶段 raw supplier payload 覆盖 daily market endpoints；financial per-stock endpoint 尚未
 接入 receipt/payload，因此 financial 字段不得被本阶段 daily trusted watermark 或本

@@ -4,6 +4,7 @@ import ast
 import hashlib
 import json
 from pathlib import Path
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -15,6 +16,7 @@ import yaml
 from qsys.pit_certification import (
     CertificationError,
     _canonical_bytes,
+    _canonical_materialization_identity,
     _checkpoint_set_payload,
     _scope_rows,
     _sha256_bytes,
@@ -25,6 +27,11 @@ from qsys.pit_certification import (
     sha256_file,
     stable_scope_hash,
     validate_feature_dependencies,
+)
+from qsys.pit_datapack import (
+    _corporate_action_files,
+    export_certified_datapack,
+    verify_datapack,
 )
 
 
@@ -92,6 +99,13 @@ def _make_db(path: Path, *, evidence: bool = True, mutation: dict | None = None)
                  "a" * 64, '["ts_code","trade_date","close"]', "20200101", "20200131",
                  1, "raw_supplier", "raw.parquet", sha256_file(payload), None,
                  "2020-02-01T00:00:00Z", None),
+            )
+            conn.execute(
+                "INSERT INTO fetch_receipts VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                ("derived-1", "evidence-1", "local", "daily_bundle", "success",
+                 json.dumps(requested_scope, sort_keys=True), 1,
+                 "b" * 64, '["ts_code","trade_date","close"]', "20200101", "20200131",
+                 1, "derived", None, None, None, "2020-02-01T00:00:00Z", None),
             )
             conn.execute(
                 "INSERT INTO field_receipt_links VALUES(?,?,?,?)",
@@ -187,8 +201,32 @@ def tiny_project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path,
             "features_sha256": "tiny-features", "feature_list_config_sha256": "tiny-config",
         },
     }))
+    _write(project / "data/canonical/daily/000001.SZ.feather", b"canonical rows")
+    events = _write(
+        project / "data/research/corporate_actions/tiny-ca/events.parquet",
+        b"corporate actions",
+    )
+    source_bundle = _write(
+        project / "data/research/corporate_actions/tiny-ca/source/source_bundle.zip",
+        b"raw corporate action evidence",
+    )
+    corporate_action_manifest = {
+        "schema_version": "corporate_actions_v1", "artifact_name": "tiny-ca",
+        "events_sha256": sha256_file(events),
+        "source_raw_path": "source/source_bundle.zip",
+        "source_raw_artifact_sha256": sha256_file(source_bundle),
+    }
+    _write(
+        project / "data/research/corporate_actions/tiny-ca/manifest.json",
+        json.dumps(corporate_action_manifest),
+    )
     _write(project / "backtest.json", json.dumps({
         "artifacts": {}, "signal_id": "tiny-signal", "signal_run_id": "tiny-signal-run",
+        "accounting": {
+            "canonical_data_root": "data/canonical/daily",
+            "corporate_action_artifact": "tiny-ca",
+            "corporate_action_manifest": corporate_action_manifest,
+        },
         "signal_sources": [{
             "manifest_sha256": sha256_file(project / "signal.json"),
             "predictions_sha256": sha256_file(project / "signal.parquet"),
@@ -383,6 +421,181 @@ def test_read_only_certification_deterministic_exclusive_and_hash_linked(
             request_path=request, audit_db=database, output_root=tmp_path / "out-a",
             evidence_run_ids=["evidence-1"], project_root=project,
         )
+
+
+def test_certified_datapack_exports_exact_inputs_without_qlib(
+    tiny_project: tuple[Path, Path, Path],
+) -> None:
+    project, request, database = tiny_project
+    certified = certify_pit_baseline(
+        request_path=request, audit_db=database, output_root=project / "certifications",
+        evidence_run_ids=["evidence-1"], project_root=project,
+    )
+    pack = project / "exports/tiny-pack"
+    exported = export_certified_datapack(
+        certification_dir=certified["output_dir"], output_dir=pack,
+        project_root=project,
+    )
+    assert exported["status"] == "VERIFIED"
+    assert exported["baseline_id"] == "tiny-baseline"
+    assert (pack / "data/canonical/daily/000001.SZ.feather").is_file()
+    assert (pack / "data/raw.parquet").is_file()
+    assert (pack / "data/corporate_actions/tiny-ca/events.parquet").is_file()
+    assert not (pack / "data/qlib_bin").exists()
+    assert verify_datapack(pack)["pack_id"] == exported["pack_id"]
+    cli = subprocess.run(
+        [
+            sys.executable, str(ROOT / "scripts/research/certify_pit_baseline.py"),
+            "--verify-datapack", str(pack),
+        ],
+        cwd=ROOT, check=False, capture_output=True, text=True,
+    )
+    assert cli.returncode == 0, cli.stderr
+    assert json.loads(cli.stdout)["status"] == "VERIFIED"
+
+    (pack / "data/canonical/daily/000001.SZ.feather").write_bytes(b"tampered")
+    with pytest.raises(CertificationError, match="checksum mismatch"):
+        verify_datapack(pack)
+
+
+def test_datapack_rejects_non_certified_receipt(
+    tiny_project: tuple[Path, Path, Path],
+) -> None:
+    project, request, database = tiny_project
+    blocked = certify_pit_baseline(
+        request_path=request, audit_db=database, output_root=project / "blocked",
+        project_root=project,
+    )
+    with pytest.raises(CertificationError, match="only a CERTIFIED"):
+        export_certified_datapack(
+            certification_dir=blocked["output_dir"], output_dir=project / "should-not-exist",
+            project_root=project,
+        )
+
+
+def test_datapack_rejects_canonical_change_after_certification(
+    tiny_project: tuple[Path, Path, Path],
+) -> None:
+    project, request, database = tiny_project
+    certified = certify_pit_baseline(
+        request_path=request, audit_db=database, output_root=project / "certifications",
+        evidence_run_ids=["evidence-1"], project_root=project,
+    )
+    (project / "data/canonical/daily/000001.SZ.feather").write_bytes(b"changed")
+    with pytest.raises(CertificationError, match="changed after certification"):
+        export_certified_datapack(
+            certification_dir=certified["output_dir"], output_dir=project / "exports/changed",
+            project_root=project,
+        )
+
+
+def test_datapack_verify_rejects_symlink_root(
+    tiny_project: tuple[Path, Path, Path],
+) -> None:
+    project, request, database = tiny_project
+    certified = certify_pit_baseline(
+        request_path=request, audit_db=database, output_root=project / "certifications",
+        evidence_run_ids=["evidence-1"], project_root=project,
+    )
+    pack = project / "exports/pack"
+    export_certified_datapack(
+        certification_dir=certified["output_dir"], output_dir=pack, project_root=project,
+    )
+    alias = project / "exports/pack-alias"
+    alias.symlink_to(pack, target_is_directory=True)
+    with pytest.raises(CertificationError, match="symlink"):
+        verify_datapack(alias)
+
+
+def test_datapack_rejects_canonical_instrument_and_ca_path_traversal(
+    tiny_project: tuple[Path, Path, Path],
+) -> None:
+    project, _request, _database = tiny_project
+    with pytest.raises(CertificationError, match="unsafe consumed canonical instrument"):
+        _canonical_materialization_identity(project, project / "backtest.json", ["../secret"])
+
+    backtest = json.loads((project / "backtest.json").read_text(encoding="utf-8"))
+    ca_manifest_path = project / "data/research/corporate_actions/tiny-ca/manifest.json"
+    ca_manifest = json.loads(ca_manifest_path.read_text(encoding="utf-8"))
+    ca_manifest["source_raw_path"] = "../../../../signal.parquet"
+    ca_manifest["source_raw_artifact_sha256"] = sha256_file(project / "signal.parquet")
+    ca_manifest_path.write_text(json.dumps(ca_manifest), encoding="utf-8")
+    backtest["accounting"]["corporate_action_manifest"] = ca_manifest
+    with pytest.raises(CertificationError, match="escapes"):
+        _corporate_action_files(project=project, backtest_manifest=backtest, files={})
+
+
+def test_datapack_verifier_rejects_qlib_member(
+    tiny_project: tuple[Path, Path, Path],
+) -> None:
+    project, request, database = tiny_project
+    certified = certify_pit_baseline(
+        request_path=request, audit_db=database, output_root=project / "certifications",
+        evidence_run_ids=["evidence-1"], project_root=project,
+    )
+    pack = project / "exports/pack"
+    export_certified_datapack(
+        certification_dir=certified["output_dir"], output_dir=pack, project_root=project,
+    )
+    qlib = _write(pack / "data/qlib_bin/features/a.bin", b"cache")
+    manifest_path = pack / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["files"].append({
+        "path": qlib.relative_to(pack).as_posix(),
+        "sha256": sha256_file(qlib), "size": qlib.stat().st_size,
+    })
+    manifest["files"].sort(key=lambda row: row["path"])
+    manifest["pack_id"] = _sha256_bytes(_canonical_bytes(manifest["files"]))
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    members = sorted(
+        path for path in pack.rglob("*")
+        if path.is_file() and path.name != "checksums.sha256"
+    )
+    (pack / "checksums.sha256").write_text(
+        "".join(f"{sha256_file(path)}  {path.relative_to(pack).as_posix()}\n" for path in members),
+        encoding="utf-8",
+    )
+    with pytest.raises(CertificationError, match="Qlib cache is forbidden"):
+        verify_datapack(pack)
+
+
+def test_datapack_verifier_rejects_self_consistent_audit_only_pack(
+    tiny_project: tuple[Path, Path, Path],
+) -> None:
+    project, request, database = tiny_project
+    certified = certify_pit_baseline(
+        request_path=request, audit_db=database, output_root=project / "certifications",
+        evidence_run_ids=["evidence-1"], project_root=project,
+    )
+    pack = project / "exports/pack"
+    export_certified_datapack(
+        certification_dir=certified["output_dir"], output_dir=pack, project_root=project,
+    )
+    for name in ("contracts", "lineage", "data"):
+        shutil.rmtree(pack / name)
+    manifest_path = pack / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["files"] = [
+        row for row in manifest["files"] if row["path"].startswith("audit/")
+    ]
+    manifest["pack_id"] = _sha256_bytes(_canonical_bytes(manifest["files"]))
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    members = sorted(
+        path for path in pack.rglob("*")
+        if path.is_file() and path.name != "checksums.sha256"
+    )
+    (pack / "checksums.sha256").write_text(
+        "".join(f"{sha256_file(path)}  {path.relative_to(pack).as_posix()}\n" for path in members),
+        encoding="utf-8",
+    )
+    with pytest.raises(CertificationError):
+        verify_datapack(pack)
 
 
 def test_zero_or_missing_evidence_produces_complete_blocked_report(
@@ -997,12 +1210,13 @@ def test_output_symlink_is_rejected(tiny_project: tuple[Path, Path, Path], tmp_p
 
 
 def test_certifier_has_no_producer_or_workflow_imports() -> None:
-    source = (ROOT / "qsys/pit_certification.py").read_text(encoding="utf-8")
-    tree = ast.parse(source)
-    imports = {
-        node.module for node in ast.walk(tree)
-        if isinstance(node, ast.ImportFrom) and node.module is not None
-    }
+    imports = set()
+    for path in ("qsys/pit_certification.py", "qsys/pit_datapack.py"):
+        tree = ast.parse((ROOT / path).read_text(encoding="utf-8"))
+        imports.update(
+            node.module for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom) and node.module is not None
+        )
     assert "qsys.data.source_audit" not in imports
     assert "qsys.data.collector" not in imports
     assert not any(name.startswith("qsys.research") or name.startswith("qsys.backtest") for name in imports)

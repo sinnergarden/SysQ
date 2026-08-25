@@ -55,12 +55,15 @@ Qlib readback 和 terminal watermark 做交集验证，产出不可变 certifica
 ### Outputs
 
 - `<output-root>/<baseline_id>/<audit_id>/audit_scope.json`；
-- 同目录的 `coverage.parquet`、`exceptions.parquet`、`audit_receipt.json`；
+- 同目录的 `coverage.parquet`、`exceptions.parquet`、`evidence_snapshot.json`、`audit_receipt.json`；
 - `CERTIFIED`、`BLOCKED` 或 `REAUDIT_REQUIRED`，并保留可定位的 fail-closed exceptions。
+- 仅从 `CERTIFIED` receipt 导出的 portable DataPack 目录；它包含审计证明、所选 raw payload、
+  被消费股票的 canonical 文件、PIT universe、corporate actions 和 lineage identity，固定不含 Qlib。
 
 ### Canonical Entrypoints
 
 - `scripts/research/certify_pit_baseline.py`（已实现，只读）。
+- 同一入口的 `--export-datapack-from` / `--verify-datapack` 模式。
 
 该 entrypoint 必须只读，不得 import/call daily fetch、repair、research runner 或 production
 runner。daily evidence 仍由 `UC_DAILY_OPS` 的既有 entrypoint 生产。
@@ -70,7 +73,8 @@ runner。daily evidence 仍由 `UC_DAILY_OPS` 的既有 entrypoint 生产。
 - `data/audit/audit.db` — 最小 SQLite evidence SOT；
 - `data/audit/source_runs/{run_id}/receipt.json` — per-run immutable export；
 - `data/raw/evidence/tushare/{endpoint}/{run_id}/{receipt_id}.parquet` — supplier raw response；
-- `<output-root>/<baseline_id>/<audit_id>/{audit_scope.json,coverage.parquet,exceptions.parquet,audit_receipt.json}`。
+- `<output-root>/<baseline_id>/<audit_id>/{audit_scope.json,coverage.parquet,exceptions.parquet,evidence_snapshot.json,audit_receipt.json}`；
+- `<explicit-datapack-output>/{manifest.json,checksums.sha256,audit/,contracts/,data/,lineage/}`。
 
 ### Required Checks
 
@@ -107,6 +111,7 @@ reviewer_agent
 
 - `scripts/research/certify_pit_baseline.py`
 - `qsys/pit_certification.py`
+- `qsys/pit_datapack.py`
 - `configs/audit/csi1800_s180_baseline_v1_r1.yaml`
 - `configs/audit/feature_dependencies/v3a_plus_liquidity_financial_rc_v1.yaml`
 - `docs/requirements/`
@@ -136,3 +141,8 @@ python scripts/research/certify_pit_baseline.py \
 同一 deterministic audit 目录禁止覆盖；所有文件先在 baseline root 唯一 staging 中完成并校验，
 再在 flock 下原子发布。watermark 必须能回链 trusted terminal receipt、精确六 gates、raw supplier
 payload 以及与 consumed instruments/date 完全一致的 requested scope，否则 coverage 为 missing。
+
+DataPack 导出必须显式给出 certification 目录与全新 output 目录，只接受
+`baseline_status=CERTIFIED`。它逐项复核 certification、lineage、raw payload、canonical、universe
+和 corporate-action hash 后原子发布。它是可复制目录，不是每日 snapshot；复制或归档后先运行
+`--verify-datapack`。Qlib 始终由 canonical 重建，不进入默认包。
