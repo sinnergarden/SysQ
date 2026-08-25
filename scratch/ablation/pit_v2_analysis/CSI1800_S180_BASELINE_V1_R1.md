@@ -23,6 +23,21 @@ Top5 候选覆盖改成了 signal-independent PIT CSI1800 覆盖。因此不能�
 旧 static-current CSI800、旧 accounting-incomplete `23.70%` CSI1800 以及旧 v1
 都只保留为历史对照。后续 objective/feature/model 研究统一使用 r1。
 
+本次报告只补充流程、部署和已知问题，不改变上述 baseline 指标、任何 lineage/hash
+或 8 月 25 日 Top10。
+
+## PR #260–#266 合并顺序与用途
+
+| PR | 用途 |
+|---:|---|
+| #260 | 固定 PIT research input contract，校验 S180 raw-score artifact。 |
+| #261 | 固定 rolling freshness、shareholder snapshot 和 checkpoint/dependency lineage。 |
+| #262 | 将财报研究改为 Top10 模型信号可靠性审计，不替代量化排序。 |
+| #263 | 建立 CSI1800 daily runtime deployment use case、安装和验证契约。 |
+| #264 | 部署固定 revision 的 CSI1800 runtime、service 和 timer。 |
+| #265 | 将 daily sync 收敛为 PIT-safe 的 completed-session、single-day fast path。 |
+| #266 | 完成 accounting baseline、signal-independent PIT corporate-action artifact，并为 CA 按日期索引提速。 |
+
 ## r1 冻结 identity
 
 - Backtest：`data/research/backtests/CSI1800_S180_baseline_v1_r1`
@@ -134,17 +149,27 @@ S180 raw Top10（无 z-score）：
 | 10 | 300496.SZ 中科创达 | 0.4026695892 |
 
 Top10 artifact SHA：`d9f34af119e0726605a9a5861c5a667ddf98be08d62a1ffa9a726cec44eee890`。
+Top10 checker 已通过；`model_bundle_hash` 为
+`d4b757b0914837df5a5113b47e9dbbd878b06dde6ba8bdcc396a72c2af754a8a`，
+`candidate_hash` 为 `a0cde494b47c6b76072b3c1bbc93991036c6f6f0fdfd543e7ff08e36ff85221c`。
 基本面审计严格按“模型信号可靠性审计”角色执行：5 个 `supported/monitor`，5 个
 `mixed/reduce_confidence`，没有 `conflicted` 或 `strongly_challenge`。审计用于降低
 极端错误，不替代模型排序。
+
+stock audit checker 曾在 clean final worktree 首次因相对 `outputs` 路径按调用 cwd
+解析而 blocked；在真实 artifact repo root 复跑通过（run identity
+`c187f0e0b5e9749b68465d46fcfe0fc942f08ccbd3b50f8415af07051ecd9f85`，
+`audit_count=10`）。这暴露了 artifact 路径不应依赖调用 cwd 的契约问题，已列入后续
+改进，不影响本次 Top10/模型 hash。
 
 ## 这次流程哪里做错了，已经怎样修
 
 ### 1. CSI800 daily 与 CSI1800 research 脱节
 
 旧 daily 只维护 CSI800，切到 CSI1800 时有 699 个历史 deficient 股票，因此第一次
-必须做一次历史 catch-up。修复后 daily 先查本地 watermark/deficient symbols：正常日
-只拉目标交易日，只有真实 deficient 才做 bounded history repair；后续两次审计均为 0。
+必须做一次历史 catch-up。修复后正常 daily 固定为单个目标交易日（`daily_single_day`），
+不再自动 bounded catch-up；历史补数只有调用方显式提供 `--repair-start-date` 才进入
+repair 路径。后续两次审计均为 0。
 
 ### 2. “当前日期”与“最后完整交易日”混淆
 
@@ -182,6 +207,34 @@ Python 叠加触发全局 OOM，杀掉一份。已增加 `<state>.lock` 的 non-
 等价复算约 2 分 19 秒。两次 run 的 daily、executions、CA ledger、valuation 和
 attribution 五个 artifact 字节 SHA 完全一致，metrics 除 `created_at` 外一致。
 
+## 实际部署与 transient smoke 证据
+
+### Runtime deployment
+
+- deployed code main/runtime revision：`f81a91ac9f17ce1ea2b60f0ba6dfec1d96e782b6`。
+- 已安装 `qsys-csi1800-pit-daily-sync.service` SHA：
+  `eac9f3f0cea18b34f1c3b2ba9aaeb17d318971890f0178cac9e06de3ca10765a`。
+- 已安装 `qsys-csi1800-pit-daily-sync.timer` SHA：
+  `883a7b8d0a36cfd63678d753881ea9137997b8e7f9648c02910ec777b0c76fe9`。
+- 安装 unit bytes 与仓库 deploy unit bytes 一致；`systemd-analyze verify` 通过。
+- timer 当前 `enabled/active`，正式 service 当前 `inactive`；这只证明调度已注册，
+  不能把 timer active 当成 daily 成功。
+- 正式调度为工作日 19:00；post-fix 后仍待第一次 19:00 正式 apply 观察。
+- 历史现场：8 月 24 日曾有 CHDIR 失败，8 月 25 日曾收到 TERM；二者都是历史失败
+  证据，不能被后续 timer active 状态覆盖或解释成成功。
+
+### Transient dry-run smoke
+
+- unit：`qsys-csi1800-pit-daily-sync-smoke-20260825T1310`。
+- invocation：`7981a6fe50cd468a98253061b2a55a08`。
+- 运行时长 `17.53s`，exit `0`，状态 `READY`，目标日 `20260824`。
+- PIT constituents `1,800`；行情 rows `1,799`。
+- `002155.SZ` 唯一缺失，审计原因是 `missing_target_row`；与停牌证据一致。
+- `sync_window=daily_single_day`；无 blocking、无 warning。
+
+这次 smoke 证明的是 dry-run READY contract，不等价于正式 apply 已成功；正式 apply
+仍以首次 19:00 service 运行结果为准。
+
 ## 后续 daily 应该只有一个 READY contract
 
 理想状态机：
@@ -190,17 +243,19 @@ attribution 五个 artifact 字节 SHA 完全一致，metrics 除 `created_at` �
 resolve exact completed target
   -> load exact PIT CSI1800 snapshot
   -> inspect local watermarks / target rows
-  -> target-only repair OR bounded history catch-up
+  -> sync exactly one target day (`daily_single_day`)
   -> build market + financial + shareholder readiness artifact
   -> schema/date/PIT/coverage validation
   -> READY
   -> inference consumes this exact READY identity
 ```
 
-正常日不应重新校验多年历史 hash，也不应重训 68 窗。hash 用于 immutable artifact
-发布和 cache identity；daily 只比较上一次已接受 watermark/hash 与本次增量。历史 68
-窗是 research baseline，live 路径只在既定 retrain cadence 训练最新模型，其他天复用已
-部署 model bundle。
+正常日发现历史 deficient 时，不得自动跳转到多年 bounded catch-up；应显式暴露
+`REPAIR_REQUIRED`，由调用方另行使用 `--repair-start-date` 进入历史 repair 状态。历史
+repair 完成后，仍需由下一次单日 target run 独立通过上述 READY 状态机。hash 用于
+immutable artifact 发布和 cache identity；daily 只比较上一次已接受 watermark/hash 与
+本次增量。历史 68 窗是 research baseline，live 路径只在既定 retrain cadence 训练最新
+模型，其他天复用已部署 model bundle。
 
 ## 仍然存在的问题
 
@@ -226,6 +281,39 @@ resolve exact completed target
    Tushare dividend source 在本样本主要覆盖现金、送股、转增，仍需独立验证真实拆并股
    的 source mapping。
 
+### 本轮补充的已知问题
+
+8. **P1 — 正式 apply 尚未完成首个 19:00 观察。** dry-run smoke 已 READY，但 timer
+   active 不是 service 成功；必须记录首次正式 apply 的 exit、READY、target rows 和
+   audit 后再关闭该项。
+9. **P1 — collector 配置仍依赖 fallback 默认值。** `settings.yaml` 当前缺少
+   `derived_fields`、`expected_extra_cols`、`financial_cols`、`moneyflow_fields` 和
+   `numeric_extra_cols`；运行时使用 fallback defaults。应把生产所需字段显式写入配置并
+   做 hash-bound config gate，避免默认值静默变化。
+10. **P1 — audit 目前按日期覆盖而非 append-only。** 同一日期重跑会覆盖 audit 文件，
+    不足以构成完整历史审计链；应改为 invocation/run identity 分层保存，并由日期索引
+    指向不可变记录。
+11. **P1 — stock audit artifact 路径依赖调用 cwd。** 应绑定明确 project root/URI，或按
+    audit 文件位置解析，同时保留 Top10、memo 和 summary hash；不能依赖调用方当前目录。
+12. **P1 — main 仍有既有测试债。** 两条 rolling config 日期断言，以及 17 条 rolling
+    runner 旧 fixture/duckdb/API 测试仍失败；这是 baseline 已存在的债务，不是 r1
+    指标或 Top10 变化。
+
 这些问题不会使 r1 当前历史结果失效；P0 项会影响 daily/shadow portfolio 的长期稳定性，
 应在开始新的 objective/feature 研究前先纳入 production readiness backlog。
 
+## Loop Result
+
+- Status: found（baseline 数字、hash、Top10 未变；发现 daily 状态机、部署观测、配置
+  fallback、audit 可追溯性和既有测试债的补充问题）。
+- Root cause: 正常 daily 曾把历史 repair 混入单日路径；timer 生命周期、service 成功和
+  dry-run READY 未被分开记录；部分 artifact 路径与 audit 记录仍隐含调用 cwd。
+- Fix suggestion / priority:
+  1. P0：保持 single-day READY contract，并让 CA artifact 进入 daily readiness。
+  2. P1：完成首次 19:00 apply 观察，显式固定 collector config，改 audit 为 append-only，
+     修复 stock audit root/URI 解析。
+  3. P1：清理两条日期断言和 17 条 rolling runner fixture/duckdb/API 测试债。
+  4. P1/P2：继续 heartbeat、CA carry edge、partial-fill、split/consolidation coverage
+     等原列表工作。
+- Reviewer needed: yes — production deployment 首次 apply 与 audit artifact contract 需要
+  独立复核。
