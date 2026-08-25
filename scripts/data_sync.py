@@ -39,6 +39,15 @@ def _data_sync_run_root(data_root: Path, run_id: str) -> Path:
     return Path(data_root) / "audit" / "data_sync" / run_id
 
 
+def _shareholder_required_history_start_date(
+    target_date: str, lookback_days: int
+) -> str:
+    if lookback_days <= 0:
+        raise ValueError("shareholder history lookback days must be positive")
+    target = datetime.strptime(str(target_date).replace("-", ""), "%Y%m%d")
+    return (target - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
+
+
 def main():
     p = argparse.ArgumentParser(description="Data Sync — UC-1")
     p.add_argument("--config", default=None)
@@ -70,6 +79,12 @@ def main():
         "--shareholder-start-date",
         default=None,
         help="Force a bounded shareholder announcement-date backfill start",
+    )
+    p.add_argument(
+        "--shareholder-history-lookback-days",
+        type=int,
+        default=1461,
+        help="Calendar-day PIT shareholder history required from target date",
     )
     p.add_argument(
         "--margin-lookback-days",
@@ -108,6 +123,8 @@ def main():
     args = p.parse_args()
     if args.margin_lag_sessions < 1:
         p.error("--margin-lag-sessions must be at least 1 for post-close sync")
+    if args.shareholder_history_lookback_days <= 0:
+        p.error("--shareholder-history-lookback-days must be positive")
     universe = args.universe
     target_date = args.target_date
     do_apply = args.apply
@@ -291,6 +308,11 @@ def main():
                 audit_run_root / "shareholder_repair"
             ),
             start_date=args.shareholder_start_date,
+            required_history_start_date=(
+                _shareholder_required_history_start_date(
+                    resolved_target, args.shareholder_history_lookback_days
+                )
+            ),
         )
         report["shareholder_repair"] = shareholder_result
         if shareholder_result["status"] not in {"healthy", "success"}:

@@ -15,7 +15,7 @@ import os
 import shutil
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -44,9 +44,29 @@ class Top10RunResult:
 
 def _canonical_hash(value: Any) -> str:
     encoded = json.dumps(
-        value, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        default=_canonical_json_default,
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _canonical_json_default(value: Any) -> str:
+    """Serialize the non-JSON scalar types allowed in canonical payloads.
+
+    ``date`` and ``datetime`` are converted explicitly so fingerprints can be
+    generated from YAML-loaded values without changing the representation of
+    ordinary JSON payloads.  Other types are rejected instead of being
+    silently coerced into an unstable or misleading string representation.
+    """
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    raise TypeError(
+        f"unsupported type for canonical hash: {type(value).__module__}."
+        f"{type(value).__qualname__}"
+    )
 
 
 def _file_sha256(path: Path) -> str:
@@ -498,9 +518,16 @@ def validate_top10_run_artifact(path: str | Path) -> dict[str, Any]:
         raise Top10RunError("candidate hash differs from quality gate")
     if payload["quality_gate"].get("score_transform") != "raw_model_prediction":
         raise Top10RunError("Top10 quality gate must pin raw_model_prediction")
-    if candidate.get("source", {}).get("model_bundle_hash") != payload["model"].get(
-        "bundle_hash"
-    ):
+    candidate_source = candidate.get("source", {})
+    # ``model_bundle_id`` is the content-addressed bundle hash.  The
+    # ``model_bundle_hash`` emitted by model_blend_inference is the hash of
+    # the resolved inference settings, so it is intentionally different
+    # when availability/freshness metadata changes.  Keep the fallback for
+    # legacy candidate artifacts that predate the explicit bundle id.
+    candidate_bundle = candidate_source.get("model_bundle_id")
+    if candidate_bundle is None:
+        candidate_bundle = candidate_source.get("model_bundle_hash")
+    if candidate_bundle != payload["model"].get("bundle_hash"):
         raise Top10RunError("model bundle differs from candidate artifact")
     candidate_rows = candidate.get("candidates")
     if not isinstance(candidate_rows, list) or len(candidate_rows) != 10:

@@ -31,6 +31,17 @@ def test_data_sync_routes_csi1800_to_canonical_sync_entrypoint():
     assert run.call_args.kwargs["check"] is True
 
 
+def test_shareholder_history_start_uses_target_and_positive_lookback():
+    assert data_sync._shareholder_required_history_start_date(
+        "2026-08-21", 1461
+    ) == "2022-08-21"
+    assert data_sync._shareholder_required_history_start_date(
+        "20260821", 1
+    ) == "2026-08-20"
+    with pytest.raises(ValueError, match="positive"):
+        data_sync._shareholder_required_history_start_date("2026-08-21", 0)
+
+
 def test_csi1800_audit_uses_distinct_target_date_path(tmp_path: Path):
     path = _write_audit(
         tmp_path,

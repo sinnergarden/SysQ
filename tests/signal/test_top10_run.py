@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -15,6 +15,7 @@ from qsys.signal.top10_run import (
     _canonical_hash,
     _file_sha256,
     _select_model_entry,
+    _publish_top10_manifest,
     run_top10_signal,
     validate_top10_run_artifact,
 )
@@ -38,6 +39,34 @@ def test_same_date_retrain_appends_revision_and_selects_newest(tmp_path: Path) -
     assert published_first["revision"] == 1
     assert published_second["revision"] == 2
     assert _select_model_entry(registry, decision_date="2026-08-21") == published_second
+
+
+def test_canonical_hash_converts_date_and_datetime_to_iso() -> None:
+    payload = {
+        "as_of": date(2026, 8, 24),
+        "created_at": datetime(2026, 8, 24, 9, 30, 15, tzinfo=timezone.utc),
+    }
+    expected = {
+        "as_of": "2026-08-24",
+        "created_at": "2026-08-24T09:30:15+00:00",
+    }
+
+    assert _canonical_hash(payload) == _canonical_hash(expected)
+
+
+def test_canonical_hash_preserves_json_hash_and_key_sorting() -> None:
+    payload = {"b": 2, "a": {"d": "x", "c": [3, True]}, "z": None}
+    reordered = {"z": None, "a": {"c": [3, True], "d": "x"}, "b": 2}
+
+    assert _canonical_hash(payload) == (
+        "8574d394879e9ac212f7d2e844a97960c2e04ad09c30a1d955f24d08201cc820"
+    )
+    assert _canonical_hash(payload) == _canonical_hash(reordered)
+
+
+def test_canonical_hash_rejects_unsupported_types() -> None:
+    with pytest.raises(TypeError, match="unsupported type for canonical hash"):
+        _canonical_hash({"value": object()})
 
 
 def _config(root: Path) -> dict:
@@ -160,6 +189,30 @@ def test_initial_run_trains_then_publishes_verified_top10(tmp_path: Path) -> Non
     )
     assert state["stage"] == "complete"
     assert state["status"] == "complete"
+
+
+def test_validator_uses_content_bundle_id_not_inference_settings_hash(
+    tmp_path: Path,
+) -> None:
+    _prepare_inputs(tmp_path)
+    inference_result = _write_candidate(tmp_path)
+    inference_result.payload["source"]["model_bundle_id"] = "b" * 64
+    inference_result.payload["source"]["model_bundle_hash"] = "h" * 64
+    inference_result.artifact_path.write_text(
+        json.dumps(inference_result.payload), encoding="utf-8"
+    )
+
+    result = _publish_top10_manifest(
+        tmp_path,
+        inference_result,
+        model_entry={"bundle_hash": "b" * 64},
+        retrained=True,
+        retrain_reason="initial_model",
+        sessions_since_model=0,
+    )
+
+    assert result.payload["model"]["bundle_hash"] == "b" * 64
+    assert validate_top10_run_artifact(result.artifact_path)["run_identity"]
 
 
 def test_model_inside_20_sessions_is_reused(tmp_path: Path) -> None:

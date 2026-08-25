@@ -10,7 +10,9 @@ from qsys.model.financial_rc_trainer import (
     compute_model_artifact_identity,
     FinancialRCTrainingError,
     FinancialRCTrainer,
+    TrainingWindow,
     _filter_pit_membership,
+    _label_coverage_universe,
     _prediction_membership_identity,
     derive_purged_evaluation_train_end,
     derive_training_window,
@@ -122,6 +124,63 @@ def test_label_universe_gate_allows_small_recent_listing_gap() -> None:
 
     assert result["coverage"] == 0.99
     assert result["missing_members"] == ["S099"]
+
+
+def test_pit_label_coverage_uses_membership_window_not_ever_union() -> None:
+    class Store:
+        instruments = ["ACTIVE", "DELISTED_OUTSIDE_WINDOW"]
+
+        def membership_window(self, start: str, end: str) -> list[str]:
+            assert (start, end) == ("2023-10-30", "2025-11-25")
+            return ["ACTIVE"]
+
+    window = TrainingWindow(
+        train_start="2023-10-27",
+        train_end="2025-11-24",
+        label_start="2023-10-30",
+        label_end="2025-11-25",
+        as_of_date="2026-08-24",
+        horizon=180,
+        window_sessions=504,
+        maturity_sessions=182,
+    )
+    members, semantics = _label_coverage_universe(
+        Store(), Store.instruments, window
+    )
+
+    result = profile_label_universe_coverage(
+        ["ACTIVE"], members, min_coverage=0.99
+    )
+
+    assert semantics == "pit_membership_window"
+    assert result["coverage"] == 1.0
+    assert result["missing_members"] == []
+
+
+def test_pit_label_coverage_still_rejects_missing_window_member() -> None:
+    class Store:
+        def membership_window(self, start: str, end: str) -> list[str]:
+            return ["ACTIVE", "MISSING_IN_WINDOW"]
+
+    window = TrainingWindow(
+        train_start="2023-10-27",
+        train_end="2025-11-24",
+        label_start="2023-10-30",
+        label_end="2025-11-25",
+        as_of_date="2026-08-24",
+        horizon=180,
+        window_sessions=504,
+        maturity_sessions=182,
+    )
+    members, _ = _label_coverage_universe(Store(), [], window)
+
+    with pytest.raises(
+        FinancialRCTrainingError,
+        match="label artifact does not cover the current training universe",
+    ):
+        profile_label_universe_coverage(
+            ["ACTIVE"], members, min_coverage=0.99
+        )
 
 
 def test_financial_rc_has_dedicated_training_candidate(tmp_path) -> None:
