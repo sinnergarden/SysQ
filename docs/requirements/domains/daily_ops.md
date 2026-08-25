@@ -18,6 +18,9 @@ stable
 ### Scope
 包含：
 - 数据同步（csi800 daily）
+- canonical CSI1800 单日采集实现（`qsys/data/collector.py`）；该实现只允许由
+  `scripts/data_sync.py` 或 `scripts/ops/sync_csi800_daily.py` 调用，不将整个
+  `qsys/data/` 目录纳入 daily allowed paths。
 - 盘前推理（signal → prediction → plan）
 - 盘后执行（simulated fills → ledger → MTM）
 - 通知（Telegram）
@@ -46,6 +49,8 @@ stable
 - `scripts/data_sync.py` — 数据同步
 - `scripts/run_daily.py --mode preopen|postclose` — 盘前/盘后
 - `scripts/run_daily_batch.py` — 批量 wrapper，只调度 shadow pointer 真正指向的策略
+- `qsys/data/collector.py` — 仅作为上述 canonical sync entrypoint 的采集实现；
+  不作为独立运营入口，也不改变 deploy/systemd 边界。
 
 对齐 `docs/USE_CASES.md` §7。
 
@@ -69,6 +74,7 @@ operator_agent
 - `scripts/run_daily.py`
 - `scripts/run_daily_batch.py`
 - `scripts/ops/sync_csi800_daily.py`
+- `qsys/data/collector.py`
 - `qsys/ops/`
 - `configs/strategies/`
 - `harness/checks/`
