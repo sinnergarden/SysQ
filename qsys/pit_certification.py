@@ -28,6 +28,7 @@ from qsys.feature.registry import FeatureListRegistry
 
 
 SCHEMA_VERSION = "pit_baseline_certification_v1"
+EVIDENCE_SNAPSHOT_SCHEMA_VERSION = "pit_evidence_snapshot_v1"
 COVERAGE_COLUMNS = [
     "source", "dataset", "endpoint", "field", "instrument", "date_start",
     "date_end", "scope_kind", "evidence_run_id", "receipt_id", "mutation_id",
@@ -789,6 +790,45 @@ def _artifact_identities(project_root: Path, request: Mapping[str, Any]) -> tupl
     return identities, paths
 
 
+def _canonical_materialization_identity(
+    project_root: Path, backtest_manifest_path: Path, instruments: Sequence[str],
+) -> dict[str, Any]:
+    backtest = json.loads(backtest_manifest_path.read_text(encoding="utf-8"))
+    relative_root = str((backtest.get("accounting") or {}).get("canonical_data_root") or "")
+    root = (project_root / relative_root).absolute()
+    _reject_symlink_components(root)
+    resolved_root = root.resolve()
+    if (
+        not relative_root or not resolved_root.is_dir()
+        or (resolved_root != project_root and project_root not in resolved_root.parents)
+    ):
+        raise CertificationError("certified backtest canonical_data_root is missing or unsafe")
+    files: list[dict[str, Any]] = []
+    for instrument in sorted(set(instruments)):
+        if (
+            not instrument or instrument in {".", ".."}
+            or Path(instrument).name != instrument
+            or not all(ch.isalnum() or ch in "._-" for ch in instrument)
+        ):
+            raise CertificationError(f"unsafe consumed canonical instrument: {instrument!r}")
+        candidate = (resolved_root / f"{instrument}.feather").absolute()
+        _reject_symlink_components(candidate)
+        path = candidate.resolve()
+        if resolved_root not in path.parents or not path.is_file() or path.is_symlink():
+            raise CertificationError(f"consumed canonical instrument file missing: {instrument}")
+        files.append({
+            "instrument": instrument,
+            "path": path.relative_to(project_root).as_posix(),
+            "sha256": sha256_file(path),
+            "size": path.stat().st_size,
+        })
+    return {
+        "root": resolved_root.relative_to(project_root).as_posix(),
+        "materialization": "whole_consumed_instrument_files",
+        "files": files,
+    }
+
+
 def _validate_cross_artifact_lineage(
     *, project: Path, request: Mapping[str, Any], identities: Mapping[str, Any],
     paths: Mapping[str, Path], research_config: Mapping[str, Any],
@@ -1054,16 +1094,57 @@ def certify_pit_baseline(
         })
     has_blocker = any(item["severity"] == "BLOCKING" for item in exceptions)
     has_reaudit = any(item["severity"] == "REAUDIT" for item in exceptions)
+    canonical_materialization: dict[str, Any] | None = None
+    if not has_blocker and not has_reaudit:
+        try:
+            canonical_materialization = _canonical_materialization_identity(
+                project, paths["backtest_manifest"], consumed_instruments,
+            )
+        except CertificationError as exc:
+            exceptions.append(_exception(
+                "CANONICAL_MATERIALIZATION_UNBOUND", "BLOCKING", registry["features"],
+                {"error": str(exc)},
+            ))
+            has_blocker = True
     baseline_status = "BLOCKED" if has_blocker else ("REAUDIT_REQUIRED" if has_reaudit else "CERTIFIED")
     dependency_sha = sha256_file(dependency_path)
+    try:
+        request_relative = request_file.relative_to(project).as_posix()
+        dependency_relative = dependency_path.relative_to(project).as_posix()
+        audit_db_relative = Path(audit_db).resolve().relative_to(project).as_posix()
+    except ValueError as exc:
+        raise CertificationError("certification inputs must remain inside project root") from exc
+    audit_db_path = Path(audit_db).resolve()
+    data_root = audit_db_path.parent.parent if audit_db_path.parent.name == "audit" else audit_db_path.parent
+    try:
+        data_root_relative = data_root.relative_to(project).as_posix() or "."
+        audit_root_relative = audit_db_path.parent.relative_to(project).as_posix() or "."
+    except ValueError as exc:
+        raise CertificationError("audit data root must remain inside project root") from exc
+    source_contracts: list[dict[str, str]] = []
+    for spec in (request.get("portable_datapack") or {}).get("source_contracts", []):
+        if not isinstance(spec, Mapping):
+            raise CertificationError("portable_datapack source_contracts must be identity mappings")
+        path = _verify_identity(project, spec, "portable_datapack source contract")
+        source_contracts.append({
+            "path": path.relative_to(project).as_posix(),
+            "sha256": sha256_file(path),
+        })
     identity_payload = {
         "schema_version": SCHEMA_VERSION,
         "baseline_id": baseline_id,
         "request_sha256": sha256_file(request_file),
+        "request": {"path": request_relative, "sha256": sha256_file(request_file)},
         "identities": identities,
         "feature_list_config_sha256": registry["feature_list_config_sha256"],
         "features_sha256": registry["features_sha256"],
         "feature_dependencies_sha256": dependency_sha,
+        "feature_dependencies": {"path": dependency_relative, "sha256": dependency_sha},
+        "source_contracts": source_contracts,
+        "audit_db_relative": audit_db_relative,
+        "audit_root_relative": audit_root_relative,
+        "evidence_data_root_relative": data_root_relative,
+        "canonical_materialization": canonical_materialization,
         "checkpoint_set_sha256": checkpoint_scope["checkpoint_set_sha256"],
         "selected_evidence_run_ids": sorted(set(evidence_run_ids)),
         "selected_mutation_run_ids": sorted(set(mutation_run_ids)),
@@ -1120,10 +1201,20 @@ def certify_pit_baseline(
         scope_path = staging / "audit_scope.json"
         coverage_path = staging / "coverage.parquet"
         exceptions_path = staging / "exceptions.parquet"
+        evidence_path = staging / "evidence_snapshot.json"
         receipt_path = staging / "audit_receipt.json"
         _write_json(scope_path, audit_scope)
         pd.DataFrame(coverage, columns=COVERAGE_COLUMNS).to_parquet(coverage_path, index=False)
         pd.DataFrame(exceptions, columns=EXCEPTION_COLUMNS).to_parquet(exceptions_path, index=False)
+        _write_json(evidence_path, {
+            "schema_version": EVIDENCE_SNAPSHOT_SCHEMA_VERSION,
+            "audit_db_sha256_at_query": evidence["audit_db_sha256"],
+            "evidence_query_sha256": evidence["evidence_query_sha256"],
+            "selected_evidence_run_ids": sorted(set(evidence_run_ids)),
+            "selected_mutation_run_ids": sorted(set(mutation_run_ids)),
+            "full_mutation_ledger_sha256": evidence["full_mutation_ledger_sha256"],
+            "tables": evidence["tables"],
+        })
         try:
             git_revision = subprocess.run(
                 ["git", "rev-parse", "HEAD"], cwd=project, check=True,
@@ -1135,6 +1226,7 @@ def certify_pit_baseline(
             "audit_scope.json": sha256_file(scope_path),
             "coverage.parquet": sha256_file(coverage_path),
             "exceptions.parquet": sha256_file(exceptions_path),
+            "evidence_snapshot.json": sha256_file(evidence_path),
         }
         receipt = {
             "schema_version": SCHEMA_VERSION,
@@ -1152,7 +1244,7 @@ def certify_pit_baseline(
         _write_json(receipt_path, receipt)
         if any(sha256_file(staging / name) != digest for name, digest in artifact_hashes.items()):
             raise CertificationError("staged certification artifact hash mismatch")
-        for staged_path in (scope_path, coverage_path, exceptions_path, receipt_path):
+        for staged_path in (scope_path, coverage_path, exceptions_path, evidence_path, receipt_path):
             staged_fd = os.open(staged_path, os.O_RDONLY)
             try:
                 os.fsync(staged_fd)
