@@ -127,7 +127,7 @@ def _load_certification(certification_dir: Path) -> tuple[dict[str, Any], dict[s
     query_payload = {
         key: snapshot.get(key) for key in (
             "selected_evidence_run_ids", "selected_mutation_run_ids",
-            "full_mutation_ledger_sha256", "tables",
+            "full_mutation_ledger_sha256", "canonical_mutation_summary", "tables",
         )
     }
     query_sha = hashlib.sha256(_canonical_bytes(query_payload)).hexdigest()

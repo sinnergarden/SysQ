@@ -13,6 +13,8 @@ import pandas as pd
 import pytest
 import yaml
 
+import qsys.pit_certification as pit_certification
+
 from qsys.pit_certification import (
     CertificationError,
     _canonical_bytes,
@@ -23,6 +25,7 @@ from qsys.pit_certification import (
     _sha256_bytes,
     certify_pit_baseline,
     classify_mutation_intersection,
+    iter_canonical_mutations,
     load_checkpoint_scope,
     load_universe_spans,
     sha256_file,
@@ -705,6 +708,57 @@ def test_validated_evidence_at_mutation_time_accounts_and_certifies(
     assert mutation_row["status"] == "ACCOUNTED"
     exceptions = pd.read_parquet(Path(result["output_dir"]) / "exceptions.parquet")
     assert not exceptions["reason_code"].str.startswith("CANONICAL_MUTATION_").any()
+
+
+def test_large_mutation_ledger_is_streamed_and_detail_is_bounded(
+    tiny_project: tuple[Path, Path, Path],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project, request, _database = tiny_project
+    database = project / "bounded-mutations.db"
+    _make_db(database, mutation={
+        "mutation_id": "mutation-1", "run_id": "mutation-run", "source": "tushare",
+        "dataset": "canonical_daily", "endpoint": "daily_bundle", "fields": ["close"],
+        "symbol": "000001.SZ", "date_start": "20200131", "date_end": "20200131",
+        "ingested_at": "2020-02-01T00:00:00+00:00",
+    })
+    with sqlite3.connect(database) as connection:
+        for number in (2, 3):
+            connection.execute(
+                "INSERT INTO canonical_mutations VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    f"mutation-{number}", "mutation-run", "canonical_daily",
+                    "tushare", "daily_bundle", None, "000001.SZ", "20200131",
+                    "20200131", json.dumps(["close"]), "update", "d" * 64,
+                    "e" * 64, "2020-02-01T00:00:00+00:00",
+                ),
+            )
+    monkeypatch.setattr(pit_certification, "MAX_MUTATION_DETAIL_ROWS", 1)
+
+    result = certify_pit_baseline(
+        request_path=request,
+        audit_db=database,
+        output_root=tmp_path / "bounded",
+        evidence_run_ids=["evidence-1"],
+        project_root=project,
+    )
+
+    scope = json.loads((Path(result["output_dir"]) / "audit_scope.json").read_text())
+    summary = scope["canonical_mutation_summary"]
+    assert summary["count"] == 3
+    assert summary["detail_count"] == 1
+    assert summary["detail_omitted_count"] == 2
+    coverage = pd.read_parquet(Path(result["output_dir"]) / "coverage.parquet")
+    assert len(coverage.loc[coverage["scope_kind"] == "canonical_mutation"]) == 1
+    snapshot = json.loads(
+        (Path(result["output_dir"]) / "evidence_snapshot.json").read_text()
+    )
+    assert snapshot["tables"]["canonical_mutations"] == []
+    assert snapshot["canonical_mutation_summary"]["count"] == 3
+    assert snapshot["full_mutation_ledger_sha256"] == hashlib.sha256(
+        _canonical_bytes(list(iter_canonical_mutations(database)))
+    ).hexdigest()
 
 
 def test_multifield_mutation_requires_newer_proof_for_every_consumed_field(

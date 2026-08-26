@@ -597,6 +597,58 @@ def test_bare_or_forged_untrusted_terminal_is_not_a_resume_source(
         )
 
 
+def test_terminal_receipt_summarizes_mutations_without_embedding_rows(tmp_path: Path) -> None:
+    audit_root = tmp_path / "audit"
+    store = SourceAuditStore(audit_root / "audit.db")
+    run_id = "compact-mutations"
+    store.append_event(run_id, "run_started", {"entrypoint": "test"})
+    store.record_mutations(
+        run_id=run_id,
+        mutations=[
+            {
+                "symbol": "000001.SZ",
+                "date_start": "20260821",
+                "date_end": "20260821",
+                "fields": ["close"],
+                "mutation_type": mutation_type,
+                "before_hash": "before",
+                "after_hash": "after",
+            }
+            for mutation_type in ("insert", "update")
+        ],
+    )
+
+    receipt_path = store.export_receipt(
+        run_id, audit_root / "source_runs", trust_state="untrusted", gates={}
+    )
+    receipt = json.loads(receipt_path.read_text())
+
+    assert receipt["canonical_mutations"] == []
+    assert receipt["canonical_mutation_summary"] == {
+        "count": 2,
+        "counts_by_type": {"insert": 1, "update": 1},
+        "storage": "audit.db:canonical_mutations",
+    }
+    assert store.changed_mutation_symbols(run_id) == ["000001.SZ"]
+    assert len(store.changed_mutations(run_id, symbol="000001.SZ")) == 2
+
+
+def test_resume_lineage_returns_all_mutation_runs_oldest_first(tmp_path: Path) -> None:
+    store = SourceAuditStore(tmp_path / "audit" / "audit.db")
+    for run_id in ("first-run", "second-run", "third-run"):
+        store.append_event(run_id, "run_started", {"entrypoint": "test"})
+    store.append_event(
+        "second-run", "resume_from_run", {"resume_from_run_id": "first-run"}
+    )
+    store.append_event(
+        "third-run", "resume_from_run", {"resume_from_run_id": "second-run"}
+    )
+
+    assert store.resume_lineage_run_ids("third-run") == [
+        "first-run", "second-run", "third-run"
+    ]
+
+
 def test_post_terminal_db_failure_marker_does_not_retroactively_validate_snapshot(
     tmp_path: Path,
 ) -> None:

@@ -494,6 +494,10 @@ class SourceAuditStore:
                     terminal_receipt_sha256 TEXT NOT NULL,
                     PRIMARY KEY(source, field_name, scope_key)
                 );
+                CREATE INDEX IF NOT EXISTS canonical_mutations_run_symbol_type_idx
+                ON canonical_mutations(run_id,symbol,mutation_type);
+                CREATE INDEX IF NOT EXISTS canonical_mutations_run_mutation_idx
+                ON canonical_mutations(run_id,mutation_id);
                 CREATE TRIGGER IF NOT EXISTS fetch_receipts_no_update
                 BEFORE UPDATE ON fetch_receipts BEGIN SELECT RAISE(ABORT, 'fetch receipts are append-only'); END;
                 CREATE TRIGGER IF NOT EXISTS fetch_receipts_no_delete
@@ -1325,15 +1329,41 @@ class SourceAuditStore:
                 ids.append(mutation_id)
         return ids
 
-    def changed_mutations(self, run_id: str) -> list[dict[str, Any]]:
+    def changed_mutation_symbols(
+        self, run_id: str, *, mutation_type: str | None = None
+    ) -> list[str]:
         run_id = validate_run_id(run_id)
+        if mutation_type is not None and mutation_type not in {"insert", "update"}:
+            raise ValueError("changed mutation_type must be insert or update")
+        query = (
+            "SELECT DISTINCT symbol FROM canonical_mutations "
+            "WHERE run_id=? AND mutation_type IN ('insert','update')"
+        )
+        params: list[str] = [run_id]
+        if mutation_type is not None:
+            query += " AND mutation_type=?"
+            params.append(mutation_type)
+        query += " ORDER BY symbol"
         with self._connect() as conn:
-            rows = conn.execute(
-                """SELECT dataset,source,endpoint,fetch_receipt_id,symbol,date_start,date_end,fields_json,mutation_type,before_hash,after_hash,ingested_at
-                   FROM canonical_mutations WHERE run_id=? AND mutation_type IN ('insert','update')
-                   ORDER BY symbol,date_start,mutation_id""",
-                (run_id,),
-            ).fetchall()
+            return [str(row[0]) for row in conn.execute(query, params).fetchall()]
+
+    def changed_mutations(
+        self, run_id: str, *, symbol: str | None = None
+    ) -> list[dict[str, Any]]:
+        run_id = validate_run_id(run_id)
+        query = (
+            "SELECT dataset,source,endpoint,fetch_receipt_id,symbol,date_start,date_end,"
+            "fields_json,mutation_type,before_hash,after_hash,ingested_at "
+            "FROM canonical_mutations WHERE run_id=? "
+            "AND mutation_type IN ('insert','update')"
+        )
+        params: list[str] = [run_id]
+        if symbol is not None:
+            query += " AND symbol=?"
+            params.append(str(symbol))
+        query += " ORDER BY symbol,date_start,mutation_id"
+        with self._connect() as conn:
+            rows = conn.execute(query, params).fetchall()
         return [
             {
                 **dict(row),
@@ -1341,6 +1371,33 @@ class SourceAuditStore:
             }
             for row in rows
         ]
+
+    def resume_lineage_run_ids(self, run_id: str) -> list[str]:
+        """Return oldest-to-newest run ids for one explicit resume chain."""
+
+        current = validate_run_id(run_id)
+        newest_to_oldest: list[str] = []
+        seen: set[str] = set()
+        with self._connect() as conn:
+            while current:
+                if current in seen:
+                    raise ValueError("resume lineage contains a cycle")
+                seen.add(current)
+                newest_to_oldest.append(current)
+                rows = conn.execute(
+                    """SELECT payload_json FROM audit_journal
+                       WHERE run_id=? AND event_type='resume_from_run'
+                       ORDER BY seq DESC LIMIT 1""",
+                    (current,),
+                ).fetchall()
+                if not rows:
+                    break
+                payload = json.loads(rows[0]["payload_json"])
+                parent = str(payload.get("resume_from_run_id") or "").strip()
+                if not parent:
+                    raise ValueError("resume lineage event is missing parent run_id")
+                current = validate_run_id(parent)
+        return list(reversed(newest_to_oldest))
 
     def run_evidence_summary(self, run_id: str) -> dict[str, Any]:
         """Return small gate inputs without treating legacy JSON as evidence."""
@@ -1461,9 +1518,14 @@ class SourceAuditStore:
             fetches = [dict(row) for row in conn.execute(
                 "SELECT * FROM fetch_receipts WHERE run_id=? ORDER BY rowid", (run_id,)
             ).fetchall()]
-            mutations = [dict(row) for row in conn.execute(
-                "SELECT * FROM canonical_mutations WHERE run_id=? ORDER BY rowid", (run_id,)
-            ).fetchall()]
+            mutation_counts = {
+                str(row[0]): int(row[1])
+                for row in conn.execute(
+                    """SELECT mutation_type,COUNT(*) FROM canonical_mutations
+                       WHERE run_id=? GROUP BY mutation_type ORDER BY mutation_type""",
+                    (run_id,),
+                ).fetchall()
+            }
             journal = [dict(row) for row in conn.execute(
                 "SELECT * FROM audit_journal WHERE run_id=? ORDER BY seq", (run_id,)
             ).fetchall()]
@@ -1475,8 +1537,6 @@ class SourceAuditStore:
             row["requested_scope"] = json.loads(row.pop("requested_scope_json"))
             row["response_columns"] = json.loads(row.pop("response_columns_json"))
             row["error"] = json.loads(row.pop("error_json")) if row["error_json"] else None
-        for row in mutations:
-            row["fields"] = json.loads(row.pop("fields_json"))
         for row in journal:
             row["payload"] = json.loads(row.pop("payload_json"))
         return redact_secrets(
@@ -1487,7 +1547,15 @@ class SourceAuditStore:
                 "terminal_gates": dict(gates),
                 "watermark_claim": "not_recorded_in_receipt",
                 "fetch_receipts": fetches,
-                "canonical_mutations": mutations,
+                # Mutation rows remain in the append-only SQLite SOT.  Keeping
+                # millions of rows in one terminal JSON would make a full
+                # history run impossible to finalize or resume safely.
+                "canonical_mutations": [],
+                "canonical_mutation_summary": {
+                    "count": sum(mutation_counts.values()),
+                    "counts_by_type": mutation_counts,
+                    "storage": "audit.db:canonical_mutations",
+                },
                 "field_receipt_links": field_links,
                 "audit_journal": journal,
                 "exported_at": utc_now(),

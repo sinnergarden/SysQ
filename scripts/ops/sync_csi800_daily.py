@@ -70,6 +70,7 @@ TRUSTED_DAILY_FIELD_ENDPOINTS = {
     "factor": "adj_factor",
 }
 _CRASH_EVIDENCE: dict | None = None
+_MAX_MUTATION_MISMATCH_SAMPLES = 100
 
 
 def _load_csi1800_research_union(data_root: Path) -> tuple[list[str], dict]:
@@ -717,6 +718,97 @@ def _refresh_and_verify_changed_symbols(
     }
 
 
+def _refresh_and_verify_history_mutation_store(
+    adapter: QlibAdapter,
+    store: StockDataStore,
+    audit_store,
+    run_ids: list[str],
+    *,
+    apply: bool,
+) -> dict:
+    """Read and verify one symbol's historical mutations at a time."""
+
+    run_ids = [validate_run_id(item) for item in run_ids]
+    symbols = sorted({
+        symbol
+        for item in run_ids
+        for symbol in audit_store.changed_mutation_symbols(item)
+    })
+    revision_symbols = sorted({
+        symbol
+        for item in run_ids
+        for symbol in audit_store.changed_mutation_symbols(item, mutation_type="update")
+    })
+    if not symbols:
+        return {
+            "status": "success",
+            "mode": "noop",
+            "changed_symbols": [],
+            "verified_value_count": 0,
+        }
+    if not apply:
+        return {
+            "status": "dry_run",
+            "changed_symbols": symbols,
+            "verified_value_count": 0,
+        }
+
+    refresh = (
+        adapter.convert_fix_symbols(revision_symbols, refresh_universes=[])
+        if revision_symbols
+        else {
+            "status": "skipped",
+            "reason": "inserts_handled_by_incremental",
+            "symbols_count": 0,
+        }
+    )
+    if revision_symbols and refresh.get("status") != "success":
+        return {
+            "status": "failed",
+            "error": f"convert_fix_symbols returned status={refresh.get('status')}",
+            "changed_symbols": symbols,
+            "revision_symbols": revision_symbols,
+            "refresh": refresh,
+        }
+
+    verified_fields: set[str] = set()
+    verified_value_count = 0
+    mismatch_count = 0
+    mismatch_samples: list[dict[str, object]] = []
+    for symbol in symbols:
+        symbol_mutations: list[dict] = []
+        for item in run_ids:
+            symbol_mutations.extend(
+                audit_store.changed_mutations(item, symbol=symbol)
+            )
+        verification = _historical_mutation_readback(
+            adapter,
+            store,
+            symbol_mutations,
+        )
+        verified_fields.update(verification.get("verified_fields", []))
+        verified_value_count += int(verification.get("verified_value_count", 0))
+        current_mismatches = list(verification.get("mismatches", []))
+        mismatch_count += len(current_mismatches)
+        remaining = _MAX_MUTATION_MISMATCH_SAMPLES - len(mismatch_samples)
+        if remaining > 0:
+            mismatch_samples.extend(current_mismatches[:remaining])
+
+    return {
+        "status": "failed" if mismatch_count else "success",
+        "mode": "historical_mutation_fix",
+        "mutation_run_ids": run_ids,
+        "changed_symbols": symbols,
+        "revision_symbols": revision_symbols,
+        "verified_fields": sorted(verified_fields),
+        "verified_value_count": verified_value_count,
+        "mismatch_count": mismatch_count,
+        "mismatches": mismatch_samples,
+        "refresh": refresh,
+        **({"error": "historical Qlib value readback mismatch"} if mismatch_count else {}),
+    }
+
+
 # Index codes refreshed daily alongside stock data
 _INDEX_CODES = [
     "000001.SH", "000300.SH", "000905.SH", "000852.SH",
@@ -907,6 +999,14 @@ def _do_raw_fetch(
                 evidence_universe=str(universe or scope_key or "ad_hoc"),
             )
         elapsed = time.time() - t0
+        mutation_count = 0
+        if isinstance(collector_result, dict):
+            recorded_count = collector_result.get("mutation_count")
+            mutation_count = (
+                int(recorded_count)
+                if recorded_count is not None
+                else len(collector_result.get("mutations") or [])
+            )
         required_missing_by_endpoint = (
             collector_result.get("required_endpoint_missing_symbols", {})
             if isinstance(collector_result, dict)
@@ -1048,11 +1148,7 @@ def _do_raw_fetch(
                         if collector_status in {"success", "empty", "noop"}
                         else "failed"
                     ),
-                    "mutation_count": len(
-                        collector_result.get("mutations", [])
-                        if isinstance(collector_result, dict)
-                        else []
-                    ),
+                    "mutation_count": mutation_count,
                 },
             )
             audit_store.append_event(run_id, "source_scope_coverage", scope_coverage)
@@ -1065,9 +1161,7 @@ def _do_raw_fetch(
             "collector_status": (
                 collector_result.get("status") if isinstance(collector_result, dict) else "success"
             ),
-            "mutation_count": len(
-                collector_result.get("mutations", []) if isinstance(collector_result, dict) else []
-            ),
+            "mutation_count": mutation_count,
             "evidence_field_endpoints": (
                 collector_result.get("evidence_field_endpoints", {})
                 if isinstance(collector_result, dict)
@@ -1610,14 +1704,40 @@ def _main_under_writer_lock(writer_lock: data_writer_lock) -> None:
     # Exact insert/update receipts, rather than a date watermark, select the
     # symbols that require dump_fix and value readback.  This is what makes a
     # same-key source revision visible in Qlib.
-    mutations = source_audit.changed_mutations(run_id) if source_audit is not None else []
-    if args.no_qlib_convert and mutations:
+    history_mutation_run_ids = (
+        source_audit.resume_lineage_run_ids(run_id)
+        if source_audit is not None and is_history_repair
+        else []
+    )
+    history_mutation_symbols = sorted({
+        symbol
+        for item in history_mutation_run_ids
+        for symbol in source_audit.changed_mutation_symbols(item)
+    }) if source_audit is not None else []
+    mutations = (
+        source_audit.changed_mutations(run_id)
+        if source_audit is not None and not is_history_repair
+        else []
+    )
+    if args.no_qlib_convert and (mutations or history_mutation_symbols):
         mutation_refresh = {
             "status": "skipped",
             "reason": "qlib conversion disabled by operator",
-            "changed_symbols": sorted({str(item["symbol"]) for item in mutations}),
+            "changed_symbols": (
+                history_mutation_symbols
+                if is_history_repair
+                else sorted({str(item["symbol"]) for item in mutations})
+            ),
             "verified_value_count": 0,
         }
+    elif source_audit is not None and is_history_repair:
+        mutation_refresh = _refresh_and_verify_history_mutation_store(
+            adapter,
+            store,
+            source_audit,
+            history_mutation_run_ids,
+            apply=do_apply,
+        )
     else:
         mutation_refresh = _refresh_and_verify_changed_symbols(
             adapter,
@@ -1625,7 +1745,7 @@ def _main_under_writer_lock(writer_lock: data_writer_lock) -> None:
             mutations,
             target_dt=target_dt,
             apply=do_apply,
-            history_mode=is_history_repair,
+            history_mode=False,
         )
     report["steps"]["mutation_qlib_refresh"] = mutation_refresh
     if source_audit is not None:

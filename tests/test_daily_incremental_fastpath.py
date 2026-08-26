@@ -10,7 +10,11 @@ from qsys.data.collector import TushareCollector, _supplier_request_sha256
 from qsys.data.source_audit import SourceAuditStore, stable_scope_hash
 from qsys.data.storage import StockDataStore
 from qsys.ops.data_coverage import fetch_suspension_evidence
-from scripts.ops.sync_csi800_daily import _do_raw_fetch, _refresh_and_verify_changed_symbols
+from scripts.ops.sync_csi800_daily import (
+    _do_raw_fetch,
+    _refresh_and_verify_changed_symbols,
+    _refresh_and_verify_history_mutation_store,
+)
 
 
 TARGET = "20260821"
@@ -950,6 +954,97 @@ def test_historical_mutation_readback_uses_mutation_date_not_target_date():
     assert result["status"] == "success"
     assert result["mode"] == "historical_mutation_fix"
     assert result["verified_value_count"] == 1
+
+
+def test_historical_mutation_store_reads_one_symbol_at_a_time(tmp_path):
+    audit = SourceAuditStore(tmp_path / "audit" / "audit.db")
+    run_id = "history-stream"
+    audit.append_event(run_id, "run_started", {"entrypoint": "test"})
+    audit.record_mutations(
+        run_id=run_id,
+        mutations=[
+            {
+                "symbol": symbol,
+                "date_start": "20200102",
+                "date_end": "20200102",
+                "fields": ["close"],
+                "mutation_type": mutation_type,
+                "before_hash": "before",
+                "after_hash": "after",
+            }
+            for symbol, mutation_type in (
+                ("000001.SZ", "insert"),
+                ("000002.SZ", "update"),
+            )
+        ],
+    )
+    queried_symbols = []
+    changed_mutations = audit.changed_mutations
+
+    def tracked_changed_mutations(run_id, *, symbol=None):
+        queried_symbols.append(symbol)
+        return changed_mutations(run_id, symbol=symbol)
+
+    audit.changed_mutations = tracked_changed_mutations
+
+    class Store:
+        def load_daily_window(self, symbol, *, start_date, end_date, columns):
+            return pd.DataFrame({"trade_date": ["20200102"], "close": [11.0]})
+
+    class Adapter:
+        def __init__(self):
+            self.fix_calls = []
+
+        def convert_fix_symbols(self, symbols, refresh_universes=None):
+            self.fix_calls.append(list(symbols))
+            return {"status": "success"}
+
+        def get_features(self, symbols, fields, start_time=None, end_time=None):
+            index = pd.MultiIndex.from_tuples(
+                [(pd.Timestamp("2020-01-02"), symbols[0])],
+                names=["datetime", "instrument"],
+            )
+            return pd.DataFrame({"$close": [11.0]}, index=index)
+
+    adapter = Adapter()
+    result = _refresh_and_verify_history_mutation_store(
+        adapter, Store(), audit, [run_id], apply=True
+    )
+
+    assert queried_symbols == ["000001.SZ", "000002.SZ"]
+    assert adapter.fix_calls == [["000002.SZ"]]
+    assert result["changed_symbols"] == ["000001.SZ", "000002.SZ"]
+    assert result["verified_value_count"] == 2
+    assert result["mismatch_count"] == 0
+    assert result["status"] == "success"
+
+
+def test_historical_mutation_mismatch_samples_are_bounded(monkeypatch):
+    symbols = [f"{number:06d}.SZ" for number in range(150)]
+
+    class Audit:
+        def changed_mutation_symbols(self, _run_id, *, mutation_type=None):
+            return [] if mutation_type == "update" else symbols
+
+        def changed_mutations(self, _run_id, *, symbol=None):
+            return [{"symbol": symbol, "mutation_type": "insert"}]
+
+    monkeypatch.setattr(
+        "scripts.ops.sync_csi800_daily._historical_mutation_readback",
+        lambda _adapter, _store, changed: {
+            "verified_fields": [],
+            "verified_value_count": 0,
+            "mismatches": [{"symbol": changed[0]["symbol"], "reason": "test"}],
+        },
+    )
+
+    result = _refresh_and_verify_history_mutation_store(
+        object(), object(), Audit(), ["history-run"], apply=True
+    )
+
+    assert result["status"] == "failed"
+    assert result["mismatch_count"] == 150
+    assert len(result["mismatches"]) == 100
 
 
 def test_real_store_insert_volume_alias_reads_back_one_qlib_volume(tmp_path):

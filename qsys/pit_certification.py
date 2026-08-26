@@ -50,6 +50,7 @@ FIELD_ALIASES = {
 REQUIRED_TERMINAL_GATES = frozenset(
     {"fetch", "raw_payloads", "canonical_commit", "qlib_readback", "readiness", "contiguous_range"}
 )
+MAX_MUTATION_DETAIL_ROWS = 1_000
 
 
 class CertificationError(RuntimeError):
@@ -431,6 +432,23 @@ def _decode_row(row: sqlite3.Row) -> dict[str, Any]:
     return value
 
 
+def iter_canonical_mutations(audit_db: Path) -> Iterable[dict[str, Any]]:
+    """Stream the append-only mutation ledger without materializing it."""
+
+    uri = f"file:{quote(str(audit_db.resolve()))}?mode=ro"
+    connection = sqlite3.connect(uri, uri=True)
+    connection.row_factory = sqlite3.Row
+    try:
+        connection.execute("BEGIN")
+        for row in connection.execute(
+            "SELECT * FROM canonical_mutations ORDER BY run_id,mutation_id"
+        ):
+            yield _decode_row(row)
+        connection.rollback()
+    finally:
+        connection.close()
+
+
 def read_selected_evidence(
     audit_db: Path, evidence_run_ids: Sequence[str], mutation_run_ids: Sequence[str]
 ) -> dict[str, Any]:
@@ -462,11 +480,6 @@ def read_selected_evidence(
             }
             for name, query in queries.items():
                 tables[name] = [_decode_row(row) for row in connection.execute(query, selected_evidence)]
-        tables["canonical_mutations"] = [
-            _decode_row(row) for row in connection.execute(
-                "SELECT * FROM canonical_mutations ORDER BY run_id,mutation_id"
-            )
-        ]
         connection.rollback()
     finally:
         connection.close()
@@ -495,25 +508,13 @@ def read_selected_evidence(
         for name, rows in tables.items() if name != "canonical_mutations"
         for row in rows if row.get("run_id") is not None
     }
-    mutation_present = {
-        str(row["run_id"]) for row in tables["canonical_mutations"] if row.get("run_id") is not None
-    }
     missing_evidence = sorted(set(evidence_run_ids) - evidence_present)
-    missing_mutation = sorted(set(mutation_run_ids) - mutation_present)
-    mutation_ledger_sha256 = _sha256_bytes(_canonical_bytes(tables["canonical_mutations"]))
-    query_payload = {
+    return {
         "selected_evidence_run_ids": sorted(set(evidence_run_ids)),
         "selected_mutation_run_ids": sorted(set(mutation_run_ids)),
-        "full_mutation_ledger_sha256": mutation_ledger_sha256,
         "tables": tables,
-    }
-    return {
-        **query_payload,
-        "evidence_query_sha256": _sha256_bytes(_canonical_bytes(query_payload)),
         "audit_db_sha256": before,
-        "full_mutation_ledger_sha256": mutation_ledger_sha256,
         "missing_evidence_run_ids": missing_evidence,
-        "missing_mutation_run_ids": missing_mutation,
     }
 
 
@@ -1062,8 +1063,6 @@ def certify_pit_baseline(
         exceptions.append(_exception("NO_EVIDENCE_RUNS_SELECTED", "BLOCKING", registry["features"], {}))
     if evidence["missing_evidence_run_ids"]:
         exceptions.append(_exception("EVIDENCE_RUN_MISSING", "BLOCKING", registry["features"], evidence["missing_evidence_run_ids"]))
-    if evidence["missing_mutation_run_ids"]:
-        exceptions.append(_exception("MUTATION_RUN_MISSING", "BLOCKING", registry["features"], evidence["missing_mutation_run_ids"]))
     source_manifest = request.get("source_manifest") or {}
     if source_manifest.get("sha256") and not source_manifest.get("path"):
         exceptions.append(_exception("UNRESOLVED_SOURCE_MANIFEST", "BLOCKING", registry["features"], source_manifest))
@@ -1095,12 +1094,33 @@ def certify_pit_baseline(
             source=key[0], dataset=key[1], endpoint=key[2], field=key[3],
         ))
     out_of_scope: list[str] = []
-    mutation_rows = [
-        row for row in evidence["tables"]["canonical_mutations"]
-        if row.get("mutation_type") != "noop"
-    ]
+    out_of_scope_count = 0
+    mutation_count = 0
+    mutation_detail_count = 0
+    mutation_reaudit_count = 0
+    mutation_present: set[str] = set()
+    mutation_type_counts: dict[str, int] = {}
+    mutation_status_counts: dict[str, int] = {}
+    mutation_digest = hashlib.sha256()
+    mutation_digest.update(b"[")
+    first_mutation = True
     mutation_scope_index = _build_mutation_scope_index(scopes)
-    for mutation in mutation_rows:
+    mutation_db_before = sha256_file(audit_db)
+    if mutation_db_before != evidence["audit_db_sha256"]:
+        raise CertificationError("audit database changed before mutation scan")
+    for mutation in iter_canonical_mutations(Path(audit_db)):
+        if not first_mutation:
+            mutation_digest.update(b",")
+        mutation_digest.update(_canonical_bytes(mutation))
+        first_mutation = False
+        mutation_count += 1
+        mutation_run_id = str(mutation.get("run_id") or "")
+        if mutation_run_id:
+            mutation_present.add(mutation_run_id)
+        mutation_type = str(mutation.get("mutation_type") or "")
+        mutation_type_counts[mutation_type] = mutation_type_counts.get(mutation_type, 0) + 1
+        if mutation_type == "noop":
+            continue
         candidate_indices, ambiguous = _mutation_candidate_indices(
             mutation, mutation_scope_index,
         )
@@ -1123,43 +1143,85 @@ def certify_pit_baseline(
             status = "ACCOUNTED"
         else:
             status = "INTERSECTS"
+        mutation_status_counts[status] = mutation_status_counts.get(status, 0) + 1
         if status == "DISJOINT":
-            out_of_scope.append(str(mutation["mutation_id"]))
+            out_of_scope_count += 1
+            if len(out_of_scope) < MAX_MUTATION_DETAIL_ROWS:
+                out_of_scope.append(str(mutation["mutation_id"]))
         elif status != "ACCOUNTED":
-            affected = sorted({
-                feature
-                for index, result in candidate_results
-                if result in {"INTERSECTS", "UNKNOWN"}
-                for scope in (scopes[index],)
-                for feature in dependency_features.get((scope["source"], scope["dataset"], scope["endpoint"], scope["field"]), [])
+            mutation_reaudit_count += 1
+            if mutation_reaudit_count <= MAX_MUTATION_DETAIL_ROWS:
+                affected = sorted({
+                    feature
+                    for index, result in candidate_results
+                    if result in {"INTERSECTS", "UNKNOWN"}
+                    for scope in (scopes[index],)
+                    for feature in dependency_features.get((scope["source"], scope["dataset"], scope["endpoint"], scope["field"]), [])
+                })
+                if ambiguous:
+                    affected = sorted(registry["features"])
+                exceptions.append(_exception(
+                    "CANONICAL_MUTATION_INTERSECTS" if status == "INTERSECTS" else "CANONICAL_MUTATION_SCOPE_UNKNOWN",
+                    "REAUDIT", affected, {"mutation_id": mutation["mutation_id"], "run_id": mutation["run_id"]},
+                    source=mutation.get("source"), dataset=mutation.get("dataset"),
+                    endpoint=mutation.get("endpoint"), instrument=mutation.get("symbol"),
+                    date_start=mutation.get("date_start"), date_end=mutation.get("date_end"),
+                    mutation_run_id=mutation.get("run_id"), mutation_id=mutation.get("mutation_id"),
+                ))
+        if mutation_detail_count < MAX_MUTATION_DETAIL_ROWS:
+            mutation_fields = mutation.get("fields")
+            displayed_fields = (
+                ",".join(sorted(str(normalize_field(item)) for item in mutation_fields))
+                if isinstance(mutation_fields, (list, tuple, set)) else None
+            )
+            coverage.append({
+                "source": mutation.get("source"), "dataset": mutation.get("dataset"),
+                "endpoint": mutation.get("endpoint"),
+                "field": displayed_fields,
+                "instrument": mutation.get("symbol"), "date_start": mutation.get("date_start"),
+                "date_end": mutation.get("date_end"), "scope_kind": "canonical_mutation",
+                "evidence_run_id": mutation.get("run_id"), "receipt_id": mutation.get("fetch_receipt_id"),
+                "mutation_id": mutation.get("mutation_id"), "status": status,
+                "reason_code": f"MUTATION_{status}",
             })
-            if ambiguous:
-                affected = sorted(registry["features"])
-            exceptions.append(_exception(
-                "CANONICAL_MUTATION_INTERSECTS" if status == "INTERSECTS" else "CANONICAL_MUTATION_SCOPE_UNKNOWN",
-                "REAUDIT", affected, {"mutation_id": mutation["mutation_id"], "run_id": mutation["run_id"]},
-                source=mutation.get("source"), dataset=mutation.get("dataset"),
-                endpoint=mutation.get("endpoint"), instrument=mutation.get("symbol"),
-                date_start=mutation.get("date_start"), date_end=mutation.get("date_end"),
-                mutation_run_id=mutation.get("run_id"), mutation_id=mutation.get("mutation_id"),
-            ))
-        mutation_fields = mutation.get("fields")
-        displayed_fields = (
-            ",".join(sorted(str(normalize_field(item)) for item in mutation_fields))
-            if isinstance(mutation_fields, (list, tuple, set)) else None
-        )
-        coverage.append({
-            "source": mutation.get("source"), "dataset": mutation.get("dataset"),
-            "endpoint": mutation.get("endpoint"),
-            "field": displayed_fields,
-            "instrument": mutation.get("symbol"), "date_start": mutation.get("date_start"),
-            "date_end": mutation.get("date_end"), "scope_kind": "canonical_mutation",
-            "evidence_run_id": mutation.get("run_id"), "receipt_id": mutation.get("fetch_receipt_id"),
-            "mutation_id": mutation.get("mutation_id"), "status": status,
-            "reason_code": f"MUTATION_{status}",
-        })
+            mutation_detail_count += 1
+    mutation_digest.update(b"]")
+    if sha256_file(audit_db) != mutation_db_before:
+        raise CertificationError("audit database changed during mutation scan")
+    missing_mutation_run_ids = sorted(set(mutation_run_ids) - mutation_present)
+    evidence["missing_mutation_run_ids"] = missing_mutation_run_ids
+    if missing_mutation_run_ids:
+        exceptions.append(_exception(
+            "MUTATION_RUN_MISSING", "BLOCKING", registry["features"],
+            missing_mutation_run_ids,
+        ))
+    mutation_summary = {
+        "count": mutation_count,
+        "counts_by_type": dict(sorted(mutation_type_counts.items())),
+        "counts_by_scope_status": dict(sorted(mutation_status_counts.items())),
+        "run_ids": sorted(mutation_present),
+        "detail_limit": MAX_MUTATION_DETAIL_ROWS,
+        "detail_count": mutation_detail_count,
+        "detail_omitted_count": max(sum(mutation_status_counts.values()) - mutation_detail_count, 0),
+        "reaudit_count": mutation_reaudit_count,
+        "out_of_scope_count": out_of_scope_count,
+    }
+    evidence["canonical_mutation_summary"] = mutation_summary
+    evidence["full_mutation_ledger_sha256"] = mutation_digest.hexdigest()
+    evidence_query_payload = {
+        "selected_evidence_run_ids": evidence["selected_evidence_run_ids"],
+        "selected_mutation_run_ids": evidence["selected_mutation_run_ids"],
+        "full_mutation_ledger_sha256": evidence["full_mutation_ledger_sha256"],
+        "canonical_mutation_summary": mutation_summary,
+        "tables": evidence["tables"],
+    }
+    evidence["evidence_query_sha256"] = _sha256_bytes(
+        _canonical_bytes(evidence_query_payload)
+    )
     has_blocker = any(item["severity"] == "BLOCKING" for item in exceptions)
-    has_reaudit = any(item["severity"] == "REAUDIT" for item in exceptions)
+    has_reaudit = mutation_reaudit_count > 0 or any(
+        item["severity"] == "REAUDIT" for item in exceptions
+    )
     canonical_materialization: dict[str, Any] | None = None
     if not has_blocker and not has_reaudit:
         try:
@@ -1249,7 +1311,9 @@ def certify_pit_baseline(
             "evidence": sorted(set(evidence_run_ids)),
             "mutation": sorted(set(mutation_run_ids)),
         },
+        "canonical_mutation_summary": mutation_summary,
         "out_of_scope_mutation_ids": sorted(out_of_scope),
+        "out_of_scope_mutation_id_count": out_of_scope_count,
         "source_manifest": source_manifest,
     }
     root = Path(output_root)
@@ -1279,6 +1343,7 @@ def certify_pit_baseline(
             "selected_evidence_run_ids": sorted(set(evidence_run_ids)),
             "selected_mutation_run_ids": sorted(set(mutation_run_ids)),
             "full_mutation_ledger_sha256": evidence["full_mutation_ledger_sha256"],
+            "canonical_mutation_summary": mutation_summary,
             "tables": evidence["tables"],
         })
         try:
