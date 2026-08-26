@@ -5,7 +5,7 @@ import pandas as pd
 import time
 import json
 from datetime import datetime, timedelta
-from typing import Mapping, Optional
+from typing import Callable, Mapping, Optional
 from qsys.config import cfg
 from qsys.utils.logger import log
 from qsys.data.storage import StockDataStore
@@ -914,6 +914,9 @@ class TushareCollector:
         identity_columns: tuple[str, ...] = ("ts_code", "trade_date"),
         evidence_fields: tuple[str, ...] = (),
         required_column_groups: tuple[tuple[str, ...], ...] = (),
+        response_validator: (
+            Callable[[pd.DataFrame], Mapping[str, object] | None] | None
+        ) = None,
         required_endpoint: bool = True,
         **kwargs,
     ) -> tuple[pd.DataFrame, str | None]:
@@ -985,8 +988,27 @@ class TushareCollector:
         required_keys = set(identity_columns)
         if not frame.empty and not required_keys.issubset(frame.columns):
             status = "partial"
-        if not frame.empty and any(not set(group).intersection(frame.columns) for group in required_column_groups):
+        if not frame.empty and any(
+            not set(group).intersection(frame.columns)
+            for group in required_column_groups
+        ):
             status = "partial"
+        validation_error = None
+        if response_validator is not None:
+            try:
+                validation_result = response_validator(frame)
+            except Exception as exc:
+                validation_result = {
+                    "reason": "validator_exception",
+                    "exception_type": type(exc).__name__,
+                    "message": str(exc),
+                }
+            if validation_result is not None:
+                status = "partial"
+                validation_error = {
+                    "kind": "response_validation_failed",
+                    "details": dict(validation_result),
+                }
         receipt_id = None
         if audit_store is not None and run_id is not None:
             receipt_id = audit_store.record_fetch(
@@ -1002,6 +1024,7 @@ class TushareCollector:
                 published_at=None,
                 observed_at=utc_now(),
                 payload_frame=frame if status in {"success", "partial"} else None,
+                error=validation_error,
                 **normalized_response_metadata(frame),
             )
             if evidence_fields:

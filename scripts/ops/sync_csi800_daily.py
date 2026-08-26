@@ -71,6 +71,7 @@ TRUSTED_DAILY_FIELD_ENDPOINTS = {
 }
 _CRASH_EVIDENCE: dict | None = None
 _MAX_MUTATION_MISMATCH_SAMPLES = 100
+_HISTORY_SUSPEND_FIELDS = "ts_code,trade_date,suspend_type"
 
 
 def _load_csi1800_research_union(data_root: Path) -> tuple[list[str], dict]:
@@ -931,6 +932,225 @@ def _suspension_evidence_from_reused_frame(
     }
 
 
+def _validate_history_suspension_response(
+    frame: pd.DataFrame,
+    *,
+    symbol: str,
+    start_date: str,
+    end_date: str,
+) -> dict | None:
+    """Return a receipt-safe failure detail for an out-of-scope response."""
+
+    if frame.empty:
+        return None
+    missing_columns = sorted(
+        {"ts_code", "trade_date", "suspend_type"} - set(frame.columns)
+    )
+    if missing_columns:
+        return {
+            "reason": "response_missing_columns",
+            "missing_columns": missing_columns,
+        }
+    response_symbols = frame["ts_code"].astype("string")
+    if response_symbols.isna().any() or not response_symbols.eq(symbol).all():
+        return {"reason": "response_symbol_out_of_scope"}
+    response_types = frame["suspend_type"].astype("string")
+    if response_types.isna().any() or not response_types.eq("S").all():
+        return {"reason": "response_suspend_type_out_of_scope"}
+    date_text = (
+        frame["trade_date"]
+        .astype("string")
+        .str.strip()
+        .str.replace("-", "", regex=False)
+    )
+    response_dates = pd.to_datetime(date_text, format="%Y%m%d", errors="coerce")
+    start_ts = pd.to_datetime(start_date, format="%Y%m%d")
+    end_ts = pd.to_datetime(end_date, format="%Y%m%d")
+    if (
+        response_dates.isna().any()
+        or (response_dates < start_ts).any()
+        or (response_dates > end_ts).any()
+    ):
+        return {"reason": "response_date_out_of_scope"}
+    return None
+
+
+def _fetch_audited_history_suspensions(
+    collector: TushareCollector,
+    codes: list[str],
+    start_date: str,
+    end_date: str,
+    *,
+    is_history_repair: bool,
+    run_id: str,
+    audit_store: SourceAuditStore,
+    resume_proof: dict | None,
+    scope_key: str,
+    universe: str,
+) -> tuple[dict, list[str]]:
+    """Receipt one exact full-range ``suspend_d`` shard per history symbol."""
+
+    if universe != "csi1800" or not is_history_repair:
+        return {"status": "not_required"}, []
+    start = str(start_date).replace("-", "")
+    end = str(end_date).replace("-", "")
+    symbols = sorted({str(code).strip().upper() for code in codes if str(code).strip()})
+    if (
+        scope_key != "csi1800"
+        or len(start) != 8
+        or not start.isdigit()
+        or len(end) != 8
+        or not end.isdigit()
+        or start > end
+        or not symbols
+    ):
+        raise ValueError("history suspension evidence requires a bounded CSI1800 scope")
+
+    reused_before = sum(
+        1
+        for event in audit_store.run_evidence_summary(run_id)["events"]
+        if event["event_type"] == "fetch_shard_reused"
+        and event["payload"].get("endpoint") == "suspend_d"
+    )
+    receipt_ids: list[str] = []
+    success_count = 0
+    empty_count = 0
+    row_count = 0
+    failure: dict | None = None
+
+    for symbol in symbols:
+        requested_scope = {
+            "date_start": start,
+            "date_end": end,
+            "symbol_count": 1,
+            "symbols": [symbol],
+            "symbols_sha256": stable_scope_hash([symbol]),
+        }
+        try:
+            frame, receipt_id = collector._fetch_daily_endpoint_with_receipt(
+                "suspend_d",
+                run_id=run_id,
+                audit_store=audit_store,
+                requested_scope=requested_scope,
+                resume_proof=resume_proof,
+                scope_key=scope_key,
+                universe=universe,
+                request_variant="history_suspend_s_v1",
+                identity_columns=("ts_code", "trade_date", "suspend_type"),
+                response_validator=lambda response, expected_symbol=symbol: (
+                    _validate_history_suspension_response(
+                        response,
+                        symbol=expected_symbol,
+                        start_date=start,
+                        end_date=end,
+                    )
+                ),
+                required_endpoint=True,
+                ts_code=symbol,
+                start_date=start,
+                end_date=end,
+                suspend_type="S",
+                fields=_HISTORY_SUSPEND_FIELDS,
+            )
+        except Exception as exc:
+            failure = {
+                "symbol": symbol,
+                "reason": "supplier_failure",
+                "error": str(exc),
+            }
+            break
+        if receipt_id is None:
+            failure = {"symbol": symbol, "reason": "receipt_missing"}
+            break
+        receipt_ids.append(str(receipt_id))
+        receipt_check = audit_store.verify_fetch_receipt(
+            run_id=run_id, receipt_id=str(receipt_id)
+        )
+        if receipt_check["status"] != "success":
+            failure = {
+                "symbol": symbol,
+                "reason": str(receipt_check.get("reason") or "receipt_invalid"),
+            }
+            break
+        frame = frame if frame is not None else pd.DataFrame()
+        if frame.empty:
+            empty_count += 1
+            continue
+        validation_failure = _validate_history_suspension_response(
+            frame, symbol=symbol, start_date=start, end_date=end
+        )
+        if validation_failure is not None:
+            failure = {"symbol": symbol, **validation_failure}
+            break
+        success_count += 1
+        row_count += len(frame)
+
+    reused_after = sum(
+        1
+        for event in audit_store.run_evidence_summary(run_id)["events"]
+        if event["event_type"] == "fetch_shard_reused"
+        and event["payload"].get("endpoint") == "suspend_d"
+    )
+    complete = (
+        failure is None
+        and len(receipt_ids) == len(symbols)
+        and success_count + empty_count == len(symbols)
+    )
+    summary = {
+        "status": "success" if complete else "failed",
+        "date_start": start,
+        "date_end": end,
+        "symbol_count": len(symbols),
+        "symbols_sha256": stable_scope_hash(symbols),
+        "receipt_count": len(receipt_ids),
+        "success_count": success_count,
+        "empty_count": empty_count,
+        "row_count": row_count,
+        "reused_count": reused_after - reused_before,
+    }
+    if failure is not None:
+        summary["failure"] = failure
+    audit_store.append_event(run_id, "history_suspension_evidence", summary)
+    return summary, receipt_ids
+
+
+def _verify_history_suspension_receipts(
+    audit_store: SourceAuditStore,
+    *,
+    run_id: str,
+    summary: dict,
+    receipt_ids: list[str],
+) -> dict:
+    """Recheck history suspension payload identity immediately before terminal trust."""
+
+    failures = []
+    for receipt_id in receipt_ids:
+        result = audit_store.verify_fetch_receipt(
+            run_id=run_id, receipt_id=receipt_id
+        )
+        if result["status"] != "success":
+            failures.append({
+                "receipt_id": receipt_id,
+                "reason": str(result.get("reason") or "receipt_invalid"),
+            })
+    expected_count = int(summary.get("symbol_count") or 0)
+    complete = (
+        summary.get("status") == "success"
+        and expected_count > 0
+        and len(receipt_ids) == expected_count
+        and not failures
+    )
+    result = {
+        "status": "success" if complete else "failed",
+        "expected_count": expected_count,
+        "receipt_count": len(receipt_ids),
+        "failure_count": len(failures),
+        "failures": failures[:10],
+    }
+    audit_store.append_event(run_id, "history_suspension_terminal_check", result)
+    return result
+
+
 def _do_raw_fetch(
     collector: TushareCollector,
     codes: list[str],
@@ -1658,6 +1878,36 @@ def _main_under_writer_lock(writer_lock: data_writer_lock) -> None:
         outer_owned_terminal=args.wrapper_managed_finalize,
     )
 
+    history_suspension_summary: dict = {"status": "not_required"}
+    history_suspension_receipt_ids: list[str] = []
+    if do_apply:
+        (
+            history_suspension_summary,
+            history_suspension_receipt_ids,
+        ) = _fetch_audited_history_suspensions(
+            collector,
+            codes,
+            sync_start,
+            target_dt,
+            is_history_repair=is_history_repair,
+            run_id=run_id,
+            audit_store=source_audit,
+            resume_proof=resume_proof,
+            scope_key=universe,
+            universe=universe,
+        )
+        if history_suspension_summary["status"] != "not_required":
+            report["steps"]["history_suspension_evidence"] = history_suspension_summary
+            _abort_if_stage_failed(
+                report,
+                stage="history_suspension_evidence",
+                summary=history_suspension_summary,
+                do_apply=do_apply,
+                audit_dir=audit_dir,
+                evidence=evidence,
+                outer_owned_terminal=args.wrapper_managed_finalize,
+            )
+
     # Step 4: Index daily update (always applies when do_apply, no separate dry-run for this)
     if do_apply:
         t0 = time.time()
@@ -1867,6 +2117,7 @@ def _main_under_writer_lock(writer_lock: data_writer_lock) -> None:
     if source_audit is not None:
         evidence_summary = source_audit.run_evidence_summary(run_id)
         history_mode = is_history_repair
+        history_suspension_required = history_mode and universe == "csi1800"
         evidence_field_endpoints = (
             dict(raw_summary.get("evidence_field_endpoints") or HISTORY_FIELD_ENDPOINTS)
             if history_mode
@@ -1900,10 +2151,25 @@ def _main_under_writer_lock(writer_lock: data_writer_lock) -> None:
                 run_id=run_id, receipt_id=str(suspension_receipt_id)
             )["status"] == "success"
         )
+        history_suspension_terminal = (
+            _verify_history_suspension_receipts(
+                source_audit,
+                run_id=run_id,
+                summary=history_suspension_summary,
+                receipt_ids=history_suspension_receipt_ids,
+            )
+            if history_suspension_required
+            else {"status": "not_required"}
+        )
+        history_suspension_ok = (
+            not history_suspension_required
+            or history_suspension_terminal["status"] == "success"
+        )
         source_scope_ok = (
             bool(scope_events)
             and scope_payload.get("status") == "success"
             and suspension_evidence_ok
+            and history_suspension_ok
             and not untrusted_preexisting_symbols
         )
         evidence_fields = tuple(evidence_field_endpoints)
@@ -1917,7 +2183,8 @@ def _main_under_writer_lock(writer_lock: data_writer_lock) -> None:
         gates = {
             "fetch": prior_trusted if precheck_noop else field_receipts["status"] == "success"
             and source_scope_ok,
-            "raw_payloads": prior_trusted if precheck_noop else field_receipts["status"] == "success",
+            "raw_payloads": prior_trusted if precheck_noop else field_receipts["status"] == "success"
+            and history_suspension_ok,
             "canonical_commit": prior_trusted if precheck_noop else bool(canonical_events)
             and canonical_events[-1]["payload"].get("status") == "success",
             "qlib_readback": mutation_refresh.get("status") == "success",

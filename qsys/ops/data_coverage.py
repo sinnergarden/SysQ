@@ -191,6 +191,18 @@ def load_local_suspension_evidence(
     fetch_receipts = receipt.get("fetch_receipts")
     if not isinstance(fetch_receipts, list):
         raise ValueError("suspension terminal receipt fetch_receipts is invalid")
+    journal = receipt.get("audit_journal")
+    if not isinstance(journal, list):
+        raise ValueError("suspension terminal receipt audit_journal is invalid")
+    reused_receipts: dict[str, dict[str, Any]] = {}
+    for event in journal:
+        if not isinstance(event, dict) or event.get("event_type") != "fetch_shard_reused":
+            continue
+        payload = event.get("payload")
+        receipt_id = str(payload.get("receipt_id") or "") if isinstance(payload, dict) else ""
+        if not receipt_id or receipt_id in reused_receipts:
+            raise ValueError("suspension terminal receipt reuse journal is invalid")
+        reused_receipts[receipt_id] = payload
 
     if (
         resolved.name != "receipt.json"
@@ -202,6 +214,7 @@ def load_local_suspension_evidence(
         raise ValueError("suspension terminal receipt is outside canonical audit layout")
     data_root = resolved.parents[3]
     audit_db = data_root / "audit" / "audit.db"
+    immediate_source_receipts: dict[str, tuple[Any, ...] | None] = {}
     try:
         connection = sqlite3.connect(f"{audit_db.resolve().as_uri()}?mode=ro", uri=True)
         try:
@@ -210,6 +223,21 @@ def load_local_suspension_evidence(
                    WHERE source=? AND run_id=? AND terminal_receipt_sha256=?""",
                 ("tushare", run_id, receipt_sha256),
             ).fetchall()
+            for receipt_id, reuse in reused_receipts.items():
+                if (
+                    reuse.get("source") != "tushare"
+                    or reuse.get("endpoint") != "suspend_d"
+                ):
+                    continue
+                immediate_source_receipts[receipt_id] = connection.execute(
+                    """SELECT source,endpoint,status,requested_scope_json,payload_kind,
+                              payload_path,payload_sha256
+                       FROM fetch_receipts WHERE run_id=? AND receipt_id=?""",
+                    (
+                        str(reuse.get("resume_from_run_id") or ""),
+                        str(reuse.get("source_receipt_id") or ""),
+                    ),
+                ).fetchone()
         finally:
             connection.close()
     except (OSError, sqlite3.Error) as exc:
@@ -246,6 +274,9 @@ def load_local_suspension_evidence(
             or fetch.get("status") not in {"success", "empty"}
         ):
             raise ValueError("suspend_d receipt has invalid run, source, or status")
+        receipt_id = str(fetch.get("receipt_id") or "")
+        if not receipt_id:
+            raise ValueError("suspend_d receipt identity is invalid")
         scope = fetch.get("requested_scope")
         scope_symbols = scope.get("symbols") if isinstance(scope, dict) else None
         if (
@@ -296,10 +327,36 @@ def load_local_suspension_evidence(
         payload_path = (data_root / relative_payload).resolve()
         if data_root != payload_path and data_root not in payload_path.parents:
             raise ValueError("suspend_d payload path escapes data root")
-        expected_payload_root = (
-            data_root / "raw" / "evidence" / "tushare" / "suspend_d" / run_id
+        evidence_root = (
+            data_root / "raw" / "evidence" / "tushare" / "suspend_d"
         ).resolve()
-        if payload_path.parent != expected_payload_root or payload_path.suffix != ".parquet":
+        payload_run_id = payload_path.parent.name
+        layout_valid = (
+            payload_path.parent.parent == evidence_root
+            and payload_path.suffix == ".parquet"
+        )
+        if payload_run_id == run_id:
+            layout_valid = layout_valid and payload_path.stem == receipt_id
+        else:
+            reuse = reused_receipts.get(receipt_id, {})
+            source_row = immediate_source_receipts.get(receipt_id)
+            try:
+                source_scope = json.loads(source_row[3]) if source_row else None
+            except (TypeError, json.JSONDecodeError):
+                source_scope = None
+            layout_valid = layout_valid and source_row is not None and (
+                reuse.get("source") == "tushare"
+                and reuse.get("endpoint") == "suspend_d"
+                and source_row[0] == "tushare"
+                and source_row[1] == "suspend_d"
+                and source_row[2] == "success"
+                and source_scope == scope
+                and source_scope.get("checkpoint_key") == reuse.get("checkpoint_key")
+                and source_row[4] == "raw_supplier"
+                and source_row[5] == relative_payload.as_posix()
+                and source_row[6] == expected_payload_sha
+            )
+        if not layout_valid:
             raise ValueError("suspend_d payload is outside canonical evidence layout")
         if not payload_path.is_file():
             raise ValueError(f"suspend_d payload is missing: {payload_path}")
@@ -312,16 +369,20 @@ def load_local_suspension_evidence(
         if (
             frame.empty
             or len(frame) != returned_rows
-            or not {"ts_code", "trade_date"}.issubset(frame.columns)
+            or not {"ts_code", "trade_date", "suspend_type"}.issubset(frame.columns)
         ):
             raise ValueError("successful suspend_d payload schema or row count is invalid")
         payload_count += 1
         event_row_count += len(frame)
-        for row in frame.loc[:, ["ts_code", "trade_date"]].itertuples(index=False):
+        for row in frame.loc[
+            :, ["ts_code", "trade_date", "suspend_type"]
+        ].itertuples(index=False):
             row_symbol = str(row.ts_code).strip() if pd.notna(row.ts_code) else ""
             trade_date = _normalize_date(row.trade_date)
             if row_symbol != symbol:
                 raise ValueError("suspend_d payload symbol escaped requested scope")
+            if pd.isna(row.suspend_type) or str(row.suspend_type).strip() != "S":
+                raise ValueError("suspend_d payload suspend_type is not S")
             if (
                 trade_date is None
                 or trade_date < normalized_start

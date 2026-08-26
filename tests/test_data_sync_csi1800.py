@@ -1146,6 +1146,15 @@ def test_main_ignores_stale_qlib_watermark_unless_repair_is_explicit(tmp_path):
         "_readiness_check": lambda *_args, **_kwargs: health,
         "_write_audit": lambda _audit_dir, report: reports.append(report),
         "_notify_telegram": lambda *_args, **_kwargs: None,
+        # This test isolates stale-Qlib watermark routing.  The audited
+        # history suspension supplier/receipt path has dedicated tests.
+        "_fetch_audited_history_suspensions": lambda *_args, **_kwargs: (
+            {"status": "success", "symbol_count": 2},
+            ["fixture-suspend-1", "fixture-suspend-2"],
+        ),
+        "_verify_history_suspension_receipts": lambda *_args, **_kwargs: {
+            "status": "success"
+        },
     }
     pit_path = "qsys.ops.pit_universe_snapshot.resolve_csi1800_pit_snapshot"
     registry_path = "qsys.ops.pit_universe_snapshot.write_current_qlib_registry"
