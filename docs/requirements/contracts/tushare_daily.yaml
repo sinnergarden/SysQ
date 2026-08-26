@@ -52,18 +52,22 @@ endpoints:
   income:
     capability: per_symbol_report_history_with_announcement_date
     revision_capability: update_flag_timeline_requires_separate_audit
+    raw_revision_fields: [f_ann_date, report_type, comp_type, end_type, update_flag]
     key_fields: [ts_code, ann_date, end_date]
   balancesheet:
     capability: per_symbol_report_history_with_announcement_date
     revision_capability: update_flag_timeline_requires_separate_audit
+    raw_revision_fields: [f_ann_date, report_type, comp_type, end_type, update_flag]
     key_fields: [ts_code, ann_date, end_date]
   cashflow:
     capability: per_symbol_report_history_with_announcement_date
     revision_capability: update_flag_timeline_requires_separate_audit
+    raw_revision_fields: [f_ann_date, report_type, comp_type, end_type, update_flag]
     key_fields: [ts_code, ann_date, end_date]
   fina_indicator:
     capability: per_symbol_derived_report_history_with_announcement_date
     revision_capability: historical_revision_timeline_unverified
+    raw_revision_fields: [update_flag]
     key_fields: [ts_code, ann_date, end_date]
   stk_holdernumber:
     capability: paged_announcement_date_history

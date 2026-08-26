@@ -6,7 +6,11 @@ Does NOT depend on settings.yaml (local-only, gitignored).
 """
 from __future__ import annotations
 
+from copy import deepcopy
+from pathlib import Path
 from unittest import TestCase
+
+import yaml
 
 from qsys.config.manager import ConfigManager
 
@@ -53,19 +57,19 @@ def _hardcoded_default() -> dict:
                 },
                 "income": {
                     "interface": "income",
-                    "fields": "ts_code,ann_date,end_date,n_income,revenue,oper_cost",
+                    "fields": "ts_code,ann_date,end_date,f_ann_date,report_type,comp_type,end_type,update_flag,n_income,revenue,oper_cost",
                 },
                 "balancesheet": {
                     "interface": "balancesheet",
-                    "fields": "ts_code,ann_date,end_date,total_assets,total_hldr_eqy_exc_min_int,total_cur_assets,total_cur_liab",
+                    "fields": "ts_code,ann_date,end_date,f_ann_date,report_type,comp_type,end_type,update_flag,total_assets,total_hldr_eqy_exc_min_int,total_cur_assets,total_cur_liab",
                 },
                 "cashflow": {
                     "interface": "cashflow",
-                    "fields": "ts_code,ann_date,end_date,n_cashflow_act",
+                    "fields": "ts_code,ann_date,end_date,f_ann_date,report_type,comp_type,end_type,update_flag,n_cashflow_act",
                 },
                 "fina_indicator": {
                     "interface": "fina_indicator",
-                    "fields": "ts_code,ann_date,end_date,roe,roe_waa,grossprofit_margin,debt_to_assets,current_ratio,q_dtprofit,q_gr_yoy",
+                    "fields": "ts_code,ann_date,end_date,update_flag,roe,roe_waa,grossprofit_margin,debt_to_assets,current_ratio,q_dtprofit,q_gr_yoy",
                     "rename": {
                         "q_dtprofit": "q_dt_profit",
                     },
@@ -138,6 +142,65 @@ class TestHardcodedConfigCompleteness(TestCase):
     def test_financial_cols_has_key_fields(self):
         for key in ("net_income", "revenue", "roe", "op_cashflow"):
             self.assertIn(key, self.collector["financial_cols"])
+
+    def test_financial_interfaces_request_supplier_revision_evidence(self):
+        interfaces = self.collector["interfaces"]
+        statement_evidence = {
+            "f_ann_date", "report_type", "comp_type", "end_type", "update_flag",
+        }
+        for endpoint in ("income", "balancesheet", "cashflow"):
+            fields = set(interfaces[endpoint]["fields"].split(","))
+            self.assertTrue(statement_evidence.issubset(fields), endpoint)
+
+        indicator_fields = set(interfaces["fina_indicator"]["fields"].split(","))
+        self.assertIn("update_flag", indicator_fields)
+        self.assertTrue(
+            indicator_fields.isdisjoint(
+                {"f_ann_date", "report_type", "comp_type", "end_type"}
+            )
+        )
+
+    def test_legacy_financial_fields_canonicalize_to_defaults_and_are_idempotent(self):
+        defaults = _hardcoded_default()
+        default_interfaces = defaults["collector"]["interfaces"]
+        evidence = {"f_ann_date", "report_type", "comp_type", "end_type", "update_flag"}
+
+        for input_type in (str, list):
+            for evidence_state in ("missing", "tail"):
+                legacy = deepcopy(defaults)
+                for endpoint in ("income", "balancesheet", "cashflow", "fina_indicator"):
+                    default_fields = default_interfaces[endpoint]["fields"].split(",")
+                    endpoint_evidence = [field for field in default_fields if field in evidence]
+                    narrow = [field for field in default_fields if field not in evidence]
+                    legacy_fields = [narrow[0], *narrow]
+                    if evidence_state == "tail":
+                        legacy_fields.extend([*endpoint_evidence, endpoint_evidence[0]])
+                    legacy["collector"]["interfaces"][endpoint]["fields"] = (
+                        ",".join(legacy_fields) if input_type is str else legacy_fields
+                    )
+
+                enriched = ConfigManager._with_financial_evidence_fields(legacy)
+                for endpoint in ("income", "balancesheet", "cashflow", "fina_indicator"):
+                    self.assertEqual(
+                        enriched["collector"]["interfaces"][endpoint]["fields"],
+                        default_interfaces[endpoint]["fields"],
+                        (input_type.__name__, evidence_state, endpoint),
+                    )
+                first_pass = deepcopy(enriched)
+                self.assertEqual(
+                    ConfigManager._with_financial_evidence_fields(enriched),
+                    first_pass,
+                )
+
+    def test_daily_ops_allowlist_includes_collector_config_manager(self):
+        root = Path(__file__).resolve().parents[1]
+        harness_map = yaml.safe_load(
+            (root / "docs" / "requirements" / "harness_map.yaml").read_text()
+        )
+        self.assertIn(
+            "qsys/config/manager.py",
+            harness_map["usecases"]["UC_DAILY_OPS"]["allowed_paths"],
+        )
 
     def test_moneyflow_fields_complete(self):
         fields = self.collector["moneyflow_fields"]

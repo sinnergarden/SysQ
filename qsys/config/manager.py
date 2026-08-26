@@ -3,6 +3,16 @@ import yaml
 from pathlib import Path
 
 
+_TUSHARE_FINANCIAL_EVIDENCE_FIELDS = {
+    "income": ("f_ann_date", "report_type", "comp_type", "end_type", "update_flag"),
+    "balancesheet": ("f_ann_date", "report_type", "comp_type", "end_type", "update_flag"),
+    "cashflow": ("f_ann_date", "report_type", "comp_type", "end_type", "update_flag"),
+    # Tushare fina_indicator does not expose statement report metadata.  Its
+    # only supplier-supported revision field is update_flag.
+    "fina_indicator": ("update_flag",),
+}
+
+
 def _resolve_env_placeholders(value):
     if isinstance(value, dict):
         return {key: _resolve_env_placeholders(val) for key, val in value.items()}
@@ -112,8 +122,8 @@ class ConfigManager:
         value = config.get("tushare_feature_config")
         if isinstance(value, dict):
             self._verify_tushare_config(value)
-            return value
-        return {
+            return self._with_financial_evidence_fields(value)
+        value = {
             "collector": {
                 "expected_extra_cols": ["paused"],
                 "numeric_extra_cols": ["paused"],
@@ -153,19 +163,19 @@ class ConfigManager:
                     },
                     "income": {
                         "interface": "income",
-                        "fields": "ts_code,ann_date,end_date,n_income,revenue,oper_cost",
+                        "fields": "ts_code,ann_date,end_date,f_ann_date,report_type,comp_type,end_type,update_flag,n_income,revenue,oper_cost",
                     },
                     "balancesheet": {
                         "interface": "balancesheet",
-                        "fields": "ts_code,ann_date,end_date,total_assets,total_hldr_eqy_exc_min_int,total_cur_assets,total_cur_liab",
+                        "fields": "ts_code,ann_date,end_date,f_ann_date,report_type,comp_type,end_type,update_flag,total_assets,total_hldr_eqy_exc_min_int,total_cur_assets,total_cur_liab",
                     },
                     "cashflow": {
                         "interface": "cashflow",
-                        "fields": "ts_code,ann_date,end_date,n_cashflow_act",
+                        "fields": "ts_code,ann_date,end_date,f_ann_date,report_type,comp_type,end_type,update_flag,n_cashflow_act",
                     },
                     "fina_indicator": {
                         "interface": "fina_indicator",
-                        "fields": "ts_code,ann_date,end_date,roe,roe_waa,grossprofit_margin,debt_to_assets,current_ratio,q_dtprofit,q_gr_yoy",
+                        "fields": "ts_code,ann_date,end_date,update_flag,roe,roe_waa,grossprofit_margin,debt_to_assets,current_ratio,q_dtprofit,q_gr_yoy",
                         "rename": {
                             "q_dtprofit": "q_dt_profit",
                         },
@@ -207,6 +217,47 @@ class ConfigManager:
                 ]
             }
         }
+        return self._with_financial_evidence_fields(value)
+
+    @staticmethod
+    def _with_financial_evidence_fields(value: dict) -> dict:
+        """Add supplier-supported revision fields to configured raw requests.
+
+        Local ``settings.yaml`` files predate the raw-evidence contract and may
+        still contain the narrow financial field lists.  Enrich those lists at
+        the configuration boundary so request identity changes without making
+        the evidence-only metadata part of canonical feature configuration.
+        """
+        interfaces = value.get("collector", {}).get("interfaces", {})
+        if not isinstance(interfaces, dict):
+            return value
+        for endpoint, evidence_fields in _TUSHARE_FINANCIAL_EVIDENCE_FIELDS.items():
+            item = interfaces.get(endpoint)
+            if not isinstance(item, dict):
+                continue
+            fields = item.get("fields")
+            if isinstance(fields, str):
+                raw_fields = fields.split(",")
+            elif isinstance(fields, (list, tuple)):
+                raw_fields = fields
+            else:
+                continue
+            field_list = list(dict.fromkeys(
+                str(field).strip() for field in raw_fields if str(field).strip()
+            ))
+            field_list = [field for field in field_list if field not in evidence_fields]
+            insert_at = (
+                field_list.index("end_date") + 1
+                if "end_date" in field_list
+                else len(field_list)
+            )
+            canonical_fields = (
+                field_list[:insert_at]
+                + list(evidence_fields)
+                + field_list[insert_at:]
+            )
+            item["fields"] = ",".join(canonical_fields)
+        return value
 
     @staticmethod
     def _verify_tushare_config(value: dict) -> None:

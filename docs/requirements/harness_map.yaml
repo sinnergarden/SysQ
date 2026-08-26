@@ -35,6 +35,7 @@ usecases:
       - scripts/run_daily.py
       - scripts/run_daily_batch.py
       - scripts/ops/sync_csi800_daily.py
+      - qsys/config/manager.py
       - qsys/data/collector.py
       - qsys/data/storage.py
       - qsys/data/source_audit.py
