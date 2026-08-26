@@ -20,6 +20,10 @@ from qsys.data.income_sidecar import (
     INCOME_SIDECAR_TRANSFORM,
 )
 from qsys.data.source_audit import stable_scope_hash
+from qsys.ops.shareholder_sync import (
+    AUDITED_SNAPSHOT_CONTRACT,
+    AUDITED_SNAPSHOT_SCHEMA,
+)
 
 
 _FRESHNESS_CONTRACT = {
@@ -108,6 +112,64 @@ def _income_identity(tmp_path: Path, *, payload: bytes = b"income-v1") -> dict[s
             manifest_path.read_bytes()
         ).hexdigest(),
         "income_sidecar_required_history_start": "20180313",
+    }
+
+
+def _shareholder_identity(tmp_path: Path) -> dict[str, str]:
+    holder = tmp_path / "holder_num.parquet"
+    top10 = tmp_path / "top10_holder_ratio.parquet"
+    holder.write_bytes(b"holder-v1")
+    top10.write_bytes(b"top10-v1")
+    holder_sha = hashlib.sha256(holder.read_bytes()).hexdigest()
+    top10_sha = hashlib.sha256(top10.read_bytes()).hexdigest()
+    symbols = ["000001.SZ"]
+    identity = {
+        "schema": AUDITED_SNAPSHOT_SCHEMA,
+        "contract": AUDITED_SNAPSHOT_CONTRACT,
+        "source": "tushare",
+        "source_run_id": "run-shareholder",
+        "terminal_receipt_sha256": "e" * 64,
+        "scope_key": "csi1800",
+        "range_start": "20180101",
+        "range_end": "20260821",
+        "symbol_count": 1,
+        "symbols_sha256": stable_scope_hash(symbols),
+        "receipt_count": 2,
+        "receipts_sha256": "f" * 64,
+    }
+    identity_bytes = (
+        json.dumps(identity, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
+    ).encode("utf-8")
+    manifest = {
+        "schema_version": 2,
+        "artifact_type": AUDITED_SNAPSHOT_SCHEMA,
+        "artifact_id": hashlib.sha256(identity_bytes).hexdigest(),
+        "identity": identity,
+        "artifacts": {
+            "holder_num": {"path": holder.name, "sha256": holder_sha},
+            "top10_holder_ratio": {"path": top10.name, "sha256": top10_sha},
+        },
+        "scope": {
+            "scope_key": "csi1800", "range_start": "20180101",
+            "range_end": "20260821", "symbol_count": 1,
+            "symbols_sha256": stable_scope_hash(symbols), "symbols": symbols,
+        },
+        "contracts": {"transform": AUDITED_SNAPSHOT_CONTRACT},
+        "source_evidence": {
+            "run_id": "run-shareholder", "terminal_receipt_sha256": "e" * 64,
+        },
+    }
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    return {
+        "shareholder_holder_path": str(holder),
+        "shareholder_holder_sha256": holder_sha,
+        "shareholder_top10_path": str(top10),
+        "shareholder_top10_sha256": top10_sha,
+        "shareholder_manifest_path": str(manifest_path),
+        "shareholder_manifest_sha256": hashlib.sha256(
+            manifest_path.read_bytes()
+        ).hexdigest(),
     }
 
 
@@ -205,6 +267,60 @@ def test_shareholder_snapshot_hash_is_verified_and_enters_identity(
         )
 
 
+def test_audited_shareholder_manifest_enters_lineage_checkpoint_and_cache(
+    tmp_path: Path,
+) -> None:
+    identity = _shareholder_identity(tmp_path)
+    generator = _generator(tmp_path / "cache", **identity)
+    lineage = generator.feature_source_lineage
+
+    assert lineage["shareholder_sidecar"]["source_run_id"] == "run-shareholder"
+    assert lineage["shareholder_sidecar"]["scope_key"] == "csi1800"
+    assert generator.checkpoint_input_artifacts == [
+        {"name": "holder_num", "sha256": identity["shareholder_holder_sha256"]},
+        {
+            "name": "shareholder_sidecar",
+            "sha256": identity["shareholder_manifest_sha256"],
+        },
+        {
+            "name": "top10_holder_ratio",
+            "sha256": identity["shareholder_top10_sha256"],
+        },
+    ]
+    legacy = _generator(
+        tmp_path / "legacy",
+        **{
+            key: value for key, value in identity.items()
+            if "manifest" not in key
+        },
+    )
+    assert "shareholder_sidecar" not in legacy.feature_source_lineage
+    assert generator._window_key("2020-01-01", "2021-01-01", ["f1"]) != (
+        legacy._window_key("2020-01-01", "2021-01-01", ["f1"])
+    )
+
+    Path(identity["shareholder_manifest_path"]).write_text("{}")
+    with pytest.raises(ValueError, match="manifest hash mismatch"):
+        _generator(tmp_path / "tampered", **identity)
+
+
+def test_legacy_shareholder_manifest_cannot_be_promoted_to_audited_lineage(
+    tmp_path: Path,
+) -> None:
+    identity = _shareholder_identity(tmp_path)
+    manifest_path = Path(identity["shareholder_manifest_path"])
+    manifest = json.loads(manifest_path.read_text())
+    manifest["schema_version"] = 1
+    manifest["artifact_type"] = "legacy_shareholder_snapshot_v1"
+    manifest_path.write_text(json.dumps(manifest))
+    identity["shareholder_manifest_sha256"] = hashlib.sha256(
+        manifest_path.read_bytes()
+    ).hexdigest()
+
+    with pytest.raises(ValueError, match="manifest contract/identity mismatch"):
+        _generator(tmp_path / "legacy-manifest", **identity)
+
+
 def test_income_sidecar_manifest_identity_enters_lineage_cache_and_checkpoint(
     tmp_path: Path,
 ) -> None:
@@ -284,3 +400,22 @@ def test_matrix_factory_forwards_explicit_income_sidecar_identity(
     assert generator.income_sidecar_manifest_sha256 == identity[
         "income_sidecar_manifest_sha256"
     ]
+
+
+def test_matrix_factory_forwards_shareholder_manifest_identity(
+    tmp_path: Path,
+) -> None:
+    from qsys.research.matrix_job import _create_generator_from_config
+
+    identity = _shareholder_identity(tmp_path)
+    generator = _create_generator_from_config({
+        "generator_id": "shareholder",
+        "type": "single_label_lightgbm",
+        "params": {"label_id": "fwd_ret_20d_xsz_clip3", **identity},
+    })
+    assert generator.shareholder_manifest_path == identity[
+        "shareholder_manifest_path"
+    ]
+    assert generator.feature_source_lineage["shareholder_sidecar"][
+        "terminal_receipt_sha256"
+    ] == "e" * 64

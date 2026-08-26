@@ -163,9 +163,9 @@ CSI1800 历史修复只使用 immutable historical union 作为请求集合，�
 
 同一显式历史修复中的 shareholder 年度/报告期分页也使用该 historical union identity，并把
 每页 raw response 落为可校验 shard。中断后继续引用最新失败 run；不要另跑 shareholder
-脚本，也不要删除已验证分片后重拉。该 receipt 目前只证明 source capture 和可恢复性；在
-historical revision timeline 未证明前，不推进 shareholder PIT watermark，也不作为 baseline
-coverage。
+脚本，也不要删除已验证分片后重拉。trusted terminal 是 source evidence；正式 baseline 还须
+由下面的离线 materializer 生成 consumed immutable snapshot，再由 certifier 绑定 snapshot 与
+terminal watermark，不能直接把 mutable canonical sidecar 当成已认证输入。
 
 wrapper 每次 resume 仍创建新的 shared run_id，并在同一个 writer lock 内运行完整 market
 child、outer repairs 和 readiness。已验证且持久化的 success/empty supplier shard 会克隆到
@@ -173,6 +173,22 @@ child、outer repairs 和 readiness。已验证且持久化的 success/empty sup
 会正常重试。`daily_bundle`、canonical merge、Qlib readback 和 readiness 都是本地派生阶段，
 每次必须重建/重验，不能因为 canonical precheck 已完整而跳过。若新 run 再失败，下一次只需
 显式引用这个最新失败 run；它已经包含本次采用的全部 verified shard，不遍历更早祖先。
+
+full-history wrapper 完成并产生 trusted terminal 后，可在同一 canonical entrypoint 运行一次
+显式离线 shareholder snapshot bootstrap。它与 normal sync 参数互斥，不调用 Tushare：
+
+```bash
+python scripts/data_sync.py --apply \
+  --build-shareholder-sidecar-from-run-id <trusted-run-id> \
+  --shareholder-sidecar-output-root research/source_snapshots/shareholder \
+  --shareholder-sidecar-scope-key csi1800 \
+  --shareholder-sidecar-range-start YYYYMMDD \
+  --shareholder-sidecar-cutoff YYYYMMDD
+```
+
+输出是 identity-addressed `holder_num.parquet`、`top10_holder_ratio.parquet` 与 terminal-backed
+v2 `manifest.json`。旧 snapshot manifest 只有 source state/bootstrap summary，可继续 legacy
+research 使用但不可认证；禁止手工补 source run/hash 冒充 v2。normal daily 不运行此 bootstrap。
 
 这里保证的是 verified-durable at-most-once：只有已写入并可校验 receipt/payload 的响应才可
 跳过远端调用。若进程在 supplier 返回之后、durable receipt 写入之前崩溃，该 shard 没有可

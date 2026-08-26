@@ -40,6 +40,9 @@ UC-5（Signal Analytics）、UC-6（Signal Combination）、UC-7（Signal Backte
   audit scope/feature-set 消费范围给出的 `required_history_start`。旧配置映射为
   `legacy_unverified_global_v0` 并在运行时告警；该模式只用于兼容，不能通过 PIT
   certification。
+- 启用 shareholder feature 时，正式 audited research 还必须 pin holder/top10 path+SHA
+  以及同目录 terminal-backed v2 manifest path+SHA。旧两文件配置仍可作为 legacy research
+  输入，但 signal lineage 缺 manifest/source terminal identity，不能通过 certification。
 
 ### Outputs
 - `data/research/signals/{signal_id}/{signal_run_id}/predictions.parquet`
@@ -76,6 +79,22 @@ bootstrap mode 产生，但由 research generator 消费。`LightGBMSingleLabelG
 receipt hash、scope/cutoff 写入 `feature_source_lineage`，同时绑定 checkpoint 与 feature
 cache identity。adapter 只接收 generator 显式传入的 identity；缺失、tamper、scope
 或 cutoff 不覆盖实际请求 window 时 fail closed，禁止 catch-all 转成全 NaN。
+
+Shareholder 的正式 immutable snapshot 同样只由 `scripts/data_sync.py` 显式 offline bootstrap
+mode 从一个 trusted full-history terminal run 生成。generator 校验 v2 manifest 对 holder/top10
+文件的反向 hash、historical union symbol/date scope、source run 与 terminal receipt identity；
+manifest hash 同时进入 checkpoint、feature cache 和 signal `feature_source_lineage`。normal daily
+不会构建或猜测这个 snapshot。
+
+```yaml
+params:
+  shareholder_holder_path: data/research/source_snapshots/shareholder/<artifact_id>/holder_num.parquet
+  shareholder_holder_sha256: <exact_sha256>
+  shareholder_top10_path: data/research/source_snapshots/shareholder/<artifact_id>/top10_holder_ratio.parquet
+  shareholder_top10_sha256: <exact_sha256>
+  shareholder_manifest_path: data/research/source_snapshots/shareholder/<artifact_id>/manifest.json
+  shareholder_manifest_sha256: <exact_manifest_sha256>
+```
 
 ```yaml
 params:
