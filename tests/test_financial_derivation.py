@@ -24,7 +24,7 @@ class TestFinancialDerivation(unittest.TestCase):
         })
         fin_df = pd.DataFrame({
             "ts_code": ["600176.SH"],
-            "ann_date": ["20260320"],
+            "availability_date": ["20260320"],
             "end_date": ["20251231"],
             "net_income": [200.0],
             "revenue": [1000.0],
@@ -53,7 +53,7 @@ class TestFinancialDerivation(unittest.TestCase):
         })
         fin_df = pd.DataFrame({
             "ts_code": ["300308.SZ"],
-            "ann_date": ["20260417"],
+            "availability_date": ["20260417"],
             "end_date": ["20260331"],
             "roe": [44.1614],
             "grossprofit_margin": [42.0356],
@@ -66,6 +66,23 @@ class TestFinancialDerivation(unittest.TestCase):
         self.assertAlmostEqual(row["grossprofit_margin"], 0.420356, places=6)
         self.assertAlmostEqual(row["debt_to_assets"], 0.30179, places=6)
         self.assertAlmostEqual(row["current_ratio"], 2.6893, places=6)
+
+    def test_merge_financials_rejects_unproven_legacy_ann_date(self):
+        collector = TushareCollector()
+        daily_df = pd.DataFrame({
+            "ts_code": ["300308.SZ"],
+            "trade_date": ["20260430"],
+        })
+        legacy_fin_df = pd.DataFrame({
+            "ts_code": ["300308.SZ"],
+            "ann_date": ["20260417"],
+            "roe": [44.1614],
+        })
+
+        with self.assertRaisesRegex(
+            RuntimeError, "missing audited availability_date"
+        ):
+            collector._merge_financials(daily_df, legacy_fin_df)
 
 
 if __name__ == "__main__":
