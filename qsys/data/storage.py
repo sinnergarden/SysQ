@@ -143,6 +143,103 @@ class StockDataStore:
         dates = frame["trade_date"].astype(str).str.replace("-", "", regex=False).str[:8]
         return frame.loc[(dates >= start_date) & (dates <= end_date)].copy()
 
+    def merge_daily_industry(
+        self,
+        df: pd.DataFrame,
+        code: str,
+        *,
+        source_run_id: str,
+        source_receipt_id: str,
+    ) -> list[dict[str, Any]]:
+        """Atomically project audited PIT industry values into canonical daily rows.
+
+        Rows outside the existing daily frame are intentionally ignored: ``bak_basic``
+        describes every calendar snapshot, while the canonical SOT contains trading
+        observations only. Supplier corrections overwrite the same key and are
+        captured by the canonical mutation ledger.
+        """
+
+        required = {"ts_code", "trade_date", "industry"}
+        if df is None or df.empty:
+            return []
+        if not required.issubset(df.columns):
+            raise ValueError("industry history requires ts_code, trade_date, industry")
+        symbol = str(code).strip().upper()
+        if not symbol or not source_run_id or not source_receipt_id:
+            raise ValueError("industry history requires source lineage")
+        incoming = df.loc[:, ["ts_code", "trade_date", "industry"]].copy()
+        incoming["ts_code"] = incoming["ts_code"].astype("string").str.strip().str.upper()
+        incoming["trade_date"] = (
+            incoming["trade_date"]
+            .astype("string")
+            .str.strip()
+            .str.replace("-", "", regex=False)
+            .str.replace(r"\.0$", "", regex=True)
+        )
+        incoming["industry"] = incoming["industry"].astype("string").str.strip()
+        if (
+            incoming["ts_code"].isna().any()
+            or not incoming["ts_code"].eq(symbol).all()
+            or incoming["trade_date"].isna().any()
+            or not incoming["trade_date"].str.fullmatch(r"\d{8}").all()
+            or incoming["industry"].isna().any()
+            or incoming["industry"].eq("").any()
+            or incoming.duplicated(["ts_code", "trade_date"]).any()
+        ):
+            raise ValueError("industry history rows are invalid or duplicated")
+        target = self.canonical_dir / f"{symbol}.feather"
+        if not target.is_file():
+            raise ValueError(f"canonical daily frame missing for {symbol}")
+        existing = pd.read_feather(target)
+        if existing.empty or "trade_date" not in existing.columns:
+            raise ValueError(f"canonical daily frame invalid for {symbol}")
+        before = existing.copy()
+        canonical_dates = (
+            existing["trade_date"].astype("string").str.replace("-", "", regex=False).str[:8]
+        )
+        lookup = incoming.set_index("trade_date")["industry"]
+        projected = canonical_dates.map(lookup)
+        if "industry" in existing.columns:
+            prior = existing["industry"].astype("string").str.strip()
+            changed = projected.notna() & (prior.isna() | prior.eq("") | prior.ne(projected))
+            existing["industry"] = prior.where(~changed, projected)
+        else:
+            existing["industry"] = projected
+            changed = projected.notna()
+        touched = projected.notna()
+        for column, value in (
+            ("industry_source_run_id", str(source_run_id)),
+            ("industry_source_receipt_id", str(source_receipt_id)),
+        ):
+            if column not in existing.columns:
+                existing[column] = pd.NA
+            missing = existing[column].isna() | existing[column].astype("string").str.strip().eq("")
+            existing.loc[touched & (changed | missing), column] = value
+
+        from qsys.data.source_audit import build_canonical_mutations, utc_now
+
+        committed_at = utc_now()
+        value_columns = ["trade_date", "industry"]
+        mutations = build_canonical_mutations(
+            symbol=symbol,
+            incoming=pd.DataFrame({
+                "ts_code": symbol,
+                "trade_date": canonical_dates.loc[touched],
+                "industry": projected.loc[touched],
+            }),
+            before=before.loc[:, [column for column in value_columns if column in before.columns]],
+            after=existing.loc[:, value_columns],
+            ingested_at=committed_at,
+        )
+        for mutation in mutations:
+            mutation.update({
+                "dataset": "canonical_daily",
+                "endpoint": "bak_basic",
+                "fetch_receipt_id": str(source_receipt_id),
+            })
+        self._atomic_write(existing, target)
+        return mutations
+
     def _atomic_write(self, df: pd.DataFrame, target_path: Path):
         # Write to temp file first
         # Use directory of target_path to ensure same filesystem (for atomic rename)

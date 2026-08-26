@@ -37,6 +37,7 @@ usecases:
       - scripts/ops/sync_csi800_daily.py
       - qsys/config/manager.py
       - qsys/data/collector.py
+      - qsys/data/adapter.py
       - qsys/data/storage.py
       - qsys/data/source_audit.py
       - qsys/ops/

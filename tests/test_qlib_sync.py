@@ -296,6 +296,50 @@ class TestQlibSync(unittest.TestCase):
         self.assertEqual(out["date"].tolist(), ["2026-04-17", "2026-04-20"])
         self.assertEqual(len(out), 2)
 
+    def test_prepare_csvs_uses_per_date_pit_industry_and_certified_mode_blocks_fallback(self):
+        canonical = cfg.get_path("canonical_dir")
+        frame = pd.DataFrame({
+            "trade_date": ["20180313", "20260417"],
+            "open": [10.0, 11.0], "high": [10.5, 11.5],
+            "low": [9.5, 10.5], "close": [10.2, 11.2],
+            "vol": [1.0, 2.0], "amount": [1.0, 2.0],
+            "adj_factor": [1.0, 1.0], "paused": [0, 0],
+            "industry": ["OldSector", "NewSector"],
+        })
+        path = canonical / "000001.SZ.feather"
+        frame.to_feather(path)
+        adapter = QlibAdapter(raw_dir=canonical)
+        stock = pd.DataFrame({"ts_code": ["000001.SZ"], "industry": ["NewSector"]})
+        with patch("qsys.data.adapter.StockDataStore.get_stock_list", return_value=stock), patch.object(
+            adapter, "_load_industry_map", return_value={"OldSector": 1, "NewSector": 2}
+        ):
+            csv_dir, count = adapter._prepare_csvs(
+                selected_symbols=["000001.SZ"], output_dir=self.root / "csv_pit_industry",
+                require_pit_industry=True,
+            )
+        self.assertEqual(count, 1)
+        self.assertEqual(pd.read_csv(csv_dir / "000001.SZ.csv")["industry"].tolist(), [1, 2])
+
+        frame.loc[0, "industry"] = pd.NA
+        frame.to_feather(path)
+        with patch("qsys.data.adapter.StockDataStore.get_stock_list", return_value=stock), patch.object(
+            adapter, "_load_industry_map", return_value={"NewSector": 2}
+        ), self.assertRaisesRegex(RuntimeError, "PIT industry coverage missing"):
+            adapter._prepare_csvs(
+                selected_symbols=["000001.SZ"], output_dir=self.root / "csv_pit_missing",
+                require_pit_industry=True,
+            )
+
+        frame.drop(columns=["trade_date"]).assign(industry="NewSector").to_feather(path)
+        with patch("qsys.data.adapter.StockDataStore.get_stock_list", return_value=stock), patch.object(
+            adapter, "_load_industry_map", return_value={"NewSector": 2}
+        ), self.assertRaisesRegex(RuntimeError, "PIT industry date identity missing"):
+            adapter._prepare_csvs(
+                until_date=pd.Timestamp("2026-04-17"),
+                selected_symbols=["000001.SZ"], output_dir=self.root / "csv_pit_bad_date",
+                require_pit_industry=True,
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1485,3 +1485,26 @@ def test_crash_receipt_is_untrusted_immutable_and_never_advances_watermark(tmp_p
     assert second["status"] == "existing"
     assert receipt.read_bytes() == original
     assert store.watermark_snapshot_bytes() == before
+
+
+def test_finalize_history_records_endpoint_specific_field_range_floor(tmp_path: Path) -> None:
+    store = SourceAuditStore(tmp_path / "audit" / "audit.db")
+    gates = {
+        "fetch": True, "raw_payloads": True, "canonical_commit": True,
+        "qlib_readback": True, "readiness": True, "contiguous_range": True,
+    }
+    result = store.finalize_run(
+        run_id="field-range-floor", source="tushare", scope_key="csi1800",
+        range_start="20140101", range_end="20260821",
+        fields=["close", "industry"], gates=gates,
+        receipt_root=tmp_path / "audit" / "source_runs",
+        allow_initial_history=True,
+        field_range_starts={"industry": "20180313"},
+    )
+    assert result["status"] == "trusted"
+    with sqlite3.connect(store.db_path) as connection:
+        rows = dict(connection.execute(
+            "SELECT field_name,range_start FROM trusted_watermarks WHERE run_id=?",
+            ("field-range-floor",),
+        ).fetchall())
+    assert rows == {"close": "20140101", "industry": "20180313"}

@@ -175,6 +175,7 @@ def _finalize_wrapper_evidence(
         trust_state="trusted" if all(terminal_gates.values()) else "untrusted",
         previous_open_session=terminal.get("previous_open_session"),
         allow_initial_history=bool(terminal.get("allow_initial_history")),
+        field_range_starts=dict(terminal.get("field_range_starts") or {}),
     )
 
 

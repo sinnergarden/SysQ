@@ -248,6 +248,15 @@ certifier 认证。
 
 **Minimal Fields / Concepts**: `feature_set_id`, `feature_version`, `as_of_date`, `instrument`, `feature_names`, `coverage`, missing policy, PIT flag, normalization policy, `run_id`
 
+Historical industry classification is PIT data, not static metadata. CSI1800 historical
+repair receipts one `bak_basic(ts_code=...)` all-history shard per immutable-union symbol,
+preserves the complete valid supplier payload, and atomically projects only
+`2016-01-01..availability_cutoff` onto matching rows in the existing canonical daily
+Feather. Daily CSI1800 sync uses one `bak_basic(trade_date=T)` market snapshot. Qlib uses
+the per-row canonical value; current `stock_basic.industry` is only an explicit legacy
+fallback outside the certified path. A T classification is available after T close for
+T+1 decisions.
+
 **Invariants**:
 - feature 必须避免未来数据泄露。
 - PIT / 非 PIT 必须明确标注。
