@@ -8,6 +8,11 @@ feature_set: v3a_plus_liquidity_financial_rc
 model_version: financial_rc_equal_weight_2cd1dcea783f54dc
 signal_version: blend_0.5_60d_0.5_180d_shareholder_pit_history_v6
 
+# Transitional, explicitly unverified compatibility mode. Certification must
+# replace this with audited_sidecar_v1 and bind the built artifact identity.
+income_feature_source:
+  mode: legacy_unverified_global_v0
+
 # The model sees a single-date feature snapshot: margin and ordinary inputs
 # are both from signal_date. Tushare margin_detail is only treated as complete
 # on the following open session, so daily inference delays the entire snapshot

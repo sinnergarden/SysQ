@@ -272,6 +272,31 @@ def test_legacy_financial_rc_engine_still_accepts_two_models(tmp_path) -> None:
     )
     settings = FinancialRCTrainer(config, tmp_path)._settings()
     assert len(settings["models"]) == 2
+    assert settings["income_feature_source"] == {
+        "mode": "legacy_unverified_global_v0",
+        "artifact_path": "",
+        "artifact_sha256": "",
+        "manifest_path": "",
+        "manifest_sha256": "",
+        "required_history_start": "",
+    }
+
+
+def test_training_audited_income_mode_requires_complete_binding(tmp_path) -> None:
+    config = _trainer_config(
+        strategy_id="s180_top10",
+        engine="lightgbm_model_bundle_v1",
+        models=[{
+            "tag": "s180",
+            "label_id": "fwd_ret_180d_raw",
+            "experiment_id": "s180_top10",
+            "horizon": 180,
+        }],
+    )
+    config["income_feature_source"] = {"mode": "audited_sidecar_v1"}
+
+    with pytest.raises(FinancialRCTrainingError, match="artifact/manifest identity"):
+        FinancialRCTrainer(config, tmp_path)._settings()
 
 
 def test_pit_filter_uses_strict_row_date_intervals() -> None:

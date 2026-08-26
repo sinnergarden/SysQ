@@ -39,6 +39,7 @@ usecases:
       - qsys/data/collector.py
       - qsys/data/_merge_helpers.py
       - qsys/data/adapter.py
+      - qsys/data/income_sidecar.py
       - qsys/data/storage.py
       - qsys/data/source_audit.py
       - qsys/ops/
@@ -117,6 +118,7 @@ usecases:
       - data/research/models/
       - qsys/signal/
       - qsys/data/adapter.py
+      - qsys/data/income_sidecar.py
       - qsys/feature/
       - qsys/ops/shareholder_sync.py
       - scripts/dev/
@@ -210,6 +212,8 @@ usecases:
       - qsys/evaluation/
       - qsys/backtest/
       - qsys/analysis/
+      - qsys/data/adapter.py
+      - qsys/data/income_sidecar.py
       - configs/research/
       - configs/features/
       - configs/labels/
@@ -246,6 +250,7 @@ usecases:
       - qsys/ops/model_resolver.py
       - qsys/ops/shareholder_sync.py
       - qsys/feature/freshness.py
+      - qsys/data/income_sidecar.py
       - configs/strategies/
       - harness/checks/
       - tests/

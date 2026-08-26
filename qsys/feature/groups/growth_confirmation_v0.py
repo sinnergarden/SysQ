@@ -1,12 +1,16 @@
 """Growth confirmation features — Tushare-based PIT financial signals.
 
-Data sources (synced via ``scripts/dev/sync_tushare_financial.py``):
+Data sources:
     data/tushare/forecast.parquet
-    data/tushare/income.parquet
+    explicit audited immutable income PIT sidecar + manifest identity, or the
+    declared legacy-unverified compatibility source
 
 PIT rule:
-    All financial data is merged via ``ann_date`` using ``merge_asof(direction="backward")``.
-    Strictly forbidden to use ``end_date`` as the visibility date.
+    Each income-derived feature is merged via the maximum availability of all
+    quarterly inputs actually used by its unchanged formula.  ``end_date`` is
+    only a report-period ordering key, never a visibility date.
+    Audited income is visible only on dates strictly after publication; legacy
+    compatibility preserves the historical exact-date merge behavior.
 
 Features (9 total):
   Forecast (3):
@@ -67,25 +71,87 @@ def _load_forecast() -> pd.DataFrame:
     return df.drop_duplicates(subset=["ts_code", "ann_date", "end_date"])
 
 
-def _load_income() -> pd.DataFrame:
-    """Load income data, keep only quarterly reports (report_type=1).
+def _load_income(
+    *,
+    artifact_path: str,
+    artifact_sha256: str,
+    manifest_path: str,
+    manifest_sha256: str,
+    required_start: str | None,
+    required_end: str | None,
+    required_history_start: str,
+    required_symbols: set[str],
+) -> pd.DataFrame:
+    """Load one explicit audited first-available income artifact."""
 
-    PIT dedup: if multiple records for same (ts_code, end_date), keep
-    the one with the latest ``ann_date`` (most recently revised).
-    """
+    from qsys.data.income_sidecar import validate_income_sidecar_identity
+
+    identity = validate_income_sidecar_identity(
+        artifact_path=artifact_path,
+        artifact_sha256=artifact_sha256,
+        manifest_path=manifest_path,
+        manifest_sha256=manifest_sha256,
+        required_start=required_start,
+        required_end=required_end,
+        required_history_start=required_history_start,
+        required_symbols=required_symbols,
+    )
+    df = pd.read_parquet(identity["artifact_path"])
+    required = {
+        "ts_code", "ann_date", "f_ann_date", "publication_date",
+        "availability_date", "end_date", "report_type", "comp_type",
+        "end_type", "update_flag", "n_income", "revenue", "oper_cost",
+        "source_run_id", "source_receipt_id", "source_payload_sha256",
+    }
+    missing = required - set(df.columns)
+    manifest = identity["manifest"]
+    if missing:
+        raise ValueError(f"audited income sidecar missing fields: {sorted(missing)}")
+    if (
+        len(df) != manifest["artifact"].get("rows")
+        or list(df.columns) != manifest["artifact"].get("columns")
+    ):
+        raise ValueError("audited income sidecar row/schema identity mismatch")
+    if df.duplicated(["ts_code", "end_date"]).any():
+        raise ValueError("audited income sidecar contains duplicate report periods")
+    for column in ("ann_date", "publication_date", "availability_date", "end_date"):
+        df[column] = pd.to_datetime(df[column], errors="coerce")
+    if df[["ann_date", "publication_date", "availability_date", "end_date"]].isna().any().any():
+        raise ValueError("audited income sidecar contains invalid dates")
+    cutoff = pd.to_datetime(
+        str(manifest["scope"]["availability_cutoff"]),
+        format="%Y%m%d",
+        errors="raise",
+    )
+    if df["availability_date"].gt(cutoff).any():
+        raise ValueError("audited income sidecar contains rows after its cutoff")
+    return df.sort_values(["ts_code", "end_date"], kind="mergesort").reset_index(drop=True)
+
+
+def _load_legacy_unverified_income() -> pd.DataFrame:
+    """Load the pre-audit mutable income table under an explicit legacy mode."""
+
     path = _tushare_dir() / "income.parquet"
-    if not path.exists():
-        raise FileNotFoundError(f"Income data not found at {path}")
-    df = pd.read_parquet(path)
-    df = df[df["report_type"].astype(int) == 1].copy()
-    df["ann_date"] = pd.to_datetime(df["ann_date"])
-    df["end_date"] = pd.to_datetime(df["end_date"])
-
-    # PIT dedup: keep latest ann_date per (ts_code, end_date)
-    df = df.sort_values(["ts_code", "end_date", "ann_date"])
-    df = df.drop_duplicates(subset=["ts_code", "end_date"], keep="last")
-
-    return df
+    if not path.is_file():
+        raise FileNotFoundError(f"Legacy unverified income data not found at {path}")
+    frame = pd.read_parquet(path)
+    required = {"ts_code", "ann_date", "end_date", "report_type"}
+    missing = required - set(frame.columns)
+    if missing:
+        raise ValueError(f"legacy unverified income table missing fields: {sorted(missing)}")
+    frame = frame.loc[
+        pd.to_numeric(frame["report_type"], errors="coerce").eq(1)
+    ].copy()
+    frame["ann_date"] = pd.to_datetime(frame["ann_date"], errors="coerce")
+    frame["end_date"] = pd.to_datetime(frame["end_date"], errors="coerce")
+    if frame[["ann_date", "end_date"]].isna().any().any():
+        raise ValueError("legacy unverified income table contains invalid dates")
+    frame["availability_date"] = frame["ann_date"]
+    return (
+        frame.sort_values(["ts_code", "end_date", "ann_date"], kind="mergesort")
+        .drop_duplicates(["ts_code", "end_date"], keep="last")
+        .reset_index(drop=True)
+    )
 
 
 def _build_daily_anchor(universe: list[str] | None = None,
@@ -106,7 +172,12 @@ def _build_daily_anchor(universe: list[str] | None = None,
 # PIT merge
 # ═══════════════════════════════════════════════════════════════════
 
-def _pit_merge(anchor: pd.DataFrame, right: pd.DataFrame) -> pd.DataFrame:
+def _pit_merge(
+    anchor: pd.DataFrame,
+    right: pd.DataFrame,
+    *,
+    allow_exact_matches: bool = True,
+) -> pd.DataFrame:
     """Merge right table (with ``_ann_dt``) into anchor (with ``_dt``) by (ts_code, _dt) backward.
 
     The right table must have columns ``ts_code``, ``_ann_dt``, plus value columns.
@@ -128,8 +199,14 @@ def _pit_merge(anchor: pd.DataFrame, right: pd.DataFrame) -> pd.DataFrame:
             chunks.append(a)
         else:
             r_renamed = r.rename(columns={"_ann_dt": "_dt"})
-            merged = pd.merge_asof(a, r_renamed, on="_dt", by="ts_code",
-                                    direction="backward")
+            merged = pd.merge_asof(
+                a,
+                r_renamed,
+                on="_dt",
+                by="ts_code",
+                direction="backward",
+                allow_exact_matches=allow_exact_matches,
+            )
             chunks.append(merged)
 
     result = pd.concat(chunks, ignore_index=True)
@@ -159,6 +236,27 @@ def _single_q_value(revenue_cum: float, prev_cum: float, end_q: int) -> float:
     return revenue_cum - prev_cum
 
 
+def _max_available_from(*values: pd.Series) -> pd.Series:
+    frame = pd.concat([pd.to_datetime(value) for value in values], axis=1)
+    return frame.max(axis=1)
+
+
+def _rolling_max_available_from(
+    values: pd.Series,
+    groups: pd.Series,
+    *,
+    window: int,
+) -> pd.Series:
+    dates = pd.to_datetime(values)
+    # ``NaT.astype(int64)`` is the minimum int64 value and must never become
+    # an apparently ancient availability timestamp inside a rolling maximum.
+    numeric = dates.astype("int64").astype("float64").where(dates.notna())
+    rolled = numeric.groupby(groups).transform(
+        lambda series: series.rolling(window, min_periods=window).max()
+    )
+    return pd.to_datetime(rolled)
+
+
 def _compute_quarterly_features(inc_raw: pd.DataFrame) -> pd.DataFrame:
     """Compute single-quarter and TTM features on the quarterly table.
 
@@ -167,10 +265,10 @@ def _compute_quarterly_features(inc_raw: pd.DataFrame) -> pd.DataFrame:
         2. Convert cumulative revenue/n_income/oper_cost to single-quarter.
         3. Compute single_q_revenue_yoy, ttm_revenue_yoy, is_profitable_ttm,
            gross_margin_delta_yoy at the quarterly level.
-        4. Return quarterly table with pre-computed feature columns + ``_ann_dt``
-           (for PIT merge into daily anchor).
+        4. Propagate each feature's actual dependency availability separately.
     """
     inc = inc_raw.copy()
+    inc["availability_date"] = pd.to_datetime(inc["availability_date"])
     inc["end_q"] = inc["end_date"].dt.quarter
     inc["end_year"] = inc["end_date"].dt.year
     inc = inc.sort_values(["ts_code", "end_date"]).reset_index(drop=True)
@@ -193,11 +291,25 @@ def _compute_quarterly_features(inc_raw: pd.DataFrame) -> pd.DataFrame:
             lambda r: _single_q_value(r[col], r[f"{col}_prev_cum"], r["end_q"]),
             axis=1,
         )
+        previous_available = inc.groupby("ts_code")["availability_date"].shift(1)
+        inc[f"{col}_single_q_available_from"] = inc["availability_date"]
+        dependency_available = _max_available_from(
+            inc["availability_date"], previous_available,
+        )
+        inc.loc[
+            inc["end_q"].ne(1) & valid_prev,
+            f"{col}_single_q_available_from",
+        ] = dependency_available
 
     # ── Single-quarter revenue yoy ──
     inc["single_q_revenue_ly"] = inc.groupby("ts_code")["revenue_single_q"].shift(4)
     inc["single_q_revenue_yoy"] = (
         inc["revenue_single_q"] / inc["single_q_revenue_ly"].replace(0, np.nan) - 1
+    )
+    inc["single_q_revenue_yoy_available_from"] = _max_available_from(
+        inc["availability_date"],
+        inc["revenue_single_q_available_from"],
+        inc.groupby("ts_code")["revenue_single_q_available_from"].shift(4),
     )
 
     # ── TTM revenue (last 4 single quarters) ──
@@ -208,12 +320,30 @@ def _compute_quarterly_features(inc_raw: pd.DataFrame) -> pd.DataFrame:
     inc["ttm_revenue_yoy"] = (
         inc["ttm_revenue"] / inc["ttm_revenue_lag4q"].replace(0, np.nan) - 1
     )
+    inc["ttm_revenue_available_from"] = _rolling_max_available_from(
+        inc["revenue_single_q_available_from"],
+        inc["ts_code"],
+        window=4,
+    )
+    inc["ttm_revenue_yoy_available_from"] = _max_available_from(
+        inc["availability_date"],
+        inc["ttm_revenue_available_from"],
+        inc.groupby("ts_code")["ttm_revenue_available_from"].shift(4),
+    )
 
     # ── TTM profitability ──
     inc["ttm_n_income"] = inc.groupby("ts_code")["n_income_single_q"].transform(
         lambda s: s.rolling(4, min_periods=4).sum()
     )
     inc["is_profitable_ttm"] = (inc["ttm_n_income"] > 0).astype(float)
+    inc["is_profitable_ttm_available_from"] = _max_available_from(
+        inc["availability_date"],
+        _rolling_max_available_from(
+            inc["n_income_single_q_available_from"],
+            inc["ts_code"],
+            window=4,
+        ),
+    )
 
     # ── Gross margin delta yoy (both revenue and cost are single-quarter) ──
     inc["single_q_gross_margin"] = (
@@ -222,26 +352,90 @@ def _compute_quarterly_features(inc_raw: pd.DataFrame) -> pd.DataFrame:
     )
     inc["single_q_gm_ly"] = inc.groupby("ts_code")["single_q_gross_margin"].shift(4)
     inc["gross_margin_delta_yoy"] = inc["single_q_gross_margin"] - inc["single_q_gm_ly"]
+    inc["single_q_gross_margin_available_from"] = _max_available_from(
+        inc["availability_date"],
+        inc["revenue_single_q_available_from"],
+        inc["oper_cost_single_q_available_from"],
+    )
+    inc["gross_margin_delta_yoy_available_from"] = _max_available_from(
+        inc["availability_date"],
+        inc["single_q_gross_margin_available_from"],
+        inc.groupby("ts_code")["single_q_gross_margin_available_from"].shift(4),
+    )
 
     # ── Keep only feature columns + ann_date anchor ──
     keep = [
-        "ts_code", "ann_date", "end_date",
+        "ts_code", "ann_date", "availability_date", "end_date",
         "single_q_revenue_yoy", "ttm_revenue_yoy",
         "is_profitable_ttm", "gross_margin_delta_yoy",
+    ]
+    availability_columns = [
+        f"{feature}_available_from"
+        for feature in (
+            "single_q_revenue_yoy", "ttm_revenue_yoy",
+            "is_profitable_ttm", "gross_margin_delta_yoy",
+        )
     ]
     for c in keep:
         if c not in inc.columns:
             inc[c] = np.nan
 
-    inc["_ann_dt"] = inc["ann_date"]
-    return inc[keep + ["_ann_dt"]].dropna(subset=["_ann_dt"])
+    for feature in (
+        "single_q_revenue_yoy", "ttm_revenue_yoy",
+        "is_profitable_ttm", "gross_margin_delta_yoy",
+    ):
+        unavailable_value = inc[feature].notna() & inc[
+            f"{feature}_available_from"
+        ].isna()
+        if unavailable_value.any():
+            raise ValueError(
+                f"income feature {feature} has value without dependency availability"
+            )
+
+    return inc[keep + availability_columns]
+
+
+def _latest_mature_feature_events(
+    quarterly: pd.DataFrame,
+    feature: str,
+) -> pd.DataFrame:
+    """Emit only report-period innovations for one feature availability stream."""
+
+    available_column = f"{feature}_available_from"
+    events = quarterly[
+        ["ts_code", "end_date", feature, available_column]
+    ].copy()
+    events = events.rename(columns={available_column: "_ann_dt"})
+    events = events.dropna(subset=["_ann_dt", "end_date"])
+    events = events.sort_values(
+        ["ts_code", "_ann_dt", "end_date"], kind="mergesort",
+    )
+    events = events.drop_duplicates(["ts_code", "_ann_dt"], keep="last")
+    retained: list[pd.DataFrame] = []
+    for _, group in events.groupby("ts_code", sort=False):
+        latest_before = group["end_date"].cummax().shift(1)
+        retained.append(group.loc[latest_before.isna() | group["end_date"].gt(latest_before)])
+    if not retained:
+        return events.iloc[0:0]
+    return pd.concat(retained, ignore_index=True)
 
 
 # ═══════════════════════════════════════════════════════════════════
 # Main builder
 # ═══════════════════════════════════════════════════════════════════
 
-def build_growth_confirmation_features(df: pd.DataFrame) -> pd.DataFrame:
+def build_growth_confirmation_features(
+    df: pd.DataFrame,
+    *,
+    income_sidecar_path: str = "",
+    income_sidecar_sha256: str = "",
+    income_sidecar_manifest_path: str = "",
+    income_sidecar_manifest_sha256: str = "",
+    income_source_mode: str = "legacy_unverified_global_v0",
+    income_sidecar_required_start: str | None = None,
+    income_sidecar_required_end: str | None = None,
+    income_sidecar_required_history_start: str = "",
+) -> pd.DataFrame:
     """Build growth confirmation features.
 
     Adds columns:
@@ -289,24 +483,54 @@ def build_growth_confirmation_features(df: pd.DataFrame) -> pd.DataFrame:
     # ═══════════════════════════════════════════════════════════════
     # 2. Income — financial features (TTM / YoY)
     # ═══════════════════════════════════════════════════════════════
-    try:
-        inc_raw = _load_income()
-        q_feats = _compute_quarterly_features(inc_raw)
+    from qsys.data.income_sidecar import (
+        INCOME_SOURCE_MODE_AUDITED,
+        INCOME_SOURCE_MODE_LEGACY,
+        normalize_income_feature_source,
+    )
 
-        # PIT merge: quarterly computed features → daily anchor
+    source = normalize_income_feature_source({
+        "mode": income_source_mode,
+        "artifact_path": income_sidecar_path,
+        "artifact_sha256": income_sidecar_sha256,
+        "manifest_path": income_sidecar_manifest_path,
+        "manifest_sha256": income_sidecar_manifest_sha256,
+        "required_history_start": income_sidecar_required_history_start,
+    })
+    if source["mode"] == INCOME_SOURCE_MODE_AUDITED:
+        inc_raw = _load_income(
+            artifact_path=source["artifact_path"],
+            artifact_sha256=source["artifact_sha256"],
+            manifest_path=source["manifest_path"],
+            manifest_sha256=source["manifest_sha256"],
+            required_start=income_sidecar_required_start,
+            required_end=income_sidecar_required_end,
+            required_history_start=source["required_history_start"],
+            required_symbols=set(out["ts_code"].astype(str).unique()),
+        )
+    elif source["mode"] == INCOME_SOURCE_MODE_LEGACY:
+        warnings.warn(
+            "growth confirmation is using legacy_unverified_global_v0 income; "
+            "this source is not eligible for audited PIT certification",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        inc_raw = _load_legacy_unverified_income()
+    else:  # pragma: no cover - normalizer owns the closed mode set.
+        raise ValueError(f"unsupported income source mode: {source['mode']}")
+    q_feats = _compute_quarterly_features(inc_raw)
+
+    for col in [
+        "single_q_revenue_yoy", "ttm_revenue_yoy",
+        "is_profitable_ttm", "gross_margin_delta_yoy",
+    ]:
+        events = _latest_mature_feature_events(q_feats, col)
         inc_merged = _pit_merge(
             out[["ts_code", "_dt"]],
-            q_feats,
+            events[["ts_code", "_ann_dt", col]],
+            allow_exact_matches=(source["mode"] == INCOME_SOURCE_MODE_LEGACY),
         )
-
-        for col in ["single_q_revenue_yoy", "ttm_revenue_yoy",
-                     "is_profitable_ttm", "gross_margin_delta_yoy"]:
-            out[col] = pd.to_numeric(inc_merged[col], errors="coerce")
-    except (FileNotFoundError, Exception) as e:
-        for c in ["single_q_revenue_yoy", "ttm_revenue_yoy",
-                   "is_profitable_ttm", "gross_margin_delta_yoy"]:
-            out[c] = np.nan
-        print(f"  [WARN] Income features unavailable: {e}")
+        out[col] = pd.to_numeric(inc_merged[col], errors="coerce")
 
     # ═══════════════════════════════════════════════════════════════
     # 3. Breakout features (from daily close, no external dependencies)
@@ -347,8 +571,13 @@ def build_growth_confirmation_features(df: pd.DataFrame) -> pd.DataFrame:
 # PIT Sanity Check
 # ═══════════════════════════════════════════════════════════════════
 
-def pit_sanity_check(result: pd.DataFrame, n_sample: int = 20) -> None:
-    """Verify PIT: ann_date <= trade_date for all financial features.
+def pit_sanity_check(
+    result: pd.DataFrame,
+    n_sample: int = 20,
+    *,
+    income_source_mode: str = "legacy_unverified_global_v0",
+) -> None:
+    """Report the selected income mode's feature visibility boundary.
 
     Prints sampled rows with trade_date, ann_date, end_date, and feature values.
     """
@@ -363,7 +592,12 @@ def pit_sanity_check(result: pd.DataFrame, n_sample: int = 20) -> None:
     sample = result.dropna(subset=available).sample(min(n_sample, len(result)))
 
     print(f"\n{'='*60}")
-    print("PIT SANITY CHECK — verifying ann_date <= trade_date")
+    audited = income_source_mode == "audited_sidecar_v1"
+    relation = "<" if audited else "<="
+    print(
+        "PIT SANITY CHECK — income publication_date "
+        f"{relation} feature trade_date ({income_source_mode})"
+    )
     print(f"{'='*60}")
 
     for i, (_, r) in enumerate(sample.iterrows()):
@@ -373,4 +607,7 @@ def pit_sanity_check(result: pd.DataFrame, n_sample: int = 20) -> None:
         line += " | ".join(f"{f}={v}" for f, v in vals.items())
         print(line)
 
-    print("  ✅ PIT check: all sampled features via merge_asof backward => ann_date <= trade_date")
+    print(
+        "  PIT boundary: merge_asof backward with publication_date "
+        f"{relation} trade_date"
+    )

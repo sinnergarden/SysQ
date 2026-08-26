@@ -1,5 +1,6 @@
 import unittest
 from unittest.mock import patch
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -69,6 +70,49 @@ class TestAdapterSemanticFeatures(unittest.TestCase):
         self.assertGreaterEqual(
             (pd.Timestamp("2026-08-07") - pd.Timestamp(start)).days,
             1461,
+        )
+
+    @patch("qsys.data.adapter.build_phase1_features")
+    def test_growth_sidecar_identity_is_forwarded_with_requested_window(
+        self, mock_build
+    ):
+        native_df = self._mock_native_frame()
+        artifact = Path("/tmp/pinned-income.parquet")
+        manifest = Path("/tmp/pinned-income-manifest.json")
+
+        def _return_feature(frame, *, flags):
+            result = frame.copy()
+            result["ttm_revenue_yoy"] = 0.25
+            return result
+
+        mock_build.side_effect = _return_feature
+        adapter = QlibAdapter(
+            income_source_mode="audited_sidecar_v1",
+            income_sidecar_path=artifact,
+            income_sidecar_sha256="a" * 64,
+            income_sidecar_manifest_path=manifest,
+            income_sidecar_manifest_sha256="b" * 64,
+            income_sidecar_required_history_start="2014-03-13",
+        )
+
+        result = adapter._build_semantic_features(
+            native_df,
+            ["ttm_revenue_yoy"],
+            start_time="2026-04-02",
+            end_time="2026-04-03",
+        )
+
+        self.assertEqual(len(result), 2)
+        flags = mock_build.call_args.kwargs["flags"]
+        self.assertEqual(flags["income_sidecar_path"], str(artifact))
+        self.assertEqual(flags["income_sidecar_sha256"], "a" * 64)
+        self.assertEqual(flags["income_sidecar_manifest_path"], str(manifest))
+        self.assertEqual(flags["income_sidecar_manifest_sha256"], "b" * 64)
+        self.assertEqual(flags["income_sidecar_required_start"], "2026-04-02")
+        self.assertEqual(flags["income_sidecar_required_end"], "2026-04-03")
+        self.assertEqual(flags["income_source_mode"], "audited_sidecar_v1")
+        self.assertEqual(
+            flags["income_sidecar_required_history_start"], "2014-03-13"
         )
 
     @patch("qsys.data.adapter.DatasetD")

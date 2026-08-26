@@ -8,6 +8,11 @@ feature_set: v3a_plus_liquidity_financial_rc
 model_version: content_addressed
 signal_version: s180_raw_top10_v1
 
+# Transitional, explicitly unverified compatibility mode. Certification must
+# replace this with audited_sidecar_v1 and bind the built artifact identity.
+income_feature_source:
+  mode: legacy_unverified_global_v0
+
 hypothesis: >
   Rank the current dated PIT CSI1800 snapshot with one strictly PIT-trained
   180-session LightGBM model. This artifact is a research candidate list only;

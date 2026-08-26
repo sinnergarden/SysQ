@@ -23,6 +23,7 @@ from qsys.feature.freshness import (
     profile_shareholder_feature_freshness,
     shareholder_row_freshness_reasons,
 )
+from qsys.data.income_sidecar import normalize_income_feature_source
 from qsys.model.training import TrainingResult
 
 
@@ -517,6 +518,12 @@ class FinancialRCTrainer:
             )
         except ValueError as exc:
             raise FinancialRCTrainingError(str(exc)) from exc
+        try:
+            income_feature_source = normalize_income_feature_source(
+                self.config.get("income_feature_source")
+            )
+        except ValueError as exc:
+            raise FinancialRCTrainingError(str(exc)) from exc
         engine = str(training.get("engine") or "").strip()
         supported_engines = {
             "financial_rc_lightgbm_bundle_v1",  # legacy financial_rc config
@@ -607,11 +614,13 @@ class FinancialRCTrainer:
             "models": parsed_models,
             "feature_availability": feature_availability,
             "shareholder_freshness": shareholder_freshness,
+            "income_feature_source": income_feature_source,
             "config_hash": _canonical_hash(
                 {
                     "training": training,
                     "feature_availability": feature_availability,
                     "shareholder_freshness": shareholder_freshness,
+                    "income_feature_source": income_feature_source,
                 }
             ),
         }
@@ -780,6 +789,18 @@ class FinancialRCTrainer:
         adapter = QlibAdapter(
             qlib_dir=self.project_root / "data" / "qlib_bin",
             raw_dir=self.project_root / "data" / "canonical" / "daily",
+            income_source_mode=settings["income_feature_source"]["mode"],
+            income_sidecar_path=settings["income_feature_source"]["artifact_path"],
+            income_sidecar_sha256=settings["income_feature_source"]["artifact_sha256"],
+            income_sidecar_manifest_path=(
+                settings["income_feature_source"]["manifest_path"]
+            ),
+            income_sidecar_manifest_sha256=(
+                settings["income_feature_source"]["manifest_sha256"]
+            ),
+            income_sidecar_required_history_start=(
+                settings["income_feature_source"]["required_history_start"]
+            ),
         )
         adapter.init_qlib()
         with _project_working_directory(self.project_root):
@@ -1170,6 +1191,7 @@ class FinancialRCTrainer:
                     "shareholder_freshness_contract": settings[
                         "shareholder_freshness"
                     ],
+                    "income_feature_source": settings["income_feature_source"],
                     "shareholder_source_lineage": shareholder_source_lineage[tag],
                     "shareholder_feature_freshness": shareholder_feature_freshness,
                     "metrics": model_metrics,
@@ -1270,6 +1292,7 @@ class FinancialRCTrainer:
                 "prediction_membership_sha256": prediction_sha256,
                 "feature_availability": settings["feature_availability"],
                 "shareholder_freshness": settings["shareholder_freshness"],
+                "income_feature_source": settings["income_feature_source"],
                 "models": bundle_models,
                 "created_at": created_at,
                 "git": git_state,

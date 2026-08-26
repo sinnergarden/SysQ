@@ -155,6 +155,15 @@ class LightGBMSingleLabelGenerator:
     shareholder_holder_sha256: str = ""
     shareholder_top10_path: str = ""
     shareholder_top10_sha256: str = ""
+    # Required when the selected feature list consumes growth-confirmation
+    # income fields.  This is one immutable audited bootstrap artifact, never
+    # an implicit mutable ``data/tushare/income.parquet`` input.
+    income_sidecar_path: str = ""
+    income_sidecar_sha256: str = ""
+    income_sidecar_manifest_path: str = ""
+    income_sidecar_manifest_sha256: str = ""
+    income_source_mode: str = "legacy_unverified_global_v0"
+    income_sidecar_required_history_start: str = ""
     # Optional research-only contract.  When omitted, preserve the historical
     # generator behaviour (including its existing NaN handling).  When set,
     # it is a read-only fail-closed preflight over the raw feature frame; it
@@ -167,6 +176,12 @@ class LightGBMSingleLabelGenerator:
     _call_count: int = field(default=0, repr=False)
     _prediction_membership_sha256: str = field(default="", repr=False, init=False)
     _shareholder_source_lineage: dict[str, dict[str, str]] = field(
+        default_factory=dict, repr=False, init=False
+    )
+    _income_source_lineage: dict[str, dict[str, object]] = field(
+        default_factory=dict, repr=False, init=False
+    )
+    _income_source_contract: dict[str, str] = field(
         default_factory=dict, repr=False, init=False
     )
     _shareholder_freshness_profiles: dict[str, dict[str, object]] = field(
@@ -186,6 +201,7 @@ class LightGBMSingleLabelGenerator:
                 "prediction_universe requires prediction_membership_path"
             )
         self._validate_shareholder_snapshot()
+        self._validate_income_snapshot()
         if self.shareholder_freshness_contract is not None:
             from qsys.feature.freshness import normalise_shareholder_freshness
 
@@ -258,9 +274,66 @@ class LightGBMSingleLabelGenerator:
         self.shareholder_top10_sha256 = lineage["top10_holder_ratio"]["sha256"]
         self._shareholder_source_lineage = lineage
 
+    def _validate_income_snapshot(self) -> None:
+        from qsys.data.income_sidecar import (
+            INCOME_SOURCE_MODE_AUDITED,
+            normalize_income_feature_source,
+            validate_income_sidecar_identity,
+        )
+
+        source = normalize_income_feature_source({
+            "mode": self.income_source_mode,
+            "artifact_path": self.income_sidecar_path,
+            "artifact_sha256": self.income_sidecar_sha256,
+            "manifest_path": self.income_sidecar_manifest_path,
+            "manifest_sha256": self.income_sidecar_manifest_sha256,
+            "required_history_start": self.income_sidecar_required_history_start,
+        })
+        self._income_source_contract = source
+        self.income_source_mode = source["mode"]
+        self.income_sidecar_required_history_start = source[
+            "required_history_start"
+        ]
+        if source["mode"] != INCOME_SOURCE_MODE_AUDITED:
+            return
+
+        identity = validate_income_sidecar_identity(
+            artifact_path=source["artifact_path"],
+            artifact_sha256=source["artifact_sha256"],
+            manifest_path=source["manifest_path"],
+            manifest_sha256=source["manifest_sha256"],
+            required_history_start=source["required_history_start"],
+        )
+        manifest = identity["manifest"]
+        self.income_sidecar_path = identity["artifact_path"]
+        self.income_sidecar_sha256 = identity["artifact_sha256"]
+        self.income_sidecar_manifest_path = identity["manifest_path"]
+        self.income_sidecar_manifest_sha256 = identity["manifest_sha256"]
+        self._income_source_lineage = {
+            "income_sidecar": {
+                "path": self.income_sidecar_path,
+                "sha256": self.income_sidecar_sha256,
+                "manifest_path": self.income_sidecar_manifest_path,
+                "manifest_sha256": self.income_sidecar_manifest_sha256,
+                "artifact_id": manifest["artifact_id"],
+                "source_run_id": manifest["source_evidence"]["run_id"],
+                "terminal_receipt_sha256": manifest["source_evidence"][
+                    "terminal_receipt_sha256"
+                ],
+                "scope_key": manifest["scope"]["scope_key"],
+                "availability_cutoff": manifest["scope"][
+                    "availability_cutoff"
+                ],
+                "transform_contract": manifest["contracts"]["transform"],
+            }
+        }
+
     @property
-    def feature_source_lineage(self) -> dict[str, dict[str, str]]:
-        return dict(self._shareholder_source_lineage)
+    def feature_source_lineage(self) -> dict[str, dict[str, object]]:
+        return {
+            **self._shareholder_source_lineage,
+            **self._income_source_lineage,
+        }
 
     @property
     def shareholder_freshness_lineage(self) -> dict[str, object] | None:
@@ -275,18 +348,31 @@ class LightGBMSingleLabelGenerator:
     @property
     def checkpoint_contract_identity(self) -> dict[str, object]:
         """Contracts that alter the generator's acceptance semantics."""
-        if self.shareholder_freshness_contract is None:
-            return {}
-        return {
-            "shareholder_freshness_contract": self.shareholder_freshness_contract,
+        contracts: dict[str, object] = {
+            "income_feature_source": self._income_source_contract,
         }
+        if self.shareholder_freshness_contract is not None:
+            contracts["shareholder_freshness_contract"] = (
+                self.shareholder_freshness_contract
+            )
+        return contracts
 
     @property
     def checkpoint_input_artifacts(self) -> list[dict[str, str]]:
-        return [
+        artifacts = [
             {"name": name, "sha256": payload["sha256"]}
             for name, payload in sorted(self._shareholder_source_lineage.items())
         ]
+        if self._income_source_lineage:
+            income = self._income_source_lineage["income_sidecar"]
+            artifacts.extend([
+                {"name": "income_sidecar", "sha256": str(income["sha256"])},
+                {
+                    "name": "income_sidecar_manifest",
+                    "sha256": str(income["manifest_sha256"]),
+                },
+            ])
+        return artifacts
 
     @property
     def checkpoint_code_dependencies(self) -> dict[str, Path]:
@@ -300,10 +386,12 @@ class LightGBMSingleLabelGenerator:
         """
         from qsys.data import adapter
         from qsys.feature import builder
+        from qsys.feature.groups import growth_confirmation_v0
         from qsys.feature.groups import value_growth_v3a
+        from qsys.data import income_sidecar
         from qsys.signal.alpha_v1 import training
 
-        return {
+        dependencies = {
             "qsys.data.adapter": Path(adapter.__file__).resolve(),
             "qsys.feature.builder": Path(builder.__file__).resolve(),
             "qsys.feature.groups.value_growth_v3a": Path(
@@ -311,6 +399,14 @@ class LightGBMSingleLabelGenerator:
             ).resolve(),
             "qsys.signal.alpha_v1.training": Path(training.__file__).resolve(),
         }
+        if self._income_source_lineage:
+            dependencies.update({
+                "qsys.data.income_sidecar": Path(income_sidecar.__file__).resolve(),
+                "qsys.feature.groups.growth_confirmation_v0": Path(
+                    growth_confirmation_v0.__file__
+                ).resolve(),
+            })
+        return dependencies
 
     # ═══════════════════════════════════════════════════════════════
     # Per-window cache: content identity, not date range alone.
@@ -371,6 +467,16 @@ class LightGBMSingleLabelGenerator:
             identity["shareholder_freshness_contract"] = (
                 self.shareholder_freshness_contract
             )
+        if self._income_source_lineage:
+            income = self._income_source_lineage["income_sidecar"]
+            identity["income_sidecar_sha256"] = income["sha256"]
+            identity["income_sidecar_manifest_sha256"] = income[
+                "manifest_sha256"
+            ]
+        identity["income_source_mode"] = self.income_source_mode
+        identity["income_required_history_start"] = (
+            self.income_sidecar_required_history_start
+        )
         return identity
 
     def _window_key(self, start: str, end: str, features: list[str]) -> str:
@@ -590,6 +696,18 @@ class LightGBMSingleLabelGenerator:
             QlibAdapter(
                 shareholder_holder_path=self.shareholder_holder_path or None,
                 shareholder_top10_path=self.shareholder_top10_path or None,
+                income_sidecar_path=self.income_sidecar_path or None,
+                income_sidecar_sha256=self.income_sidecar_sha256,
+                income_sidecar_manifest_path=(
+                    self.income_sidecar_manifest_path or None
+                ),
+                income_sidecar_manifest_sha256=(
+                    self.income_sidecar_manifest_sha256
+                ),
+                income_source_mode=self.income_source_mode,
+                income_sidecar_required_history_start=(
+                    self.income_sidecar_required_history_start
+                ),
             ).init_qlib()
             self._qlib_inited = True
 
@@ -659,6 +777,16 @@ class LightGBMSingleLabelGenerator:
         adapter = QlibAdapter(
             shareholder_holder_path=self.shareholder_holder_path or None,
             shareholder_top10_path=self.shareholder_top10_path or None,
+            income_sidecar_path=self.income_sidecar_path or None,
+            income_sidecar_sha256=self.income_sidecar_sha256,
+            income_sidecar_manifest_path=(
+                self.income_sidecar_manifest_path or None
+            ),
+            income_sidecar_manifest_sha256=self.income_sidecar_manifest_sha256,
+            income_source_mode=self.income_source_mode,
+            income_sidecar_required_history_start=(
+                self.income_sidecar_required_history_start
+            ),
         )
 
         # Build features via qlib + phase1 builder
@@ -838,6 +966,16 @@ class LightGBMSingleLabelGenerator:
         raw = QlibAdapter(
             shareholder_holder_path=self.shareholder_holder_path or None,
             shareholder_top10_path=self.shareholder_top10_path or None,
+            income_sidecar_path=self.income_sidecar_path or None,
+            income_sidecar_sha256=self.income_sidecar_sha256,
+            income_sidecar_manifest_path=(
+                self.income_sidecar_manifest_path or None
+            ),
+            income_sidecar_manifest_sha256=self.income_sidecar_manifest_sha256,
+            income_source_mode=self.income_source_mode,
+            income_sidecar_required_history_start=(
+                self.income_sidecar_required_history_start
+            ),
         ).get_features(
             self.prediction_universe,
             clean_features + ["$close"],
