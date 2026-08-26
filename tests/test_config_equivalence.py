@@ -6,7 +6,11 @@ Does NOT depend on settings.yaml (local-only, gitignored).
 """
 from __future__ import annotations
 
+from copy import deepcopy
+from pathlib import Path
 from unittest import TestCase
+
+import yaml
 
 from qsys.config.manager import ConfigManager
 
@@ -156,31 +160,47 @@ class TestHardcodedConfigCompleteness(TestCase):
             )
         )
 
-    def test_legacy_yaml_financial_fields_are_enriched_at_config_boundary(self):
-        legacy = {
-            "collector": {
-                "interfaces": {
-                    "income": {"fields": "ts_code,ann_date,end_date,n_income"},
-                    "balancesheet": {"fields": ["ts_code", "ann_date", "end_date", "total_assets"]},
-                    "cashflow": {"fields": "ts_code,ann_date,end_date,n_cashflow_act"},
-                    "fina_indicator": {"fields": "ts_code,ann_date,end_date,roe"},
-                }
-            }
-        }
+    def test_legacy_financial_fields_canonicalize_to_defaults_and_are_idempotent(self):
+        defaults = _hardcoded_default()
+        default_interfaces = defaults["collector"]["interfaces"]
+        evidence = {"f_ann_date", "report_type", "comp_type", "end_type", "update_flag"}
 
-        enriched = ConfigManager._with_financial_evidence_fields(legacy)
+        for input_type in (str, list):
+            for evidence_state in ("missing", "tail"):
+                legacy = deepcopy(defaults)
+                for endpoint in ("income", "balancesheet", "cashflow", "fina_indicator"):
+                    default_fields = default_interfaces[endpoint]["fields"].split(",")
+                    endpoint_evidence = [field for field in default_fields if field in evidence]
+                    narrow = [field for field in default_fields if field not in evidence]
+                    legacy_fields = [narrow[0], *narrow]
+                    if evidence_state == "tail":
+                        legacy_fields.extend([*endpoint_evidence, endpoint_evidence[0]])
+                    legacy["collector"]["interfaces"][endpoint]["fields"] = (
+                        ",".join(legacy_fields) if input_type is str else legacy_fields
+                    )
 
-        for endpoint in ("income", "balancesheet", "cashflow"):
-            fields = enriched["collector"]["interfaces"][endpoint]["fields"]
-            if isinstance(fields, str):
-                fields = fields.split(",")
-            self.assertTrue(
-                {"f_ann_date", "report_type", "comp_type", "end_type", "update_flag"}
-                .issubset(fields),
-                endpoint,
-            )
-        indicator_fields = enriched["collector"]["interfaces"]["fina_indicator"]["fields"].split(",")
-        self.assertEqual(indicator_fields, ["ts_code", "ann_date", "end_date", "roe", "update_flag"])
+                enriched = ConfigManager._with_financial_evidence_fields(legacy)
+                for endpoint in ("income", "balancesheet", "cashflow", "fina_indicator"):
+                    self.assertEqual(
+                        enriched["collector"]["interfaces"][endpoint]["fields"],
+                        default_interfaces[endpoint]["fields"],
+                        (input_type.__name__, evidence_state, endpoint),
+                    )
+                first_pass = deepcopy(enriched)
+                self.assertEqual(
+                    ConfigManager._with_financial_evidence_fields(enriched),
+                    first_pass,
+                )
+
+    def test_daily_ops_allowlist_includes_collector_config_manager(self):
+        root = Path(__file__).resolve().parents[1]
+        harness_map = yaml.safe_load(
+            (root / "docs" / "requirements" / "harness_map.yaml").read_text()
+        )
+        self.assertIn(
+            "qsys/config/manager.py",
+            harness_map["usecases"]["UC_DAILY_OPS"]["allowed_paths"],
+        )
 
     def test_moneyflow_fields_complete(self):
         fields = self.collector["moneyflow_fields"]

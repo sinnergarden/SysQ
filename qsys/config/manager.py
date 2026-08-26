@@ -237,15 +237,26 @@ class ConfigManager:
                 continue
             fields = item.get("fields")
             if isinstance(fields, str):
-                field_list = [field.strip() for field in fields.split(",") if field.strip()]
-                for field in evidence_fields:
-                    if field not in field_list:
-                        field_list.append(field)
-                item["fields"] = ",".join(field_list)
-            elif isinstance(fields, list):
-                for field in evidence_fields:
-                    if field not in fields:
-                        fields.append(field)
+                raw_fields = fields.split(",")
+            elif isinstance(fields, (list, tuple)):
+                raw_fields = fields
+            else:
+                continue
+            field_list = list(dict.fromkeys(
+                str(field).strip() for field in raw_fields if str(field).strip()
+            ))
+            field_list = [field for field in field_list if field not in evidence_fields]
+            insert_at = (
+                field_list.index("end_date") + 1
+                if "end_date" in field_list
+                else len(field_list)
+            )
+            canonical_fields = (
+                field_list[:insert_at]
+                + list(evidence_fields)
+                + field_list[insert_at:]
+            )
+            item["fields"] = ",".join(canonical_fields)
         return value
 
     @staticmethod
