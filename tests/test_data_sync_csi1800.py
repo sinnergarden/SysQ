@@ -689,6 +689,49 @@ def test_shareholder_history_start_uses_target_and_positive_lookback():
         data_sync._shareholder_required_history_start_date("2026-08-21", 0)
 
 
+def test_data_sync_shareholder_snapshot_bootstrap_is_explicit_offline_only(
+    tmp_path: Path,
+) -> None:
+    data_root = tmp_path / "data"
+    (data_root / "audit/source_runs/source-run").mkdir(parents=True)
+    from qsys.config import cfg
+
+    original_get_path = cfg.get_path
+    with patch.object(
+        cfg,
+        "get_path",
+        side_effect=lambda name: (
+            str(data_root) if name == "root" else original_get_path(name)
+        ),
+    ), patch(
+        "qsys.ops.shareholder_sync.materialize_audited_shareholder_snapshot",
+        return_value={"status": "published", "artifact_id": "snapshot"},
+    ) as materialize, patch.object(
+        sys,
+        "argv",
+        [
+            "scripts/data_sync.py", "--apply",
+            "--build-shareholder-sidecar-from-run-id", "source-run",
+            "--shareholder-sidecar-output-root", "research/source_snapshots/shareholder",
+            "--shareholder-sidecar-scope-key", "csi1800",
+            "--shareholder-sidecar-range-start", "20180101",
+            "--shareholder-sidecar-cutoff", "20260821",
+        ],
+    ):
+        data_sync._main_under_writer_lock(object())
+
+    materialize.assert_called_once_with(
+        terminal_receipt_path=(
+            data_root / "audit/source_runs/source-run/receipt.json"
+        ),
+        source_run_id="source-run",
+        scope_key="csi1800",
+        range_start="20180101",
+        range_end="20260821",
+        output_root=data_root / "research/source_snapshots/shareholder",
+    )
+
+
 def test_csi1800_audit_uses_distinct_target_date_path(tmp_path: Path):
     path = _write_audit(
         tmp_path,

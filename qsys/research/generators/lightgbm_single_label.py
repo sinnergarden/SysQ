@@ -155,6 +155,8 @@ class LightGBMSingleLabelGenerator:
     shareholder_holder_sha256: str = ""
     shareholder_top10_path: str = ""
     shareholder_top10_sha256: str = ""
+    shareholder_manifest_path: str = ""
+    shareholder_manifest_sha256: str = ""
     # Required when the selected feature list consumes growth-confirmation
     # income fields.  This is one immutable audited bootstrap artifact, never
     # an implicit mutable ``data/tushare/income.parquet`` input.
@@ -228,7 +230,11 @@ class LightGBMSingleLabelGenerator:
             "shareholder_top10_path": self.shareholder_top10_path,
             "shareholder_top10_sha256": self.shareholder_top10_sha256,
         }
-        if not any(values.values()):
+        manifest_values = {
+            "shareholder_manifest_path": self.shareholder_manifest_path,
+            "shareholder_manifest_sha256": self.shareholder_manifest_sha256,
+        }
+        if not any((*values.values(), *manifest_values.values())):
             return
         missing = [key for key, value in values.items() if not value]
         if missing:
@@ -272,6 +278,104 @@ class LightGBMSingleLabelGenerator:
         self.shareholder_holder_sha256 = lineage["holder_num"]["sha256"]
         self.shareholder_top10_path = lineage["top10_holder_ratio"]["path"]
         self.shareholder_top10_sha256 = lineage["top10_holder_ratio"]["sha256"]
+        if not any(manifest_values.values()):
+            # Legacy research remains runnable, but without a terminal-backed
+            # manifest this lineage is intentionally not certifiable.
+            self._shareholder_source_lineage = lineage
+            return
+        missing_manifest = [
+            key for key, value in manifest_values.items() if not value
+        ]
+        if missing_manifest:
+            raise ValueError(
+                "shareholder audited snapshot requires manifest path and SHA-256; "
+                f"missing {missing_manifest}"
+            )
+        declared_manifest_sha = self.shareholder_manifest_sha256.lower()
+        if len(declared_manifest_sha) != 64 or any(
+            char not in "0123456789abcdef" for char in declared_manifest_sha
+        ):
+            raise ValueError("shareholder manifest hash must be SHA-256")
+        manifest_path = Path(self.shareholder_manifest_path).expanduser().absolute()
+        if manifest_path.is_symlink() or not manifest_path.is_file():
+            raise ValueError(
+                "shareholder manifest must be an existing regular file: "
+                f"{manifest_path}"
+            )
+        actual_manifest_sha = _sha256_file(manifest_path)
+        if actual_manifest_sha != declared_manifest_sha:
+            raise ValueError("shareholder manifest hash mismatch")
+        if any(Path(item["path"]).parent != manifest_path.parent for item in lineage.values()):
+            raise ValueError("shareholder manifest and artifacts must share one directory")
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError("shareholder manifest is invalid JSON") from exc
+        from qsys.ops.shareholder_sync import (
+            AUDITED_SNAPSHOT_CONTRACT,
+            AUDITED_SNAPSHOT_SCHEMA,
+        )
+
+        immutable = manifest.get("identity") if isinstance(manifest, dict) else None
+        artifacts = manifest.get("artifacts") if isinstance(manifest, dict) else None
+        scope = manifest.get("scope") if isinstance(manifest, dict) else None
+        evidence = manifest.get("source_evidence") if isinstance(manifest, dict) else None
+        canonical_identity = (
+            json.dumps(
+                immutable, indent=2, sort_keys=True, ensure_ascii=False, default=str,
+            ) + "\n"
+        ).encode("utf-8") if isinstance(immutable, dict) else b""
+        if (
+            manifest.get("schema_version") != 2
+            or manifest.get("artifact_type") != AUDITED_SNAPSHOT_SCHEMA
+            or not isinstance(immutable, dict)
+            or immutable.get("schema") != AUDITED_SNAPSHOT_SCHEMA
+            or immutable.get("contract") != AUDITED_SNAPSHOT_CONTRACT
+            or manifest.get("artifact_id")
+            != hashlib.sha256(canonical_identity).hexdigest()
+            or not isinstance(artifacts, dict)
+            or not isinstance(scope, dict)
+            or not isinstance(evidence, dict)
+            or evidence.get("run_id") != immutable.get("source_run_id")
+            or evidence.get("terminal_receipt_sha256")
+            != immutable.get("terminal_receipt_sha256")
+        ):
+            raise ValueError("shareholder manifest contract/identity mismatch")
+        for name in ("holder_num", "top10_holder_ratio"):
+            spec = artifacts.get(name)
+            if (
+                not isinstance(spec, dict)
+                or spec.get("path") != Path(lineage[name]["path"]).name
+                or spec.get("sha256") != lineage[name]["sha256"]
+            ):
+                raise ValueError(
+                    f"shareholder manifest artifact identity mismatch: {name}"
+                )
+        if any(
+            scope.get(key) != immutable.get(key)
+            for key in (
+                "scope_key", "range_start", "range_end", "symbol_count",
+                "symbols_sha256",
+            )
+        ):
+            raise ValueError("shareholder manifest scope identity mismatch")
+        self.shareholder_manifest_path = str(manifest_path)
+        self.shareholder_manifest_sha256 = actual_manifest_sha
+        lineage["shareholder_sidecar"] = {
+            "path": self.shareholder_manifest_path,
+            "sha256": self.shareholder_manifest_sha256,
+            "artifact_id": str(manifest["artifact_id"]),
+            "source_run_id": str(evidence["run_id"]),
+            "terminal_receipt_sha256": str(
+                evidence["terminal_receipt_sha256"]
+            ),
+            "scope_key": str(scope["scope_key"]),
+            "range_start": str(scope["range_start"]),
+            "range_end": str(scope["range_end"]),
+            "symbol_count": int(scope["symbol_count"]),
+            "symbols_sha256": str(scope["symbols_sha256"]),
+            "transform_contract": AUDITED_SNAPSHOT_CONTRACT,
+        }
         self._shareholder_source_lineage = lineage
 
     def _validate_income_snapshot(self) -> None:
@@ -355,6 +459,14 @@ class LightGBMSingleLabelGenerator:
             contracts["shareholder_freshness_contract"] = (
                 self.shareholder_freshness_contract
             )
+        if "shareholder_sidecar" in self._shareholder_source_lineage:
+            contracts["shareholder_sidecar"] = {
+                key: value
+                for key, value in self._shareholder_source_lineage[
+                    "shareholder_sidecar"
+                ].items()
+                if key not in {"path"}
+            }
         return contracts
 
     @property
@@ -467,6 +579,13 @@ class LightGBMSingleLabelGenerator:
             identity["shareholder_freshness_contract"] = (
                 self.shareholder_freshness_contract
             )
+        if self._shareholder_source_lineage:
+            identity["shareholder_source_artifacts"] = {
+                name: str(payload["sha256"])
+                for name, payload in sorted(
+                    self._shareholder_source_lineage.items()
+                )
+            }
         if self._income_source_lineage:
             income = self._income_source_lineage["income_sidecar"]
             identity["income_sidecar_sha256"] = income["sha256"]

@@ -388,7 +388,94 @@ def _main_under_writer_lock(writer_lock=None):
             "scope (YYYYMMDD); never inferred from a rolling window"
         ),
     )
+    p.add_argument(
+        "--build-shareholder-sidecar-from-run-id",
+        default=None,
+        metavar="RUN_ID",
+        help=(
+            "Explicit offline bootstrap: materialize an immutable audited "
+            "shareholder snapshot from one trusted source run; never runs during "
+            "normal daily sync"
+        ),
+    )
+    p.add_argument(
+        "--shareholder-sidecar-output-root",
+        default=None,
+        help="Explicit artifact root for --build-shareholder-sidecar-from-run-id",
+    )
+    p.add_argument(
+        "--shareholder-sidecar-scope-key",
+        default=None,
+        help="Exact trusted shareholder source scope (for example csi1800)",
+    )
+    p.add_argument(
+        "--shareholder-sidecar-range-start",
+        default=None,
+        help="Exact shareholder announcement-date history start (YYYYMMDD)",
+    )
+    p.add_argument(
+        "--shareholder-sidecar-cutoff",
+        default=None,
+        help="Exact shareholder announcement-date history end (YYYYMMDD)",
+    )
     args = p.parse_args()
+    if args.build_income_sidecar_from_run_id and args.build_shareholder_sidecar_from_run_id:
+        p.error("income and shareholder sidecar bootstrap modes are mutually exclusive")
+    if args.build_shareholder_sidecar_from_run_id:
+        if not args.apply:
+            p.error("--build-shareholder-sidecar-from-run-id requires --apply")
+        required = {
+            "--shareholder-sidecar-output-root": args.shareholder_sidecar_output_root,
+            "--shareholder-sidecar-scope-key": args.shareholder_sidecar_scope_key,
+            "--shareholder-sidecar-range-start": args.shareholder_sidecar_range_start,
+            "--shareholder-sidecar-cutoff": args.shareholder_sidecar_cutoff,
+        }
+        missing = [name for name, value in required.items() if not value]
+        if missing:
+            p.error(
+                "--build-shareholder-sidecar-from-run-id missing required arguments: "
+                + ", ".join(missing)
+            )
+        conflicting = {
+            "--config": args.config,
+            "--universe": args.universe,
+            "--target-date": args.target_date,
+            "--repair-start-date": args.repair_start_date,
+            "--resume-from-run-id": args.resume_from_run_id,
+            "--force-fetch": args.force_fetch,
+        }
+        used_conflicts = [name for name, value in conflicting.items() if value]
+        if used_conflicts:
+            p.error(
+                "shareholder sidecar bootstrap cannot run normal sync options: "
+                + ", ".join(used_conflicts)
+            )
+        if writer_lock is None:
+            raise RuntimeError(
+                "shareholder sidecar bootstrap requires the data-root writer lock"
+            )
+        from qsys.config import cfg
+        from qsys.data.source_audit import resolve_under, validate_run_id
+        from qsys.ops.shareholder_sync import materialize_audited_shareholder_snapshot
+
+        data_root = Path(cfg.get_path("root")).resolve()
+        source_run_id = validate_run_id(args.build_shareholder_sidecar_from_run_id)
+        output_root = Path(args.shareholder_sidecar_output_root).expanduser()
+        if not output_root.is_absolute():
+            output_root = data_root / output_root
+        output_root = resolve_under(data_root, output_root)
+        result = materialize_audited_shareholder_snapshot(
+            terminal_receipt_path=(
+                data_root / "audit" / "source_runs" / source_run_id / "receipt.json"
+            ),
+            source_run_id=source_run_id,
+            scope_key=args.shareholder_sidecar_scope_key,
+            range_start=args.shareholder_sidecar_range_start,
+            range_end=args.shareholder_sidecar_cutoff,
+            output_root=output_root,
+        )
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return
     if args.build_income_sidecar_from_run_id:
         if not args.apply:
             p.error("--build-income-sidecar-from-run-id requires --apply")

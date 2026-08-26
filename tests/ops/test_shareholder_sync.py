@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,10 +13,12 @@ import pytest
 from qsys.data.collector import TushareCollector
 from qsys.data.source_audit import SourceAuditStore
 from qsys.ops.shareholder_sync import (
+    _load_audited_shareholder_payload,
     _calendar_year_chunks,
     _paged_call,
     fetch_shareholder_backfill,
     inspect_shareholder_sidecar_health,
+    materialize_audited_shareholder_snapshot,
     normalise_holder_rows,
     normalise_top10_rows,
     run_shareholder_history_repair,
@@ -121,6 +124,158 @@ def test_historical_shareholder_pages_emit_exact_durable_receipts(tmp_path: Path
     assert top10_scope["request_variant"] == "announcement_date:20200430:offset=0"
     assert ("shareholder_holdernumber", "holder_num") in links
     assert ("shareholder_top10", "hold_ratio") in links
+
+
+def test_materializes_terminal_backed_immutable_shareholder_snapshot(
+    tmp_path: Path,
+) -> None:
+    holder = pd.DataFrame({
+        "ts_code": ["000001.SZ", "600000.SH"],
+        "ann_date": ["20200430", "20200430"],
+        "end_date": ["20191231", "20191231"], "holder_num": [1000, 2000],
+    })
+    top10 = pd.DataFrame({
+        "ts_code": ["000001.SZ", "000001.SZ", "600000.SH"],
+        "ann_date": ["20200430", "20200430", "20200430"],
+        "end_date": ["20191231", "20191231", "20191231"],
+        "holder_name": ["A", "B", "outside"],
+        "hold_ratio": [10.0, 5.0, 50.0],
+    })
+    collector = TushareCollector.__new__(TushareCollector)
+    collector.max_retries = 1
+    collector._collector_interfaces = {}
+    collector.pro = SimpleNamespace(
+        stk_holdernumber=lambda **_kwargs: holder.copy(),
+        top10_holders=lambda **kwargs: (
+            top10.copy() if kwargs.get("ann_date") == "20200430" else pd.DataFrame()
+        ),
+    )
+    data_root = tmp_path / "data"
+    audit = SourceAuditStore(data_root / "audit" / "audit.db")
+    run_id = "shareholder-materialize"
+    audit.append_event(run_id, "run_started", {
+        "entrypoint": "scripts/data_sync.py", "universe": "csi1800",
+        "target_date": "20200430", "range_start": "20200429",
+    })
+    fetch_shareholder_backfill(
+        collector, start_date="2020-04-29", end_date="2020-04-30",
+        run_id=run_id, audit_store=audit, scope_key="csi1800",
+        universe="csi1800", evidence_symbols=["000001.SZ", "000002.SZ"],
+    )
+    terminal = audit.finalize_run(
+        run_id=run_id, source="tushare", scope_key="csi1800",
+        range_start="20200429", range_end="20200430",
+        fields=("ann_date", "holder_num", "hold_ratio"),
+        gates={name: True for name in (
+            "fetch", "raw_payloads", "canonical_commit", "qlib_readback",
+            "readiness", "contiguous_range",
+        )},
+        receipt_root=data_root / "audit" / "source_runs",
+        allow_initial_history=True,
+    )
+    result = materialize_audited_shareholder_snapshot(
+        terminal_receipt_path=terminal["receipt_path"], source_run_id=run_id,
+        scope_key="csi1800", range_start="20200429", range_end="20200430",
+        output_root=data_root / "research" / "source_snapshots" / "shareholder",
+    )
+    assert result["status"] == "published"
+    manifest = json.loads(Path(result["manifest_path"]).read_text())
+    assert manifest["schema_version"] == 2
+    assert manifest["artifact_type"] == "audited_shareholder_pit_sidecars_v2"
+    assert manifest["source_evidence"]["terminal_receipt_sha256"] == terminal[
+        "terminal_receipt_sha256"
+    ]
+    assert manifest["scope"]["symbols"] == ["000001.SZ", "000002.SZ"]
+    assert manifest["projection"]["excluded_outside_union_rows"] == 2
+    projected = pd.read_parquet(result["top10_path"])
+    assert projected.loc[0, "top10_ratio"] == 15.0
+    assert set(projected["inst"]) == {"000001.SZ"}
+    projected_holder = pd.read_parquet(result["holder_path"])
+    assert set(projected_holder["inst"]) == {"000001.SZ"}
+    reused = materialize_audited_shareholder_snapshot(
+        terminal_receipt_path=terminal["receipt_path"], source_run_id=run_id,
+        scope_key="csi1800", range_start="20200429", range_end="20200430",
+        output_root=data_root / "research" / "source_snapshots" / "shareholder",
+    )
+    assert reused["status"] == "reused"
+
+    terminal_path = Path(terminal["receipt_path"])
+    trusted_terminal_bytes = terminal_path.read_bytes()
+    untrusted_terminal = json.loads(trusted_terminal_bytes)
+    untrusted_terminal["trust_state"] = "untrusted"
+    terminal_path.write_text(json.dumps(untrusted_terminal), encoding="utf-8")
+    with pytest.raises(RuntimeError, match="terminal receipt is not trusted"):
+        materialize_audited_shareholder_snapshot(
+            terminal_receipt_path=terminal_path, source_run_id=run_id,
+            scope_key="csi1800", range_start="20200429", range_end="20200430",
+            output_root=data_root / "untrusted",
+        )
+    terminal_path.write_bytes(trusted_terminal_bytes)
+    with pytest.raises(RuntimeError, match="watermark does not cover scope"):
+        materialize_audited_shareholder_snapshot(
+            terminal_receipt_path=terminal_path, source_run_id=run_id,
+            scope_key="csi1800", range_start="20200428", range_end="20200430",
+            output_root=data_root / "scope-gap",
+        )
+
+    payload_path = next(
+        data_root / row[0]
+        for row in sqlite3.connect(data_root / "audit" / "audit.db").execute(
+            "SELECT payload_path FROM fetch_receipts WHERE run_id=? AND status='success'",
+            (run_id,),
+        )
+    )
+    payload_path.write_bytes(b"tampered")
+    with pytest.raises(RuntimeError, match="payload sha256 mismatch"):
+        materialize_audited_shareholder_snapshot(
+            terminal_receipt_path=terminal["receipt_path"], source_run_id=run_id,
+            scope_key="csi1800", range_start="20200429", range_end="20200430",
+            output_root=data_root / "other",
+        )
+
+
+def test_shareholder_payload_requires_canonical_receipt_layout(tmp_path: Path) -> None:
+    data_root = tmp_path / "data"
+    receipt_id = "a" * 32
+    run_id = "source-run"
+    endpoint = "stk_holdernumber"
+    canonical = (
+        data_root / "raw" / "evidence" / "tushare" / endpoint
+        / run_id / f"{receipt_id}.parquet"
+    )
+    canonical.parent.mkdir(parents=True)
+    pd.DataFrame({
+        "ts_code": ["000001.SZ"], "ann_date": ["20200430"],
+        "end_date": ["20191231"], "holder_num": [1000],
+    }).to_parquet(canonical, index=False)
+    fetch = {
+        "status": "success", "payload_kind": "raw_supplier",
+        "source": "tushare", "endpoint": endpoint, "run_id": run_id,
+        "receipt_id": receipt_id,
+        "payload_path": canonical.relative_to(data_root).as_posix(),
+        "payload_sha256": hashlib.sha256(canonical.read_bytes()).hexdigest(),
+        "requested_scope": {"date_start": "20200401", "date_end": "20200430"},
+    }
+    frame, stats = _load_audited_shareholder_payload(
+        fetch, data_root=data_root, endpoint=endpoint,
+        expected_symbols={"000001.SZ"}, range_start="20200401",
+        range_end="20200430",
+    )
+    assert len(frame) == 1
+    assert stats["excluded_outside_union_rows"] == 0
+
+    for bad_path in (
+        f"raw/evidence/tushare/top10_holders/{run_id}/{receipt_id}.parquet",
+        f"raw/evidence/tushare/{endpoint}/other-run/{receipt_id}.parquet",
+        "../outside.parquet",
+    ):
+        with pytest.raises(RuntimeError, match="identity|canonical evidence layout"):
+            _load_audited_shareholder_payload(
+                {**fetch, "payload_path": bad_path},
+                data_root=data_root, endpoint=endpoint,
+                expected_symbols={"000001.SZ"}, range_start="20200401",
+                range_end="20200430",
+            )
 
 
 def test_audited_top10_response_outside_requested_announcement_date_fails_closed(

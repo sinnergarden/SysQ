@@ -374,12 +374,19 @@ usecases:
       - tests/test_source_audit.py
       - tests/test_pit_baseline_certification.py
       - tests/test_raw_to_qlib_coverage.py
+      - tests/ops/test_shareholder_sync.py
+      - tests/research/test_lightgbm_window_cache_identity.py
+      - tests/test_data_sync_csi1800.py
     allowed_paths:
       - scripts/research/certify_pit_baseline.py
       - scripts/ops/audit_raw_to_qlib_coverage.py
       - qsys/pit_certification.py
       - qsys/pit_datapack.py
       - qsys/ops/data_coverage.py
+      - qsys/ops/shareholder_sync.py
+      - qsys/research/generators/lightgbm_single_label.py
+      - qsys/research/matrix_job.py
+      - scripts/data_sync.py
       - configs/audit/csi1800_s180_baseline_v1_r1.yaml
       - configs/audit/feature_dependencies/v3a_plus_liquidity_financial_rc_v1.yaml
       - docs/requirements/
@@ -387,9 +394,11 @@ usecases:
       - docs/ops/DAILY_OPS_SOP.md
       - tests/test_pit_baseline_certification.py
       - tests/test_raw_to_qlib_coverage.py
+      - tests/ops/test_shareholder_sync.py
+      - tests/research/test_lightgbm_window_cache_identity.py
+      - tests/test_data_sync_csi1800.py
       - .claude/skills/sysq-dev/SKILL.md
     forbidden_paths:
-      - scripts/data_sync.py
       - scripts/run_daily.py
       - scripts/run_daily_batch.py
       - qsys/ops/daily_runner.py
