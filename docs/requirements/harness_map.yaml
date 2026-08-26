@@ -345,6 +345,8 @@ usecases:
       review: sysq-review
     entrypoints:
       - scripts/research/certify_pit_baseline.py
+    supporting_tools:
+      - scripts/ops/audit_raw_to_qlib_coverage.py
     artifacts:
       - data/audit/audit.db
       - data/audit/source_runs/{run_id}/receipt.json
@@ -357,20 +359,26 @@ usecases:
       - <explicit-datapack-output>/checksums.sha256
     checks:
       - harness/checks/check_usecase_registry.py
+      - harness/checks/check_scripts_entrypoints.py
       - harness/checks/check_no_latest_model_resolution.py
       - harness/checks/check_model_resolution_boundary.py
       - tests/test_source_audit.py
       - tests/test_pit_baseline_certification.py
+      - tests/test_raw_to_qlib_coverage.py
     allowed_paths:
       - scripts/research/certify_pit_baseline.py
+      - scripts/ops/audit_raw_to_qlib_coverage.py
       - qsys/pit_certification.py
       - qsys/pit_datapack.py
+      - qsys/ops/data_coverage.py
       - configs/audit/csi1800_s180_baseline_v1_r1.yaml
       - configs/audit/feature_dependencies/v3a_plus_liquidity_financial_rc_v1.yaml
       - docs/requirements/
       - docs/CONTRACTS.md
       - docs/ops/DAILY_OPS_SOP.md
       - tests/test_pit_baseline_certification.py
+      - tests/test_raw_to_qlib_coverage.py
+      - .claude/skills/sysq-dev/SKILL.md
     forbidden_paths:
       - scripts/data_sync.py
       - scripts/run_daily.py

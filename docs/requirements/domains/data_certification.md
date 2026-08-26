@@ -28,6 +28,7 @@ Qlib readback 和 terminal watermark 做交集验证，产出不可变 certifica
 包含：
 
 - 只读解析 `data/audit/audit.db`、per-run immutable receipt 和后续 coverage exception Parquet；
+- 使用 bounded、gap-only supporting audit 离线检查既有 historical raw/Qlib 覆盖；
 - 按 source × field × instrument × date 求 evidence 交集；
 - 区分 `published_at`、`observed_at`、`ingested_at`，未知发布时间保持 null；
 - 拒绝 gap、缺 endpoint capability、缺 terminal receipt 回链或 legacy/untrusted evidence；
@@ -65,6 +66,16 @@ Qlib readback 和 terminal watermark 做交集验证，产出不可变 certifica
 - `scripts/research/certify_pit_baseline.py`（已实现，只读）。
 - 同一入口的 `--export-datapack-from` / `--verify-datapack` 模式。
 
+只读 supporting tool：
+
+- `scripts/ops/audit_raw_to_qlib_coverage.py`。historical mode 只消费本地 raw/Qlib
+  与显式 `--suspension-evidence` trusted SourceAudit terminal receipt；不得调用 Tushare。
+  receipt 的 hash/run/scope/range 必须回链 `audit.db` trusted watermark，并以
+  success/empty 单-symbol shards 完整覆盖精确审计区间；success payload 的 hash、symbol
+  与事件范围须离线复核。该工具只保留
+  actionable gap details，OK 单元格仅累计 counters，并以 `--max-gap-details` 硬上限
+  fail closed。该工具不替代 canonical certifier，也不得修改被审计数据。
+
 该 entrypoint 必须只读，不得 import/call daily fetch、repair、research runner 或 production
 runner。daily evidence 仍由 `UC_DAILY_OPS` 的既有 entrypoint 生产。
 
@@ -79,8 +90,10 @@ runner。daily evidence 仍由 `UC_DAILY_OPS` 的既有 entrypoint 生产。
 ### Required Checks
 
 - `harness/checks/check_usecase_registry.py`
+- `harness/checks/check_scripts_entrypoints.py`
 - `tests/test_source_audit.py`
 - `tests/test_pit_baseline_certification.py`
+- `tests/test_raw_to_qlib_coverage.py`
 
 ### Execution Guidance For Future Audit Tasks
 
@@ -110,14 +123,18 @@ reviewer_agent
 ### Allowed Paths
 
 - `scripts/research/certify_pit_baseline.py`
+- `scripts/ops/audit_raw_to_qlib_coverage.py`
 - `qsys/pit_certification.py`
 - `qsys/pit_datapack.py`
+- `qsys/ops/data_coverage.py`
 - `configs/audit/csi1800_s180_baseline_v1_r1.yaml`
 - `configs/audit/feature_dependencies/v3a_plus_liquidity_financial_rc_v1.yaml`
 - `docs/requirements/`
 - `docs/CONTRACTS.md`
 - `docs/ops/DAILY_OPS_SOP.md`
 - `tests/test_pit_baseline_certification.py`
+- `tests/test_raw_to_qlib_coverage.py`
+- `.claude/skills/sysq-dev/SKILL.md`
 
 ### Forbidden Paths
 
