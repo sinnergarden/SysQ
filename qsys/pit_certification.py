@@ -47,6 +47,9 @@ FIELD_ALIASES = {
     "rzye": "margin_balance", "rzmre": "margin_buy_amount",
     "rzche": "margin_repay_amount",
 }
+_NONCANONICAL_SIDECAR_DATASET_ALIASES = frozenset({
+    "income", "shareholder", "holder_num", "top10_holder_ratio",
+})
 REQUIRED_TERMINAL_GATES = frozenset(
     {"fetch", "raw_payloads", "canonical_commit", "qlib_readback", "readiness", "contiguous_range"}
 )
@@ -401,8 +404,21 @@ def _mutation_candidate_indices(
         or not fields
     ):
         return [], True
+    if any(str(value) != str(value).strip() for value in scalar_values):
+        return [], True
+    symbol = str(mutation.get("symbol") or "")
+    if (
+        symbol != symbol.upper()
+        or Path(symbol).name != symbol
+        or not all(char.isalnum() or char in "._-" for char in symbol)
+    ):
+        return [], True
+    if str(mutation.get("dataset")) in _NONCANONICAL_SIDECAR_DATASET_ALIASES:
+        return [], True
     normalized_fields = {normalize_field(field) for field in fields}
-    if None in normalized_fields:
+    if None in normalized_fields or any(
+        str(field) != str(field).strip() for field in fields
+    ):
         return [], True
     try:
         if _normal_date(mutation["date_start"]) > _normal_date(mutation["date_end"]):
@@ -830,11 +846,19 @@ def _aware_utc(value: Any) -> datetime | None:
 
 def _proof_accounts_mutation(
     proof: Mapping[str, Any], mutation: Mapping[str, Any],
+    *, required_sidecar_identity: Mapping[str, Any] | None = None,
 ) -> bool:
     watermark = proof.get("watermark")
     if not isinstance(watermark, Mapping) or not _range_covers(
         watermark.get("range_start"), watermark.get("trusted_through"),
         mutation.get("date_start"), mutation.get("date_end"),
+    ):
+        return False
+    if required_sidecar_identity is not None and (
+        str(watermark.get("run_id") or "")
+        != str(required_sidecar_identity.get("source_run_id") or "")
+        or str(watermark.get("terminal_receipt_sha256") or "")
+        != str(required_sidecar_identity.get("terminal_receipt_sha256") or "")
     ):
         return False
     watermark_time = _aware_utc(watermark.get("updated_at"))
@@ -844,6 +868,19 @@ def _proof_accounts_mutation(
         and mutation_time is not None
         and watermark_time >= mutation_time
     )
+
+
+def _sidecar_identity_for_scope(
+    scope: Mapping[str, Any], consumed_sidecars: Mapping[str, Any],
+) -> Mapping[str, Any] | None:
+    dataset = str(scope.get("dataset") or "")
+    if dataset == "income_sidecar":
+        value = consumed_sidecars.get("income")
+        return value if isinstance(value, Mapping) else None
+    if dataset in {"shareholder_holdernumber", "shareholder_top10"}:
+        value = consumed_sidecars.get("shareholder")
+        return value if isinstance(value, Mapping) else None
+    return None
 
 
 def _artifact_identities(project_root: Path, request: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, Path]]:
@@ -914,7 +951,7 @@ def _validate_cross_artifact_lineage(
     paths: Mapping[str, Path], research_config: Mapping[str, Any],
     registry: Mapping[str, Any], dependencies: Mapping[str, Any],
     checkpoint_scope: Mapping[str, Any],
-) -> None:
+) -> dict[str, Any]:
     signal = json.loads(paths["signal_manifest"].read_text(encoding="utf-8"))
     backtest = json.loads(paths["backtest_manifest"].read_text(encoding="utf-8"))
     universe = json.loads(paths["universe_manifest"].read_text(encoding="utf-8"))
@@ -1004,6 +1041,342 @@ def _validate_cross_artifact_lineage(
             signal_artifact = _verify_identity(project, lineage, f"{lineage_name} signal sidecar")
             if config_artifact != signal_artifact or config_sha != lineage.get("sha256"):
                 raise CertificationError(f"shareholder sidecar lineage mismatch: {lineage_name}")
+    return {
+        "generator_params": dict(generator_params),
+        "feature_source_lineage": dict(feature_lineage),
+        "dependency_datasets": sorted(dependency_datasets),
+    }
+
+
+def _sidecar_watermark_backlink(
+    *, identity: Mapping[str, Any], evidence: Mapping[str, Any],
+    expected_scope_key: str,
+) -> None:
+    run_id = str(identity.get("source_run_id") or "")
+    terminal_sha = str(identity.get("terminal_receipt_sha256") or "")
+    range_start = _normal_date(identity.get("range_start"))
+    range_end = _normal_date(identity.get("range_end"))
+    if run_id not in set(evidence.get("selected_evidence_run_ids") or []):
+        raise CertificationError("consumed sidecar source run was not selected")
+    matching = [
+        row for row in (evidence.get("tables") or {}).get("trusted_watermarks") or []
+        if isinstance(row, Mapping)
+        and row.get("source") == "tushare"
+        and str(row.get("run_id") or "") == run_id
+        and str(row.get("terminal_receipt_sha256") or "") == terminal_sha
+        and str(row.get("scope_key") or "") == expected_scope_key
+        and _normal_date(row.get("range_start")) <= range_start
+        and _normal_date(row.get("range_end") or row.get("trusted_through")) >= range_end
+        and _normal_date(row.get("trusted_through")) >= range_end
+    ]
+    if not matching:
+        raise CertificationError("consumed sidecar terminal watermark backlink missing")
+
+
+def _request_identity_spec(value: Any, *, label: str) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping):
+        raise CertificationError(f"consumed sidecar identity missing: {label}")
+    return value
+
+
+def _validate_income_consumed_sidecar(
+    *, project: Path, spec: Mapping[str, Any], generator_params: Mapping[str, Any],
+    feature_lineage: Mapping[str, Any], request_scope_key: str,
+    consumed_symbols: Sequence[str], consumed_start: str, consumed_end: str,
+    evidence: Mapping[str, Any],
+) -> dict[str, Any]:
+    from qsys.data.income_sidecar import (
+        INCOME_SOURCE_MODE_AUDITED,
+        IncomeSidecarError,
+        validate_income_sidecar_identity,
+    )
+
+    artifact_spec = _request_identity_spec(spec.get("artifact"), label="income artifact")
+    manifest_spec = _request_identity_spec(spec.get("manifest"), label="income manifest")
+    artifact = _verify_identity(project, artifact_spec, "income request sidecar")
+    manifest_path = _verify_identity(project, manifest_spec, "income request manifest")
+    config_values = {
+        "artifact": (
+            generator_params.get("income_sidecar_path"),
+            generator_params.get("income_sidecar_sha256"),
+        ),
+        "manifest": (
+            generator_params.get("income_sidecar_manifest_path"),
+            generator_params.get("income_sidecar_manifest_sha256"),
+        ),
+    }
+    if generator_params.get("income_source_mode") != INCOME_SOURCE_MODE_AUDITED:
+        raise CertificationError("certified income sidecar requires audited generator mode")
+    for name, (path_value, digest) in config_values.items():
+        config_path = _verify_identity(
+            project, {"path": path_value, "sha256": digest},
+            f"income config {name}",
+        )
+        expected_path = artifact if name == "artifact" else manifest_path
+        expected_sha = artifact_spec["sha256"] if name == "artifact" else manifest_spec["sha256"]
+        if config_path != expected_path or str(digest) != str(expected_sha):
+            raise CertificationError(f"income request/config identity mismatch: {name}")
+    required_history_start = str(spec.get("required_history_start") or "")
+    if (
+        not required_history_start
+        or str(generator_params.get("income_sidecar_required_history_start") or "")
+        != required_history_start
+    ):
+        raise CertificationError("income required_history_start lineage mismatch")
+    try:
+        validated = validate_income_sidecar_identity(
+            artifact_path=artifact,
+            artifact_sha256=str(artifact_spec["sha256"]),
+            manifest_path=manifest_path,
+            manifest_sha256=str(manifest_spec["sha256"]),
+            required_start=consumed_start,
+            required_end=consumed_end,
+            required_history_start=required_history_start,
+            required_symbols=consumed_symbols,
+        )
+    except (IncomeSidecarError, ValueError) as exc:
+        raise CertificationError(f"income consumed sidecar invalid: {exc}") from exc
+    manifest = validated["manifest"]
+    normalized = {
+        "kind": "income",
+        "artifact": {
+            "path": artifact.relative_to(project).as_posix(),
+            "sha256": str(artifact_spec["sha256"]),
+        },
+        "manifest": {
+            "path": manifest_path.relative_to(project).as_posix(),
+            "sha256": str(manifest_spec["sha256"]),
+        },
+        "artifact_id": str(manifest["artifact_id"]),
+        "source_run_id": str(manifest["source_evidence"]["run_id"]),
+        "terminal_receipt_sha256": str(
+            manifest["source_evidence"]["terminal_receipt_sha256"]
+        ),
+        "scope_key": str(manifest["scope"]["scope_key"]),
+        "range_start": str(manifest["scope"]["range_start"]),
+        "range_end": str(manifest["scope"]["range_end"]),
+        "availability_cutoff": str(manifest["scope"]["availability_cutoff"]),
+        "required_history_start": str(manifest["scope"]["required_history_start"]),
+        "transform_contract": str(manifest["contracts"]["transform"]),
+        "financial_availability_contract": str(
+            manifest["contracts"]["financial_availability"]
+        ),
+        "availability_rule": str(manifest["contracts"]["availability_rule"]),
+        "symbol_count": int(manifest["scope"]["symbol_count"]),
+        "symbols_sha256": str(manifest["scope"]["symbols_sha256"]),
+    }
+    declared_semantics = {
+        key: spec.get(key) for key in normalized
+        if key not in {"kind", "artifact", "manifest"}
+    }
+    expected_semantics = {
+        key: value for key, value in normalized.items()
+        if key not in {"kind", "artifact", "manifest"}
+    }
+    if declared_semantics != expected_semantics:
+        raise CertificationError("income request/manifest semantic identity mismatch")
+    lineage = feature_lineage.get("income_sidecar")
+    if not isinstance(lineage, Mapping):
+        raise CertificationError("income signal feature_source_lineage missing")
+    signal_expected = {
+        "path": str(artifact.resolve()),
+        "sha256": normalized["artifact"]["sha256"],
+        "manifest_path": str(manifest_path.resolve()),
+        "manifest_sha256": normalized["manifest"]["sha256"],
+        **expected_semantics,
+    }
+    if dict(lineage) != signal_expected:
+        raise CertificationError("income signal sidecar lineage mismatch")
+    if normalized["scope_key"] != request_scope_key:
+        raise CertificationError("income sidecar scope_key mismatch")
+    _sidecar_watermark_backlink(
+        identity=normalized, evidence=evidence, expected_scope_key=request_scope_key,
+    )
+    return normalized
+
+
+def _validate_shareholder_consumed_sidecar(
+    *, project: Path, spec: Mapping[str, Any], generator_params: Mapping[str, Any],
+    feature_lineage: Mapping[str, Any], request_scope_key: str,
+    consumed_symbols: Sequence[str], consumed_start: str, consumed_end: str,
+    evidence: Mapping[str, Any],
+) -> dict[str, Any]:
+    from qsys.ops.shareholder_sync import (
+        AUDITED_SNAPSHOT_CONTRACT,
+        AUDITED_SNAPSHOT_SCHEMA,
+    )
+
+    names = ("holder_num", "top10_holder_ratio", "manifest")
+    request_specs = {
+        name: _request_identity_spec(spec.get(name), label=f"shareholder {name}")
+        for name in names
+    }
+    paths = {
+        name: _verify_identity(project, request_specs[name], f"shareholder request {name}")
+        for name in names
+    }
+    if len({path.parent for path in paths.values()}) != 1:
+        raise CertificationError("shareholder artifacts and manifest must share one directory")
+    config_keys = {
+        "holder_num": ("shareholder_holder_path", "shareholder_holder_sha256"),
+        "top10_holder_ratio": ("shareholder_top10_path", "shareholder_top10_sha256"),
+        "manifest": ("shareholder_manifest_path", "shareholder_manifest_sha256"),
+    }
+    for name, (path_key, sha_key) in config_keys.items():
+        config_path = _verify_identity(
+            project,
+            {"path": generator_params.get(path_key), "sha256": generator_params.get(sha_key)},
+            f"shareholder config {name}",
+        )
+        if (
+            config_path != paths[name]
+            or str(generator_params.get(sha_key) or "") != str(request_specs[name]["sha256"])
+        ):
+            raise CertificationError(f"shareholder request/config identity mismatch: {name}")
+    try:
+        manifest = json.loads(paths["manifest"].read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise CertificationError("shareholder consumed manifest is invalid JSON") from exc
+    identity = manifest.get("identity") if isinstance(manifest, dict) else None
+    artifacts = manifest.get("artifacts") if isinstance(manifest, dict) else None
+    scope = manifest.get("scope") if isinstance(manifest, dict) else None
+    source = manifest.get("source_evidence") if isinstance(manifest, dict) else None
+    if (
+        manifest.get("schema_version") != 2
+        or manifest.get("artifact_type") != AUDITED_SNAPSHOT_SCHEMA
+        or not isinstance(identity, Mapping)
+        or identity.get("schema") != AUDITED_SNAPSHOT_SCHEMA
+        or identity.get("contract") != AUDITED_SNAPSHOT_CONTRACT
+        or manifest.get("artifact_id") != _sha256_bytes(
+            json.dumps(
+                identity, indent=2, sort_keys=True, ensure_ascii=False, default=str,
+            ).encode("utf-8") + b"\n"
+        )
+        or not isinstance(artifacts, Mapping)
+        or not isinstance(scope, Mapping)
+        or not isinstance(source, Mapping)
+    ):
+        raise CertificationError("shareholder manifest contract/identity mismatch")
+    for name in ("holder_num", "top10_holder_ratio"):
+        artifact = artifacts.get(name)
+        if (
+            not isinstance(artifact, Mapping)
+            or artifact.get("path") != paths[name].name
+            or artifact.get("sha256") != request_specs[name]["sha256"]
+        ):
+            raise CertificationError(f"shareholder manifest artifact mismatch: {name}")
+    required_symbols = sorted(set(consumed_symbols))
+    scope_symbols = sorted({str(value) for value in scope.get("symbols") or []})
+    if (
+        not set(required_symbols).issubset(scope_symbols)
+        or scope.get("symbol_count") != len(scope_symbols)
+        or scope.get("symbols_sha256") != stable_scope_hash(scope_symbols)
+        or any(
+            scope.get(key) != identity.get(key)
+            for key in (
+                "scope_key", "range_start", "range_end", "symbol_count", "symbols_sha256",
+            )
+        )
+        or _normal_date(scope.get("range_start")) > consumed_start
+        or _normal_date(scope.get("range_end")) < consumed_end
+        or source.get("run_id") != identity.get("source_run_id")
+        or source.get("terminal_receipt_sha256")
+        != identity.get("terminal_receipt_sha256")
+    ):
+        raise CertificationError("shareholder manifest consumed scope mismatch")
+    normalized = {
+        "kind": "shareholder",
+        **{
+            name: {
+                "path": paths[name].relative_to(project).as_posix(),
+                "sha256": str(request_specs[name]["sha256"]),
+            }
+            for name in names
+        },
+        "artifact_id": str(manifest["artifact_id"]),
+        "source_run_id": str(source["run_id"]),
+        "terminal_receipt_sha256": str(source["terminal_receipt_sha256"]),
+        "scope_key": str(scope["scope_key"]),
+        "range_start": str(scope["range_start"]),
+        "range_end": str(scope["range_end"]),
+        "symbol_count": int(scope["symbol_count"]),
+        "symbols_sha256": str(scope["symbols_sha256"]),
+        "transform_contract": AUDITED_SNAPSHOT_CONTRACT,
+    }
+    declared_semantics = {
+        key: spec.get(key) for key in normalized
+        if key not in {"kind", *names}
+    }
+    expected_semantics = {
+        key: value for key, value in normalized.items()
+        if key not in {"kind", *names}
+    }
+    if declared_semantics != expected_semantics:
+        raise CertificationError("shareholder request/manifest semantic identity mismatch")
+    for name in ("holder_num", "top10_holder_ratio"):
+        lineage = feature_lineage.get(name)
+        if not isinstance(lineage, Mapping) or dict(lineage) != {
+            "path": str(paths[name].resolve()),
+            "sha256": normalized[name]["sha256"],
+        }:
+            raise CertificationError(f"shareholder signal sidecar lineage mismatch: {name}")
+    manifest_lineage = feature_lineage.get("shareholder_sidecar")
+    signal_manifest_expected = {
+        "path": str(paths["manifest"].resolve()),
+        "sha256": normalized["manifest"]["sha256"],
+        **expected_semantics,
+    }
+    if not isinstance(manifest_lineage, Mapping) or dict(manifest_lineage) != signal_manifest_expected:
+        raise CertificationError("shareholder signal manifest lineage mismatch")
+    if normalized["scope_key"] != request_scope_key:
+        raise CertificationError("shareholder sidecar scope_key mismatch")
+    _sidecar_watermark_backlink(
+        identity=normalized, evidence=evidence, expected_scope_key=request_scope_key,
+    )
+    return normalized
+
+
+def _validate_consumed_sidecars(
+    *, project: Path, request: Mapping[str, Any], dependencies: Mapping[str, Any],
+    lineage_context: Mapping[str, Any], spans: Sequence[Mapping[str, Any]],
+    evidence: Mapping[str, Any],
+) -> dict[str, Any]:
+    datasets = set(lineage_context.get("dependency_datasets") or [])
+    required = set()
+    if "income_sidecar" in datasets:
+        required.add("income")
+    if datasets.intersection({"shareholder_holdernumber", "shareholder_top10"}):
+        required.add("shareholder")
+    declared = request.get("consumed_sidecars") or {}
+    if not isinstance(declared, Mapping) or set(declared) != required:
+        raise CertificationError(
+            "baseline consumed_sidecars must exactly match consumed dependency datasets"
+        )
+    if not required:
+        return {}
+    symbols = sorted({str(span["instrument"]) for span in spans})
+    consumed_start = min(_normal_date(span["date_start"]) for span in spans)
+    consumed_end = max(_normal_date(span["date_end"]) for span in spans)
+    common = {
+        "project": project,
+        "generator_params": lineage_context["generator_params"],
+        "feature_lineage": lineage_context["feature_source_lineage"],
+        "request_scope_key": str(request["scope_key"]),
+        "consumed_symbols": symbols,
+        "consumed_start": consumed_start,
+        "consumed_end": consumed_end,
+        "evidence": evidence,
+    }
+    result: dict[str, Any] = {}
+    if "income" in required:
+        result["income"] = _validate_income_consumed_sidecar(
+            spec=declared["income"], **common,
+        )
+    if "shareholder" in required:
+        result["shareholder"] = _validate_shareholder_consumed_sidecar(
+            spec=declared["shareholder"], **common,
+        )
+    return result
 
 
 def _reject_symlink_components(path: Path) -> None:
@@ -1045,7 +1418,7 @@ def certify_pit_baseline(
         request=request["checkpoints"],
         research_config=research_config,
     )
-    _validate_cross_artifact_lineage(
+    lineage_context = _validate_cross_artifact_lineage(
         project=project, request=request, identities=identities, paths=paths,
         research_config=research_config, registry=registry, dependencies=dependencies,
         checkpoint_scope=checkpoint_scope,
@@ -1072,6 +1445,14 @@ def certify_pit_baseline(
     )
     evidence = read_selected_evidence(
         Path(audit_db), sorted(set(evidence_run_ids)), sorted(set(mutation_run_ids))
+    )
+    consumed_sidecars = _validate_consumed_sidecars(
+        project=project,
+        request=request,
+        dependencies=dependencies,
+        lineage_context=lineage_context,
+        spans=spans,
+        evidence=evidence,
     )
     scopes, dependency_features = _scope_rows(dependencies, spans)
     consumed_instruments = sorted({str(span["instrument"]) for span in spans})
@@ -1156,7 +1537,13 @@ def certify_pit_baseline(
             status = "DISJOINT"
         elif all(
             any(
-                _proof_accounts_mutation(proof, mutation)
+                _proof_accounts_mutation(
+                    proof,
+                    mutation,
+                    required_sidecar_identity=_sidecar_identity_for_scope(
+                        scopes[index], consumed_sidecars,
+                    ),
+                )
                 for proof in coverage_proofs.get(index, [])
             )
             for index in intersecting
@@ -1290,6 +1677,7 @@ def certify_pit_baseline(
         "feature_dependencies_sha256": dependency_sha,
         "feature_dependencies": {"path": dependency_relative, "sha256": dependency_sha},
         "source_contracts": source_contracts,
+        "consumed_sidecars": consumed_sidecars,
         "audit_db_relative": audit_db_relative,
         "audit_root_relative": audit_root_relative,
         "evidence_data_root_relative": data_root_relative,

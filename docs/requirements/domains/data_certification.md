@@ -51,7 +51,12 @@ Qlib readback 和 terminal watermark 做交集验证，产出不可变 certifica
 - mutation 只有在每个相交 dependency scope 的 selected-evidence coverage、字段 watermark 日期范围
   和 aware UTC `updated_at >= ingested_at` 都成立时才为 `ACCOUNTED`；UNKNOWN 或任一字段未满足均重审。
 - terminal coverage 必须回链 receipt 中精确 normalized field link；声明 source manifest 时三处
-  backlink 均须非空一致，formal shareholder dependency 必须同时具备 config 与 signal sidecar lineage。
+  backlink 均须非空一致。formal income/shareholder dependency 还必须由 baseline request、research
+  generator config 与 signal `feature_source_lineage` 三方绑定同一 immutable artifact/manifest。
+  income identity 必须包含 artifact id、source run/terminal SHA、scope/cutoff、完整历史起点与
+  availability/transform contract；shareholder manifest 必须反向绑定 holder/top10 两文件，且
+  source run/terminal SHA 必须回链 selected trusted watermark。旧 snapshot v1（仅
+  `source_state`/`bootstrap_audit`）不是 source evidence，不能认证。
 
 ### Outputs
 
@@ -59,7 +64,9 @@ Qlib readback 和 terminal watermark 做交集验证，产出不可变 certifica
 - 同目录的 `coverage.parquet`、`exceptions.parquet`、`evidence_snapshot.json`、`audit_receipt.json`；
 - `CERTIFIED`、`BLOCKED` 或 `REAUDIT_REQUIRED`，并保留可定位的 fail-closed exceptions。
 - 仅从 `CERTIFIED` receipt 导出的 portable DataPack 目录；它包含审计证明、所选 raw payload、
-  被消费股票的 canonical 文件、PIT universe、corporate actions 和 lineage identity，固定不含 Qlib。
+  被消费股票的 canonical 文件、PIT universe、corporate actions、income artifact+manifest 与
+  shareholder holder/top10+manifest；sidecar 固定落在 `data/sidecars/{income,shareholder}/`，
+  固定不含 Qlib。
 
 ### Canonical Entrypoints
 
@@ -77,7 +84,9 @@ Qlib readback 和 terminal watermark 做交集验证，产出不可变 certifica
   fail closed。该工具不替代 canonical certifier，也不得修改被审计数据。
 
 该 entrypoint 必须只读，不得 import/call daily fetch、repair、research runner 或 production
-runner。daily evidence 仍由 `UC_DAILY_OPS` 的既有 entrypoint 生产。
+runner。daily evidence 仍由 `UC_DAILY_OPS` 的既有 entrypoint 生产。`scripts/data_sync.py`
+另有显式、与 normal sync 互斥的 offline shareholder snapshot bootstrap mode；它只从指定
+trusted terminal 的 verified raw payload 重建 immutable v2 snapshot，不联网，也不由 certifier 调度。
 
 ### Key Artifacts
 
@@ -94,6 +103,9 @@ runner。daily evidence 仍由 `UC_DAILY_OPS` 的既有 entrypoint 生产。
 - `tests/test_source_audit.py`
 - `tests/test_pit_baseline_certification.py`
 - `tests/test_raw_to_qlib_coverage.py`
+- `tests/ops/test_shareholder_sync.py`
+- `tests/research/test_lightgbm_window_cache_identity.py`
+- `tests/test_data_sync_csi1800.py`
 
 ### Execution Guidance For Future Audit Tasks
 
@@ -127,6 +139,10 @@ reviewer_agent
 - `qsys/pit_certification.py`
 - `qsys/pit_datapack.py`
 - `qsys/ops/data_coverage.py`
+- `qsys/ops/shareholder_sync.py`（仅 terminal-backed offline snapshot materializer）
+- `qsys/research/generators/lightgbm_single_label.py`
+- `qsys/research/matrix_job.py`
+- `scripts/data_sync.py`（仅显式 offline snapshot bootstrap mode）
 - `configs/audit/csi1800_s180_baseline_v1_r1.yaml`
 - `configs/audit/feature_dependencies/v3a_plus_liquidity_financial_rc_v1.yaml`
 - `docs/requirements/`
@@ -134,11 +150,14 @@ reviewer_agent
 - `docs/ops/DAILY_OPS_SOP.md`
 - `tests/test_pit_baseline_certification.py`
 - `tests/test_raw_to_qlib_coverage.py`
+- `tests/ops/test_shareholder_sync.py`
+- `tests/research/test_lightgbm_window_cache_identity.py`
+- `tests/test_data_sync_csi1800.py`
 - `.claude/skills/sysq-dev/SKILL.md`
 
 ### Forbidden Paths
 
-- `scripts/data_sync.py`, `scripts/run_daily.py`, `scripts/run_daily_batch.py`
+- `scripts/run_daily.py`, `scripts/run_daily_batch.py`
 - `qsys/ops/daily_runner.py`
 - `qsys/model/`, `qsys/signal/`, `qsys/backtest/`
 - `qsys/broker/`, `qsys/trader/`, `qsys/ledger/`
@@ -163,3 +182,8 @@ DataPack 导出必须显式给出 certification 目录与全新 output 目录，
 `baseline_status=CERTIFIED`。它逐项复核 certification、lineage、raw payload、canonical、universe
 和 corporate-action hash 后原子发布。它是可复制目录，不是每日 snapshot；复制或归档后先运行
 `--verify-datapack`。Qlib 始终由 canonical 重建，不进入默认包。
+
+相交的 income/shareholder sidecar mutation 只有在 accounting watermark 的 `run_id` 与
+`terminal_receipt_sha256` 精确等于该 sidecar manifest source identity 时才可记为
+`ACCOUNTED`；后来其他 run 的水位即使覆盖日期也不能替旧 sidecar 抵消 mutation。无交集 mutation
+仍保持 `DISJOINT`，缺失/非规范 sidecar dataset 或 field/instrument identity 保持 UNKNOWN 并重审。

@@ -425,10 +425,21 @@ class LightGBMSingleLabelGenerator:
                     "terminal_receipt_sha256"
                 ],
                 "scope_key": manifest["scope"]["scope_key"],
+                "range_start": manifest["scope"]["range_start"],
+                "range_end": manifest["scope"]["range_end"],
                 "availability_cutoff": manifest["scope"][
                     "availability_cutoff"
                 ],
+                "required_history_start": manifest["scope"][
+                    "required_history_start"
+                ],
                 "transform_contract": manifest["contracts"]["transform"],
+                "financial_availability_contract": manifest["contracts"][
+                    "financial_availability"
+                ],
+                "availability_rule": manifest["contracts"][
+                    "availability_rule"
+                ],
             }
         }
 

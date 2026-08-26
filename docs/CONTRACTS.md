@@ -230,8 +230,11 @@ baseline invalid。输出目录由不含 created_at 的 audit identity
 hash、trusted state、精确六 gates、linked raw supplier payload、精确 normalized
 `(run_id,dataset,field_name,receipt_id)` field link 与 requested symbol/date scope 全部复核后才可形成
 coverage。request 声明 source manifest 时，research config、signal manifest 与 selected backtest
-source backlink 都必须非空且精确一致；formal shareholder dependencies 还必须同时绑定 config 与
-signal sidecar lineage。五个 artifact（含可携带 `evidence_snapshot.json`）先写唯一 staging，hash 复核后在 baseline-root flock 下
+source backlink 都必须非空且精确一致。formal income/shareholder dependency 必须由 request、
+research config 与 signal `feature_source_lineage` 三方精确绑定 immutable artifact/manifest；
+manifest 的 source run/terminal SHA 还必须回链 selected trusted watermark。仅含 source state 和
+bootstrap summary 的 legacy shareholder manifest 不具备 SOURCE_CAPTURED/PIT_AUDITED 身份。
+五个 artifact（含可携带 `evidence_snapshot.json`）先写唯一 staging，hash 复核后在 baseline-root flock 下
 原子发布到不存在的 final 目录，禁止覆盖或留下半成品 final。
 只有没有 coverage/mutation blocker 时，certifier 才对全部 consumed instrument 的 canonical
 文件记录 path/SHA-256/size 并纳入 audit identity；缺文件或导出前发生变化均阻断 DataPack。
@@ -240,13 +243,25 @@ Portable DataPack 只能从显式 `CERTIFIED` receipt 导出，逐文件复核�
 `manifest.json` / `checksums.sha256`。它包含 certification proof、选中 raw evidence、consumed
 canonical instrument files、PIT universe、corporate actions 与 lineage identity；Qlib 固定排除，
 因为它是可从 canonical 重建的 materialized view。DataPack 校验只证明搬运完整性，不产生新的
-PIT certification。
+PIT certification。实际消费的 income artifact+manifest 与 shareholder holder/top10+manifest
+固定打包到 `data/sidecars/income/` 和 `data/sidecars/shareholder/`；缺失、路径逃逸、hash 或
+manifest 反向引用不一致都拒绝。
 
 financial per-stock endpoint 已进入 raw supplier receipt、field link 与 canonical mutation 链。
 专用 `audited_income_pit_sidecar_v1` materializer 只从一个显式 trusted terminal run 离线读取
 current-contract income receipts，逐 payload 复核 SHA 并重跑 first-available selector；产物以
 identity-addressed 目录原子发布 `income.parquet` + `manifest.json`，同 identity 只允许 byte-identical
 reuse。normal daily 不调用此 bootstrap，也不重新向供应商拉取全量 income。
+
+专用 `audited_shareholder_pit_sidecars_v2` materializer 由 `scripts/data_sync.py` 的显式
+bootstrap-only mode 调用，只读取一个 trusted full-history terminal receipt、audit.db backlink 与
+其中 success/empty `stk_holdernumber`/`top10_holders` raw payload。它复核 historical union
+symbol/date scope、payload SHA 与 field links，复用现有 normalizer 重建两份 parquet 后原子发布；
+它不联网、不在 normal daily 运行，也不会把旧 snapshot v1 就地升级。
+
+sidecar dataset 的相交 mutation 只有在 accounting proof 的 watermark run/terminal SHA 与该
+sidecar manifest source identity 相同时才可记为 `ACCOUNTED`。后来其他 run 的水位不能替旧
+sidecar 抵消 mutation；无交集 mutation仍保持局部 `DISJOINT`，非规范/缺失 identity fail closed。
 
 正式 audited research 必须选择 `audited_sidecar_v1`，显式 pin sidecar artifact path/SHA、manifest
 path/SHA 与 `required_history_start`。manifest identity（source run、terminal receipt SHA、scope/cutoff、
@@ -258,9 +273,9 @@ available_from，同一 availability 只发最大 end_date，晚成熟旧期不�
 NaN 时仍发事件以暴露缺失。audited income 用严格 publication_date < feature trade_date；legacy income
 与 forecast 保持原有 exact-match 行为。
 
-本顺序 PR 不修改 PIT certifier/DataPack，因此现有 certification blocker 不在这里移除；只有后续
-把 sidecar artifact/manifest 纳入 certification proof 与 portable DataPack identity 后，才能声称
-`UNBOUND_SOURCE_ARTIFACT` / `REVISION_VISIBILITY_UNPROVEN` 已闭合。
+只有 request/config/signal 三方 sidecar identity、selected terminal backlink、dependency coverage
+和 mutation closure 同时通过，income 的 `UNBOUND_SOURCE_ARTIFACT` /
+`REVISION_VISIBILITY_UNPROVEN` 才视为闭合；旧 signal 不会被追认升级。
 
 ---
 
