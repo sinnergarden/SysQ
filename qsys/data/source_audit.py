@@ -1649,20 +1649,29 @@ class SourceAuditStore:
         trust_state: str = TRUSTED,
         previous_open_session: str | None = None,
         allow_initial_history: bool = False,
+        field_range_starts: Mapping[str, str] | None = None,
     ) -> dict[str, Any]:
         """Export immutable evidence then atomically advance trusted watermarks last."""
 
         run_id = validate_run_id(run_id)
 
         effective_gates = dict(gates)
-        contiguous = self.can_advance_contiguous(
-            source=source,
-            scope_key=scope_key,
-            range_start=range_start,
-            target_date=range_end,
-            fields=fields,
-            previous_open_session=previous_open_session,
-            allow_initial_history=allow_initial_history,
+        normalized_field_starts = {
+            str(field): _normalise_trade_date(start)
+            for field, start in dict(field_range_starts or {}).items()
+        }
+        unknown_starts = set(normalized_field_starts) - {str(field) for field in fields}
+        if unknown_starts:
+            raise ValueError(f"field_range_starts contains unknown fields: {sorted(unknown_starts)}")
+        contiguous = all(
+            self.can_advance_contiguous(
+                source=source, scope_key=scope_key,
+                range_start=normalized_field_starts.get(str(field), range_start),
+                target_date=range_end, fields=[str(field)],
+                previous_open_session=previous_open_session,
+                allow_initial_history=allow_initial_history,
+            )
+            for field in fields
         )
         effective_gates["contiguous_range"] = bool(gates.get("contiguous_range")) and contiguous
         missing_gates = sorted(REQUIRED_TERMINAL_GATES - set(effective_gates))
@@ -1702,6 +1711,7 @@ class SourceAuditStore:
                 (run_id, "terminal_gate_passed", _json_text({"gates": effective_gates}), updated_at),
             )
             for field_name in unique_fields:
+                field_range_start = normalized_field_starts.get(field_name, range_start)
                 conn.execute(
                     """INSERT INTO trusted_watermarks(
                         source,field_name,scope_key,range_start,range_end,trusted_through,run_id,updated_at,
@@ -1713,7 +1723,7 @@ class SourceAuditStore:
                         run_id=CASE WHEN excluded.trusted_through >= trusted_through THEN excluded.run_id ELSE run_id END,
                         updated_at=CASE WHEN excluded.trusted_through >= trusted_through THEN excluded.updated_at ELSE updated_at END,
                         terminal_receipt_sha256=CASE WHEN excluded.trusted_through >= trusted_through THEN excluded.terminal_receipt_sha256 ELSE terminal_receipt_sha256 END""",
-                    (source, field_name, scope_key, range_start, range_end, range_end, run_id, updated_at, receipt_sha256),
+                    (source, field_name, scope_key, field_range_start, range_end, range_end, run_id, updated_at, receipt_sha256),
                 )
         return {
             "status": "trusted",

@@ -56,6 +56,10 @@ from qsys.data.source_audit import (
     validate_run_id,
 )
 from qsys.data.adapter import QlibAdapter
+from qsys.ops.industry_sync import (
+    fetch_audited_daily_industry,
+    fetch_audited_history_industry,
+)
 from qsys.utils.logger import log
 
 
@@ -470,6 +474,7 @@ _CANONICAL_TO_QLIB_READBACK = {
     "grossprofit_margin": "$grossprofit_margin",
     "debt_to_assets": "$debt_to_assets",
     "current_ratio": "$current_ratio",
+    "industry": "$industry",
 }
 
 
@@ -547,7 +552,14 @@ def _historical_mutation_readback(adapter, store, changed: list[dict]) -> dict:
                 if qlib_field not in qlib_row:
                     mismatches.append({"symbol": symbol, "date": mutation_date, "field": qlib_field, "reason": "readback_field_missing"})
                     continue
-                expected = _expected_qlib_value(raw_field, raw_row[raw_field])
+                if raw_field == "industry":
+                    industry_map = adapter._load_industry_map(store.get_stock_list())
+                    expected = industry_map.get(str(raw_row[raw_field]).strip())
+                    if expected is None:
+                        mismatches.append({"symbol": symbol, "date": mutation_date, "field": qlib_field, "reason": "industry_mapping_missing"})
+                        continue
+                else:
+                    expected = _expected_qlib_value(raw_field, raw_row[raw_field])
                 actual = pd.to_numeric(pd.Series([qlib_row[qlib_field]]), errors="coerce").iloc[0]
                 same = (pd.isna(expected) and pd.isna(actual)) or (
                     pd.notna(expected) and pd.notna(actual)
@@ -684,7 +696,10 @@ def _refresh_and_verify_changed_symbols(
         raw_row = canonical_rows.iloc[-1]
         qlib_row = qlib_symbol_rows.iloc[-1]
         by_qlib: dict[str, str] = {}
-        for raw_field in ("open", "high", "low", "close", "factor", "adj_factor", "volume", "vol", "amount"):
+        for raw_field in (
+            "open", "high", "low", "close", "factor", "adj_factor",
+            "volume", "vol", "amount", "industry",
+        ):
             qlib_field = _CANONICAL_TO_QLIB_READBACK[raw_field]
             if raw_field not in changed_fields or raw_field not in raw_row:
                 continue
@@ -696,8 +711,17 @@ def _refresh_and_verify_changed_symbols(
                 by_qlib[qlib_field] = raw_field
         for qlib_field, raw_field in by_qlib.items():
             if qlib_field not in qlib_row:
+                if raw_field == "industry":
+                    mismatches.append({"symbol": symbol, "field": qlib_field, "reason": "readback_field_missing"})
                 continue
-            expected = _expected_qlib_value(raw_field, raw_row[raw_field])
+            if raw_field == "industry":
+                industry_map = adapter._load_industry_map(store.get_stock_list())
+                expected = industry_map.get(str(raw_row[raw_field]).strip())
+                if expected is None:
+                    mismatches.append({"symbol": symbol, "field": qlib_field, "reason": "industry_mapping_missing"})
+                    continue
+            else:
+                expected = _expected_qlib_value(raw_field, raw_row[raw_field])
             actual = pd.to_numeric(pd.Series([qlib_row[qlib_field]]), errors="coerce").iloc[0]
             same = (pd.isna(expected) and pd.isna(actual)) or (
                 pd.notna(expected) and pd.notna(actual) and bool(np.isclose(float(expected), float(actual), rtol=1e-10, atol=1e-12))
@@ -726,6 +750,7 @@ def _refresh_and_verify_history_mutation_store(
     run_ids: list[str],
     *,
     apply: bool,
+    require_pit_industry: bool = False,
 ) -> dict:
     """Read and verify one symbol's historical mutations at a time."""
 
@@ -754,8 +779,11 @@ def _refresh_and_verify_history_mutation_store(
             "verified_value_count": 0,
         }
 
+    refresh_kwargs = {"refresh_universes": []}
+    if require_pit_industry:
+        refresh_kwargs["require_pit_industry"] = True
     refresh = (
-        adapter.convert_fix_symbols(revision_symbols, refresh_universes=[])
+        adapter.convert_fix_symbols(revision_symbols, **refresh_kwargs)
         if revision_symbols
         else {
             "status": "skipped",
@@ -1495,6 +1523,7 @@ def _finalize_market_evidence(
     allow_trusted: bool,
     fields: tuple[str, ...] = TRUSTED_DAILY_FIELDS,
     allow_initial_history: bool = False,
+    field_range_starts: dict[str, str] | None = None,
 ) -> dict:
     if unchanged:
         return audit_store.finalize_unchanged(
@@ -1515,6 +1544,7 @@ def _finalize_market_evidence(
         trust_state=TRUSTED if allow_trusted and all(gates.values()) else "untrusted",
         previous_open_session=previous_open_session,
         allow_initial_history=allow_initial_history,
+        field_range_starts=field_range_starts,
     )
 
 
@@ -1536,6 +1566,50 @@ def _publish_wrapper_terminal_gates(
         {"gates": gates, "outer_owned_terminal": True},
     )
     raise SystemExit(2)
+
+
+def _fetch_daily_industry_after_precheck(
+    collector,
+    codes: list[str],
+    target_date: str,
+    *,
+    precheck_noop: bool,
+    prior_core_trusted: bool,
+    prior_industry_trusted: bool,
+    run_id: str,
+    audit_store: SourceAuditStore,
+    resume_proof: dict | None,
+    scope_key: str,
+    universe: str,
+) -> tuple[dict, list[str]]:
+    """Avoid supplier calls for a completed target and block untrusted repair."""
+
+    if universe == "csi1800" and precheck_noop:
+        if prior_core_trusted and prior_industry_trusted:
+            summary = {
+                "status": "not_required",
+                "reason": "trusted_target_already_complete",
+                "target_date": target_date,
+                "supplier_calls": 0,
+            }
+        else:
+            summary = {
+                "status": "failed",
+                "error": (
+                    "REPAIR_REQUIRED: canonical target rows preexist without trusted "
+                    "core+industry evidence; run explicit CSI1800 history repair"
+                ),
+                "target_date": target_date,
+                "prior_core_trusted": prior_core_trusted,
+                "prior_industry_trusted": prior_industry_trusted,
+                "supplier_calls": 0,
+            }
+        audit_store.append_event(run_id, "daily_industry_evidence", summary)
+        return summary, []
+    return fetch_audited_daily_industry(
+        collector, codes, target_date, run_id=run_id, audit_store=audit_store,
+        resume_proof=resume_proof, scope_key=scope_key, universe=universe,
+    )
 
 
 def _load_last_audit(audit_dir: Path, universe: str = "csi800") -> dict | None:
@@ -1810,6 +1884,17 @@ def _main_under_writer_lock(writer_lock: data_writer_lock) -> None:
             fields=TRUSTED_DAILY_FIELDS,
         )
     )
+    prior_industry_trusted_at_start = bool(
+        source_audit
+        and universe == "csi1800"
+        and source_audit.has_trusted_range(
+            source="tushare",
+            scope_key=universe,
+            range_start=target_dt,
+            range_end=target_dt,
+            fields=("industry",),
+        )
+    )
     untrusted_preexisting_symbols = (
         []
         if args.force_fetch or prior_scope_trusted_at_start or sync_start < target_dt
@@ -1908,6 +1993,44 @@ def _main_under_writer_lock(writer_lock: data_writer_lock) -> None:
                 outer_owned_terminal=args.wrapper_managed_finalize,
             )
 
+    history_industry_summary: dict = {"status": "not_required"}
+    history_industry_receipt_ids: list[str] = []
+    if do_apply:
+        history_industry_summary, history_industry_receipt_ids = fetch_audited_history_industry(
+            collector, codes, target_dt,
+            is_history_repair=is_history_repair,
+            run_id=run_id, audit_store=source_audit,
+            resume_proof=resume_proof, scope_key=universe, universe=universe,
+        )
+        if history_industry_summary["status"] != "not_required":
+            report["steps"]["history_industry_evidence"] = history_industry_summary
+            _abort_if_stage_failed(
+                report, stage="history_industry_evidence",
+                summary=history_industry_summary, do_apply=do_apply,
+                audit_dir=audit_dir, evidence=evidence,
+                outer_owned_terminal=args.wrapper_managed_finalize,
+            )
+
+    daily_industry_summary: dict = {"status": "not_required"}
+    daily_industry_receipt_ids: list[str] = []
+    if do_apply and not is_history_repair:
+        daily_industry_summary, daily_industry_receipt_ids = _fetch_daily_industry_after_precheck(
+            collector, codes, target_dt,
+            precheck_noop=precheck_noop,
+            prior_core_trusted=prior_scope_trusted_at_start,
+            prior_industry_trusted=prior_industry_trusted_at_start,
+            run_id=run_id, audit_store=source_audit,
+            resume_proof=resume_proof, scope_key=universe, universe=universe,
+        )
+        if daily_industry_summary["status"] != "not_required":
+            report["steps"]["daily_industry_evidence"] = daily_industry_summary
+            _abort_if_stage_failed(
+                report, stage="daily_industry_evidence",
+                summary=daily_industry_summary, do_apply=do_apply,
+                audit_dir=audit_dir, evidence=evidence,
+                outer_owned_terminal=args.wrapper_managed_finalize,
+            )
+
     # Step 4: Index daily update (always applies when do_apply, no separate dry-run for this)
     if do_apply:
         t0 = time.time()
@@ -1987,6 +2110,7 @@ def _main_under_writer_lock(writer_lock: data_writer_lock) -> None:
             source_audit,
             history_mutation_run_ids,
             apply=do_apply,
+            require_pit_industry=(universe == "csi1800"),
         )
     else:
         mutation_refresh = _refresh_and_verify_changed_symbols(
@@ -2123,6 +2247,8 @@ def _main_under_writer_lock(writer_lock: data_writer_lock) -> None:
             if history_mode
             else dict(TRUSTED_DAILY_FIELD_ENDPOINTS)
         )
+        if not history_mode and universe == "csi1800":
+            evidence_field_endpoints["industry"] = "bak_basic"
         field_receipts = (
             source_audit.evaluate_history_field_receipts(
                 run_id=run_id, field_endpoints=evidence_field_endpoints
@@ -2165,14 +2291,35 @@ def _main_under_writer_lock(writer_lock: data_writer_lock) -> None:
             not history_suspension_required
             or history_suspension_terminal["status"] == "success"
         )
+        history_industry_required = history_mode and universe == "csi1800"
+        history_industry_ok = (
+            not history_industry_required
+            or (
+                history_industry_summary.get("status") == "success"
+                and int(history_industry_summary.get("receipt_count") or 0)
+                == int(history_industry_summary.get("symbol_count") or -1)
+                and len(history_industry_receipt_ids)
+                == int(history_industry_summary.get("symbol_count") or -1)
+                and all(
+                    source_audit.verify_fetch_receipt(run_id=run_id, receipt_id=item)["status"] == "success"
+                    for item in history_industry_receipt_ids
+                )
+            )
+        )
         source_scope_ok = (
             bool(scope_events)
             and scope_payload.get("status") == "success"
             and suspension_evidence_ok
             and history_suspension_ok
+            and history_industry_ok
             and not untrusted_preexisting_symbols
         )
         evidence_fields = tuple(evidence_field_endpoints)
+        field_range_starts = (
+            {"industry": max(sync_start, "20180313")}
+            if history_mode and universe == "csi1800"
+            else {}
+        )
         prior_trusted = source_audit.has_trusted_range(
             source="tushare",
             scope_key=universe,
@@ -2217,6 +2364,7 @@ def _main_under_writer_lock(writer_lock: data_writer_lock) -> None:
                         "fields": list(evidence_fields),
                         "previous_open_session": previous_open_session,
                         "allow_initial_history": history_mode,
+                        "field_range_starts": field_range_starts,
                     },
                 )
             except SystemExit:
@@ -2238,6 +2386,7 @@ def _main_under_writer_lock(writer_lock: data_writer_lock) -> None:
                 allow_trusted=True,
                 fields=evidence_fields,
                 allow_initial_history=history_mode,
+                field_range_starts=field_range_starts,
             )
         if evidence_result is not None:
             log.info("Source evidence: %s", evidence_result)

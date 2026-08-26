@@ -18,7 +18,9 @@ from qsys.ops.data_coverage import (
     load_local_suspension_evidence,
 )
 from scripts.ops.sync_csi800_daily import (
+    _abort_if_stage_failed,
     _do_raw_fetch,
+    _fetch_daily_industry_after_precheck,
     _fetch_audited_history_suspensions,
     _refresh_and_verify_changed_symbols,
     _refresh_and_verify_history_mutation_store,
@@ -28,6 +30,104 @@ from scripts.ops.sync_csi800_daily import (
 
 TARGET = "20260821"
 HISTORY_START = "20260819"
+
+
+def _seed_target_watermarks(
+    audit: SourceAuditStore, audit_root: Path, *, run_id: str, fields: list[str]
+) -> None:
+    gates = {name: True for name in REQUIRED_TERMINAL_GATES}
+    result = audit.finalize_run(
+        run_id=run_id, source="tushare", scope_key="csi1800",
+        range_start=TARGET, range_end=TARGET, fields=fields, gates=gates,
+        receipt_root=audit_root / "source_runs",
+    )
+    assert result["status"] == "trusted"
+
+
+def test_daily_industry_trusted_precheck_noop_makes_zero_supplier_calls(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    audit_root = tmp_path / "data" / "audit"
+    audit = SourceAuditStore(audit_root / "audit.db")
+    _seed_target_watermarks(
+        audit, audit_root, run_id="prior-complete",
+        fields=["open", "high", "low", "close", "volume", "factor", "industry"],
+    )
+    calls = []
+
+    def forbidden_fetch(*args, **kwargs):
+        calls.append((args, kwargs))
+        raise AssertionError("trusted precheck noop must not call bak_basic")
+
+    monkeypatch.setattr(
+        "scripts.ops.sync_csi800_daily.fetch_audited_daily_industry", forbidden_fetch
+    )
+    core_trusted = audit.has_trusted_range(
+        source="tushare", scope_key="csi1800", range_start=TARGET,
+        range_end=TARGET, fields=("open", "high", "low", "close", "volume", "factor"),
+    )
+    industry_trusted = audit.has_trusted_range(
+        source="tushare", scope_key="csi1800", range_start=TARGET,
+        range_end=TARGET, fields=("industry",),
+    )
+    summary, receipts = _fetch_daily_industry_after_precheck(
+        object(), ["000001.SZ"], TARGET,
+        precheck_noop=True, prior_core_trusted=core_trusted,
+        prior_industry_trusted=industry_trusted,
+        run_id="trusted-noop", audit_store=audit, resume_proof=None,
+        scope_key="csi1800", universe="csi1800",
+    )
+    assert summary == {
+        "status": "not_required", "reason": "trusted_target_already_complete",
+        "target_date": TARGET, "supplier_calls": 0,
+    }
+    assert receipts == []
+    assert calls == []
+
+
+def test_daily_industry_untrusted_preexisting_requires_history_repair_without_watermark(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    audit_root = tmp_path / "data" / "audit"
+    audit = SourceAuditStore(audit_root / "audit.db")
+    core_fields = ["open", "high", "low", "close", "volume", "factor"]
+    _seed_target_watermarks(
+        audit, audit_root, run_id="prior-core-only", fields=core_fields,
+    )
+    monkeypatch.setattr(
+        "scripts.ops.sync_csi800_daily.fetch_audited_daily_industry",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("normal daily must not silently repair history")
+        ),
+    )
+    before = audit.watermark_snapshot_bytes()
+    summary, receipts = _fetch_daily_industry_after_precheck(
+        object(), ["000001.SZ"], TARGET,
+        precheck_noop=True, prior_core_trusted=True,
+        prior_industry_trusted=False,
+        run_id="repair-required", audit_store=audit, resume_proof=None,
+        scope_key="csi1800", universe="csi1800",
+    )
+    assert summary["status"] == "failed"
+    assert summary["error"].startswith("REPAIR_REQUIRED:")
+    assert summary["supplier_calls"] == 0
+    assert receipts == []
+    with pytest.raises(RuntimeError, match="REPAIR_REQUIRED"):
+        _abort_if_stage_failed(
+            {}, stage="daily_industry_evidence", summary=summary,
+            do_apply=True, audit_dir=audit_root,
+            evidence={
+                "store": audit, "run_id": "repair-required",
+                "universe": "csi1800", "target_date": TARGET,
+                "receipt_root": audit_root / "source_runs",
+            },
+            outer_owned_terminal=False,
+        )
+    assert audit.watermark_snapshot_bytes() == before
+    assert not audit.has_trusted_range(
+        source="tushare", scope_key="csi1800", range_start=TARGET,
+        range_end=TARGET, fields=("industry",),
+    )
 
 
 def test_supplier_request_hash_is_order_independent_and_rejects_ambiguous_values() -> None:
@@ -1509,6 +1609,48 @@ def test_mutation_refresh_dump_fixes_only_updates_but_reads_back_inserts_too():
     assert result["revision_symbols"] == ["000002.SZ"]
     assert result["verified_value_count"] == 2
     assert result["status"] == "success"
+
+
+@pytest.mark.parametrize(
+    ("qlib_industry", "expected_status"),
+    [(7.0, "success"), (8.0, "failed"), (None, "failed")],
+)
+def test_daily_industry_mutation_readback_uses_mapping_id(qlib_industry, expected_status):
+    mutations = [{
+        "symbol": "000001.SZ", "date_start": TARGET, "date_end": TARGET,
+        "fields": ["industry"], "mutation_type": "update",
+    }]
+
+    class Store:
+        def load_daily_window(self, symbol, *, start_date, end_date, columns):
+            assert columns == ["industry"]
+            return pd.DataFrame({"trade_date": [TARGET], "industry": ["Sector"]})
+
+        def get_stock_list(self):
+            return pd.DataFrame({"ts_code": ["000001.SZ"], "industry": ["Sector"]})
+
+    class Adapter:
+        def convert_fix_symbols(self, symbols, refresh_universes=None):
+            return {"status": "success", "symbols_count": len(symbols)}
+
+        def _load_industry_map(self, _stock_list):
+            return {"Sector": 7}
+
+        def get_features(self, symbols, fields, start_time=None, end_time=None):
+            index = pd.MultiIndex.from_tuples(
+                [(pd.Timestamp("2026-08-21"), "000001.SZ")],
+                names=["datetime", "instrument"],
+            )
+            return pd.DataFrame(
+                {} if qlib_industry is None else {"$industry": [qlib_industry]},
+                index=index,
+            )
+
+    result = _refresh_and_verify_changed_symbols(
+        Adapter(), Store(), mutations, target_dt=TARGET, apply=True
+    )
+    assert result["status"] == expected_status
+    assert result.get("verified_value_count", 0) == (1 if expected_status == "success" else 0)
 
 
 def test_historical_mutation_readback_uses_mutation_date_not_target_date():

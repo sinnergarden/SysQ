@@ -440,14 +440,13 @@ features:
     visibility: completed_session
     pit_status: evidence_required
   - source: tushare
-    dataset: stock_basic_classification
-    endpoint: stock_basic
+    dataset: canonical_daily
+    endpoint: bak_basic
     leaf_fields:
     - industry
-    visibility: current_snapshot_without_effective_time
-    pit_status: unknown
-    blocker_codes:
-    - STATIC_CLASSIFICATION_NOT_PIT_BOUND
+    visibility: after_close_available_next_session
+    pit_status: evidence_required
+    evidence_date_floor: '20180313'
 - feature: rps_industry_120d
   required: true
   dependencies:
@@ -459,14 +458,13 @@ features:
     visibility: completed_session
     pit_status: evidence_required
   - source: tushare
-    dataset: stock_basic_classification
-    endpoint: stock_basic
+    dataset: canonical_daily
+    endpoint: bak_basic
     leaf_fields:
     - industry
-    visibility: current_snapshot_without_effective_time
-    pit_status: unknown
-    blocker_codes:
-    - STATIC_CLASSIFICATION_NOT_PIT_BOUND
+    visibility: after_close_available_next_session
+    pit_status: evidence_required
+    evidence_date_floor: '20180313'
 - feature: price_percentile_252d
   required: true
   dependencies:
@@ -1132,14 +1130,13 @@ features:
     visibility: completed_session
     pit_status: evidence_required
   - source: tushare
-    dataset: stock_basic_classification
-    endpoint: stock_basic
+    dataset: canonical_daily
+    endpoint: bak_basic
     leaf_fields:
     - industry
-    visibility: current_snapshot_without_effective_time
-    pit_status: unknown
-    blocker_codes:
-    - STATIC_CLASSIFICATION_NOT_PIT_BOUND
+    visibility: after_close_available_next_session
+    pit_status: evidence_required
+    evidence_date_floor: '20180313'
 - feature: turnover_rate_ind_zscore
   required: true
   dependencies:
@@ -1151,14 +1148,13 @@ features:
     visibility: completed_session
     pit_status: evidence_required
   - source: tushare
-    dataset: stock_basic_classification
-    endpoint: stock_basic
+    dataset: canonical_daily
+    endpoint: bak_basic
     leaf_fields:
     - industry
-    visibility: current_snapshot_without_effective_time
-    pit_status: unknown
-    blocker_codes:
-    - STATIC_CLASSIFICATION_NOT_PIT_BOUND
+    visibility: after_close_available_next_session
+    pit_status: evidence_required
+    evidence_date_floor: '20180313'
 - feature: ttm_revenue_yoy
   required: true
   dependencies:

@@ -465,6 +465,9 @@ def test_inner_resume_bypasses_complete_precheck_and_calls_full_universe_collect
             AssertionError("resume must not take canonical precheck noop")
         ),
         _do_raw_fetch=raw_fetch,
+        fetch_audited_daily_industry=lambda *_args, **_kwargs: (
+            {"status": "success", "receipt_count": 1}, ["fixture-industry"]
+        ),
         _update_index_daily=lambda *_args: {},
         _refresh_and_verify_changed_symbols=lambda *_args, **_kwargs: {
             "status": "success", "changed_symbols": [], "verified_value_count": 0,
@@ -530,9 +533,10 @@ def test_wrapper_finalizes_only_after_outer_readiness_event(tmp_path: Path):
             "mode": "advance", "gates": gates, "prior_trusted": False,
             "source": "tushare", "scope_key": "csi1800",
             "range_start": "20260821", "range_end": "20260821",
-            "fields": ["open", "high", "low", "close", "volume", "factor"],
+            "fields": ["open", "high", "low", "close", "volume", "factor", "industry"],
             "previous_open_session": "20260820",
             "allow_initial_history": True,
+            "field_range_starts": {"industry": "20180313"},
         },
     )
     assert not (receipt_root / run_id / "receipt.json").exists()
@@ -561,9 +565,14 @@ def test_wrapper_finalizes_only_after_outer_readiness_event(tmp_path: Path):
                    WHERE source='tushare' AND scope_key='csi1800'"""
             ).fetchall()
         }
+        industry_range_start = connection.execute(
+            """SELECT range_start FROM trusted_watermarks
+               WHERE source='tushare' AND scope_key='csi1800' AND field_name='industry'"""
+        ).fetchone()[0]
     assert watermark_lineage == [(run_id, outer_receipt_sha256)]
     assert watermark_lineage[0][0] != direct_run_id
     assert {"ann_date", "holder_num", "hold_ratio"}.issubset(watermark_fields)
+    assert industry_range_start == "20180313"
     assert audit.has_trusted_range(
         source="tushare", scope_key="csi1800",
         range_start="20260821", range_end="20260821",
@@ -1155,6 +1164,16 @@ def test_main_ignores_stale_qlib_watermark_unless_repair_is_explicit(tmp_path):
         "_verify_history_suspension_receipts": lambda *_args, **_kwargs: {
             "status": "success"
         },
+        "fetch_audited_daily_industry": lambda *_args, **_kwargs: (
+            {"status": "success", "receipt_count": 1}, ["fixture-industry-daily"]
+        ),
+        "fetch_audited_history_industry": lambda *_args, **_kwargs: (
+            {
+                "status": "success", "symbol_count": 2,
+                "receipt_count": 2,
+            },
+            ["fixture-industry-1", "fixture-industry-2"],
+        ),
     }
     pit_path = "qsys.ops.pit_universe_snapshot.resolve_csi1800_pit_snapshot"
     registry_path = "qsys.ops.pit_universe_snapshot.write_current_qlib_registry"
@@ -1176,6 +1195,10 @@ def test_main_ignores_stale_qlib_watermark_unless_repair_is_explicit(tmp_path):
         daily_sync.SourceAuditStore,
         "finalize_run",
         return_value={"status": "trusted", "trust_state": "trusted", "watermark_advanced": True},
+    ), patch.object(
+        daily_sync.SourceAuditStore,
+        "verify_fetch_receipt",
+        return_value={"status": "success"},
     ):
         with patch.object(sys, "argv", ["sync", "--apply", "--universe", "csi1800", "--target-date", target]):
             daily_sync.main()

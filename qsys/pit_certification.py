@@ -180,6 +180,8 @@ def validate_feature_dependencies(
             for literal in ("source", "dataset", "endpoint"):
                 if not isinstance(scope[literal], str) or not scope[literal].strip():
                     raise CertificationError(f"{literal} must be a literal: {item['feature']}")
+            if "evidence_date_floor" in scope:
+                _normal_date(scope["evidence_date_floor"])
     lookback = dependency.get("lookback_contract")
     if not isinstance(lookback, dict):
         raise CertificationError("feature dependency lookback_contract missing")
@@ -545,6 +547,7 @@ def _scope_rows(
     dependencies: Mapping[str, Any], spans: Sequence[Mapping[str, str]]
 ) -> tuple[list[dict[str, Any]], dict[tuple[str, str, str, str], list[str]]]:
     keys: dict[tuple[str, str, str, str], list[str]] = {}
+    evidence_date_floors: dict[tuple[str, str, str, str], str] = {}
     for item in dependencies["features"]:
         for dependency in item["dependencies"]:
             for field in dependency["leaf_fields"]:
@@ -553,13 +556,23 @@ def _scope_rows(
                     str(dependency["endpoint"]), str(normalize_field(field)),
                 )
                 keys.setdefault(key, []).append(str(item["feature"]))
+                if dependency.get("evidence_date_floor"):
+                    value = _normal_date(dependency["evidence_date_floor"])
+                    previous = evidence_date_floors.get(key)
+                    if previous is not None and previous != value:
+                        raise CertificationError(f"conflicting evidence_date_floor for dependency {key}")
+                    evidence_date_floors[key] = value
     rows: list[dict[str, Any]] = []
     for (source, dataset, endpoint, field), _features in sorted(keys.items()):
         for span in spans:
+            floor = evidence_date_floors.get((source, dataset, endpoint, field))
+            if floor is not None and span["date_end"] < floor:
+                continue
             rows.append({
                 "source": source, "dataset": dataset, "endpoint": endpoint,
                 "field": field, "instrument": span["instrument"],
-                "date_start": span["date_start"], "date_end": span["date_end"],
+                "date_start": max(span["date_start"], floor or span["date_start"]),
+                "date_end": span["date_end"],
                 "scope_kind": "feature_dependency",
             })
     return rows, keys
@@ -1038,6 +1051,14 @@ def certify_pit_baseline(
         checkpoint_scope=checkpoint_scope,
     )
     feature_input = request["feature_input_scope"]
+    dependency_floors = [
+        _normal_date(scope["evidence_date_floor"])
+        for item in dependencies["features"]
+        for scope in item["dependencies"]
+        if scope.get("evidence_date_floor")
+    ]
+    if dependency_floors and _normal_date(feature_input["date_start"]) < max(dependency_floors):
+        raise CertificationError("feature input starts before dependency evidence_date_floor")
     if _normal_date(feature_input["date_start"]) != _normal_date(checkpoint_scope["train_date_start"]):
         raise CertificationError("feature input start is not bound to checkpoint train_start")
     if _normal_date(feature_input["date_end"]) != _normal_date(checkpoint_scope["predict_date_end"]):

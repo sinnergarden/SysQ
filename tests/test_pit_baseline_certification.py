@@ -334,9 +334,25 @@ def test_real_feature_contract_binds_exact_96_and_multisource_scopes() -> None:
         "UNBOUND_SOURCE_ARTIFACT", "REVISION_VISIBILITY_UNPROVEN",
     }
     industry = next(row for row in dependencies["features"] if row["feature"] == "rps_industry_60d")
-    classification = next(row for row in industry["dependencies"] if row["endpoint"] == "stock_basic")
+    classification = next(row for row in industry["dependencies"] if row["endpoint"] == "bak_basic")
     assert classification["source"] == "tushare"
-    assert classification["dataset"] == "stock_basic_classification"
+    assert classification["dataset"] == "canonical_daily"
+    assert classification["evidence_date_floor"] == "20180313"
+    floor_scopes, _ = _scope_rows(
+        dependencies,
+        [{"instrument": "000001.SZ", "date_start": "20140101", "date_end": "20200102"}],
+    )
+    industry_scope = next(
+        row for row in floor_scopes
+        if row["endpoint"] == "bak_basic" and row["field"] == "industry"
+    )
+    assert industry_scope["date_start"] == "20180313"
+    pre_floor_scopes, _ = _scope_rows(
+        dependencies,
+        [{"instrument": "DELISTED.SZ", "date_start": "20140101", "date_end": "20171231"}],
+    )
+    assert not any(row["endpoint"] == "bak_basic" for row in pre_floor_scopes)
+    assert all(row["date_start"] <= row["date_end"] for row in pre_floor_scopes)
     bad = yaml.safe_load(REAL_DEPENDENCIES.read_text(encoding="utf-8"))
     bad["features"][0], bad["features"][1] = bad["features"][1], bad["features"][0]
     path = ROOT / ".pytest-pit-dependencies-bad.yaml"

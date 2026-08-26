@@ -20,6 +20,7 @@ import sys
 import os
 import shutil
 import subprocess
+import tempfile
 
 
 @dataclass
@@ -62,6 +63,7 @@ class QlibAdapter:
     # buffer while the builder still trims the returned frame to the caller's
     # requested dates.
     _SEMANTIC_LOOKBACK_CALENDAR_DAYS = 1461
+    _PIT_INDUSTRY_START = "2018-03-13"
 
     def __init__(
         self,
@@ -575,7 +577,7 @@ class QlibAdapter:
                 collapsed[col] = selected
         return collapsed
 
-    def _prepare_csvs(self, since_date=None, *, until_date=None, selected_symbols=None, output_dir=None):
+    def _prepare_csvs(self, since_date=None, *, until_date=None, selected_symbols=None, output_dir=None, require_pit_industry=False):
         """
         Prepare CSVs from Feather files.
         If ``since_date`` is provided, only include rows on/after that date.
@@ -602,13 +604,6 @@ class QlibAdapter:
         qlib_fields = adapter_cfg.get("qlib_fields", [])
         target_fields = set(feature_fields) | set(qlib_fields)
 
-        store = StockDataStore()
-        stock_df = store.get_stock_list()
-        industry_map = self._load_industry_map(stock_df)
-        code_to_industry = {}
-        if stock_df is not None and not stock_df.empty and "ts_code" in stock_df.columns and "industry" in stock_df.columns:
-            code_to_industry = stock_df.set_index("ts_code")["industry"].to_dict()
-        
         files = list(self.raw_dir.glob("*.feather"))
         if selected_symbols:
             selected_normalized = {str(symbol).strip().upper() for symbol in selected_symbols if str(symbol).strip()}
@@ -617,12 +612,33 @@ class QlibAdapter:
             log.warning("No feather files found.")
             return csv_dir, 0
 
+        store = StockDataStore()
+        stock_df = store.get_stock_list()
+        code_to_industry = {}
+        if stock_df is not None and not stock_df.empty and {"ts_code", "industry"}.issubset(stock_df.columns):
+            code_to_industry = stock_df.set_index("ts_code")["industry"].to_dict()
+        historical_names: set[str] = set()
+        for source_file in files:
+            schema_frame = pd.read_feather(source_file)
+            if "industry" not in schema_frame.columns:
+                continue
+            values = schema_frame["industry"]
+            historical_names.update(
+                value for value in values.dropna().astype(str).str.strip().tolist()
+                if value and value != "nan"
+            )
+        industry_map = self._load_industry_map(stock_df, historical_names=historical_names)
+
         converted_count = 0
         for f in files:
             try:
                 df = pd.read_feather(f)
                 if df.empty:
                     continue
+                pit_industry = (
+                    df["industry"].astype("string").str.strip().copy()
+                    if "industry" in df.columns else pd.Series(pd.NA, index=df.index, dtype="string")
+                )
                 
                 # Standardize columns
                 rename_map = dict(adapter_cfg.get("rename_map", {}) or {})
@@ -779,9 +795,33 @@ class QlibAdapter:
                     df["pe_ttm"] = df["pe"]
                 symbol = f.stem
                 if "industry" in target_fields:
-                    industry_name = code_to_industry.get(symbol)
-                    industry_id = industry_map.get(industry_name, 0) if industry_name is not None else 0
-                    df["industry"] = industry_id
+                    names = pit_industry.reindex(df.index)
+                    missing = names.isna() | names.eq("")
+                    required_mask = pd.Series(True, index=df.index)
+                    pit_dates = None
+                    if "date" in df.columns:
+                        pit_date_text = df["date"].astype(str).str.replace(r"\.0$", "", regex=True).str.strip()
+                        pit_dates = pd.Series(pd.NaT, index=df.index, dtype="datetime64[ns]")
+                        ymd = pit_date_text.str.fullmatch(r"\d{8}")
+                        pit_dates.loc[ymd] = pd.to_datetime(
+                            pit_date_text.loc[ymd], format="%Y%m%d", errors="coerce"
+                        )
+                        pit_dates.loc[~ymd] = pd.to_datetime(pit_date_text.loc[~ymd], errors="coerce")
+                        required_mask = pit_dates >= pd.Timestamp(self._PIT_INDUSTRY_START)
+                    elif require_pit_industry:
+                        raise RuntimeError(f"PIT industry date identity missing for {symbol}")
+                    if until_date is not None:
+                        if pit_dates is None:
+                            raise RuntimeError(f"PIT industry date identity missing for {symbol}")
+                        required_mask &= pit_dates <= pd.Timestamp(until_date)
+                    if require_pit_industry and (missing & required_mask).any():
+                        raise RuntimeError(f"PIT industry coverage missing for {symbol}")
+                    if missing.any():
+                        names = names.where(~missing, code_to_industry.get(symbol))
+                    unknown = sorted(set(names.dropna().tolist()) - set(industry_map))
+                    if unknown:
+                        raise RuntimeError(f"industry mapping missing values for {symbol}: {unknown[:5]}")
+                    df["industry"] = names.map(industry_map).fillna(0).astype(int)
 
                 # Ensure date format with explicit YYYYMMDD handling.
                 date_series = df['date']
@@ -822,12 +862,14 @@ class QlibAdapter:
                 converted_count += 1
                 
             except Exception as e:
+                if require_pit_industry:
+                    raise
                 if "adj_factor" not in str(e): # Ignore expected adj_factor missing
                     log.warning(f"Failed to convert {f.name}: {e}")
 
         return csv_dir, converted_count
 
-    def _load_industry_map(self, stock_df: pd.DataFrame):
+    def _load_industry_map(self, stock_df: pd.DataFrame, *, historical_names: set[str] | None = None):
         meta_dir = cfg.get_path("meta")
         if meta_dir is None:
             return {}
@@ -835,16 +877,35 @@ class QlibAdapter:
         if map_path.exists():
             try:
                 with open(map_path, "r", encoding="utf-8") as f:
-                    return json.load(f)
-            except Exception:
-                return {}
-        if stock_df is None or stock_df.empty or "industry" not in stock_df.columns:
-            return {}
-        industry_series = stock_df["industry"].dropna().astype(str)
-        industry_names = sorted(set([v for v in industry_series.tolist() if v and v != "nan"]))
-        industry_map = {name: idx + 1 for idx, name in enumerate(industry_names)}
-        with open(map_path, "w", encoding="utf-8") as f:
-            json.dump(industry_map, f, ensure_ascii=False)
+                    industry_map = json.load(f)
+            except Exception as exc:
+                raise RuntimeError(f"industry mapping is unreadable: {map_path}") from exc
+            if (
+                not isinstance(industry_map, dict)
+                or any(not isinstance(name, str) or not isinstance(value, int) or value <= 0 for name, value in industry_map.items())
+                or len(set(industry_map.values())) != len(industry_map)
+            ):
+                raise RuntimeError(f"industry mapping is invalid: {map_path}")
+        else:
+            industry_map = {}
+        industry_names = set(historical_names or set())
+        if stock_df is not None and not stock_df.empty and "industry" in stock_df.columns:
+            industry_names.update(
+                value for value in stock_df["industry"].dropna().astype(str).str.strip().tolist()
+                if value and value != "nan"
+            )
+        for name in sorted(industry_names - set(industry_map)):
+            industry_map[name] = max([int(value) for value in industry_map.values()] or [0]) + 1
+        map_path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=map_path.parent,
+            prefix=f".{map_path.name}.", suffix=".tmp", delete=False,
+        ) as handle:
+            json.dump(industry_map, handle, ensure_ascii=False)
+            handle.flush()
+            os.fsync(handle.fileno())
+            temporary = Path(handle.name)
+        os.replace(temporary, map_path)
         return industry_map
 
     def convert_incremental(self, since_date):
@@ -921,6 +982,7 @@ class QlibAdapter:
         symbols: list[str],
         *,
         refresh_universes: list[str] | None = None,
+        require_pit_industry: bool = False,
     ) -> dict:
         """Replace per-symbol qlib bins from canonical data using ``dump_fix``.
 
@@ -935,7 +997,9 @@ class QlibAdapter:
             log.info("convert_fix_symbols: empty symbol list, no-op.")
             return {"status": "skipped", "reason": "empty_symbol_list"}
 
-        csv_dir, count = self._prepare_csvs(selected_symbols=symbols)
+        csv_dir, count = self._prepare_csvs(
+            selected_symbols=symbols, require_pit_industry=require_pit_industry
+        )
         if count == 0:
             log.info("convert_fix_symbols: no CSV generated from selected symbols.")
             return {"status": "skipped", "reason": "no_csv_generated"}

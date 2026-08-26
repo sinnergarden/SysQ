@@ -49,6 +49,7 @@ HISTORY_FIELD_ENDPOINTS = {
     "ann_date": "income",
     "end_date": "income",
     "report_type": "income",
+    "industry": "bak_basic",
 }
 
 

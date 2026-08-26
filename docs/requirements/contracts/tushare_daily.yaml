@@ -52,6 +52,23 @@ endpoints:
     supplier_filter: suspend_type_S_only
     history_request_variant: history_suspend_s_v1
     key_fields: [ts_code, trade_date, suspend_type]
+  bak_basic:
+    capability: historical_daily_stock_industry
+    required_for_trusted_daily: csi1800_only
+    fields: [trade_date, ts_code, industry]
+    key_fields: [ts_code, trade_date]
+    availability: after_trade_date_close_for_next_session_decision
+    source_history_start: "20160101"
+    supplier_row_limit: 7000
+    truncation_rule: row_count_greater_than_or_equal_to_limit_is_partial
+    history_request: one_all_history_query_per_immutable_csi1800_union_symbol
+    history_query_axis: ts_code_without_start_or_end_supplier_parameters
+    history_request_variant: history_bak_basic_industry_v1
+    projection: canonical_daily_rows_clamped_to_20160101_through_availability_cutoff
+    raw_payload: preserve_all_valid_supplier_rows_including_before_and_after_projection
+    daily_request: one_trade_date_market_snapshot_then_project_requested_canonical_rows
+    daily_request_variant: daily_bak_basic_industry_v1
+    taxonomy_gate: stage_level_recent_overlap_match_ratio_default_0_95
   income:
     capability: per_symbol_report_history_with_announcement_date
     revision_capability: update_flag_timeline_requires_separate_audit
@@ -105,6 +122,7 @@ trust_rules:
     close: daily
     volume: daily
     factor: adj_factor
+    industry: bak_basic
   optional_endpoint_failure_does_not_block_core: [daily_basic, stk_limit, moneyflow, margin]
   single_writer_scope: canonical_commit_through_qlib_readback_readiness_and_finalize
   required_supplier_non_null:
@@ -112,6 +130,8 @@ trust_rules:
     adj_factor: [factor]
   suspension_response_identity: exact_query_symbol_requested_date_range_and_suspend_type_S
   history_suspension_terminal: all_union_symbol_shards_in_same_run_terminal_receipt_and_watermark_backlink
+  history_industry_terminal: all_union_symbol_shards_success_or_empty_with_projection_cutoff_in_same_terminal_receipt
+  history_industry_resume: exact_checkpoint_clone_chain_then_idempotent_canonical_projection
   backward_watermark_expansion: forbidden_without_separate_certification
   wrapper_finalize: outer_only_after_all_repairs_and_final_readiness
   unreceipted_outer_core_history_mutation: untrusted_and_requires_new_run
