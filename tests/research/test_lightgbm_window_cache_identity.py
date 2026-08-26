@@ -3,12 +3,22 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import patch
 import hashlib
+import json
 
 import pytest
 
 from qsys.research.generators.lightgbm_single_label import (
     LightGBMSingleLabelGenerator,
 )
+from qsys.data._merge_helpers import (
+    FINANCIAL_AVAILABILITY_CONTRACT,
+    FINANCIAL_AVAILABILITY_RULE,
+)
+from qsys.data.income_sidecar import (
+    INCOME_SIDECAR_SCHEMA,
+    INCOME_SIDECAR_TRANSFORM,
+)
+from qsys.data.source_audit import stable_scope_hash
 
 
 _FRESHNESS_CONTRACT = {
@@ -31,6 +41,69 @@ def _generator(tmp_path: Path, **kwargs) -> LightGBMSingleLabelGenerator:
         source_manifest_hash=source_hash,
         **kwargs,
     )
+
+
+def _income_identity(tmp_path: Path, *, payload: bytes = b"income-v1") -> dict[str, str]:
+    artifact = tmp_path / "income.parquet"
+    artifact.write_bytes(payload)
+    artifact_sha = hashlib.sha256(payload).hexdigest()
+    symbols = ["000001.SZ"]
+    immutable_identity = {
+        "schema": INCOME_SIDECAR_SCHEMA,
+        "transform_contract": INCOME_SIDECAR_TRANSFORM,
+        "financial_availability_contract": FINANCIAL_AVAILABILITY_CONTRACT,
+        "financial_availability_rule": FINANCIAL_AVAILABILITY_RULE,
+        "source": "tushare",
+        "endpoint": "income",
+        "source_run_id": "run-income",
+        "terminal_receipt_sha256": "d" * 64,
+        "scope_key": "csi1800",
+        "range_start": "20180101",
+        "range_end": "20260821",
+        "availability_cutoff": "20260821",
+        "symbol_count": 1,
+        "symbols_sha256": stable_scope_hash(symbols),
+        "source_receipts": [],
+    }
+    identity_bytes = (
+        json.dumps(immutable_identity, ensure_ascii=False, sort_keys=True, indent=2)
+        + "\n"
+    ).encode("utf-8")
+    manifest = {
+        "schema_version": 1,
+        "artifact_type": INCOME_SIDECAR_SCHEMA,
+        "artifact_id": hashlib.sha256(identity_bytes).hexdigest(),
+        "identity": immutable_identity,
+        "artifact": {"path": artifact.name, "sha256": artifact_sha},
+        "scope": {
+            "scope_key": "csi1800",
+            "range_start": "20180101",
+            "range_end": "20260821",
+            "availability_cutoff": "20260821",
+            "symbol_count": 1,
+            "symbols_sha256": stable_scope_hash(symbols),
+            "symbols": symbols,
+        },
+        "contracts": {
+            "transform": INCOME_SIDECAR_TRANSFORM,
+            "financial_availability": FINANCIAL_AVAILABILITY_CONTRACT,
+            "availability_rule": FINANCIAL_AVAILABILITY_RULE,
+        },
+        "source_evidence": {
+            "run_id": "run-income",
+            "terminal_receipt_sha256": "d" * 64,
+        },
+    }
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    return {
+        "income_sidecar_path": str(artifact),
+        "income_sidecar_sha256": artifact_sha,
+        "income_sidecar_manifest_path": str(manifest_path),
+        "income_sidecar_manifest_sha256": hashlib.sha256(
+            manifest_path.read_bytes()
+        ).hexdigest(),
+    }
 
 
 def test_cache_key_binds_source_universe_and_ordered_features(tmp_path: Path) -> None:
@@ -125,3 +198,82 @@ def test_shareholder_snapshot_hash_is_verified_and_enters_identity(
             shareholder_top10_path=str(top10),
             shareholder_top10_sha256=top10_hash,
         )
+
+
+def test_income_sidecar_manifest_identity_enters_lineage_cache_and_checkpoint(
+    tmp_path: Path,
+) -> None:
+    identity = _income_identity(tmp_path)
+    generator = _generator(tmp_path / "cache", **identity)
+    lineage = generator.feature_source_lineage["income_sidecar"]
+
+    assert lineage["path"] == str(Path(identity["income_sidecar_path"]).absolute())
+    assert lineage["manifest_sha256"] == identity[
+        "income_sidecar_manifest_sha256"
+    ]
+    assert lineage["source_run_id"] == "run-income"
+    assert generator.checkpoint_input_artifacts == [
+        {"name": "income_sidecar", "sha256": identity["income_sidecar_sha256"]},
+        {
+            "name": "income_sidecar_manifest",
+            "sha256": identity["income_sidecar_manifest_sha256"],
+        },
+    ]
+    assert "qsys.data.income_sidecar" in generator.checkpoint_code_dependencies
+    base = _generator(tmp_path / "base")
+    assert generator._window_key("2020-01-01", "2021-01-01", ["f1"]) != (
+        base._window_key("2020-01-01", "2021-01-01", ["f1"])
+    )
+
+    with patch("qsys.data.adapter.QlibAdapter") as adapter_class:
+        generator._ensure_qlib()
+    adapter_kwargs = adapter_class.call_args.kwargs
+    assert adapter_kwargs["income_sidecar_path"] == identity["income_sidecar_path"]
+    assert adapter_kwargs["income_sidecar_sha256"] == identity[
+        "income_sidecar_sha256"
+    ]
+    assert adapter_kwargs["income_sidecar_manifest_path"] == identity[
+        "income_sidecar_manifest_path"
+    ]
+    assert adapter_kwargs["income_sidecar_manifest_sha256"] == identity[
+        "income_sidecar_manifest_sha256"
+    ]
+
+
+def test_income_sidecar_requires_complete_identity_and_rejects_tamper(
+    tmp_path: Path,
+) -> None:
+    identity = _income_identity(tmp_path)
+    incomplete = dict(identity)
+    incomplete["income_sidecar_manifest_sha256"] = ""
+    with pytest.raises(ValueError, match="requires artifact/manifest"):
+        _generator(tmp_path / "incomplete", **incomplete)
+
+    Path(identity["income_sidecar_path"]).write_bytes(b"tampered")
+    with pytest.raises(RuntimeError, match="artifact sha256 mismatch"):
+        _generator(tmp_path / "tampered", **identity)
+
+
+def test_matrix_factory_forwards_explicit_income_sidecar_identity(
+    tmp_path: Path,
+) -> None:
+    from qsys.research.matrix_job import _create_generator_from_config
+
+    identity = _income_identity(tmp_path)
+    generator = _create_generator_from_config({
+        "generator_id": "growth",
+        "type": "single_label_lightgbm",
+        "params": {
+            "label_id": "fwd_ret_20d_xsz_clip3",
+            **identity,
+        },
+    })
+
+    assert generator.income_sidecar_path == identity["income_sidecar_path"]
+    assert generator.income_sidecar_sha256 == identity["income_sidecar_sha256"]
+    assert generator.income_sidecar_manifest_path == identity[
+        "income_sidecar_manifest_path"
+    ]
+    assert generator.income_sidecar_manifest_sha256 == identity[
+        "income_sidecar_manifest_sha256"
+    ]

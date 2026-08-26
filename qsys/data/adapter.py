@@ -72,6 +72,10 @@ class QlibAdapter:
         raw_dir: str | Path | None = None,
         shareholder_holder_path: str | Path | None = None,
         shareholder_top10_path: str | Path | None = None,
+        income_sidecar_path: str | Path | None = None,
+        income_sidecar_sha256: str = "",
+        income_sidecar_manifest_path: str | Path | None = None,
+        income_sidecar_manifest_sha256: str = "",
     ):
         self.qlib_dir = Path(qlib_dir).expanduser() if qlib_dir is not None else Path(str(cfg.get_path("qlib_bin")))
         self.raw_dir = Path(raw_dir).expanduser() if raw_dir is not None else Path(str(cfg.get_path("canonical_dir")))
@@ -84,6 +88,20 @@ class QlibAdapter:
             Path(shareholder_top10_path).expanduser()
             if shareholder_top10_path is not None
             else None
+        )
+        self.income_sidecar_path = (
+            Path(income_sidecar_path).expanduser()
+            if income_sidecar_path is not None
+            else None
+        )
+        self.income_sidecar_sha256 = str(income_sidecar_sha256 or "")
+        self.income_sidecar_manifest_path = (
+            Path(income_sidecar_manifest_path).expanduser()
+            if income_sidecar_manifest_path is not None
+            else None
+        )
+        self.income_sidecar_manifest_sha256 = str(
+            income_sidecar_manifest_sha256 or ""
         )
         self.meta_db_path = Path(str(cfg.get_path("root"))) / "meta.db"
 
@@ -473,6 +491,23 @@ class QlibAdapter:
                 flags["shareholder_top10_path"] = str(
                     self.shareholder_top10_path
                 )
+            if self.income_sidecar_path is not None:
+                flags.update({
+                    "income_sidecar_path": str(self.income_sidecar_path),
+                    "income_sidecar_sha256": self.income_sidecar_sha256,
+                    "income_sidecar_manifest_path": str(
+                        self.income_sidecar_manifest_path or ""
+                    ),
+                    "income_sidecar_manifest_sha256": (
+                        self.income_sidecar_manifest_sha256
+                    ),
+                    "income_sidecar_required_start": (
+                        str(start_time)[:10] if start_time is not None else None
+                    ),
+                    "income_sidecar_required_end": (
+                        str(end_time)[:10] if end_time is not None else None
+                    ),
+                })
             feat = build_phase1_features(semantic_input, flags=flags)
         except KeyError as exc:
             log.warning(f"Semantic feature inputs missing; fallback to NaN for unsupported columns: {exc}")

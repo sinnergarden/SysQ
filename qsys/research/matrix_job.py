@@ -300,6 +300,8 @@ def _create_generator_from_config(
             "shareholder_holder_path", "shareholder_holder_sha256",
             "shareholder_top10_path", "shareholder_top10_sha256",
             "shareholder_freshness_contract",
+            "income_sidecar_path", "income_sidecar_sha256",
+            "income_sidecar_manifest_path", "income_sidecar_manifest_sha256",
         }
         unknown = set(params) - _CONSUMED_PARAMS
         if unknown:
@@ -359,6 +361,14 @@ def _create_generator_from_config(
             shareholder_holder_sha256=params.get("shareholder_holder_sha256", ""),
             shareholder_top10_path=params.get("shareholder_top10_path", ""),
             shareholder_top10_sha256=params.get("shareholder_top10_sha256", ""),
+            income_sidecar_path=params.get("income_sidecar_path", ""),
+            income_sidecar_sha256=params.get("income_sidecar_sha256", ""),
+            income_sidecar_manifest_path=params.get(
+                "income_sidecar_manifest_path", ""
+            ),
+            income_sidecar_manifest_sha256=params.get(
+                "income_sidecar_manifest_sha256", ""
+            ),
             shareholder_freshness_contract=params.get(
                 "shareholder_freshness_contract"
             ),

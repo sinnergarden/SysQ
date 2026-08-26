@@ -243,10 +243,21 @@ canonical instrument files、PIT universe、corporate actions 与 lineage identi
 PIT certification。
 
 financial per-stock endpoint 已进入 raw supplier receipt、field link 与 canonical mutation 链。
-但现有 global income sidecar 尚未由显式 immutable path/SHA 绑定到 research generator/DataPack，
-因此其四个 growth features 仍保留 `UNBOUND_SOURCE_ARTIFACT` certification blocker；本契约不得把
-raw receipt 闭环误称为 portable sidecar 闭环。正式 audited sidecar materializer 与 per-feature
-dependency availability 尚未接入，故 `REVISION_VISIBILITY_UNPROVEN` 也继续保留到后续顺序 PR。
+专用 `audited_income_pit_sidecar_v1` materializer 只从一个显式 trusted terminal run 离线读取
+current-contract income receipts，逐 payload 复核 SHA 并重跑 first-available selector；产物以
+identity-addressed 目录原子发布 `income.parquet` + `manifest.json`，同 identity 只允许 byte-identical
+reuse。normal daily 不调用此 bootstrap，也不重新向供应商拉取全量 income。
+
+启用四个 growth feature 的 research generator 必须显式 pin sidecar artifact path/SHA 与 manifest
+path/SHA。manifest identity（source run、terminal receipt SHA、scope/cutoff、transform contract）
+进入 feature source lineage、checkpoint input 与 feature-cache identity；mutable global
+`data/tushare/income.parquet` 禁止作为 fallback。四列数值公式不变，各列按实际参与季度传播最大
+available_from，同一 availability 只发最大 end_date，晚成熟旧期不得覆盖已成熟新期；新期结果为
+NaN 时仍发事件以暴露缺失。
+
+本顺序 PR 不修改 PIT certifier/DataPack，因此现有 certification blocker 不在这里移除；只有后续
+把 sidecar artifact/manifest 纳入 certification proof 与 portable DataPack identity 后，才能声称
+`UNBOUND_SOURCE_ARTIFACT` / `REVISION_VISIBILITY_UNPROVEN` 已闭合。
 
 ---
 

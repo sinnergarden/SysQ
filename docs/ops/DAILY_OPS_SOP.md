@@ -85,6 +85,23 @@ supplier 原始响应位于
 `data/raw/evidence/tushare/{endpoint}/{run_id}/{receipt_id}.parquet`，receipt 中的相对路径
 和 SHA-256 是复核链接；不要编辑或覆盖。SQLite SOT 位于 `data/audit/audit.db`。
 
+从已完成、已复核的 full-history source run 生成 income PIT sidecar 只能使用显式离线
+bootstrap；命令持有同一 data-root writer lock，不发网络请求，也不运行 normal daily：
+
+```bash
+python scripts/data_sync.py \
+  --build-income-sidecar-from-run-id <trusted_run_id> \
+  --income-sidecar-output-root research/income_sidecars \
+  --income-sidecar-scope-key csi1800 \
+  --income-sidecar-range-start 20140313 \
+  --income-sidecar-cutoff 20260821 \
+  --apply
+```
+
+输出 JSON 中的 artifact/manifest path 与 SHA-256 必须四项一起复制到 research generator
+配置；不得改用 `latest`、symlink 或裸 `data/tushare/income.parquet`。已有相同 identity
+只在两份文件 byte-for-byte 一致时复用；任何 terminal/payload/hash/scope 不一致都阻断。
+
 若 universe-history catch-up 实际开始写 canonical，当前 target-day source receipt 不能替
 这段历史背书。运行会先写 `untrusted_outer_repair_scope`（planned symbols 是 collector
 无 changed-set 返回时的保守上界），阻断水位并非零退出。即使 after-check 随后失败或

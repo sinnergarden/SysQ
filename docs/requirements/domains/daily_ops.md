@@ -21,6 +21,9 @@ stable
 - canonical CSI1800 单日采集实现（`qsys/data/collector.py`）；该实现只允许由
   `scripts/data_sync.py` 或 `scripts/ops/sync_csi800_daily.py` 调用，不将整个
   `qsys/data/` 目录纳入 daily allowed paths。
+- 从一个显式 trusted source run 离线 bootstrap immutable income PIT sidecar；
+  该模式复核 terminal receipt、watermark backlink、field links 与 raw payload SHA，
+  不调用供应商，也不会被 normal daily 隐式触发。
 - 盘前推理（signal → prediction → plan）
 - 盘后执行（simulated fills → ledger → MTM）
 - 通知（Telegram）
@@ -51,6 +54,9 @@ stable
 - `scripts/run_daily_batch.py` — 批量 wrapper，只调度 shadow pointer 真正指向的策略
 - `qsys/data/collector.py` — 仅作为上述 canonical sync entrypoint 的采集实现；
   不作为独立运营入口，也不改变 deploy/systemd 边界。
+- `scripts/data_sync.py --build-income-sidecar-from-run-id ... --apply` — 仅供
+  certification/bootstrap 明确调用的离线 supporting mode；不是新入口，normal daily
+  不构建全量 sidecar。
 
 对齐 `docs/USE_CASES.md` §7。
 
@@ -79,6 +85,9 @@ operator_agent
 - `scripts/run_daily_batch.py`
 - `scripts/ops/sync_csi800_daily.py`
 - `qsys/data/collector.py`
+- `qsys/data/_merge_helpers.py`
+- `qsys/data/adapter.py`
+- `qsys/data/income_sidecar.py`
 - `qsys/data/storage.py`
 - `qsys/data/source_audit.py`
 - `qsys/ops/`

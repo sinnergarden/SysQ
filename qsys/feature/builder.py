@@ -95,7 +95,21 @@ def build_phase1_features(df: pd.DataFrame, flags: dict | None = None) -> pd.Dat
 
 
     if flags.get("enable_growth_confirmation_features", False):
-        out = build_growth_confirmation_features(out)
+        out = build_growth_confirmation_features(
+            out,
+            income_sidecar_path=flags.get("income_sidecar_path", ""),
+            income_sidecar_sha256=flags.get("income_sidecar_sha256", ""),
+            income_sidecar_manifest_path=flags.get(
+                "income_sidecar_manifest_path", ""
+            ),
+            income_sidecar_manifest_sha256=flags.get(
+                "income_sidecar_manifest_sha256", ""
+            ),
+            income_sidecar_required_start=flags.get(
+                "income_sidecar_required_start"
+            ),
+            income_sidecar_required_end=flags.get("income_sidecar_required_end"),
+        )
 
 
     standardize_cols = [

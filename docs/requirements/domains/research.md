@@ -35,6 +35,9 @@ UC-5（Signal Analytics）、UC-6（Signal Combination）、UC-7（Signal Backte
 - 特征配置（`configs/features/*.yaml`）
 - 标签配置（`configs/labels/*.yaml`）
 - 行情数据（canonical / qlib_bin）
+- 启用四个 growth-confirmation income feature 时，必须显式 pin immutable audited
+  income sidecar 的 parquet path+SHA 与 manifest path+SHA；mutable global
+  `data/tushare/income.parquet` 不属于合法 research input。
 
 ### Outputs
 - `data/research/signals/{signal_id}/{signal_run_id}/predictions.parquet`
@@ -64,6 +67,28 @@ UC-5（Signal Analytics）、UC-6（Signal Combination）、UC-7（Signal Backte
 - `data/research/labels/` — LabelStore
 - `data/research/experiments/` — 实验索引
 - `data/research/backtests/` — 回测产物
+
+Growth-confirmation 的 income sidecar 由 daily canonical entrypoint 的显式 offline
+bootstrap mode 产生，但由 research generator 消费。`LightGBMSingleLabelGenerator`
+在构造时复核 artifact/manifest hash 和 contract，并把 artifact id、source run、terminal
+receipt hash、scope/cutoff 写入 `feature_source_lineage`，同时绑定 checkpoint 与 feature
+cache identity。adapter 只接收 generator 显式传入的四元 identity；缺失、tamper、scope
+或 cutoff 不覆盖实际请求 window 时 fail closed，禁止 catch-all 转成全 NaN。
+
+```yaml
+params:
+  income_sidecar_path: data/research/income_sidecars/<artifact_id>/income.parquet
+  income_sidecar_sha256: <exact_sha256>
+  income_sidecar_manifest_path: data/research/income_sidecars/<artifact_id>/manifest.json
+  income_sidecar_manifest_sha256: <exact_manifest_sha256>
+```
+
+四项必须来自同一次 bootstrap 输出；禁止填 `latest` 或 symlink。
+
+四个 feature 的数值公式与 feature list 不变。每列独立传播所有实际季度依赖的最大
+`available_from`；同一可用日取最大报告期，较旧报告晚成熟时不回退，较新报告的合法
+NaN 仍作为新事件覆盖旧季度值。公告日 T 的 feature row 仍只能由既有
+`actual_feature_date_strictly_before_trade_date_v1` 用于 T 之后的执行日。
 
 Canonical cached-signal backtest 还必须输出 manifest 绑定的
 `executions.csv`（schema `backtest_executions_v2`），逐订单记录请求数量、真实
@@ -215,6 +240,8 @@ research_agent
 - `qsys/evaluation/`
 - `qsys/backtest/`
 - `qsys/analysis/`
+- `qsys/data/adapter.py`
+- `qsys/data/income_sidecar.py`
 - `configs/research/`
 - `configs/features/`
 - `configs/labels/`
