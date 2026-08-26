@@ -313,6 +313,304 @@ def tiny_project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path,
     return project, request_path, database
 
 
+def _synthetic_consumed_sidecars(
+    project: Path, *, terminal_sha256: str,
+) -> tuple[dict, dict, dict]:
+    from qsys.data._merge_helpers import (
+        FINANCIAL_AVAILABILITY_CONTRACT,
+        FINANCIAL_AVAILABILITY_RULE,
+    )
+    from qsys.data.income_sidecar import (
+        INCOME_SIDECAR_SCHEMA,
+        INCOME_SIDECAR_TRANSFORM,
+    )
+    from qsys.ops.shareholder_sync import (
+        AUDITED_SNAPSHOT_CONTRACT,
+        AUDITED_SNAPSHOT_SCHEMA,
+    )
+
+    symbols = ["000001.SZ"]
+    income_root = project / "data/research/source_snapshots/income/test"
+    income = _write(income_root / "income.parquet", b"income")
+    income_identity = {
+        "schema": INCOME_SIDECAR_SCHEMA,
+        "transform_contract": INCOME_SIDECAR_TRANSFORM,
+        "financial_availability_contract": FINANCIAL_AVAILABILITY_CONTRACT,
+        "financial_availability_rule": FINANCIAL_AVAILABILITY_RULE,
+        "source": "tushare", "endpoint": "income",
+        "source_run_id": "evidence-1",
+        "terminal_receipt_sha256": terminal_sha256,
+        "scope_key": "tiny", "range_start": "20200101", "range_end": "20200131",
+        "availability_cutoff": "20200131", "required_history_start": "20200101",
+        "symbol_count": 1, "symbols_sha256": stable_scope_hash(symbols),
+        "source_receipts": [],
+    }
+    income_identity_bytes = (
+        json.dumps(income_identity, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
+    ).encode()
+    income_manifest_payload = {
+        "schema_version": 1, "artifact_type": INCOME_SIDECAR_SCHEMA,
+        "artifact_id": hashlib.sha256(income_identity_bytes).hexdigest(),
+        "identity": income_identity,
+        "artifact": {"path": "income.parquet", "sha256": sha256_file(income)},
+        "scope": {
+            "scope_key": "tiny", "range_start": "20200101", "range_end": "20200131",
+            "availability_cutoff": "20200131", "required_history_start": "20200101",
+            "symbol_count": 1, "symbols_sha256": stable_scope_hash(symbols),
+            "symbols": symbols,
+        },
+        "contracts": {
+            "transform": INCOME_SIDECAR_TRANSFORM,
+            "financial_availability": FINANCIAL_AVAILABILITY_CONTRACT,
+            "availability_rule": FINANCIAL_AVAILABILITY_RULE,
+        },
+        "source_evidence": {
+            "run_id": "evidence-1", "terminal_receipt_sha256": terminal_sha256,
+        },
+    }
+    income_manifest = _write(
+        income_root / "manifest.json", json.dumps(income_manifest_payload),
+    )
+    income_semantics = {
+        "artifact_id": income_manifest_payload["artifact_id"],
+        "source_run_id": "evidence-1", "terminal_receipt_sha256": terminal_sha256,
+        "scope_key": "tiny", "range_start": "20200101", "range_end": "20200131",
+        "availability_cutoff": "20200131", "required_history_start": "20200101",
+        "transform_contract": INCOME_SIDECAR_TRANSFORM,
+        "financial_availability_contract": FINANCIAL_AVAILABILITY_CONTRACT,
+        "availability_rule": FINANCIAL_AVAILABILITY_RULE,
+        "symbol_count": 1, "symbols_sha256": stable_scope_hash(symbols),
+    }
+
+    # The immutable snapshot may cover the historical union, which can be
+    # broader than the instruments consumed by this baseline request.
+    shareholder_symbols = ["000001.SZ", "000002.SZ"]
+    shareholder_root = project / "data/research/source_snapshots/shareholder/test"
+    holder = _write(shareholder_root / "holder_num.parquet", b"holder")
+    top10 = _write(shareholder_root / "top10_holder_ratio.parquet", b"top10")
+    shareholder_identity = {
+        "schema": AUDITED_SNAPSHOT_SCHEMA, "contract": AUDITED_SNAPSHOT_CONTRACT,
+        "source": "tushare", "source_run_id": "evidence-1",
+        "terminal_receipt_sha256": terminal_sha256,
+        "scope_key": "tiny", "range_start": "20200101", "range_end": "20200131",
+        "symbol_count": len(shareholder_symbols),
+        "symbols_sha256": stable_scope_hash(shareholder_symbols),
+        "receipt_count": 2, "receipts_sha256": "c" * 64,
+    }
+    shareholder_identity_bytes = (
+        json.dumps(shareholder_identity, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
+    ).encode()
+    shareholder_manifest_payload = {
+        "schema_version": 2, "artifact_type": AUDITED_SNAPSHOT_SCHEMA,
+        "artifact_id": hashlib.sha256(shareholder_identity_bytes).hexdigest(),
+        "identity": shareholder_identity,
+        "artifacts": {
+            "holder_num": {"path": holder.name, "sha256": sha256_file(holder)},
+            "top10_holder_ratio": {"path": top10.name, "sha256": sha256_file(top10)},
+        },
+        "scope": {
+            "scope_key": "tiny", "range_start": "20200101", "range_end": "20200131",
+            "symbol_count": len(shareholder_symbols),
+            "symbols_sha256": stable_scope_hash(shareholder_symbols),
+            "symbols": shareholder_symbols,
+        },
+        "contracts": {"transform": AUDITED_SNAPSHOT_CONTRACT},
+        "source_evidence": {
+            "run_id": "evidence-1", "terminal_receipt_sha256": terminal_sha256,
+        },
+    }
+    shareholder_manifest = _write(
+        shareholder_root / "manifest.json", json.dumps(shareholder_manifest_payload),
+    )
+    shareholder_semantics = {
+        "artifact_id": shareholder_manifest_payload["artifact_id"],
+        "source_run_id": "evidence-1", "terminal_receipt_sha256": terminal_sha256,
+        "scope_key": "tiny", "range_start": "20200101", "range_end": "20200131",
+        "symbol_count": len(shareholder_symbols),
+        "symbols_sha256": stable_scope_hash(shareholder_symbols),
+        "transform_contract": AUDITED_SNAPSHOT_CONTRACT,
+    }
+
+    consumed = {
+        "income": {
+            "artifact": _identity(project, income.relative_to(project).as_posix()),
+            "manifest": _identity(project, income_manifest.relative_to(project).as_posix()),
+            **income_semantics,
+        },
+        "shareholder": {
+            "holder_num": _identity(project, holder.relative_to(project).as_posix()),
+            "top10_holder_ratio": _identity(project, top10.relative_to(project).as_posix()),
+            "manifest": _identity(
+                project, shareholder_manifest.relative_to(project).as_posix(),
+            ),
+            **shareholder_semantics,
+        },
+    }
+    generator_params = {
+        "income_source_mode": "audited_sidecar_v1",
+        "income_sidecar_path": consumed["income"]["artifact"]["path"],
+        "income_sidecar_sha256": consumed["income"]["artifact"]["sha256"],
+        "income_sidecar_manifest_path": consumed["income"]["manifest"]["path"],
+        "income_sidecar_manifest_sha256": consumed["income"]["manifest"]["sha256"],
+        "income_sidecar_required_history_start": "20200101",
+        "shareholder_holder_path": consumed["shareholder"]["holder_num"]["path"],
+        "shareholder_holder_sha256": consumed["shareholder"]["holder_num"]["sha256"],
+        "shareholder_top10_path": consumed["shareholder"]["top10_holder_ratio"]["path"],
+        "shareholder_top10_sha256": consumed["shareholder"]["top10_holder_ratio"]["sha256"],
+        "shareholder_manifest_path": consumed["shareholder"]["manifest"]["path"],
+        "shareholder_manifest_sha256": consumed["shareholder"]["manifest"]["sha256"],
+    }
+    lineage = {
+        "income_sidecar": {
+            "path": str(income.resolve()), "sha256": sha256_file(income),
+            "manifest_path": str(income_manifest.resolve()),
+            "manifest_sha256": sha256_file(income_manifest), **income_semantics,
+        },
+        "holder_num": {"path": str(holder.resolve()), "sha256": sha256_file(holder)},
+        "top10_holder_ratio": {"path": str(top10.resolve()), "sha256": sha256_file(top10)},
+        "shareholder_sidecar": {
+            "path": str(shareholder_manifest.resolve()),
+            "sha256": sha256_file(shareholder_manifest), **shareholder_semantics,
+        },
+    }
+    return consumed, generator_params, lineage
+
+
+def test_consumed_sidecars_require_exact_request_config_signal_and_terminal_backlink(
+    tiny_project: tuple[Path, Path, Path],
+) -> None:
+    project, _request_path, database = tiny_project
+    terminal_sha = sha256_file(project / "source_runs/evidence-1/receipt.json")
+    consumed, generator_params, lineage = _synthetic_consumed_sidecars(
+        project, terminal_sha256=terminal_sha,
+    )
+    dependencies = {
+        "features": [{"dependencies": [
+            {"dataset": "income_sidecar"},
+            {"dataset": "shareholder_holdernumber"},
+            {"dataset": "shareholder_top10"},
+        ]}],
+    }
+    evidence = pit_certification.read_selected_evidence(database, ["evidence-1"], [])
+    context = {
+        "dependency_datasets": [
+            "income_sidecar", "shareholder_holdernumber", "shareholder_top10",
+        ],
+        "generator_params": generator_params,
+        "feature_source_lineage": lineage,
+    }
+    request = {"scope_key": "tiny", "consumed_sidecars": consumed}
+    spans = [{
+        "instrument": "000001.SZ", "date_start": "20200101", "date_end": "20200131",
+    }]
+
+    validated = pit_certification._validate_consumed_sidecars(
+        project=project, request=request, dependencies=dependencies,
+        lineage_context=context, spans=spans, evidence=evidence,
+    )
+    assert set(validated) == {"income", "shareholder"}
+    assert validated["income"]["required_history_start"] == "20200101"
+    assert validated["shareholder"]["terminal_receipt_sha256"] == terminal_sha
+    assert validated["shareholder"]["symbol_count"] == 2
+
+    old_request = {"scope_key": "tiny"}
+    with pytest.raises(CertificationError, match="must exactly match"):
+        pit_certification._validate_consumed_sidecars(
+            project=project, request=old_request, dependencies=dependencies,
+            lineage_context=context, spans=spans, evidence=evidence,
+        )
+    old_lineage = dict(lineage)
+    old_lineage.pop("income_sidecar")
+    with pytest.raises(CertificationError, match="income signal"):
+        pit_certification._validate_consumed_sidecars(
+            project=project, request=request, dependencies=dependencies,
+            lineage_context={**context, "feature_source_lineage": old_lineage},
+            spans=spans, evidence=evidence,
+        )
+
+
+def test_consumed_sidecar_tamper_and_manifest_mismatch_fail_closed(
+    tiny_project: tuple[Path, Path, Path],
+) -> None:
+    project, _request_path, database = tiny_project
+    terminal_sha = sha256_file(project / "source_runs/evidence-1/receipt.json")
+    consumed, generator_params, lineage = _synthetic_consumed_sidecars(
+        project, terminal_sha256=terminal_sha,
+    )
+    context = {
+        "dependency_datasets": ["income_sidecar"],
+        "generator_params": generator_params,
+        "feature_source_lineage": lineage,
+    }
+    request = {"scope_key": "tiny", "consumed_sidecars": {"income": consumed["income"]}}
+    evidence = pit_certification.read_selected_evidence(database, ["evidence-1"], [])
+    spans = [{
+        "instrument": "000001.SZ", "date_start": "20200101", "date_end": "20200131",
+    }]
+    Path(project / consumed["income"]["artifact"]["path"]).write_bytes(b"tampered")
+    with pytest.raises(CertificationError, match="sha256 mismatch"):
+        pit_certification._validate_consumed_sidecars(
+            project=project, request=request,
+            dependencies={"features": [{"dependencies": [{"dataset": "income_sidecar"}]}]},
+            lineage_context=context, spans=spans, evidence=evidence,
+        )
+
+
+def test_sidecar_mutation_accounting_requires_manifest_source_identity() -> None:
+    mutation = {
+        "date_start": "20200101", "date_end": "20200102",
+        "ingested_at": "2020-02-01T00:00:00Z",
+    }
+    proof = {"watermark": {
+        "range_start": "20200101", "trusted_through": "20200131",
+        "updated_at": "2020-02-02T00:00:00Z", "run_id": "newer-run",
+        "terminal_receipt_sha256": "b" * 64,
+    }}
+    sidecar = {"source_run_id": "sidecar-run", "terminal_receipt_sha256": "a" * 64}
+    assert not pit_certification._proof_accounts_mutation(
+        proof, mutation, required_sidecar_identity=sidecar,
+    )
+    proof["watermark"].update({
+        "run_id": "sidecar-run", "terminal_receipt_sha256": "a" * 64,
+    })
+    assert pit_certification._proof_accounts_mutation(
+        proof, mutation, required_sidecar_identity=sidecar,
+    )
+
+
+def test_noncanonical_sidecar_alias_is_unknown_but_scope_out_mutation_is_disjoint() -> None:
+    scope = {
+        "source": "tushare", "dataset": "shareholder_holdernumber",
+        "endpoint": "stk_holdernumber", "field": "holder_num",
+        "instrument": "000001.SZ", "date_start": "20200101", "date_end": "20200131",
+    }
+    index = pit_certification._build_mutation_scope_index([scope])
+    alias = {
+        "source": "tushare", "dataset": "shareholder", "endpoint": "stk_holdernumber",
+        "fields": ["$holder_num"], "symbol": "000001.SZ",
+        "date_start": "20200101", "date_end": "20200131",
+    }
+    assert pit_certification._mutation_candidate_indices(alias, index) == ([], True)
+    noncanonical_instrument = {**alias, "dataset": "shareholder_holdernumber"}
+    noncanonical_instrument["symbol"] = "000001.sz"
+    assert pit_certification._mutation_candidate_indices(
+        noncanonical_instrument, index,
+    ) == ([], True)
+    outside = {**alias, "dataset": "unrelated_canonical_dataset", "fields": ["close"]}
+    assert pit_certification._mutation_candidate_indices(outside, index) == ([], False)
+    assert classify_mutation_intersection(outside, scope) == "DISJOINT"
+    extra_snapshot_symbol = {
+        **alias,
+        "dataset": "shareholder_holdernumber",
+        "fields": ["holder_num"],
+        "symbol": "000002.SZ",
+    }
+    assert pit_certification._mutation_candidate_indices(
+        extra_snapshot_symbol, index,
+    ) == ([], False)
+    assert classify_mutation_intersection(extra_snapshot_symbol, scope) == "DISJOINT"
+
+
 def test_real_feature_contract_binds_exact_96_and_multisource_scopes() -> None:
     registry, dependencies = validate_feature_dependencies(
         "v3a_plus_liquidity_financial_rc", REAL_DEPENDENCIES
@@ -330,9 +628,8 @@ def test_real_feature_contract_binds_exact_96_and_multisource_scopes() -> None:
     assert any(row["endpoint"] == "daily_basic" and row["field"] == "total_mv" for row in scopes)
     income = next(row for row in dependencies["features"] if row["feature"] == "ttm_revenue_yoy")
     assert income["dependencies"][0]["dataset"] == "income_sidecar"
-    assert set(income["dependencies"][0]["blocker_codes"]) == {
-        "UNBOUND_SOURCE_ARTIFACT", "REVISION_VISIBILITY_UNPROVEN",
-    }
+    assert income["dependencies"][0]["pit_status"] == "evidence_required"
+    assert "blocker_codes" not in income["dependencies"][0]
     industry = next(row for row in dependencies["features"] if row["feature"] == "rps_industry_60d")
     classification = next(row for row in industry["dependencies"] if row["endpoint"] == "bak_basic")
     assert classification["source"] == "tushare"
@@ -496,6 +793,69 @@ def test_certified_datapack_exports_exact_inputs_without_qlib(
 
     (pack / "data/canonical/daily/000001.SZ.feather").write_bytes(b"tampered")
     with pytest.raises(CertificationError, match="checksum mismatch"):
+        verify_datapack(pack)
+
+
+def test_datapack_roundtrip_packages_only_certified_consumed_sidecars(
+    tiny_project: tuple[Path, Path, Path],
+) -> None:
+    project, request, database = tiny_project
+    terminal_sha = sha256_file(project / "source_runs/evidence-1/receipt.json")
+    consumed, _params, _lineage = _synthetic_consumed_sidecars(
+        project, terminal_sha256=terminal_sha,
+    )
+    certified = certify_pit_baseline(
+        request_path=request, audit_db=database, output_root=project / "certifications",
+        evidence_run_ids=["evidence-1"], project_root=project,
+    )
+    certification_dir = Path(certified["output_dir"])
+    receipt_path = certification_dir / "audit_receipt.json"
+    scope_path = certification_dir / "audit_scope.json"
+    receipt = json.loads(receipt_path.read_text())
+    scope = json.loads(scope_path.read_text())
+    receipt["input_identities"]["consumed_sidecars"] = consumed
+    audit_id = _sha256_bytes(_canonical_bytes(receipt["input_identities"]))
+    receipt["audit_id"] = audit_id
+    scope.update(receipt["input_identities"])
+    scope["audit_id"] = audit_id
+    scope_path.write_text(json.dumps(scope, indent=2, sort_keys=True) + "\n")
+    receipt["artifacts"]["audit_scope.json"] = sha256_file(scope_path)
+    receipt_path.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
+
+    pack = project / "exports/sidecar-pack"
+    exported = export_certified_datapack(
+        certification_dir=certification_dir, output_dir=pack, project_root=project,
+    )
+    assert exported["status"] == "VERIFIED"
+    assert (pack / "data/sidecars/income/income.parquet").is_file()
+    assert (pack / "data/sidecars/income/manifest.json").is_file()
+    assert (pack / "data/sidecars/shareholder/holder_num.parquet").is_file()
+    assert (pack / "data/sidecars/shareholder/top10_holder_ratio.parquet").is_file()
+    assert (pack / "data/sidecars/shareholder/manifest.json").is_file()
+
+    shareholder_manifest = pack / "data/sidecars/shareholder/manifest.json"
+    payload = json.loads(shareholder_manifest.read_text())
+    payload["artifacts"]["holder_num"]["sha256"] = "0" * 64
+    shareholder_manifest.write_text(json.dumps(payload))
+    manifest_path = pack / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    for row in manifest["files"]:
+        if row["path"] == "data/sidecars/shareholder/manifest.json":
+            row["sha256"] = sha256_file(shareholder_manifest)
+            row["size"] = shareholder_manifest.stat().st_size
+    manifest["pack_id"] = _sha256_bytes(_canonical_bytes(manifest["files"]))
+    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+    members = sorted(
+        path for path in pack.rglob("*")
+        if path.is_file() and path.name != "checksums.sha256"
+    )
+    (pack / "checksums.sha256").write_text(
+        "".join(
+            f"{sha256_file(path)}  {path.relative_to(pack).as_posix()}\n"
+            for path in members
+        )
+    )
+    with pytest.raises(CertificationError, match="shareholder sidecar manifest mismatch"):
         verify_datapack(pack)
 
 

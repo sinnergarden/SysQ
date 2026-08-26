@@ -22,6 +22,17 @@ SCHEMA_VERSION = "qsys_datapack_v1"
 REQUIRED_CERTIFICATION_ARTIFACTS = {
     "audit_scope.json", "coverage.parquet", "exceptions.parquet", "evidence_snapshot.json",
 }
+_SIDECAR_DESTINATIONS = {
+    "income": {
+        "artifact": "data/sidecars/income/income.parquet",
+        "manifest": "data/sidecars/income/manifest.json",
+    },
+    "shareholder": {
+        "holder_num": "data/sidecars/shareholder/holder_num.parquet",
+        "top10_holder_ratio": "data/sidecars/shareholder/top10_holder_ratio.parquet",
+        "manifest": "data/sidecars/shareholder/manifest.json",
+    },
+}
 
 
 def _canonical_bytes(value: Any) -> bytes:
@@ -181,6 +192,34 @@ def _corporate_action_files(
     )
 
 
+def _consumed_sidecar_files(
+    *, project: Path, identities: Mapping[str, Any],
+    files: dict[str, tuple[Path, str, int]],
+) -> None:
+    sidecars = identities.get("consumed_sidecars") or {}
+    if not isinstance(sidecars, Mapping) or not set(sidecars).issubset(_SIDECAR_DESTINATIONS):
+        raise CertificationError("certification consumed sidecar identities are invalid")
+    for kind, identity in sorted(sidecars.items()):
+        if not isinstance(identity, Mapping):
+            raise CertificationError(f"invalid consumed sidecar identity: {kind}")
+        expected_names = set(_SIDECAR_DESTINATIONS[kind])
+        if not expected_names.issubset(identity):
+            raise CertificationError(f"consumed sidecar identity is incomplete: {kind}")
+        for name, destination in _SIDECAR_DESTINATIONS[kind].items():
+            spec = identity[name]
+            if not isinstance(spec, Mapping):
+                raise CertificationError(f"invalid consumed sidecar member: {kind}/{name}")
+            source = _identity_file(project, spec, f"consumed sidecar {kind}/{name}")
+            expected_basename = Path(destination).name
+            if source.name != expected_basename:
+                raise CertificationError(
+                    f"consumed sidecar filename mismatch: {kind}/{name}"
+                )
+            _add_file(
+                files, destination, source, expected_sha256=str(spec["sha256"]),
+            )
+
+
 def _verify_content_members(
     *, root: Path, receipt: Mapping[str, Any], manifest_rows: Mapping[str, Mapping[str, Any]],
 ) -> None:
@@ -247,6 +286,49 @@ def _verify_content_members(
             f"data/canonical/daily/{Path(str(spec['path'])).name}",
             spec["sha256"], int(spec["size"]),
         )
+
+    sidecars = identities.get("consumed_sidecars") or {}
+    if not isinstance(sidecars, Mapping) or not set(sidecars).issubset(_SIDECAR_DESTINATIONS):
+        raise CertificationError("certified consumed sidecar identities are invalid")
+    for kind, identity in sorted(sidecars.items()):
+        if not isinstance(identity, Mapping):
+            raise CertificationError(f"invalid certified sidecar identity: {kind}")
+        for name, destination in _SIDECAR_DESTINATIONS[kind].items():
+            spec = identity.get(name)
+            if not isinstance(spec, Mapping):
+                raise CertificationError(f"certified sidecar member missing: {kind}/{name}")
+            add(destination, spec.get("sha256"))
+    if "income" in sidecars:
+        income_manifest = _read_json(
+            _safe_file(root, _SIDECAR_DESTINATIONS["income"]["manifest"])
+        )
+        artifact = income_manifest.get("artifact") or {}
+        if (
+            artifact.get("path") != "income.parquet"
+            or artifact.get("sha256")
+            != sidecars["income"]["artifact"]["sha256"]
+            or income_manifest.get("artifact_id") != sidecars["income"].get("artifact_id")
+        ):
+            raise CertificationError("packed income sidecar manifest mismatch")
+    if "shareholder" in sidecars:
+        shareholder_manifest = _read_json(
+            _safe_file(root, _SIDECAR_DESTINATIONS["shareholder"]["manifest"])
+        )
+        artifacts = shareholder_manifest.get("artifacts") or {}
+        if (
+            shareholder_manifest.get("artifact_id")
+            != sidecars["shareholder"].get("artifact_id")
+            or any(
+                not isinstance(artifacts.get(name), Mapping)
+                or artifacts[name].get("path") != Path(
+                    _SIDECAR_DESTINATIONS["shareholder"][name]
+                ).name
+                or artifacts[name].get("sha256")
+                != sidecars["shareholder"][name]["sha256"]
+                for name in ("holder_num", "top10_holder_ratio")
+            )
+        ):
+            raise CertificationError("packed shareholder sidecar manifest mismatch")
 
     backtest_spec = baseline_identities["backtest_manifest"]
     backtest_member = f"lineage/backtest_manifest/{Path(str(backtest_spec['path'])).name}"
@@ -405,6 +487,7 @@ def export_certified_datapack(
             expected_sha256=str(spec["sha256"]), expected_size=int(spec["size"]),
         )
     _corporate_action_files(project=project, backtest_manifest=backtest, files=files)
+    _consumed_sidecar_files(project=project, identities=identities, files=files)
 
     target = Path(output_dir).absolute()
     _reject_symlink_components(target.parent)
@@ -433,6 +516,9 @@ def export_certified_datapack(
             "certification_receipt_sha256": receipt_digest,
             "qlib_included": False,
             "canonical_materialization": "whole_consumed_instrument_files",
+            "consumed_sidecars": sorted(
+                (identities.get("consumed_sidecars") or {}).keys()
+            ),
             "files": entries,
         }
         manifest_path = staging / "manifest.json"
@@ -514,6 +600,9 @@ def verify_datapack(path: str | Path) -> dict[str, Any]:
         != manifest.get("certification_receipt_sha256")
     ):
         raise CertificationError("DataPack certification identity mismatch")
+    consumed_sidecars = receipt["input_identities"].get("consumed_sidecars") or {}
+    if manifest.get("consumed_sidecars") != sorted(consumed_sidecars):
+        raise CertificationError("DataPack consumed sidecar declaration mismatch")
     _verify_content_members(root=root, receipt=receipt, manifest_rows=manifest_rows)
     return {
         "status": "VERIFIED", "pack_id": manifest["pack_id"],

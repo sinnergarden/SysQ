@@ -1166,11 +1166,8 @@ features:
     - end_date
     - report_type
     - ann_date
-    visibility: announcement_date_asof
-    pit_status: unknown
-    blocker_codes:
-    - UNBOUND_SOURCE_ARTIFACT
-    - REVISION_VISIBILITY_UNPROVEN
+    visibility: publication_date_after_close_strictly_later_trade_date
+    pit_status: evidence_required
 - feature: single_q_revenue_yoy
   required: true
   dependencies:
@@ -1182,11 +1179,8 @@ features:
     - end_date
     - report_type
     - ann_date
-    visibility: announcement_date_asof
-    pit_status: unknown
-    blocker_codes:
-    - UNBOUND_SOURCE_ARTIFACT
-    - REVISION_VISIBILITY_UNPROVEN
+    visibility: publication_date_after_close_strictly_later_trade_date
+    pit_status: evidence_required
 - feature: is_profitable_ttm
   required: true
   dependencies:
@@ -1198,11 +1192,8 @@ features:
     - end_date
     - report_type
     - ann_date
-    visibility: announcement_date_asof
-    pit_status: unknown
-    blocker_codes:
-    - UNBOUND_SOURCE_ARTIFACT
-    - REVISION_VISIBILITY_UNPROVEN
+    visibility: publication_date_after_close_strictly_later_trade_date
+    pit_status: evidence_required
 - feature: gross_margin_delta_yoy
   required: true
   dependencies:
@@ -1215,8 +1206,5 @@ features:
     - end_date
     - report_type
     - ann_date
-    visibility: announcement_date_asof
-    pit_status: unknown
-    blocker_codes:
-    - UNBOUND_SOURCE_ARTIFACT
-    - REVISION_VISIBILITY_UNPROVEN
+    visibility: publication_date_after_close_strictly_later_trade_date
+    pit_status: evidence_required
