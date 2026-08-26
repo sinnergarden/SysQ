@@ -1,11 +1,11 @@
 # sysq-dev
 
 ## Purpose
-SysQ 开发与诊断 skill：诊断检查、代码实现、harness/check 开发、临时请求（UC_TEMPORARY_REQUESTS）、模型训练侧开发（UC_MODEL_TRAINING dev）、只读 UI 分析（UC_UI_ANALYSIS），以及有人工确认的部署治理前置（UC_DAILY_RUNTIME_DEPLOYMENT）。
+SysQ 开发与诊断 skill：诊断检查、代码实现、harness/check 开发、临时请求（UC_TEMPORARY_REQUESTS）、模型训练侧开发（UC_MODEL_TRAINING dev）、PIT 数据认证开发（UC_PIT_DATA_CERTIFICATION）、只读 UI 分析（UC_UI_ANALYSIS），以及有人工确认的部署治理前置（UC_DAILY_RUNTIME_DEPLOYMENT）。
 
 ## Inputs
 - 任务描述（诊断 / 开发 / harness check 新增 / 临时请求 / UI 分析）
-- 对应 UC：UC_DIAGNOSTICS、UC_TEMPORARY_REQUESTS、UC_MODEL_TRAINING（dev 侧）、UC_UI_ANALYSIS、UC_DAILY_RUNTIME_DEPLOYMENT
+- 对应 UC：UC_DIAGNOSTICS、UC_TEMPORARY_REQUESTS、UC_MODEL_TRAINING（dev 侧）、UC_PIT_DATA_CERTIFICATION、UC_UI_ANALYSIS、UC_DAILY_RUNTIME_DEPLOYMENT
 - 相关文件路径
 
 ## Required reads
@@ -15,7 +15,7 @@ SysQ 开发与诊断 skill：诊断检查、代码实现、harness/check 开发�
 - 相关代码文件
 
 ## Workflow
-1. 归类 UC（UC_DIAGNOSTICS / UC_TEMPORARY_REQUESTS / UC_MODEL_TRAINING dev / UC_UI_ANALYSIS / UC_DAILY_RUNTIME_DEPLOYMENT）。
+1. 归类 UC（UC_DIAGNOSTICS / UC_TEMPORARY_REQUESTS / UC_MODEL_TRAINING dev / UC_PIT_DATA_CERTIFICATION / UC_UI_ANALYSIS / UC_DAILY_RUNTIME_DEPLOYMENT）。
 2. 显式声明 SCOPE（Task type / UC / Skill / Scope），通过 EXECUTION_GATE（路径在 allowed_paths 内、不触 forbidden_paths）。
 3. 诊断类：只读检查，运行 `scripts/checks/` 与 `harness/checks/` 对应 check，输出结构化结果，不做自动修复。
 4. 开发类：在 allowed_paths 内实施；遵守"禁止混 PR"，改动走分支 + PR，不直接推 main。
