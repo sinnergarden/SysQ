@@ -354,7 +354,7 @@ class TestDataUpdateIntegration(unittest.TestCase):
         self.assertIn("df", saved)
         self.assertIn("ts_code", saved["df"].columns)
         self.assertEqual(saved["codes"], ["000001.SZ"])
-        self.assertEqual(result, {"status": "success", "mutations": [expected_mutation]})
+        self.assertEqual(result, {"status": "success", "mutation_count": 1})
 
 
 if __name__ == "__main__":

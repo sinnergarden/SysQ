@@ -1626,7 +1626,7 @@ class TushareCollector:
         codes = sorted({str(code) for code in self.get_universe(universe)})
         if not codes:
             log.warning("No codes found for universe.")
-            return {"status": "failed", "reason": "empty_universe", "mutations": []}
+            return {"status": "failed", "reason": "empty_universe", "mutation_count": 0}
         audited = run_id is not None or audit_store is not None or resume_proof is not None
         if audited and (run_id is None or audit_store is None or not scope_key or not evidence_universe):
             raise ValueError("audited history requires run_id, audit_store, scope_key, and evidence_universe")
@@ -1634,7 +1634,7 @@ class TushareCollector:
         batch_size = batch_size or self.batch_size
         code_batches = [codes[i:i + batch_size] for i in range(0, len(codes), batch_size)]
         total_batches = len(code_batches)
-        mutations: list[dict] = []
+        mutation_count = 0
         for i, batch_codes in enumerate(code_batches):
             batch_no = i + 1
             batch_str = ",".join(batch_codes)
@@ -1656,7 +1656,7 @@ class TushareCollector:
                 scope_key=str(scope_key or "ad_hoc"),
                 evidence_universe=str(evidence_universe or "ad_hoc"),
             )
-            mutations.extend(batch_result.get("mutations", []))
+            mutation_count += int(batch_result.get("mutation_count", 0))
             batch_elapsed = time.time() - batch_start_ts
             avg_elapsed = (time.time() - start_ts) / batch_no
             eta_seconds = max(int(avg_elapsed * (total_batches - batch_no)), 0)
@@ -1667,7 +1667,7 @@ class TushareCollector:
         log.info(f"Universe {universe} update completed in {total_elapsed:.1f}s.")
         return {
             "status": "success",
-            "mutations": mutations,
+            "mutation_count": mutation_count,
             "evidence_field_endpoints": dict(HISTORY_FIELD_ENDPOINTS) if audited else {},
             "range_start": start_date,
             "range_end": end_date,
@@ -1801,7 +1801,7 @@ class TushareCollector:
         # Loop Control
         curr_dt = datetime.strptime(start_date, '%Y%m%d')
         end_dt = datetime.strptime(end_date, '%Y%m%d')
-        mutations: list[dict] = []
+        mutation_count = 0
 
         while curr_dt <= end_dt:
             # Chunking: 3 Months (Quarterly)
@@ -2035,7 +2035,7 @@ class TushareCollector:
                     run_id=run_id, audit_store=audit_store,
                     bundle_receipt_id=bundle_receipt_id,
                 )
-                mutations.extend(chunk_mutations)
+                mutation_count += len(chunk_mutations)
 
             except Exception as e:
                 log.error(f"Failed batch chunk {chunk_start}-{chunk_end}: {e}")
@@ -2045,7 +2045,7 @@ class TushareCollector:
             # Next chunk
             curr_dt = chunk_end_dt + timedelta(days=1)
 
-        return {"status": "success", "mutations": mutations}
+        return {"status": "success", "mutation_count": mutation_count}
 
     def _save_batch_results(
         self, df_big, code_list, ignore_columns=None, *, run_id=None,
