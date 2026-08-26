@@ -1150,16 +1150,16 @@ def certify_pit_baseline(
                 out_of_scope.append(str(mutation["mutation_id"]))
         elif status != "ACCOUNTED":
             mutation_reaudit_count += 1
-            affected = sorted({
-                feature
-                for index, result in candidate_results
-                if result in {"INTERSECTS", "UNKNOWN"}
-                for scope in (scopes[index],)
-                for feature in dependency_features.get((scope["source"], scope["dataset"], scope["endpoint"], scope["field"]), [])
-            })
-            if ambiguous:
-                affected = sorted(registry["features"])
             if mutation_reaudit_count <= MAX_MUTATION_DETAIL_ROWS:
+                affected = sorted({
+                    feature
+                    for index, result in candidate_results
+                    if result in {"INTERSECTS", "UNKNOWN"}
+                    for scope in (scopes[index],)
+                    for feature in dependency_features.get((scope["source"], scope["dataset"], scope["endpoint"], scope["field"]), [])
+                })
+                if ambiguous:
+                    affected = sorted(registry["features"])
                 exceptions.append(_exception(
                     "CANONICAL_MUTATION_INTERSECTS" if status == "INTERSECTS" else "CANONICAL_MUTATION_SCOPE_UNKNOWN",
                     "REAUDIT", affected, {"mutation_id": mutation["mutation_id"], "run_id": mutation["run_id"]},
