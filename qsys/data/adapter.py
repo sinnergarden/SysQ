@@ -76,6 +76,8 @@ class QlibAdapter:
         income_sidecar_sha256: str = "",
         income_sidecar_manifest_path: str | Path | None = None,
         income_sidecar_manifest_sha256: str = "",
+        income_source_mode: str = "legacy_unverified_global_v0",
+        income_sidecar_required_history_start: str = "",
     ):
         self.qlib_dir = Path(qlib_dir).expanduser() if qlib_dir is not None else Path(str(cfg.get_path("qlib_bin")))
         self.raw_dir = Path(raw_dir).expanduser() if raw_dir is not None else Path(str(cfg.get_path("canonical_dir")))
@@ -102,6 +104,10 @@ class QlibAdapter:
         )
         self.income_sidecar_manifest_sha256 = str(
             income_sidecar_manifest_sha256 or ""
+        )
+        self.income_source_mode = str(income_source_mode or "")
+        self.income_sidecar_required_history_start = str(
+            income_sidecar_required_history_start or ""
         )
         self.meta_db_path = Path(str(cfg.get_path("root"))) / "meta.db"
 
@@ -491,6 +497,7 @@ class QlibAdapter:
                 flags["shareholder_top10_path"] = str(
                     self.shareholder_top10_path
                 )
+            flags["income_source_mode"] = self.income_source_mode
             if self.income_sidecar_path is not None:
                 flags.update({
                     "income_sidecar_path": str(self.income_sidecar_path),
@@ -506,6 +513,9 @@ class QlibAdapter:
                     ),
                     "income_sidecar_required_end": (
                         str(end_time)[:10] if end_time is not None else None
+                    ),
+                    "income_sidecar_required_history_start": (
+                        self.income_sidecar_required_history_start
                     ),
                 })
             feat = build_phase1_features(semantic_input, flags=flags)

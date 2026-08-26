@@ -35,9 +35,11 @@ UC-5（Signal Analytics）、UC-6（Signal Combination）、UC-7（Signal Backte
 - 特征配置（`configs/features/*.yaml`）
 - 标签配置（`configs/labels/*.yaml`）
 - 行情数据（canonical / qlib_bin）
-- 启用四个 growth-confirmation income feature 时，必须显式 pin immutable audited
-  income sidecar 的 parquet path+SHA 与 manifest path+SHA；mutable global
-  `data/tushare/income.parquet` 不属于合法 research input。
+- 启用四个 growth-confirmation income feature 时，正式 audited research 必须显式
+  选择 `audited_sidecar_v1`，pin parquet path+SHA、manifest path+SHA，并声明由
+  audit scope/feature-set 消费范围给出的 `required_history_start`。旧配置映射为
+  `legacy_unverified_global_v0` 并在运行时告警；该模式只用于兼容，不能通过 PIT
+  certification。
 
 ### Outputs
 - `data/research/signals/{signal_id}/{signal_run_id}/predictions.parquet`
@@ -72,23 +74,29 @@ Growth-confirmation 的 income sidecar 由 daily canonical entrypoint 的显式 
 bootstrap mode 产生，但由 research generator 消费。`LightGBMSingleLabelGenerator`
 在构造时复核 artifact/manifest hash 和 contract，并把 artifact id、source run、terminal
 receipt hash、scope/cutoff 写入 `feature_source_lineage`，同时绑定 checkpoint 与 feature
-cache identity。adapter 只接收 generator 显式传入的四元 identity；缺失、tamper、scope
+cache identity。adapter 只接收 generator 显式传入的 identity；缺失、tamper、scope
 或 cutoff 不覆盖实际请求 window 时 fail closed，禁止 catch-all 转成全 NaN。
 
 ```yaml
 params:
+  income_source_mode: audited_sidecar_v1
   income_sidecar_path: data/research/income_sidecars/<artifact_id>/income.parquet
   income_sidecar_sha256: <exact_sha256>
   income_sidecar_manifest_path: data/research/income_sidecars/<artifact_id>/manifest.json
   income_sidecar_manifest_sha256: <exact_manifest_sha256>
+  income_sidecar_required_history_start: '20140313'  # example; derive from audit scope
 ```
 
-四项必须来自同一次 bootstrap 输出；禁止填 `latest` 或 symlink。
+四项必须来自同一次 bootstrap 输出；禁止填 `latest` 或 symlink。完整历史起点与单次
+rolling request 的 `start/end` 是两项独立约束：manifest `range_start` 必须覆盖显式
+`required_history_start`，而 request window 只校验本次消费 cutoff，不能替代历史起点。
+真实 baseline identity 只能在 terminal sidecar 生成后写入；当前不得伪造 path/hash 或
+声称 baseline 已 READY。
 
 四个 feature 的数值公式与 feature list 不变。每列独立传播所有实际季度依赖的最大
 `available_from`；同一可用日取最大报告期，较旧报告晚成熟时不回退，较新报告的合法
-NaN 仍作为新事件覆盖旧季度值。公告日 T 的 feature row 仍只能由既有
-`actual_feature_date_strictly_before_trade_date_v1` 用于 T 之后的执行日。
+NaN 仍作为新事件覆盖旧季度值。audited 模式下公告日 T 的 income event 对 T feature
+不可见，只能用于 T+1 及以后；forecast 和显式 legacy income 保持原有同日可见语义。
 
 Canonical cached-signal backtest 还必须输出 manifest 绑定的
 `executions.csv`（schema `backtest_executions_v2`），逐订单记录请求数量、真实

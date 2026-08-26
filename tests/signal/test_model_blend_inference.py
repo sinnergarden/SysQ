@@ -162,6 +162,18 @@ def test_validates_pinned_bundle_and_maturity(tmp_path: Path) -> None:
     lineage = load_model_lineage(settings, "2026-08-07", OPEN_DATES)
     assert settings["bundle_id"] == "bundle_v1"
     assert [item["tag"] for item in lineage] == ["60d", "180d"]
+    assert settings["income_feature_source"]["mode"] == (
+        "legacy_unverified_global_v0"
+    )
+
+
+def test_inference_audited_income_mode_requires_complete_binding(tmp_path: Path) -> None:
+    model_root = tmp_path / "data" / "research" / "models"
+    config = _config(model_root)
+    config["income_feature_source"] = {"mode": "audited_sidecar_v1"}
+
+    with pytest.raises(InferenceContractError, match="artifact/manifest identity"):
+        validate_inference_config("financial_rc", config, tmp_path)
 
 
 def test_rejects_non_unit_model_weights(tmp_path: Path) -> None:

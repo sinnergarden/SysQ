@@ -380,6 +380,14 @@ def _main_under_writer_lock(writer_lock=None):
         default=None,
         help="Exact source range end and availability cutoff (YYYYMMDD)",
     )
+    p.add_argument(
+        "--income-sidecar-required-history-start",
+        default=None,
+        help=(
+            "Explicit earliest history required by the consuming feature/audit "
+            "scope (YYYYMMDD); never inferred from a rolling window"
+        ),
+    )
     args = p.parse_args()
     if args.build_income_sidecar_from_run_id:
         if not args.apply:
@@ -389,6 +397,9 @@ def _main_under_writer_lock(writer_lock=None):
             "--income-sidecar-scope-key": args.income_sidecar_scope_key,
             "--income-sidecar-range-start": args.income_sidecar_range_start,
             "--income-sidecar-cutoff": args.income_sidecar_cutoff,
+            "--income-sidecar-required-history-start": (
+                args.income_sidecar_required_history_start
+            ),
         }
         missing = [name for name, value in required.items() if not value]
         if missing:
@@ -431,6 +442,7 @@ def _main_under_writer_lock(writer_lock=None):
             range_start=args.income_sidecar_range_start,
             range_end=args.income_sidecar_cutoff,
             availability_cutoff=args.income_sidecar_cutoff,
+            required_history_start=args.income_sidecar_required_history_start,
             output_root=output_root,
         )
         print(json.dumps(result, indent=2, sort_keys=True))

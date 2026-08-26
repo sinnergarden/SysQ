@@ -87,10 +87,12 @@ class TestAdapterSemanticFeatures(unittest.TestCase):
 
         mock_build.side_effect = _return_feature
         adapter = QlibAdapter(
+            income_source_mode="audited_sidecar_v1",
             income_sidecar_path=artifact,
             income_sidecar_sha256="a" * 64,
             income_sidecar_manifest_path=manifest,
             income_sidecar_manifest_sha256="b" * 64,
+            income_sidecar_required_history_start="2014-03-13",
         )
 
         result = adapter._build_semantic_features(
@@ -108,6 +110,10 @@ class TestAdapterSemanticFeatures(unittest.TestCase):
         self.assertEqual(flags["income_sidecar_manifest_sha256"], "b" * 64)
         self.assertEqual(flags["income_sidecar_required_start"], "2026-04-02")
         self.assertEqual(flags["income_sidecar_required_end"], "2026-04-03")
+        self.assertEqual(flags["income_source_mode"], "audited_sidecar_v1")
+        self.assertEqual(
+            flags["income_sidecar_required_history_start"], "2014-03-13"
+        )
 
     @patch("qsys.data.adapter.DatasetD")
     def test_get_features_keeps_unavailable_semantic_columns_as_nan(self, mock_dataset):

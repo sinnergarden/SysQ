@@ -33,6 +33,7 @@ from qsys.feature.freshness import (
     profile_shareholder_feature_freshness,
     shareholder_row_freshness_reasons,
 )
+from qsys.data.income_sidecar import normalize_income_feature_source
 
 
 class InferenceContractError(RuntimeError):
@@ -638,6 +639,12 @@ def validate_inference_config(
         )
     except ValueError as exc:
         raise InferenceContractError(str(exc)) from exc
+    try:
+        income_feature_source = normalize_income_feature_source(
+            strategy_config.get("income_feature_source")
+        )
+    except ValueError as exc:
+        raise InferenceContractError(str(exc)) from exc
 
     raw_models = bundle.get("models")
     if not isinstance(raw_models, list) or not raw_models:
@@ -845,6 +852,7 @@ def validate_inference_config(
         ),
         "feature_availability": feature_availability,
         "shareholder_freshness": shareholder_freshness,
+        "income_feature_source": income_feature_source,
     }
     if settings["top_k"] <= 0:
         raise InferenceContractError("inference.top_k must be positive")
@@ -910,6 +918,7 @@ def validate_inference_config(
             "feature_list_id": feature_list_id,
             "feature_availability": feature_availability,
             "shareholder_freshness": shareholder_freshness,
+            "income_feature_source": income_feature_source,
             "models": [
                 {
                     key: value
@@ -1003,6 +1012,18 @@ def load_model_lineage(
                     "differs from config"
                 )
         try:
+            model_income_feature_source = normalize_income_feature_source(
+                meta.get("income_feature_source")
+            )
+        except ValueError as exc:
+            raise InferenceContractError(
+                f"model {model['tag']} has invalid income feature source: {exc}"
+            ) from exc
+        if model_income_feature_source != settings["income_feature_source"]:
+            raise InferenceContractError(
+                f"model {model['tag']} income feature source differs from config"
+            )
+        try:
             maturity_sessions = validate_label_maturity(
                 train_end=train_end,
                 signal_date=signal_date,
@@ -1032,6 +1053,7 @@ def load_model_lineage(
                 "shareholder_source_lineage": meta.get(
                     "shareholder_source_lineage"
                 ),
+                "income_feature_source": model_income_feature_source,
             }
         )
     return lineage
@@ -1350,6 +1372,18 @@ def run_candidate_inference(
     adapter = QlibAdapter(
         qlib_dir=project_root / "data" / "qlib_bin",
         raw_dir=project_root / "data" / "canonical" / "daily",
+        income_source_mode=settings["income_feature_source"]["mode"],
+        income_sidecar_path=settings["income_feature_source"]["artifact_path"],
+        income_sidecar_sha256=settings["income_feature_source"]["artifact_sha256"],
+        income_sidecar_manifest_path=(
+            settings["income_feature_source"]["manifest_path"]
+        ),
+        income_sidecar_manifest_sha256=(
+            settings["income_feature_source"]["manifest_sha256"]
+        ),
+        income_sidecar_required_history_start=(
+            settings["income_feature_source"]["required_history_start"]
+        ),
     )
     adapter.init_qlib()
     qlib_latest_raw = adapter.get_last_qlib_date()
@@ -1794,6 +1828,7 @@ def run_candidate_inference(
         },
         "feature_sources": {
             "shareholder": shareholder_source_health,
+            "income": settings["income_feature_source"],
         },
         "source": {
             "engine": settings["engine"],

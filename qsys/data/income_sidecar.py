@@ -29,6 +29,8 @@ from qsys.data.source_audit import REQUIRED_TERMINAL_GATES, stable_scope_hash
 
 INCOME_SIDECAR_SCHEMA = "audited_income_pit_sidecar_v1"
 INCOME_SIDECAR_TRANSFORM = "income_first_available_projection_v1"
+INCOME_SOURCE_MODE_AUDITED = "audited_sidecar_v1"
+INCOME_SOURCE_MODE_LEGACY = "legacy_unverified_global_v0"
 INCOME_SIDECAR_FILENAME = "income.parquet"
 INCOME_SIDECAR_MANIFEST_FILENAME = "manifest.json"
 _REQUIRED_INCOME_COLUMNS = {
@@ -52,6 +54,59 @@ _SHA256_CHARS = frozenset("0123456789abcdef")
 
 class IncomeSidecarError(RuntimeError):
     """Income sidecar evidence or immutable artifact validation failed."""
+
+
+def normalize_income_feature_source(
+    value: Mapping[str, Any] | None,
+) -> dict[str, str]:
+    """Normalize the dedicated audited/legacy income feature-source contract."""
+
+    raw = dict(value or {})
+    mode = str(raw.get("mode") or INCOME_SOURCE_MODE_LEGACY).strip()
+    if mode not in {INCOME_SOURCE_MODE_AUDITED, INCOME_SOURCE_MODE_LEGACY}:
+        raise ValueError(f"unsupported income feature source mode: {mode!r}")
+    result = {
+        "mode": mode,
+        "artifact_path": str(raw.get("artifact_path") or "").strip(),
+        "artifact_sha256": str(raw.get("artifact_sha256") or "").strip().lower(),
+        "manifest_path": str(raw.get("manifest_path") or "").strip(),
+        "manifest_sha256": str(raw.get("manifest_sha256") or "").strip().lower(),
+        "required_history_start": str(
+            raw.get("required_history_start") or ""
+        ).strip(),
+    }
+    identity_keys = (
+        "artifact_path", "artifact_sha256", "manifest_path", "manifest_sha256",
+    )
+    if mode == INCOME_SOURCE_MODE_AUDITED:
+        missing = [
+            key
+            for key in (*identity_keys, "required_history_start")
+            if not result[key]
+        ]
+        if missing:
+            raise ValueError(
+                "audited income feature source requires artifact/manifest identity "
+                f"and required_history_start; missing {missing}"
+            )
+        try:
+            _normalize_date(
+                result["required_history_start"], field="required_history_start"
+            )
+        except IncomeSidecarError as exc:
+            raise ValueError(str(exc)) from exc
+    else:
+        unexpected = [
+            key
+            for key in (*identity_keys, "required_history_start")
+            if result[key]
+        ]
+        if unexpected:
+            raise ValueError(
+                "legacy unverified income mode cannot carry audited identity fields: "
+                f"{unexpected}"
+            )
+    return result
 
 
 def _sha256_bytes(content: bytes) -> str:
@@ -247,6 +302,7 @@ def materialize_audited_income_sidecar(
     range_start: str,
     range_end: str,
     availability_cutoff: str,
+    required_history_start: str,
     output_root: str | Path,
 ) -> dict[str, Any]:
     """Materialize one immutable income PIT sidecar from trusted raw evidence."""
@@ -260,9 +316,17 @@ def materialize_audited_income_sidecar(
     availability_cutoff = _normalize_date(
         availability_cutoff, field="availability_cutoff"
     )
-    if range_start > range_end or availability_cutoff != range_end:
+    required_history_start = _normalize_date(
+        required_history_start, field="required_history_start"
+    )
+    if (
+        range_start > range_end
+        or availability_cutoff != range_end
+        or not range_start <= required_history_start <= availability_cutoff
+    ):
         raise IncomeSidecarError(
-            "income sidecar requires range_start <= range_end == availability_cutoff"
+            "income sidecar requires range_start <= required_history_start <= "
+            "range_end == availability_cutoff"
         )
     receipt_path, data_root = _resolve_terminal_receipt(
         terminal_receipt_path, source_run_id=source_run_id,
@@ -456,6 +520,7 @@ def materialize_audited_income_sidecar(
         "range_start": range_start,
         "range_end": range_end,
         "availability_cutoff": availability_cutoff,
+        "required_history_start": required_history_start,
         "symbol_count": len(symbols),
         "symbols_sha256": stable_scope_hash(symbols),
         "source_receipts": receipt_lineage,
@@ -490,6 +555,7 @@ def materialize_audited_income_sidecar(
                     "range_start": range_start,
                     "range_end": range_end,
                     "availability_cutoff": availability_cutoff,
+                    "required_history_start": required_history_start,
                     "symbol_count": len(symbols),
                     "symbols_sha256": stable_scope_hash(symbols),
                     "symbols": symbols,
@@ -563,6 +629,7 @@ def materialize_audited_income_sidecar(
                 "manifest_sha256": _sha256_file(final_manifest),
                 "rows": len(sidecar),
                 "symbol_count": len(symbols),
+                "required_history_start": required_history_start,
                 "projection": manifest["projection"],
             }
         finally:
@@ -578,6 +645,7 @@ def validate_income_sidecar_identity(
     manifest_sha256: str,
     required_start: str | None = None,
     required_end: str | None = None,
+    required_history_start: str | None = None,
     required_symbols: Iterable[str] = (),
 ) -> dict[str, Any]:
     """Validate an explicit immutable income sidecar identity fail closed."""
@@ -651,6 +719,8 @@ def validate_income_sidecar_identity(
         or scope.get("range_end") != immutable_identity.get("range_end")
         or scope.get("availability_cutoff")
         != immutable_identity.get("availability_cutoff")
+        or scope.get("required_history_start")
+        != immutable_identity.get("required_history_start")
         or scope.get("symbol_count") != immutable_identity.get("symbol_count")
         or scope.get("symbols_sha256") != immutable_identity.get("symbols_sha256")
     ):
@@ -665,6 +735,21 @@ def validate_income_sidecar_identity(
             scope.get("availability_cutoff"), field="scope.availability_cutoff"
         ) < end:
             raise IncomeSidecarError("income sidecar does not cover required end")
+    if required_history_start is not None:
+        history_start = _normalize_date(
+            required_history_start, field="required_history_start"
+        )
+        manifest_history_start = _normalize_date(
+            scope.get("required_history_start"),
+            field="scope.required_history_start",
+        )
+        source_start = _normalize_date(
+            scope.get("range_start"), field="scope.range_start"
+        )
+        if manifest_history_start != history_start or source_start > history_start:
+            raise IncomeSidecarError(
+                "income sidecar required history scope mismatch"
+            )
     requested = {str(symbol).strip() for symbol in required_symbols if str(symbol).strip()}
     if not requested.issubset(set(str(symbol) for symbol in scope_symbols)):
         raise IncomeSidecarError("income sidecar does not cover required symbols")

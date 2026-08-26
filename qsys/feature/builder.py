@@ -105,10 +105,16 @@ def build_phase1_features(df: pd.DataFrame, flags: dict | None = None) -> pd.Dat
             income_sidecar_manifest_sha256=flags.get(
                 "income_sidecar_manifest_sha256", ""
             ),
+            income_source_mode=flags.get(
+                "income_source_mode", "legacy_unverified_global_v0"
+            ),
             income_sidecar_required_start=flags.get(
                 "income_sidecar_required_start"
             ),
             income_sidecar_required_end=flags.get("income_sidecar_required_end"),
+            income_sidecar_required_history_start=flags.get(
+                "income_sidecar_required_history_start", ""
+            ),
         )
 
 

@@ -95,11 +95,14 @@ python scripts/data_sync.py \
   --income-sidecar-scope-key csi1800 \
   --income-sidecar-range-start 20140313 \
   --income-sidecar-cutoff 20260821 \
+  --income-sidecar-required-history-start 20140313 \
   --apply
 ```
 
-输出 JSON 中的 artifact/manifest path 与 SHA-256 必须四项一起复制到 research generator
-配置；不得改用 `latest`、symlink 或裸 `data/tushare/income.parquet`。已有相同 identity
+输出 JSON 中的 artifact/manifest path 与 SHA-256 必须四项一起复制到 audited research
+配置，并同时声明由 audit scope/feature-set 消费范围导出的 `required_history_start`；不得
+硬编码固定 lookback 天数，也不得改用 `latest` 或 symlink。manifest source range 必须覆盖
+完整历史起点，rolling request window 仅负责本次 cutoff。已有相同 identity
 只在两份文件 byte-for-byte 一致时复用；任何 terminal/payload/hash/scope 不一致都阻断。
 
 若 universe-history catch-up 实际开始写 canonical，当前 target-day source receipt 不能替

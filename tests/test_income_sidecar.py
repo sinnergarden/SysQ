@@ -7,13 +7,17 @@ from unittest.mock import patch
 
 import pandas as pd
 import pytest
+import yaml
 
 import scripts.data_sync as data_sync
 
 from qsys.data._merge_helpers import FINANCIAL_AVAILABILITY_CONTRACT
 from qsys.data.income_sidecar import (
+    INCOME_SOURCE_MODE_AUDITED,
+    INCOME_SOURCE_MODE_LEGACY,
     IncomeSidecarError,
     materialize_audited_income_sidecar,
+    normalize_income_feature_source,
     validate_income_sidecar_identity,
 )
 from qsys.data.source_audit import (
@@ -148,6 +152,7 @@ def _build(tmp_path: Path, receipt: Path) -> dict:
         range_start=START,
         range_end=CUTOFF,
         availability_cutoff=CUTOFF,
+        required_history_start=START,
         output_root=tmp_path / "artifacts",
     )
 
@@ -162,6 +167,7 @@ def test_builder_projects_trusted_raw_and_publishes_immutable_identity(
 
     assert first["status"] == "published"
     assert second["status"] == "reused"
+    assert first["required_history_start"] == START
     assert first["artifact_id"] == second["artifact_id"]
     sidecar = pd.read_parquet(first["artifact_path"])
     assert sidecar["end_date"].tolist() == ["20260331"]
@@ -180,6 +186,7 @@ def test_builder_projects_trusted_raw_and_publishes_immutable_identity(
         manifest_sha256=first["manifest_sha256"],
         required_start=START,
         required_end=CUTOFF,
+        required_history_start=START,
         required_symbols={"000001.SZ", "000002.SZ"},
     )
     assert identity["manifest"]["artifact_id"] == first["artifact_id"]
@@ -265,6 +272,14 @@ def test_identity_rejects_hash_tamper_and_scope_mismatch(tmp_path: Path) -> None
             manifest_sha256=result["manifest_sha256"],
             required_symbols={"999999.SZ"},
         )
+    with pytest.raises(IncomeSidecarError, match="required history scope"):
+        validate_income_sidecar_identity(
+            artifact_path=result["artifact_path"],
+            artifact_sha256=result["artifact_sha256"],
+            manifest_path=result["manifest_path"],
+            manifest_sha256=result["manifest_sha256"],
+            required_history_start="20170313",
+        )
 
     forged_manifest = json.loads(
         Path(result["manifest_path"]).read_text(encoding="utf-8")
@@ -315,6 +330,7 @@ def test_data_sync_explicit_bootstrap_mode_calls_real_offline_builder(
             "--income-sidecar-scope-key", SCOPE_KEY,
             "--income-sidecar-range-start", START,
             "--income-sidecar-cutoff", CUTOFF,
+            "--income-sidecar-required-history-start", START,
         ],
     )
 
@@ -345,3 +361,51 @@ def test_normal_daily_never_invokes_income_sidecar_builder(
 
     materialize.assert_not_called()
     child.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    "missing",
+    ["artifact_path", "artifact_sha256", "manifest_path", "manifest_sha256"],
+)
+def test_audited_source_contract_requires_complete_identity(missing: str) -> None:
+    value = {
+        "mode": INCOME_SOURCE_MODE_AUDITED,
+        "artifact_path": "income.parquet",
+        "artifact_sha256": "a" * 64,
+        "manifest_path": "manifest.json",
+        "manifest_sha256": "b" * 64,
+        "required_history_start": START,
+    }
+    value.pop(missing)
+
+    with pytest.raises(ValueError, match="missing"):
+        normalize_income_feature_source(value)
+
+
+def test_income_source_modes_keep_history_scope_explicit() -> None:
+    with pytest.raises(ValueError, match="required_history_start"):
+        normalize_income_feature_source({
+            "mode": INCOME_SOURCE_MODE_AUDITED,
+            "artifact_path": "income.parquet",
+            "artifact_sha256": "a" * 64,
+            "manifest_path": "manifest.json",
+            "manifest_sha256": "b" * 64,
+        })
+    assert normalize_income_feature_source(None)["mode"] == INCOME_SOURCE_MODE_LEGACY
+    with pytest.raises(ValueError, match="cannot carry audited identity"):
+        normalize_income_feature_source({
+            "mode": INCOME_SOURCE_MODE_LEGACY,
+            "artifact_path": "income.parquet",
+        })
+
+
+def test_formal_strategy_configs_declare_unverified_compatibility_mode() -> None:
+    project_root = Path(__file__).resolve().parents[1]
+    for name in ("financial_rc.yaml", "s180_top10.yaml"):
+        config = yaml.safe_load(
+            (project_root / "configs" / "strategies" / name).read_text(
+                encoding="utf-8"
+            )
+        )
+        source = normalize_income_feature_source(config["income_feature_source"])
+        assert source["mode"] == INCOME_SOURCE_MODE_LEGACY

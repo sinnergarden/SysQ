@@ -162,6 +162,8 @@ class LightGBMSingleLabelGenerator:
     income_sidecar_sha256: str = ""
     income_sidecar_manifest_path: str = ""
     income_sidecar_manifest_sha256: str = ""
+    income_source_mode: str = "legacy_unverified_global_v0"
+    income_sidecar_required_history_start: str = ""
     # Optional research-only contract.  When omitted, preserve the historical
     # generator behaviour (including its existing NaN handling).  When set,
     # it is a read-only fail-closed preflight over the raw feature frame; it
@@ -177,6 +179,9 @@ class LightGBMSingleLabelGenerator:
         default_factory=dict, repr=False, init=False
     )
     _income_source_lineage: dict[str, dict[str, object]] = field(
+        default_factory=dict, repr=False, init=False
+    )
+    _income_source_contract: dict[str, str] = field(
         default_factory=dict, repr=False, init=False
     )
     _shareholder_freshness_profiles: dict[str, dict[str, object]] = field(
@@ -270,27 +275,34 @@ class LightGBMSingleLabelGenerator:
         self._shareholder_source_lineage = lineage
 
     def _validate_income_snapshot(self) -> None:
-        values = {
-            "income_sidecar_path": self.income_sidecar_path,
-            "income_sidecar_sha256": self.income_sidecar_sha256,
-            "income_sidecar_manifest_path": self.income_sidecar_manifest_path,
-            "income_sidecar_manifest_sha256": self.income_sidecar_manifest_sha256,
-        }
-        if not any(values.values()):
+        from qsys.data.income_sidecar import (
+            INCOME_SOURCE_MODE_AUDITED,
+            normalize_income_feature_source,
+            validate_income_sidecar_identity,
+        )
+
+        source = normalize_income_feature_source({
+            "mode": self.income_source_mode,
+            "artifact_path": self.income_sidecar_path,
+            "artifact_sha256": self.income_sidecar_sha256,
+            "manifest_path": self.income_sidecar_manifest_path,
+            "manifest_sha256": self.income_sidecar_manifest_sha256,
+            "required_history_start": self.income_sidecar_required_history_start,
+        })
+        self._income_source_contract = source
+        self.income_source_mode = source["mode"]
+        self.income_sidecar_required_history_start = source[
+            "required_history_start"
+        ]
+        if source["mode"] != INCOME_SOURCE_MODE_AUDITED:
             return
-        missing = [key for key, value in values.items() if not value]
-        if missing:
-            raise ValueError(
-                "income sidecar requires artifact/manifest paths and SHA-256; "
-                f"missing {missing}"
-            )
-        from qsys.data.income_sidecar import validate_income_sidecar_identity
 
         identity = validate_income_sidecar_identity(
-            artifact_path=self.income_sidecar_path,
-            artifact_sha256=self.income_sidecar_sha256,
-            manifest_path=self.income_sidecar_manifest_path,
-            manifest_sha256=self.income_sidecar_manifest_sha256,
+            artifact_path=source["artifact_path"],
+            artifact_sha256=source["artifact_sha256"],
+            manifest_path=source["manifest_path"],
+            manifest_sha256=source["manifest_sha256"],
+            required_history_start=source["required_history_start"],
         )
         manifest = identity["manifest"]
         self.income_sidecar_path = identity["artifact_path"]
@@ -336,11 +348,14 @@ class LightGBMSingleLabelGenerator:
     @property
     def checkpoint_contract_identity(self) -> dict[str, object]:
         """Contracts that alter the generator's acceptance semantics."""
-        if self.shareholder_freshness_contract is None:
-            return {}
-        return {
-            "shareholder_freshness_contract": self.shareholder_freshness_contract,
+        contracts: dict[str, object] = {
+            "income_feature_source": self._income_source_contract,
         }
+        if self.shareholder_freshness_contract is not None:
+            contracts["shareholder_freshness_contract"] = (
+                self.shareholder_freshness_contract
+            )
+        return contracts
 
     @property
     def checkpoint_input_artifacts(self) -> list[dict[str, str]]:
@@ -458,6 +473,10 @@ class LightGBMSingleLabelGenerator:
             identity["income_sidecar_manifest_sha256"] = income[
                 "manifest_sha256"
             ]
+        identity["income_source_mode"] = self.income_source_mode
+        identity["income_required_history_start"] = (
+            self.income_sidecar_required_history_start
+        )
         return identity
 
     def _window_key(self, start: str, end: str, features: list[str]) -> str:
@@ -685,6 +704,10 @@ class LightGBMSingleLabelGenerator:
                 income_sidecar_manifest_sha256=(
                     self.income_sidecar_manifest_sha256
                 ),
+                income_source_mode=self.income_source_mode,
+                income_sidecar_required_history_start=(
+                    self.income_sidecar_required_history_start
+                ),
             ).init_qlib()
             self._qlib_inited = True
 
@@ -760,6 +783,10 @@ class LightGBMSingleLabelGenerator:
                 self.income_sidecar_manifest_path or None
             ),
             income_sidecar_manifest_sha256=self.income_sidecar_manifest_sha256,
+            income_source_mode=self.income_source_mode,
+            income_sidecar_required_history_start=(
+                self.income_sidecar_required_history_start
+            ),
         )
 
         # Build features via qlib + phase1 builder
@@ -945,6 +972,10 @@ class LightGBMSingleLabelGenerator:
                 self.income_sidecar_manifest_path or None
             ),
             income_sidecar_manifest_sha256=self.income_sidecar_manifest_sha256,
+            income_source_mode=self.income_source_mode,
+            income_sidecar_required_history_start=(
+                self.income_sidecar_required_history_start
+            ),
         ).get_features(
             self.prediction_universe,
             clean_features + ["$close"],

@@ -15,6 +15,7 @@ from qsys.data._merge_helpers import (
     FINANCIAL_AVAILABILITY_RULE,
 )
 from qsys.data.income_sidecar import (
+    INCOME_SOURCE_MODE_AUDITED,
     INCOME_SIDECAR_SCHEMA,
     INCOME_SIDECAR_TRANSFORM,
 )
@@ -61,6 +62,7 @@ def _income_identity(tmp_path: Path, *, payload: bytes = b"income-v1") -> dict[s
         "range_start": "20180101",
         "range_end": "20260821",
         "availability_cutoff": "20260821",
+        "required_history_start": "20180313",
         "symbol_count": 1,
         "symbols_sha256": stable_scope_hash(symbols),
         "source_receipts": [],
@@ -80,6 +82,7 @@ def _income_identity(tmp_path: Path, *, payload: bytes = b"income-v1") -> dict[s
             "range_start": "20180101",
             "range_end": "20260821",
             "availability_cutoff": "20260821",
+            "required_history_start": "20180313",
             "symbol_count": 1,
             "symbols_sha256": stable_scope_hash(symbols),
             "symbols": symbols,
@@ -97,12 +100,14 @@ def _income_identity(tmp_path: Path, *, payload: bytes = b"income-v1") -> dict[s
     manifest_path = tmp_path / "manifest.json"
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     return {
+        "income_source_mode": INCOME_SOURCE_MODE_AUDITED,
         "income_sidecar_path": str(artifact),
         "income_sidecar_sha256": artifact_sha,
         "income_sidecar_manifest_path": str(manifest_path),
         "income_sidecar_manifest_sha256": hashlib.sha256(
             manifest_path.read_bytes()
         ).hexdigest(),
+        "income_sidecar_required_history_start": "20180313",
     }
 
 
@@ -238,6 +243,8 @@ def test_income_sidecar_manifest_identity_enters_lineage_cache_and_checkpoint(
     assert adapter_kwargs["income_sidecar_manifest_sha256"] == identity[
         "income_sidecar_manifest_sha256"
     ]
+    assert adapter_kwargs["income_source_mode"] == INCOME_SOURCE_MODE_AUDITED
+    assert adapter_kwargs["income_sidecar_required_history_start"] == "20180313"
 
 
 def test_income_sidecar_requires_complete_identity_and_rejects_tamper(

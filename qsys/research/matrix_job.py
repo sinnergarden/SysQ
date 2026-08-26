@@ -302,6 +302,7 @@ def _create_generator_from_config(
             "shareholder_freshness_contract",
             "income_sidecar_path", "income_sidecar_sha256",
             "income_sidecar_manifest_path", "income_sidecar_manifest_sha256",
+            "income_source_mode", "income_sidecar_required_history_start",
         }
         unknown = set(params) - _CONSUMED_PARAMS
         if unknown:
@@ -368,6 +369,12 @@ def _create_generator_from_config(
             ),
             income_sidecar_manifest_sha256=params.get(
                 "income_sidecar_manifest_sha256", ""
+            ),
+            income_source_mode=params.get(
+                "income_source_mode", "legacy_unverified_global_v0"
+            ),
+            income_sidecar_required_history_start=params.get(
+                "income_sidecar_required_history_start", ""
             ),
             shareholder_freshness_contract=params.get(
                 "shareholder_freshness_contract"

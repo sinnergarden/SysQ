@@ -2,12 +2,15 @@
 
 Data sources:
     data/tushare/forecast.parquet
-    explicit audited immutable income PIT sidecar + manifest identity
+    explicit audited immutable income PIT sidecar + manifest identity, or the
+    declared legacy-unverified compatibility source
 
 PIT rule:
     Each income-derived feature is merged via the maximum availability of all
     quarterly inputs actually used by its unchanged formula.  ``end_date`` is
     only a report-period ordering key, never a visibility date.
+    Audited income is visible only on dates strictly after publication; legacy
+    compatibility preserves the historical exact-date merge behavior.
 
 Features (9 total):
   Forecast (3):
@@ -76,6 +79,7 @@ def _load_income(
     manifest_sha256: str,
     required_start: str | None,
     required_end: str | None,
+    required_history_start: str,
     required_symbols: set[str],
 ) -> pd.DataFrame:
     """Load one explicit audited first-available income artifact."""
@@ -89,6 +93,7 @@ def _load_income(
         manifest_sha256=manifest_sha256,
         required_start=required_start,
         required_end=required_end,
+        required_history_start=required_history_start,
         required_symbols=required_symbols,
     )
     df = pd.read_parquet(identity["artifact_path"])
@@ -123,6 +128,32 @@ def _load_income(
     return df.sort_values(["ts_code", "end_date"], kind="mergesort").reset_index(drop=True)
 
 
+def _load_legacy_unverified_income() -> pd.DataFrame:
+    """Load the pre-audit mutable income table under an explicit legacy mode."""
+
+    path = _tushare_dir() / "income.parquet"
+    if not path.is_file():
+        raise FileNotFoundError(f"Legacy unverified income data not found at {path}")
+    frame = pd.read_parquet(path)
+    required = {"ts_code", "ann_date", "end_date", "report_type"}
+    missing = required - set(frame.columns)
+    if missing:
+        raise ValueError(f"legacy unverified income table missing fields: {sorted(missing)}")
+    frame = frame.loc[
+        pd.to_numeric(frame["report_type"], errors="coerce").eq(1)
+    ].copy()
+    frame["ann_date"] = pd.to_datetime(frame["ann_date"], errors="coerce")
+    frame["end_date"] = pd.to_datetime(frame["end_date"], errors="coerce")
+    if frame[["ann_date", "end_date"]].isna().any().any():
+        raise ValueError("legacy unverified income table contains invalid dates")
+    frame["availability_date"] = frame["ann_date"]
+    return (
+        frame.sort_values(["ts_code", "end_date", "ann_date"], kind="mergesort")
+        .drop_duplicates(["ts_code", "end_date"], keep="last")
+        .reset_index(drop=True)
+    )
+
+
 def _build_daily_anchor(universe: list[str] | None = None,
                         start: str = "2018-01-01", end: str = "2025-12-31") -> pd.DataFrame:
     """Build daily (trade_date, ts_code) anchor from qlib."""
@@ -141,7 +172,12 @@ def _build_daily_anchor(universe: list[str] | None = None,
 # PIT merge
 # ═══════════════════════════════════════════════════════════════════
 
-def _pit_merge(anchor: pd.DataFrame, right: pd.DataFrame) -> pd.DataFrame:
+def _pit_merge(
+    anchor: pd.DataFrame,
+    right: pd.DataFrame,
+    *,
+    allow_exact_matches: bool = True,
+) -> pd.DataFrame:
     """Merge right table (with ``_ann_dt``) into anchor (with ``_dt``) by (ts_code, _dt) backward.
 
     The right table must have columns ``ts_code``, ``_ann_dt``, plus value columns.
@@ -163,8 +199,14 @@ def _pit_merge(anchor: pd.DataFrame, right: pd.DataFrame) -> pd.DataFrame:
             chunks.append(a)
         else:
             r_renamed = r.rename(columns={"_ann_dt": "_dt"})
-            merged = pd.merge_asof(a, r_renamed, on="_dt", by="ts_code",
-                                    direction="backward")
+            merged = pd.merge_asof(
+                a,
+                r_renamed,
+                on="_dt",
+                by="ts_code",
+                direction="backward",
+                allow_exact_matches=allow_exact_matches,
+            )
             chunks.append(merged)
 
     result = pd.concat(chunks, ignore_index=True)
@@ -389,8 +431,10 @@ def build_growth_confirmation_features(
     income_sidecar_sha256: str = "",
     income_sidecar_manifest_path: str = "",
     income_sidecar_manifest_sha256: str = "",
+    income_source_mode: str = "legacy_unverified_global_v0",
     income_sidecar_required_start: str | None = None,
     income_sidecar_required_end: str | None = None,
+    income_sidecar_required_history_start: str = "",
 ) -> pd.DataFrame:
     """Build growth confirmation features.
 
@@ -439,27 +483,41 @@ def build_growth_confirmation_features(
     # ═══════════════════════════════════════════════════════════════
     # 2. Income — financial features (TTM / YoY)
     # ═══════════════════════════════════════════════════════════════
-    identity_values = {
-        "income_sidecar_path": income_sidecar_path,
-        "income_sidecar_sha256": income_sidecar_sha256,
-        "income_sidecar_manifest_path": income_sidecar_manifest_path,
-        "income_sidecar_manifest_sha256": income_sidecar_manifest_sha256,
-    }
-    missing_identity = [name for name, value in identity_values.items() if not value]
-    if missing_identity:
-        raise ValueError(
-            "growth confirmation requires explicit audited income sidecar identity; "
-            f"missing {missing_identity}"
-        )
-    inc_raw = _load_income(
-        artifact_path=income_sidecar_path,
-        artifact_sha256=income_sidecar_sha256,
-        manifest_path=income_sidecar_manifest_path,
-        manifest_sha256=income_sidecar_manifest_sha256,
-        required_start=income_sidecar_required_start,
-        required_end=income_sidecar_required_end,
-        required_symbols=set(out["ts_code"].astype(str).unique()),
+    from qsys.data.income_sidecar import (
+        INCOME_SOURCE_MODE_AUDITED,
+        INCOME_SOURCE_MODE_LEGACY,
+        normalize_income_feature_source,
     )
+
+    source = normalize_income_feature_source({
+        "mode": income_source_mode,
+        "artifact_path": income_sidecar_path,
+        "artifact_sha256": income_sidecar_sha256,
+        "manifest_path": income_sidecar_manifest_path,
+        "manifest_sha256": income_sidecar_manifest_sha256,
+        "required_history_start": income_sidecar_required_history_start,
+    })
+    if source["mode"] == INCOME_SOURCE_MODE_AUDITED:
+        inc_raw = _load_income(
+            artifact_path=source["artifact_path"],
+            artifact_sha256=source["artifact_sha256"],
+            manifest_path=source["manifest_path"],
+            manifest_sha256=source["manifest_sha256"],
+            required_start=income_sidecar_required_start,
+            required_end=income_sidecar_required_end,
+            required_history_start=source["required_history_start"],
+            required_symbols=set(out["ts_code"].astype(str).unique()),
+        )
+    elif source["mode"] == INCOME_SOURCE_MODE_LEGACY:
+        warnings.warn(
+            "growth confirmation is using legacy_unverified_global_v0 income; "
+            "this source is not eligible for audited PIT certification",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        inc_raw = _load_legacy_unverified_income()
+    else:  # pragma: no cover - normalizer owns the closed mode set.
+        raise ValueError(f"unsupported income source mode: {source['mode']}")
     q_feats = _compute_quarterly_features(inc_raw)
 
     for col in [
@@ -470,6 +528,7 @@ def build_growth_confirmation_features(
         inc_merged = _pit_merge(
             out[["ts_code", "_dt"]],
             events[["ts_code", "_ann_dt", col]],
+            allow_exact_matches=(source["mode"] == INCOME_SOURCE_MODE_LEGACY),
         )
         out[col] = pd.to_numeric(inc_merged[col], errors="coerce")
 
@@ -512,8 +571,13 @@ def build_growth_confirmation_features(
 # PIT Sanity Check
 # ═══════════════════════════════════════════════════════════════════
 
-def pit_sanity_check(result: pd.DataFrame, n_sample: int = 20) -> None:
-    """Verify PIT: ann_date <= trade_date for all financial features.
+def pit_sanity_check(
+    result: pd.DataFrame,
+    n_sample: int = 20,
+    *,
+    income_source_mode: str = "legacy_unverified_global_v0",
+) -> None:
+    """Report the selected income mode's feature visibility boundary.
 
     Prints sampled rows with trade_date, ann_date, end_date, and feature values.
     """
@@ -528,7 +592,12 @@ def pit_sanity_check(result: pd.DataFrame, n_sample: int = 20) -> None:
     sample = result.dropna(subset=available).sample(min(n_sample, len(result)))
 
     print(f"\n{'='*60}")
-    print("PIT SANITY CHECK — verifying ann_date <= trade_date")
+    audited = income_source_mode == "audited_sidecar_v1"
+    relation = "<" if audited else "<="
+    print(
+        "PIT SANITY CHECK — income publication_date "
+        f"{relation} feature trade_date ({income_source_mode})"
+    )
     print(f"{'='*60}")
 
     for i, (_, r) in enumerate(sample.iterrows()):
@@ -538,4 +607,7 @@ def pit_sanity_check(result: pd.DataFrame, n_sample: int = 20) -> None:
         line += " | ".join(f"{f}={v}" for f, v in vals.items())
         print(line)
 
-    print("  ✅ PIT check: all sampled features via merge_asof backward => ann_date <= trade_date")
+    print(
+        "  PIT boundary: merge_asof backward with publication_date "
+        f"{relation} trade_date"
+    )

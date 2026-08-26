@@ -7,12 +7,15 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
+import qsys.feature.groups.growth_confirmation_v0 as growth_module
 
 from qsys.data._merge_helpers import (
     FINANCIAL_AVAILABILITY_CONTRACT,
     FINANCIAL_AVAILABILITY_RULE,
 )
 from qsys.data.income_sidecar import (
+    INCOME_SOURCE_MODE_AUDITED,
+    INCOME_SOURCE_MODE_LEGACY,
     INCOME_SIDECAR_SCHEMA,
     INCOME_SIDECAR_TRANSFORM,
 )
@@ -89,6 +92,7 @@ def _write_sidecar(tmp_path: Path) -> dict[str, str]:
         "range_start": "20180101",
         "range_end": "20211231",
         "availability_cutoff": "20211231",
+        "required_history_start": "20180313",
         "symbol_count": 1,
         "symbols_sha256": stable_scope_hash(symbols),
         "source_receipts": [],
@@ -109,6 +113,7 @@ def _write_sidecar(tmp_path: Path) -> dict[str, str]:
             "range_start": "20180101",
             "range_end": "20211231",
             "availability_cutoff": "20211231",
+            "required_history_start": "20180313",
             "symbol_count": 1,
             "symbols_sha256": stable_scope_hash(symbols),
             "symbols": symbols,
@@ -128,10 +133,12 @@ def _write_sidecar(tmp_path: Path) -> dict[str, str]:
         json.dumps(manifest, sort_keys=True), encoding="utf-8"
     )
     return {
+        "income_source_mode": INCOME_SOURCE_MODE_AUDITED,
         "income_sidecar_path": str(artifact),
         "income_sidecar_sha256": artifact_sha,
         "income_sidecar_manifest_path": str(manifest_path),
         "income_sidecar_manifest_sha256": _sha256(manifest_path),
+        "income_sidecar_required_history_start": "20180313",
     }
 
 
@@ -210,7 +217,26 @@ def test_feature_events_nan_overwrites_and_period_never_regresses() -> None:
     assert pd.isna(merged.iloc[1]["single_q_revenue_yoy"])
 
 
-def test_growth_requires_explicit_identity_and_consumes_real_sidecar(
+def test_income_publication_day_is_hidden_until_strictly_later_anchor() -> None:
+    events = pd.DataFrame({
+        "ts_code": ["A"],
+        "_ann_dt": pd.to_datetime(["2021-04-05"]),
+        "single_q_revenue_yoy": [0.25],
+    })
+    anchors = pd.DataFrame({
+        "ts_code": ["A", "A"],
+        "_dt": pd.to_datetime(["2021-04-05", "2021-04-06"]),
+    })
+
+    income = _pit_merge(anchors, events, allow_exact_matches=False)
+    forecast_legacy = _pit_merge(anchors, events)
+
+    assert pd.isna(income.iloc[0]["single_q_revenue_yoy"])
+    assert income.iloc[1]["single_q_revenue_yoy"] == 0.25
+    assert forecast_legacy.iloc[0]["single_q_revenue_yoy"] == 0.25
+
+
+def test_audited_growth_requires_explicit_identity_and_consumes_real_sidecar(
     tmp_path: Path,
 ) -> None:
     daily = pd.DataFrame({
@@ -218,8 +244,10 @@ def test_growth_requires_explicit_identity_and_consumes_real_sidecar(
         "trade_date": ["2020-05-01", "2020-05-02"],
         "close": [10.0, 10.1],
     })
-    with pytest.raises(ValueError, match="explicit audited income sidecar identity"):
-        build_growth_confirmation_features(daily)
+    with pytest.raises(ValueError, match="requires artifact/manifest identity"):
+        build_growth_confirmation_features(
+            daily, income_source_mode=INCOME_SOURCE_MODE_AUDITED
+        )
 
     identity = _write_sidecar(tmp_path)
     result = build_growth_confirmation_features(
@@ -235,6 +263,34 @@ def test_growth_requires_explicit_identity_and_consumes_real_sidecar(
             "is_profitable_ttm", "gross_margin_delta_yoy",
         ]
     ).issubset(result.columns)
+
+
+def test_income_same_day_visibility_is_mode_specific(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    daily = pd.DataFrame({
+        "ts_code": ["000001.SZ", "000001.SZ"],
+        "trade_date": ["2020-04-30", "2020-05-01"],
+        "close": [10.0, 10.1],
+    })
+    identity = _write_sidecar(tmp_path)
+    audited = build_growth_confirmation_features(daily, **identity)
+
+    legacy_path = tmp_path / "legacy-income.parquet"
+    _quarterly_rows().to_parquet(legacy_path, index=False)
+    legacy_root = tmp_path / "data" / "tushare"
+    legacy_root.mkdir(parents=True)
+    legacy_path.replace(legacy_root / "income.parquet")
+    monkeypatch.setattr(growth_module, "_tushare_dir", lambda: legacy_root)
+    with pytest.warns(RuntimeWarning, match="legacy_unverified"):
+        legacy = build_growth_confirmation_features(
+            daily, income_source_mode=INCOME_SOURCE_MODE_LEGACY
+        )
+
+    feature = "single_q_revenue_yoy"
+    assert pd.isna(audited.loc[0, feature])
+    assert audited.loc[1, feature] == pytest.approx(0.2)
+    assert legacy.loc[0, feature] == pytest.approx(0.2)
 
 
 def test_growth_rejects_tampered_manifest(tmp_path: Path) -> None:

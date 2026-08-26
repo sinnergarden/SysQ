@@ -248,12 +248,15 @@ current-contract income receipts，逐 payload 复核 SHA 并重跑 first-availa
 identity-addressed 目录原子发布 `income.parquet` + `manifest.json`，同 identity 只允许 byte-identical
 reuse。normal daily 不调用此 bootstrap，也不重新向供应商拉取全量 income。
 
-启用四个 growth feature 的 research generator 必须显式 pin sidecar artifact path/SHA 与 manifest
-path/SHA。manifest identity（source run、terminal receipt SHA、scope/cutoff、transform contract）
+正式 audited research 必须选择 `audited_sidecar_v1`，显式 pin sidecar artifact path/SHA、manifest
+path/SHA 与 `required_history_start`。manifest identity（source run、terminal receipt SHA、scope/cutoff、
+完整历史起点、transform contract）
 进入 feature source lineage、checkpoint input 与 feature-cache identity；mutable global
-`data/tushare/income.parquet` 禁止作为 fallback。四列数值公式不变，各列按实际参与季度传播最大
+`data/tushare/income.parquet` 只允许由显式 `legacy_unverified_global_v0` 兼容模式读取；该模式告警、
+进入 model/cache/candidate identity 且不具备 certification 资格。四列数值公式不变，各列按实际参与季度传播最大
 available_from，同一 availability 只发最大 end_date，晚成熟旧期不得覆盖已成熟新期；新期结果为
-NaN 时仍发事件以暴露缺失。
+NaN 时仍发事件以暴露缺失。audited income 用严格 publication_date < feature trade_date；legacy income
+与 forecast 保持原有 exact-match 行为。
 
 本顺序 PR 不修改 PIT certifier/DataPack，因此现有 certification blocker 不在这里移除；只有后续
 把 sidecar artifact/manifest 纳入 certification proof 与 portable DataPack identity 后，才能声称
