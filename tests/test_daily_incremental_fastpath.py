@@ -7,17 +7,27 @@ import pandas as pd
 import pytest
 
 from qsys.data.collector import TushareCollector, _supplier_request_sha256
-from qsys.data.source_audit import SourceAuditStore, stable_scope_hash
+from qsys.data.source_audit import (
+    REQUIRED_TERMINAL_GATES,
+    SourceAuditStore,
+    stable_scope_hash,
+)
 from qsys.data.storage import StockDataStore
-from qsys.ops.data_coverage import fetch_suspension_evidence
+from qsys.ops.data_coverage import (
+    fetch_suspension_evidence,
+    load_local_suspension_evidence,
+)
 from scripts.ops.sync_csi800_daily import (
     _do_raw_fetch,
+    _fetch_audited_history_suspensions,
     _refresh_and_verify_changed_symbols,
     _refresh_and_verify_history_mutation_store,
+    _verify_history_suspension_receipts,
 )
 
 
 TARGET = "20260821"
+HISTORY_START = "20260819"
 
 
 def test_supplier_request_hash_is_order_independent_and_rejects_ambiguous_values() -> None:
@@ -192,6 +202,460 @@ def test_history_stock_endpoint_uses_one_durable_exact_symbol_shard() -> None:
         ["000001.SZ"], ["000002.SZ"],
     ]
     assert all(call[1]["resume_proof"] == {"proof": True} for call in calls)
+
+
+def _history_suspension_collector(responses):
+    calls = []
+    collector = TushareCollector.__new__(TushareCollector)
+    collector.max_retries = 1
+    collector._collector_interfaces = {}
+
+    def api(**kwargs):
+        calls.append(dict(kwargs))
+        response = responses[kwargs["ts_code"]]
+        if isinstance(response, Exception):
+            raise response
+        return response.copy()
+
+    collector._get_interface_api = lambda endpoint: api
+    collector._fetch_with_retry = lambda func, **kwargs: func(**kwargs)
+    return collector, calls
+
+
+def _append_history_run_started(
+    audit: SourceAuditStore, run_id: str,
+) -> None:
+    audit.append_event(run_id, "run_started", {
+        "entrypoint": "scripts/data_sync.py",
+        "universe": "csi1800",
+        "target_date": TARGET,
+        "range_start": HISTORY_START,
+    })
+
+
+def _failed_history_run_proof(
+    audit: SourceAuditStore, audit_root: Path, run_id: str,
+) -> dict[str, str]:
+    audit.record_crash_receipt(
+        run_id=run_id,
+        receipt_root=audit_root / "source_runs",
+        entrypoint="scripts/data_sync.py",
+        error="injected after suspension evidence",
+    )
+    return audit.validate_resume_run(
+        resume_from_run_id=run_id,
+        expected_entrypoint="scripts/data_sync.py",
+        universe="csi1800",
+        target_date=TARGET,
+        range_start=HISTORY_START,
+    )
+
+
+def _finalize_history_receipt(
+    audit: SourceAuditStore,
+    audit_root: Path,
+    run_id: str,
+    *,
+    trusted: bool,
+) -> dict:
+    gates = {name: True for name in REQUIRED_TERMINAL_GATES}
+    gates["fetch"] = trusted
+    gates["raw_payloads"] = trusted
+    return audit.finalize_run(
+        run_id=run_id,
+        source="tushare",
+        scope_key="csi1800",
+        range_start=HISTORY_START,
+        range_end=TARGET,
+        fields=["close"],
+        gates=gates,
+        receipt_root=audit_root / "source_runs",
+        allow_initial_history=True,
+    )
+
+
+def test_history_suspension_stage_receipts_exact_union_and_loader_contract(
+    tmp_path: Path,
+) -> None:
+    symbols = ["000001.SZ", "000002.SZ", "000003.SZ"]
+    responses = {
+        "000001.SZ": pd.DataFrame({
+            "ts_code": ["000001.SZ"],
+            "trade_date": [HISTORY_START],
+            "suspend_type": ["S"],
+        }),
+        "000002.SZ": pd.DataFrame(
+            columns=["ts_code", "trade_date", "suspend_type"]
+        ),
+        "000003.SZ": pd.DataFrame({
+            "ts_code": ["000003.SZ"],
+            "trade_date": [TARGET],
+            "suspend_type": ["S"],
+        }),
+    }
+    collector, calls = _history_suspension_collector(responses)
+    audit_root = tmp_path / "data" / "audit"
+    audit = SourceAuditStore(audit_root / "audit.db")
+    run_id = "history-suspension-complete"
+
+    summary, receipt_ids = _fetch_audited_history_suspensions(
+        collector,
+        symbols,
+        HISTORY_START,
+        TARGET,
+        is_history_repair=True,
+        run_id=run_id,
+        audit_store=audit,
+        resume_proof=None,
+        scope_key="csi1800",
+        universe="csi1800",
+    )
+
+    assert summary == {
+        "status": "success",
+        "date_start": HISTORY_START,
+        "date_end": TARGET,
+        "symbol_count": 3,
+        "symbols_sha256": stable_scope_hash(symbols),
+        "receipt_count": 3,
+        "success_count": 2,
+        "empty_count": 1,
+        "row_count": 2,
+        "reused_count": 0,
+    }
+    assert [call["ts_code"] for call in calls] == symbols
+    assert all(call["start_date"] == HISTORY_START for call in calls)
+    assert all(call["end_date"] == TARGET for call in calls)
+    assert all(call["suspend_type"] == "S" for call in calls)
+    assert all(call["fields"] == "ts_code,trade_date,suspend_type" for call in calls)
+    with sqlite3.connect(audit_root / "audit.db") as connection:
+        rows = connection.execute(
+            "SELECT status,requested_scope_json FROM fetch_receipts "
+            "WHERE run_id=? AND endpoint='suspend_d' ORDER BY rowid",
+            (run_id,),
+        ).fetchall()
+    assert [status for status, _ in rows] == ["success", "empty", "success"]
+    scopes = [json.loads(scope) for _, scope in rows]
+    assert [scope["symbols"] for scope in scopes] == [[symbol] for symbol in symbols]
+    assert all(scope["date_start"] == HISTORY_START for scope in scopes)
+    assert all(scope["date_end"] == TARGET for scope in scopes)
+    assert all(scope["scope_key"] == "csi1800" for scope in scopes)
+    assert all(scope["universe"] == "csi1800" for scope in scopes)
+    assert all(scope["symbol_count"] == 1 for scope in scopes)
+    assert all(
+        scope["request_variant"] == "history_suspend_s_v1" for scope in scopes
+    )
+
+    terminal_check = _verify_history_suspension_receipts(
+        audit, run_id=run_id, summary=summary, receipt_ids=receipt_ids
+    )
+    assert terminal_check["status"] == "success"
+    finalized = _finalize_history_receipt(
+        audit, audit_root, run_id, trusted=True
+    )
+    assert finalized["trust_state"] == "trusted"
+    terminal = json.loads(Path(finalized["receipt_path"]).read_text())
+    suspension_rows = [
+        row for row in terminal["fetch_receipts"]
+        if row["endpoint"] == "suspend_d"
+    ]
+    assert len(suspension_rows) == 3
+
+    loaded = load_local_suspension_evidence(
+        finalized["receipt_path"],
+        symbols=set(symbols),
+        start_date=HISTORY_START,
+        end_date=TARGET,
+        universe="csi1800",
+    )
+    assert loaded["shard_count"] == 3
+    assert loaded["suspended_dates_by_symbol"] == {
+        "000001.SZ": {"2026-08-19"},
+        "000003.SZ": {"2026-08-21"},
+    }
+
+
+def test_history_suspension_stage_resume_reuses_exact_shards_without_supplier_calls(
+    tmp_path: Path,
+) -> None:
+    symbols = ["000001.SZ", "000002.SZ", "000003.SZ"]
+    responses = {
+        "000001.SZ": pd.DataFrame({
+            "ts_code": ["000001.SZ"], "trade_date": [HISTORY_START],
+            "suspend_type": ["S"],
+        }),
+        "000002.SZ": pd.DataFrame(
+            columns=["ts_code", "trade_date", "suspend_type"]
+        ),
+        "000003.SZ": pd.DataFrame({
+            "ts_code": ["000003.SZ"], "trade_date": [TARGET],
+            "suspend_type": ["S"],
+        }),
+    }
+    audit_root = tmp_path / "data" / "audit"
+    audit = SourceAuditStore(audit_root / "audit.db")
+    old_run = "history-suspension-old"
+    _append_history_run_started(audit, old_run)
+    old_collector, old_calls = _history_suspension_collector(responses)
+    old_summary, _ = _fetch_audited_history_suspensions(
+        old_collector,
+        symbols,
+        HISTORY_START,
+        TARGET,
+        is_history_repair=True,
+        run_id=old_run,
+        audit_store=audit,
+        resume_proof=None,
+        scope_key="csi1800",
+        universe="csi1800",
+    )
+    assert old_summary["status"] == "success"
+    assert len(old_calls) == 3
+    proof = _failed_history_run_proof(audit, audit_root, old_run)
+
+    new_run = "history-suspension-resumed"
+    _append_history_run_started(audit, new_run)
+    new_collector, new_calls = _history_suspension_collector({
+        symbol: AssertionError("verified shard must be reused") for symbol in symbols
+    })
+    summary, receipt_ids = _fetch_audited_history_suspensions(
+        new_collector,
+        symbols,
+        HISTORY_START,
+        TARGET,
+        is_history_repair=True,
+        run_id=new_run,
+        audit_store=audit,
+        resume_proof=proof,
+        scope_key="csi1800",
+        universe="csi1800",
+    )
+
+    assert new_calls == []
+    assert summary["status"] == "success"
+    assert summary["reused_count"] == 3
+    assert len(receipt_ids) == 3
+    terminal_check = _verify_history_suspension_receipts(
+        audit, run_id=new_run, summary=summary, receipt_ids=receipt_ids
+    )
+    assert terminal_check["status"] == "success"
+    second_proof = _failed_history_run_proof(audit, audit_root, new_run)
+
+    final_run = "history-suspension-resumed-twice"
+    _append_history_run_started(audit, final_run)
+    final_collector, final_calls = _history_suspension_collector({
+        symbol: AssertionError("multi-hop verified shard must be reused")
+        for symbol in symbols
+    })
+    final_summary, final_receipt_ids = _fetch_audited_history_suspensions(
+        final_collector,
+        symbols,
+        HISTORY_START,
+        TARGET,
+        is_history_repair=True,
+        run_id=final_run,
+        audit_store=audit,
+        resume_proof=second_proof,
+        scope_key="csi1800",
+        universe="csi1800",
+    )
+    assert final_calls == []
+    assert final_summary["status"] == "success"
+    assert final_summary["reused_count"] == 3
+    assert len(final_receipt_ids) == 3
+    assert _verify_history_suspension_receipts(
+        audit,
+        run_id=final_run,
+        summary=final_summary,
+        receipt_ids=final_receipt_ids,
+    )["status"] == "success"
+    finalized = _finalize_history_receipt(
+        audit, audit_root, final_run, trusted=True
+    )
+    assert finalized["trust_state"] == "trusted"
+    loaded = load_local_suspension_evidence(
+        finalized["receipt_path"],
+        symbols=set(symbols),
+        start_date=HISTORY_START,
+        end_date=TARGET,
+        universe="csi1800",
+    )
+    assert loaded["shard_count"] == 3
+
+
+@pytest.mark.parametrize(
+    "case,response",
+    [
+        ("failure", RuntimeError("supplier down")),
+        (
+            "partial_missing_suspend_type",
+            pd.DataFrame({
+                "ts_code": ["000001.SZ"], "trade_date": [HISTORY_START],
+            }),
+        ),
+        (
+            "wrong_symbol",
+            pd.DataFrame({
+                "ts_code": ["999999.SZ"], "trade_date": [HISTORY_START],
+                "suspend_type": ["S"],
+            }),
+        ),
+        (
+            "wrong_date",
+            pd.DataFrame({
+                "ts_code": ["000001.SZ"], "trade_date": ["20260818"],
+                "suspend_type": ["S"],
+            }),
+        ),
+        (
+            "resume_event",
+            pd.DataFrame({
+                "ts_code": ["000001.SZ"], "trade_date": [HISTORY_START],
+                "suspend_type": ["R"],
+            }),
+        ),
+    ],
+)
+def test_history_suspension_stage_failures_cannot_finalize_trusted(
+    tmp_path: Path, case: str, response,
+) -> None:
+    collector, _ = _history_suspension_collector({"000001.SZ": response})
+    audit_root = tmp_path / case / "data" / "audit"
+    audit = SourceAuditStore(audit_root / "audit.db")
+    run_id = f"history-suspension-{case}"
+
+    summary, receipt_ids = _fetch_audited_history_suspensions(
+        collector,
+        ["000001.SZ"],
+        HISTORY_START,
+        TARGET,
+        is_history_repair=True,
+        run_id=run_id,
+        audit_store=audit,
+        resume_proof=None,
+        scope_key="csi1800",
+        universe="csi1800",
+    )
+    assert summary["status"] == "failed"
+    terminal_check = _verify_history_suspension_receipts(
+        audit, run_id=run_id, summary=summary, receipt_ids=receipt_ids
+    )
+    assert terminal_check["status"] == "failed"
+    finalized = _finalize_history_receipt(
+        audit, audit_root, run_id, trusted=False
+    )
+    assert finalized["trust_state"] == "untrusted"
+    with sqlite3.connect(audit_root / "audit.db") as connection:
+        receipt = connection.execute(
+            "SELECT status,error_json FROM fetch_receipts WHERE run_id=?",
+            (run_id,),
+        ).fetchone()
+        assert receipt is not None
+        if case == "failure":
+            assert receipt[0] == "failure"
+        else:
+            assert receipt[0] == "partial"
+            assert json.loads(receipt[1])["detail"]["kind"] == (
+                "response_validation_failed"
+            )
+        assert connection.execute(
+            "SELECT COUNT(*) FROM trusted_watermarks WHERE run_id=?", (run_id,)
+        ).fetchone()[0] == 0
+
+
+def test_invalid_history_suspension_partial_is_refetched_on_resume(
+    tmp_path: Path,
+) -> None:
+    audit_root = tmp_path / "data" / "audit"
+    audit = SourceAuditStore(audit_root / "audit.db")
+    old_run = "history-suspension-invalid"
+    _append_history_run_started(audit, old_run)
+    old_collector, old_calls = _history_suspension_collector({
+        "000001.SZ": pd.DataFrame({
+            "ts_code": ["999999.SZ"],
+            "trade_date": [HISTORY_START],
+            "suspend_type": ["S"],
+        })
+    })
+    old_summary, _ = _fetch_audited_history_suspensions(
+        old_collector,
+        ["000001.SZ"],
+        HISTORY_START,
+        TARGET,
+        is_history_repair=True,
+        run_id=old_run,
+        audit_store=audit,
+        resume_proof=None,
+        scope_key="csi1800",
+        universe="csi1800",
+    )
+    assert old_summary["status"] == "failed"
+    assert len(old_calls) == 1
+    proof = _failed_history_run_proof(audit, audit_root, old_run)
+
+    new_run = "history-suspension-refetched"
+    _append_history_run_started(audit, new_run)
+    new_collector, new_calls = _history_suspension_collector({
+        "000001.SZ": pd.DataFrame({
+            "ts_code": ["000001.SZ"],
+            "trade_date": [HISTORY_START],
+            "suspend_type": ["S"],
+        })
+    })
+    summary, _ = _fetch_audited_history_suspensions(
+        new_collector,
+        ["000001.SZ"],
+        HISTORY_START,
+        TARGET,
+        is_history_repair=True,
+        run_id=new_run,
+        audit_store=audit,
+        resume_proof=proof,
+        scope_key="csi1800",
+        universe="csi1800",
+    )
+
+    assert summary["status"] == "success"
+    assert summary["reused_count"] == 0
+    assert len(new_calls) == 1
+    with sqlite3.connect(audit_root / "audit.db") as connection:
+        assert connection.execute(
+            "SELECT status FROM fetch_receipts WHERE run_id=?",
+            (new_run,),
+        ).fetchone()[0] == "success"
+
+
+@pytest.mark.parametrize(
+    "universe,is_history_repair",
+    [("csi1800", False), ("csi800", True)],
+)
+def test_history_suspension_stage_does_not_call_supplier_outside_csi1800_history(
+    tmp_path: Path, universe: str, is_history_repair: bool,
+) -> None:
+    collector, calls = _history_suspension_collector({
+        "000001.SZ": AssertionError("supplier must not be called")
+    })
+    audit = SourceAuditStore(tmp_path / universe / "audit" / "audit.db")
+
+    summary, receipt_ids = _fetch_audited_history_suspensions(
+        collector,
+        ["000001.SZ"],
+        HISTORY_START,
+        TARGET,
+        is_history_repair=is_history_repair,
+        run_id=f"not-required-{universe}-{is_history_repair}",
+        audit_store=audit,
+        resume_proof=None,
+        scope_key=universe,
+        universe=universe,
+    )
+
+    assert summary == {"status": "not_required"}
+    assert receipt_ids == []
+    assert calls == []
+    assert audit.run_evidence_summary(
+        f"not-required-{universe}-{is_history_repair}"
+    )["fetch_statuses"] == []
 
 
 def test_historical_income_receipt_links_canonical_and_income_sidecar(tmp_path: Path) -> None:

@@ -167,10 +167,16 @@ docs/schema/       → 部分 artifact 的字段级 schema
 - `daily` 与 `adj_factor` 的 requested PIT symbol 缺口均进入 scope gate。只有同 run 的
   `suspend_d` supplier receipt（含 observed response/hash/raw payload linkage）可把缺口分类为
   合法停牌；查询失败、payload tamper 或未解释缺口均 fail closed。
+- CSI1800 显式历史修复必须对 immutable research union 的每个 symbol 各查询一次完整 repair
+  range，固定 supplier filter `suspend_type=S`，并为 success/empty 都保存同 run raw receipt。
+  所有 shard 须进入同一 terminal receipt 并由 trusted watermark SHA-256 回链；任一 symbol
+  缺失、partial/failure、wrong symbol/date、缺列或非 `S` 行都阻断 trust。resume 只复用 exact
+  verified success/empty shard，不生成旁路 manifest，也不写 canonical/Qlib 或 feature。
 - required value coverage 基于 merge/clean/fill 之前的 supplier response：目标日、requested
   symbol 的 open/high/low/close/volume 与 factor 必须逐字段非空；`fillna(1.0)` 等 legacy
   canonical fallback 不能把上游缺值认证为 trusted。`suspend_d` 响应必须逐 query 匹配
-  ts_code 且日期落在请求范围，wrong/mixed symbol、缺列或越界日期均为失败证据。
+  ts_code 且日期落在请求范围；仅 `suspend_type=S` 可作为停牌证据，复牌 `R` 不得解释行情
+  缺口。wrong/mixed symbol、缺列、非 S 类型或越界日期均为失败证据。
 
 **Terminal watermark invariant**:
 

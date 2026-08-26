@@ -45,10 +45,13 @@ endpoints:
     expected_scope: hashes_the_post_merge_pre_commit_candidate_frame
     key_fields: [ts_code, trade_date]
   suspend_d:
-    capability: per_symbol_suspension_exception_evidence
-    required_for_trusted_daily: only_when_required_endpoint_has_requested_symbol_gaps
-    expected_scope: every_queried_gap_must_complete_and_raw_response_must_verify
-    key_fields: [ts_code, trade_date]
+    capability: per_symbol_suspension_exception_and_history_evidence
+    required_for_trusted_daily: single_day_gap_or_csi1800_history_repair
+    expected_scope: exact_symbol_and_requested_range_with_success_or_empty_receipt
+    history_request: one_full_repair_range_query_per_immutable_csi1800_union_symbol
+    supplier_filter: suspend_type_S_only
+    history_request_variant: history_suspend_s_v1
+    key_fields: [ts_code, trade_date, suspend_type]
   income:
     capability: per_symbol_report_history_with_announcement_date
     revision_capability: update_flag_timeline_requires_separate_audit
@@ -107,7 +110,8 @@ trust_rules:
   required_supplier_non_null:
     daily: [open, high, low, close, volume]
     adj_factor: [factor]
-  suspension_response_identity: exact_query_symbol_and_requested_date_range
+  suspension_response_identity: exact_query_symbol_requested_date_range_and_suspend_type_S
+  history_suspension_terminal: all_union_symbol_shards_in_same_run_terminal_receipt_and_watermark_backlink
   backward_watermark_expansion: forbidden_without_separate_certification
   wrapper_finalize: outer_only_after_all_repairs_and_final_readiness
   unreceipted_outer_core_history_mutation: untrusted_and_requires_new_run

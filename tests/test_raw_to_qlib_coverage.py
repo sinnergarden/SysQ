@@ -46,6 +46,8 @@ def _write_suspension_terminal_receipt(
     end_date: str,
     events_by_symbol: dict[str, list[str]],
     universe: str = "csi1800",
+    suspend_types_by_symbol: dict[str, list[str]] | None = None,
+    include_suspend_type: bool = True,
 ) -> Path:
     data_root = root / "data"
     run_id = "suspension-history"
@@ -53,10 +55,16 @@ def _write_suspension_terminal_receipt(
     store = SourceAuditStore(audit_root / "audit.db")
     for symbol in sorted(symbols):
         dates = events_by_symbol.get(symbol, [])
-        frame = pd.DataFrame({
+        payload = {
             "ts_code": [symbol] * len(dates),
             "trade_date": dates,
-        })
+        }
+        if include_suspend_type:
+            payload["suspend_type"] = (
+                (suspend_types_by_symbol or {}).get(symbol)
+                or ["S"] * len(dates)
+            )
+        frame = pd.DataFrame(payload)
         scope = checkpoint_requested_scope(
             {
                 "date_start": start_date,
@@ -834,6 +842,39 @@ def test_local_suspension_receipt_rejects_missing_symbol_tamper_and_escape(
         events_by_symbol={"000001.SZ": ["2025-01-04"]},
     )
     with pytest.raises(ValueError, match="payload date escaped requested scope"):
+        load_local_suspension_evidence(
+            receipt,
+            symbols={"000001.SZ"},
+            start_date="2025-01-01",
+            end_date="2025-01-03",
+            universe="csi1800",
+        )
+
+
+@pytest.mark.parametrize(
+    "include_suspend_type,suspend_types,error",
+    [
+        (False, None, "payload schema or row count is invalid"),
+        (True, {"000001.SZ": ["R"]}, "payload suspend_type is not S"),
+    ],
+)
+def test_local_suspension_receipt_rejects_missing_or_resume_type_payload(
+    tmp_path: Path,
+    include_suspend_type: bool,
+    suspend_types: dict[str, list[str]] | None,
+    error: str,
+) -> None:
+    receipt = _write_suspension_terminal_receipt(
+        tmp_path,
+        symbols={"000001.SZ"},
+        start_date="2025-01-01",
+        end_date="2025-01-03",
+        events_by_symbol={"000001.SZ": ["2025-01-02"]},
+        include_suspend_type=include_suspend_type,
+        suspend_types_by_symbol=suspend_types,
+    )
+
+    with pytest.raises(ValueError, match=error):
         load_local_suspension_evidence(
             receipt,
             symbols={"000001.SZ"},

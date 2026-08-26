@@ -42,6 +42,8 @@ usecases:
       - qsys/ops/
       - configs/strategies/
       - harness/checks/
+      - docs/requirements/contracts/tushare_daily.yaml
+      - docs/CONTRACTS.md
       - docs/ops/DAILY_OPS_SOP.md
       - tests/
     forbidden_paths:
