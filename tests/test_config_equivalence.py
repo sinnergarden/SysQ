@@ -53,19 +53,19 @@ def _hardcoded_default() -> dict:
                 },
                 "income": {
                     "interface": "income",
-                    "fields": "ts_code,ann_date,end_date,n_income,revenue,oper_cost",
+                    "fields": "ts_code,ann_date,end_date,f_ann_date,report_type,comp_type,end_type,update_flag,n_income,revenue,oper_cost",
                 },
                 "balancesheet": {
                     "interface": "balancesheet",
-                    "fields": "ts_code,ann_date,end_date,total_assets,total_hldr_eqy_exc_min_int,total_cur_assets,total_cur_liab",
+                    "fields": "ts_code,ann_date,end_date,f_ann_date,report_type,comp_type,end_type,update_flag,total_assets,total_hldr_eqy_exc_min_int,total_cur_assets,total_cur_liab",
                 },
                 "cashflow": {
                     "interface": "cashflow",
-                    "fields": "ts_code,ann_date,end_date,n_cashflow_act",
+                    "fields": "ts_code,ann_date,end_date,f_ann_date,report_type,comp_type,end_type,update_flag,n_cashflow_act",
                 },
                 "fina_indicator": {
                     "interface": "fina_indicator",
-                    "fields": "ts_code,ann_date,end_date,roe,roe_waa,grossprofit_margin,debt_to_assets,current_ratio,q_dtprofit,q_gr_yoy",
+                    "fields": "ts_code,ann_date,end_date,update_flag,roe,roe_waa,grossprofit_margin,debt_to_assets,current_ratio,q_dtprofit,q_gr_yoy",
                     "rename": {
                         "q_dtprofit": "q_dt_profit",
                     },
@@ -138,6 +138,49 @@ class TestHardcodedConfigCompleteness(TestCase):
     def test_financial_cols_has_key_fields(self):
         for key in ("net_income", "revenue", "roe", "op_cashflow"):
             self.assertIn(key, self.collector["financial_cols"])
+
+    def test_financial_interfaces_request_supplier_revision_evidence(self):
+        interfaces = self.collector["interfaces"]
+        statement_evidence = {
+            "f_ann_date", "report_type", "comp_type", "end_type", "update_flag",
+        }
+        for endpoint in ("income", "balancesheet", "cashflow"):
+            fields = set(interfaces[endpoint]["fields"].split(","))
+            self.assertTrue(statement_evidence.issubset(fields), endpoint)
+
+        indicator_fields = set(interfaces["fina_indicator"]["fields"].split(","))
+        self.assertIn("update_flag", indicator_fields)
+        self.assertTrue(
+            indicator_fields.isdisjoint(
+                {"f_ann_date", "report_type", "comp_type", "end_type"}
+            )
+        )
+
+    def test_legacy_yaml_financial_fields_are_enriched_at_config_boundary(self):
+        legacy = {
+            "collector": {
+                "interfaces": {
+                    "income": {"fields": "ts_code,ann_date,end_date,n_income"},
+                    "balancesheet": {"fields": ["ts_code", "ann_date", "end_date", "total_assets"]},
+                    "cashflow": {"fields": "ts_code,ann_date,end_date,n_cashflow_act"},
+                    "fina_indicator": {"fields": "ts_code,ann_date,end_date,roe"},
+                }
+            }
+        }
+
+        enriched = ConfigManager._with_financial_evidence_fields(legacy)
+
+        for endpoint in ("income", "balancesheet", "cashflow"):
+            fields = enriched["collector"]["interfaces"][endpoint]["fields"]
+            if isinstance(fields, str):
+                fields = fields.split(",")
+            self.assertTrue(
+                {"f_ann_date", "report_type", "comp_type", "end_type", "update_flag"}
+                .issubset(fields),
+                endpoint,
+            )
+        indicator_fields = enriched["collector"]["interfaces"]["fina_indicator"]["fields"].split(",")
+        self.assertEqual(indicator_fields, ["ts_code", "ann_date", "end_date", "roe", "update_flag"])
 
     def test_moneyflow_fields_complete(self):
         fields = self.collector["moneyflow_fields"]

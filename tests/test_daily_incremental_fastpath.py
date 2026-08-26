@@ -240,10 +240,10 @@ def _build_daily_collector(store, calls):
             "fields": "ts_code,trade_date,rzye",
             "rename": {"rzye": "margin_balance"},
         },
-        "income": {"fields": "ts_code,ann_date,end_date,n_income,revenue,oper_cost"},
-        "balancesheet": {"fields": "ts_code,ann_date,end_date,total_assets,total_hldr_eqy_exc_min_int,total_cur_assets,total_cur_liab"},
-        "cashflow": {"fields": "ts_code,ann_date,end_date,n_cashflow_act"},
-        "fina_indicator": {"fields": "ts_code,ann_date,end_date,roe,grossprofit_margin,debt_to_assets,current_ratio,q_dtprofit,q_gr_yoy"},
+        "income": {"fields": "ts_code,ann_date,end_date,f_ann_date,report_type,comp_type,end_type,update_flag,n_income,revenue,oper_cost"},
+        "balancesheet": {"fields": "ts_code,ann_date,end_date,f_ann_date,report_type,comp_type,end_type,update_flag,total_assets,total_hldr_eqy_exc_min_int,total_cur_assets,total_cur_liab"},
+        "cashflow": {"fields": "ts_code,ann_date,end_date,f_ann_date,report_type,comp_type,end_type,update_flag,n_cashflow_act"},
+        "fina_indicator": {"fields": "ts_code,ann_date,end_date,update_flag,roe,grossprofit_margin,debt_to_assets,current_ratio,q_dtprofit,q_gr_yoy"},
         "disclosure_date": {"fields": "ts_code,ann_date,end_date,pre_date,actual_date"},
     }
     collector.financial_cols = ["net_income", "revenue", "oper_cost", "total_assets", "equity", "total_cur_assets", "total_cur_liab", "roe", "op_cashflow", "q_dt_profit", "q_gr_yoy", "grossprofit_margin", "debt_to_assets", "current_ratio"]
@@ -260,6 +260,126 @@ def _build_daily_collector(store, calls):
     ]
     collector._validate_and_clean = lambda frame, code, ignore_columns=None: frame
     return collector
+
+
+def _financial_supplier_calls(*, include_revision_evidence: bool):
+    common = {
+        "ts_code": ["000001.SZ"],
+        "ann_date": [TARGET],
+        "end_date": ["20260630"],
+    }
+    statement_evidence = {
+        "f_ann_date": [TARGET],
+        "report_type": ["1"],
+        "comp_type": ["1"],
+        "end_type": ["2"],
+        "update_flag": ["1"],
+    }
+    values = {
+        "income": {"n_income": [2.0], "revenue": [10.0], "oper_cost": [6.0]},
+        "balancesheet": {
+            "total_assets": [20.0],
+            "total_hldr_eqy_exc_min_int": [8.0],
+            "total_cur_assets": [12.0],
+            "total_cur_liab": [6.0],
+        },
+        "cashflow": {"n_cashflow_act": [4.0]},
+        "fina_indicator": {
+            "roe": [0.25],
+            "grossprofit_margin": [0.4],
+            "debt_to_assets": [0.6],
+            "current_ratio": [2.0],
+            "q_dtprofit": [2.0],
+            "q_gr_yoy": [0.1],
+        },
+    }
+    calls = {}
+    for endpoint in ("income", "balancesheet", "cashflow", "fina_indicator"):
+        evidence = {}
+        if include_revision_evidence:
+            evidence = (
+                {"update_flag": ["1"]}
+                if endpoint == "fina_indicator"
+                else statement_evidence
+            )
+        frame = pd.DataFrame({**common, **evidence, **values[endpoint]})
+        call_log = []
+
+        def fetch(_frame=frame, _call_log=call_log, **kwargs):
+            _call_log.append(kwargs)
+            return _frame.copy()
+
+        fetch.calls = call_log
+        calls[endpoint] = fetch
+    return calls
+
+
+def test_financial_revision_metadata_is_preserved_only_in_raw_evidence(tmp_path: Path):
+    calls = _financial_supplier_calls(include_revision_evidence=True)
+    collector = _build_daily_collector(object(), calls)
+    audit = SourceAuditStore(tmp_path / "audit" / "audit.db")
+
+    canonical_financial = collector._fetch_financials(
+        TARGET,
+        TARGET,
+        ts_code="000001.SZ",
+        run_id="financial-evidence-schema",
+        audit_store=audit,
+        scope_key="csi1800",
+        universe="csi1800",
+    )
+
+    statement_evidence = {
+        "f_ann_date", "report_type", "comp_type", "end_type", "update_flag",
+    }
+    with sqlite3.connect(tmp_path / "audit" / "audit.db") as connection:
+        rows = connection.execute(
+            "SELECT endpoint,payload_path FROM fetch_receipts "
+            "WHERE run_id=? ORDER BY endpoint",
+            ("financial-evidence-schema",),
+        ).fetchall()
+    assert {endpoint for endpoint, _ in rows} == {
+        "income", "balancesheet", "cashflow", "fina_indicator",
+    }
+    for endpoint, payload_path in rows:
+        raw = pd.read_parquet(tmp_path / payload_path)
+        if endpoint == "fina_indicator":
+            assert "update_flag" in raw.columns
+            assert statement_evidence.isdisjoint(
+                set(raw.columns) - {"update_flag"}
+            )
+        else:
+            assert statement_evidence.issubset(raw.columns)
+        requested_fields = set(calls[endpoint].calls[0]["fields"].split(","))
+        assert set(raw.columns).issubset(requested_fields)
+
+    assert statement_evidence.isdisjoint(canonical_financial.columns)
+
+
+def test_financial_revision_metadata_does_not_change_canonical_columns_or_values():
+    narrow_collector = _build_daily_collector(
+        object(), _financial_supplier_calls(include_revision_evidence=False)
+    )
+    evidence_collector = _build_daily_collector(
+        object(), _financial_supplier_calls(include_revision_evidence=True)
+    )
+    daily = pd.DataFrame({
+        "ts_code": ["000001.SZ"], "trade_date": [TARGET], "close": [11.0],
+    })
+
+    narrow = narrow_collector._merge_financials(
+        daily,
+        narrow_collector._fetch_financials(TARGET, TARGET, ts_code="000001.SZ"),
+    )
+    with_evidence = evidence_collector._merge_financials(
+        daily,
+        evidence_collector._fetch_financials(TARGET, TARGET, ts_code="000001.SZ"),
+    )
+
+    pd.testing.assert_frame_equal(narrow, with_evidence)
+    assert {
+        "f_ann_date", "report_type", "comp_type", "end_type", "update_flag",
+    }.isdisjoint(with_evidence.columns)
 
 
 def test_daily_fastpath_writes_only_target_and_fetches_candidate_financials(tmp_path):
@@ -551,7 +671,10 @@ def test_market_endpoint_resume_reuses_verified_success_and_empty_only(
             "income",
             ("ts_code", "ann_date"),
             "ts_code,ann_date,end_date,n_income",
-            "ts_code,ann_date,end_date,n_income,revenue",
+            (
+                "ts_code,ann_date,end_date,f_ann_date,report_type,comp_type,"
+                "end_type,update_flag,n_income"
+            ),
             {"ts_code": "000001.SZ", "start_date": TARGET, "end_date": TARGET},
             pd.DataFrame({
                 "ts_code": ["000001.SZ"], "ann_date": [TARGET],
@@ -559,7 +682,9 @@ def test_market_endpoint_resume_reuses_verified_success_and_empty_only(
             }),
             pd.DataFrame({
                 "ts_code": ["000001.SZ"], "ann_date": [TARGET],
-                "end_date": ["20260630"], "n_income": [2.0], "revenue": [10.0],
+                "end_date": ["20260630"], "f_ann_date": [TARGET],
+                "report_type": ["1"], "comp_type": ["1"], "end_type": ["2"],
+                "update_flag": ["1"], "n_income": [2.0],
             }),
         ),
     ],
