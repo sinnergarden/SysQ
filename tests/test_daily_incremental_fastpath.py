@@ -1008,14 +1008,43 @@ def test_historical_mutation_store_reads_one_symbol_at_a_time(tmp_path):
 
     adapter = Adapter()
     result = _refresh_and_verify_history_mutation_store(
-        adapter, Store(), audit, run_id, apply=True
+        adapter, Store(), audit, [run_id], apply=True
     )
 
     assert queried_symbols == ["000001.SZ", "000002.SZ"]
     assert adapter.fix_calls == [["000002.SZ"]]
     assert result["changed_symbols"] == ["000001.SZ", "000002.SZ"]
     assert result["verified_value_count"] == 2
+    assert result["mismatch_count"] == 0
     assert result["status"] == "success"
+
+
+def test_historical_mutation_mismatch_samples_are_bounded(monkeypatch):
+    symbols = [f"{number:06d}.SZ" for number in range(150)]
+
+    class Audit:
+        def changed_mutation_symbols(self, _run_id, *, mutation_type=None):
+            return [] if mutation_type == "update" else symbols
+
+        def changed_mutations(self, _run_id, *, symbol=None):
+            return [{"symbol": symbol, "mutation_type": "insert"}]
+
+    monkeypatch.setattr(
+        "scripts.ops.sync_csi800_daily._historical_mutation_readback",
+        lambda _adapter, _store, changed: {
+            "verified_fields": [],
+            "verified_value_count": 0,
+            "mismatches": [{"symbol": changed[0]["symbol"], "reason": "test"}],
+        },
+    )
+
+    result = _refresh_and_verify_history_mutation_store(
+        object(), object(), Audit(), ["history-run"], apply=True
+    )
+
+    assert result["status"] == "failed"
+    assert result["mismatch_count"] == 150
+    assert len(result["mismatches"]) == 100
 
 
 def test_real_store_insert_volume_alias_reads_back_one_qlib_volume(tmp_path):

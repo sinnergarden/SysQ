@@ -633,6 +633,22 @@ def test_terminal_receipt_summarizes_mutations_without_embedding_rows(tmp_path: 
     assert len(store.changed_mutations(run_id, symbol="000001.SZ")) == 2
 
 
+def test_resume_lineage_returns_all_mutation_runs_oldest_first(tmp_path: Path) -> None:
+    store = SourceAuditStore(tmp_path / "audit" / "audit.db")
+    for run_id in ("first-run", "second-run", "third-run"):
+        store.append_event(run_id, "run_started", {"entrypoint": "test"})
+    store.append_event(
+        "second-run", "resume_from_run", {"resume_from_run_id": "first-run"}
+    )
+    store.append_event(
+        "third-run", "resume_from_run", {"resume_from_run_id": "second-run"}
+    )
+
+    assert store.resume_lineage_run_ids("third-run") == [
+        "first-run", "second-run", "third-run"
+    ]
+
+
 def test_post_terminal_db_failure_marker_does_not_retroactively_validate_snapshot(
     tmp_path: Path,
 ) -> None:

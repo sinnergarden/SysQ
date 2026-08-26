@@ -494,6 +494,10 @@ class SourceAuditStore:
                     terminal_receipt_sha256 TEXT NOT NULL,
                     PRIMARY KEY(source, field_name, scope_key)
                 );
+                CREATE INDEX IF NOT EXISTS canonical_mutations_run_symbol_type_idx
+                ON canonical_mutations(run_id,symbol,mutation_type);
+                CREATE INDEX IF NOT EXISTS canonical_mutations_run_mutation_idx
+                ON canonical_mutations(run_id,mutation_id);
                 CREATE TRIGGER IF NOT EXISTS fetch_receipts_no_update
                 BEFORE UPDATE ON fetch_receipts BEGIN SELECT RAISE(ABORT, 'fetch receipts are append-only'); END;
                 CREATE TRIGGER IF NOT EXISTS fetch_receipts_no_delete
@@ -1367,6 +1371,33 @@ class SourceAuditStore:
             }
             for row in rows
         ]
+
+    def resume_lineage_run_ids(self, run_id: str) -> list[str]:
+        """Return oldest-to-newest run ids for one explicit resume chain."""
+
+        current = validate_run_id(run_id)
+        newest_to_oldest: list[str] = []
+        seen: set[str] = set()
+        with self._connect() as conn:
+            while current:
+                if current in seen:
+                    raise ValueError("resume lineage contains a cycle")
+                seen.add(current)
+                newest_to_oldest.append(current)
+                rows = conn.execute(
+                    """SELECT payload_json FROM audit_journal
+                       WHERE run_id=? AND event_type='resume_from_run'
+                       ORDER BY seq DESC LIMIT 1""",
+                    (current,),
+                ).fetchall()
+                if not rows:
+                    break
+                payload = json.loads(rows[0]["payload_json"])
+                parent = str(payload.get("resume_from_run_id") or "").strip()
+                if not parent:
+                    raise ValueError("resume lineage event is missing parent run_id")
+                current = validate_run_id(parent)
+        return list(reversed(newest_to_oldest))
 
     def run_evidence_summary(self, run_id: str) -> dict[str, Any]:
         """Return small gate inputs without treating legacy JSON as evidence."""

@@ -70,6 +70,7 @@ TRUSTED_DAILY_FIELD_ENDPOINTS = {
     "factor": "adj_factor",
 }
 _CRASH_EVIDENCE: dict | None = None
+_MAX_MUTATION_MISMATCH_SAMPLES = 100
 
 
 def _load_csi1800_research_union(data_root: Path) -> tuple[list[str], dict]:
@@ -721,16 +722,23 @@ def _refresh_and_verify_history_mutation_store(
     adapter: QlibAdapter,
     store: StockDataStore,
     audit_store,
-    run_id: str,
+    run_ids: list[str],
     *,
     apply: bool,
 ) -> dict:
     """Read and verify one symbol's historical mutations at a time."""
 
-    symbols = audit_store.changed_mutation_symbols(run_id)
-    revision_symbols = audit_store.changed_mutation_symbols(
-        run_id, mutation_type="update"
-    )
+    run_ids = [validate_run_id(item) for item in run_ids]
+    symbols = sorted({
+        symbol
+        for item in run_ids
+        for symbol in audit_store.changed_mutation_symbols(item)
+    })
+    revision_symbols = sorted({
+        symbol
+        for item in run_ids
+        for symbol in audit_store.changed_mutation_symbols(item, mutation_type="update")
+    })
     if not symbols:
         return {
             "status": "success",
@@ -765,27 +773,39 @@ def _refresh_and_verify_history_mutation_store(
 
     verified_fields: set[str] = set()
     verified_value_count = 0
-    mismatches: list[dict[str, object]] = []
+    mismatch_count = 0
+    mismatch_samples: list[dict[str, object]] = []
     for symbol in symbols:
+        symbol_mutations: list[dict] = []
+        for item in run_ids:
+            symbol_mutations.extend(
+                audit_store.changed_mutations(item, symbol=symbol)
+            )
         verification = _historical_mutation_readback(
             adapter,
             store,
-            audit_store.changed_mutations(run_id, symbol=symbol),
+            symbol_mutations,
         )
         verified_fields.update(verification.get("verified_fields", []))
         verified_value_count += int(verification.get("verified_value_count", 0))
-        mismatches.extend(verification.get("mismatches", []))
+        current_mismatches = list(verification.get("mismatches", []))
+        mismatch_count += len(current_mismatches)
+        remaining = _MAX_MUTATION_MISMATCH_SAMPLES - len(mismatch_samples)
+        if remaining > 0:
+            mismatch_samples.extend(current_mismatches[:remaining])
 
     return {
-        "status": "failed" if mismatches else "success",
+        "status": "failed" if mismatch_count else "success",
         "mode": "historical_mutation_fix",
+        "mutation_run_ids": run_ids,
         "changed_symbols": symbols,
         "revision_symbols": revision_symbols,
         "verified_fields": sorted(verified_fields),
         "verified_value_count": verified_value_count,
-        "mismatches": mismatches,
+        "mismatch_count": mismatch_count,
+        "mismatches": mismatch_samples,
         "refresh": refresh,
-        **({"error": "historical Qlib value readback mismatch"} if mismatches else {}),
+        **({"error": "historical Qlib value readback mismatch"} if mismatch_count else {}),
     }
 
 
@@ -1684,11 +1704,16 @@ def _main_under_writer_lock(writer_lock: data_writer_lock) -> None:
     # Exact insert/update receipts, rather than a date watermark, select the
     # symbols that require dump_fix and value readback.  This is what makes a
     # same-key source revision visible in Qlib.
-    history_mutation_symbols = (
-        source_audit.changed_mutation_symbols(run_id)
+    history_mutation_run_ids = (
+        source_audit.resume_lineage_run_ids(run_id)
         if source_audit is not None and is_history_repair
         else []
     )
+    history_mutation_symbols = sorted({
+        symbol
+        for item in history_mutation_run_ids
+        for symbol in source_audit.changed_mutation_symbols(item)
+    }) if source_audit is not None else []
     mutations = (
         source_audit.changed_mutations(run_id)
         if source_audit is not None and not is_history_repair
@@ -1710,7 +1735,7 @@ def _main_under_writer_lock(writer_lock: data_writer_lock) -> None:
             adapter,
             store,
             source_audit,
-            run_id,
+            history_mutation_run_ids,
             apply=do_apply,
         )
     else:
