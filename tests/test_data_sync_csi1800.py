@@ -532,6 +532,7 @@ def test_wrapper_finalizes_only_after_outer_readiness_event(tmp_path: Path):
             "range_start": "20260821", "range_end": "20260821",
             "fields": ["open", "high", "low", "close", "volume", "factor"],
             "previous_open_session": "20260820",
+            "allow_initial_history": True,
         },
     )
     assert not (receipt_root / run_id / "receipt.json").exists()
@@ -541,6 +542,7 @@ def test_wrapper_finalizes_only_after_outer_readiness_event(tmp_path: Path):
         run_id=run_id,
         receipt_root=receipt_root,
         final_readiness_ok=True,
+        verified_outer_fields=("ann_date", "holder_num", "hold_ratio"),
     )
     assert result["trust_state"] == "trusted"
     receipt_path = Path(result["receipt_path"])
@@ -553,8 +555,15 @@ def test_wrapper_finalizes_only_after_outer_readiness_event(tmp_path: Path):
                FROM trusted_watermarks
                WHERE source='tushare' AND scope_key='csi1800'"""
         ).fetchall()
+        watermark_fields = {
+            row[0] for row in connection.execute(
+                """SELECT field_name FROM trusted_watermarks
+                   WHERE source='tushare' AND scope_key='csi1800'"""
+            ).fetchall()
+        }
     assert watermark_lineage == [(run_id, outer_receipt_sha256)]
     assert watermark_lineage[0][0] != direct_run_id
+    assert {"ann_date", "holder_num", "hold_ratio"}.issubset(watermark_fields)
     assert audit.has_trusted_range(
         source="tushare", scope_key="csi1800",
         range_start="20260821", range_end="20260821",

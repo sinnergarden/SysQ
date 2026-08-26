@@ -130,7 +130,8 @@ def _attach_explicit_resume(
 
 
 def _finalize_wrapper_evidence(
-    *, audit_store, run_id: str, receipt_root: Path, final_readiness_ok: bool
+    *, audit_store, run_id: str, receipt_root: Path, final_readiness_ok: bool,
+    verified_outer_fields: tuple[str, ...] = (),
 ) -> dict:
     """Finalize once, after every wrapper repair and final readiness check."""
 
@@ -150,19 +151,25 @@ def _finalize_wrapper_evidence(
     terminal_gates = dict(terminal.get("gates") or {})
     terminal_gates["readiness"] = bool(terminal_gates.get("readiness")) and final_readiness_ok
     if terminal.get("mode") == "unchanged":
+        if verified_outer_fields:
+            raise RuntimeError("unchanged finalization cannot add outer evidence fields")
         return audit_store.finalize_unchanged(
             run_id=run_id,
             gates=terminal_gates,
             receipt_root=receipt_root,
             prior_trusted=bool(terminal.get("prior_trusted")) and all(terminal_gates.values()),
         )
+    terminal_fields = list(dict.fromkeys([
+        *terminal["fields"],
+        *(str(field) for field in verified_outer_fields if str(field).strip()),
+    ]))
     return audit_store.finalize_run(
         run_id=run_id,
         source=str(terminal["source"]),
         scope_key=str(terminal["scope_key"]),
         range_start=str(terminal["range_start"]),
         range_end=str(terminal["range_end"]),
-        fields=list(terminal["fields"]),
+        fields=terminal_fields,
         gates=terminal_gates,
         receipt_root=receipt_root,
         trust_state="trusted" if all(terminal_gates.values()) else "untrusted",
@@ -521,6 +528,7 @@ def _main_under_writer_lock(writer_lock=None):
     data_root = Path(cfg.get_path("root")).resolve()
     audit_run_root = _data_sync_run_root(data_root, run_id)
     report = {}
+    verified_outer_fields: tuple[str, ...] = ()
     historical_evidence_symbols = symbols
     if repair_start_date and universe == "csi1800":
         from scripts.ops.sync_csi800_daily import _load_csi1800_research_union
@@ -674,6 +682,7 @@ def _main_under_writer_lock(writer_lock=None):
                 or top10_evidence["status"] != "success"
             ):
                 raise RuntimeError("shareholder historical source evidence failed")
+            verified_outer_fields = ("ann_date", "holder_num", "hold_ratio")
 
     from qsys.data.health import inspect_qlib_data_health
 
@@ -697,6 +706,7 @@ def _main_under_writer_lock(writer_lock=None):
         run_id=run_id,
         receipt_root=receipt_root,
         final_readiness_ok=not final_readiness.blocking_issues,
+        verified_outer_fields=verified_outer_fields,
     )
     if evidence_result.get("trust_state") not in {"trusted", "trusted_unchanged"}:
         raise RuntimeError(f"wrapper terminal evidence did not become trusted: {evidence_result}")

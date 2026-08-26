@@ -992,6 +992,107 @@ def test_terminal_proof_failures_block_coverage(
     assert set(coverage.loc[coverage["scope_kind"] == "feature_dependency", "status"]) == {"MISSING"}
 
 
+def test_shareholder_terminal_proof_requires_announcement_aligned_request_scope(
+    tmp_path: Path,
+) -> None:
+    audit_db = _write(tmp_path / "audit" / "audit.db", b"")
+    instruments = ["000001.SZ"]
+
+    def proof_valid(
+        run_id: str,
+        *,
+        endpoint: str,
+        dataset: str,
+        field_name: str,
+        request_start: str,
+        request_end: str,
+    ) -> bool:
+        requested_scope = {
+            "date_start": request_start,
+            "date_end": request_end,
+            "symbol_count": 1,
+            "symbols": instruments,
+            "symbols_sha256": stable_scope_hash(instruments),
+        }
+        receipt = {
+            "receipt_id": f"{run_id}-receipt",
+            "run_id": run_id,
+            "source": "tushare",
+            "endpoint": endpoint,
+            "status": "success",
+            "requested_scope": requested_scope,
+            "response_date_min": "20200430",
+            "response_date_max": "20200430",
+            "payload_kind": "raw_supplier",
+            "payload_path": f"raw/{run_id}.parquet",
+            "payload_sha256": "a" * 64,
+            "payload_verified": True,
+        }
+        link = {
+            "run_id": run_id,
+            "dataset": dataset,
+            "field_name": field_name,
+            "receipt_id": receipt["receipt_id"],
+        }
+        terminal = {
+            "schema_version": 1,
+            "run_id": run_id,
+            "trust_state": "trusted",
+            "terminal_gates": {
+                "fetch": True,
+                "raw_payloads": True,
+                "canonical_commit": True,
+                "qlib_readback": True,
+                "readiness": True,
+                "contiguous_range": True,
+            },
+            "fetch_receipts": [receipt],
+            "field_receipt_links": [link],
+        }
+        terminal_path = _write(
+            audit_db.parent / "source_runs" / run_id / "receipt.json",
+            json.dumps(terminal, sort_keys=True) + "\n",
+        )
+        watermark = {
+            "run_id": run_id,
+            "terminal_receipt_sha256": sha256_file(terminal_path),
+        }
+        return pit_certification._terminal_proof_valid(
+            audit_db=audit_db,
+            watermark=watermark,
+            receipt=receipt,
+            link=link,
+            scope_start="20200430",
+            scope_end="20200430",
+            consumed_instruments=instruments,
+        )
+
+    assert proof_valid(
+        "holdernumber-announcement-aligned",
+        endpoint="stk_holdernumber",
+        dataset="shareholder_holdernumber",
+        field_name="holder_num",
+        request_start="20200430",
+        request_end="20200430",
+    )
+    assert proof_valid(
+        "shareholder-announcement-aligned",
+        endpoint="top10_holders",
+        dataset="shareholder_top10",
+        field_name="hold_ratio",
+        request_start="20200430",
+        request_end="20200430",
+    )
+    assert not proof_valid(
+        "shareholder-report-period-scope",
+        endpoint="top10_holders",
+        dataset="shareholder_top10",
+        field_name="hold_ratio",
+        request_start="20200101",
+        request_end="20200331",
+    )
+
+
 def test_each_field_watermark_must_match_terminal_hash_even_when_run_is_cached(
     tiny_project: tuple[Path, Path, Path], tmp_path: Path,
 ) -> None:
