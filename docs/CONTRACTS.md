@@ -177,6 +177,22 @@ docs/schema/       → 部分 artifact 的字段级 schema
   canonical fallback 不能把上游缺值认证为 trusted。`suspend_d` 响应必须逐 query 匹配
   ts_code 且日期落在请求范围；仅 `suspend_type=S` 可作为停牌证据，复牌 `R` 不得解释行情
   缺口。wrong/mixed symbol、缺列、非 S 类型或越界日期均为失败证据。
+- financial history 的 supplier query 与 information cutoff 是独立轴：income、balancesheet、
+  cashflow 的 start/end 是公告日范围，fina_indicator 的 start/end 是报告期范围；daily 四端点
+  都按 exact `ann_date` 查询。statement `publication_date=max(ann_date,f_ann_date)`，indicator
+  publication_date 为 ann_date。date-only 公告视为收盘后发布，canonical 行记录公告日，且只能由
+  baseline 的 `actual_feature_date_strictly_before_trade_date_v1` 消费于后续交易日。
+- `financial_first_available_v1` 是保守初始值投影，不声称有完整后续修订时间线。logical key 有
+  flag0 时仅取最早 flag0；statement 只有 flag1 时，仅当 `f_ann_date>ann_date` 提供独立较晚日期才
+  可用，否则计入 `revision_timeline_unproven_excluded`；indicator only-flag1 全部排除。raw payload
+  完整保留 cutoff 后合法行，canonical 只投影 availability cutoff 内行。fina_indicator
+  返回 100 行或更多按 supplier cap 视为可能截断并阻断。
+- resume 优先复用 exact current-contract shard。若 parent 中存在 supplier request/base scope 完全
+  等价、payload hash 可复核且新 selector 验证通过的 legacy financial shard，则离线克隆为新
+  checkpoint receipt 并指向同一 immutable raw payload；存在但不兼容时 `REPAIR_REQUIRED`，parent
+  根本无 shard 时才允许正常 fetch。各 endpoint 是独立 publication stream，canonical event 表在
+  union availability 轴内逐 endpoint carry-forward，避免不同公告日互相擦除；但 endpoint 自身
+  新报告的 NaN 是新事实并覆盖旧季度值，不能被 forward-fill 成旧值。
 
 **Terminal watermark invariant**:
 
@@ -226,9 +242,11 @@ canonical instrument files、PIT universe、corporate actions 与 lineage identi
 因为它是可从 canonical 重建的 materialized view。DataPack 校验只证明搬运完整性，不产生新的
 PIT certification。
 
-本阶段 raw supplier payload 覆盖 daily market endpoints；financial per-stock endpoint 尚未
-接入 receipt/payload，因此 financial 字段不得被本阶段 daily trusted watermark 或本
-certifier 认证。
+financial per-stock endpoint 已进入 raw supplier receipt、field link 与 canonical mutation 链。
+但现有 global income sidecar 尚未由显式 immutable path/SHA 绑定到 research generator/DataPack，
+因此其四个 growth features 仍保留 `UNBOUND_SOURCE_ARTIFACT` certification blocker；本契约不得把
+raw receipt 闭环误称为 portable sidecar 闭环。正式 audited sidecar materializer 与 per-feature
+dependency availability 尚未接入，故 `REVISION_VISIBILITY_UNPROVEN` 也继续保留到后续顺序 PR。
 
 ---
 

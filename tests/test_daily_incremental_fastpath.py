@@ -837,7 +837,7 @@ def _financial_supplier_calls(*, include_revision_evidence: bool):
         "report_type": ["1"],
         "comp_type": ["1"],
         "end_type": ["2"],
-        "update_flag": ["1"],
+        "update_flag": ["0"],
     }
     values = {
         "income": {"n_income": [2.0], "revenue": [10.0], "oper_cost": [6.0]},
@@ -862,7 +862,7 @@ def _financial_supplier_calls(*, include_revision_evidence: bool):
         evidence = {}
         if include_revision_evidence:
             evidence = (
-                {"update_flag": ["1"]}
+                {"update_flag": ["0"]}
                 if endpoint == "fina_indicator"
                 else statement_evidence
             )
@@ -891,6 +891,7 @@ def test_financial_revision_metadata_is_preserved_only_in_raw_evidence(tmp_path:
         audit_store=audit,
         scope_key="csi1800",
         universe="csi1800",
+        exact_ann_date=TARGET,
     )
 
     statement_evidence = {
@@ -921,9 +922,6 @@ def test_financial_revision_metadata_is_preserved_only_in_raw_evidence(tmp_path:
 
 
 def test_financial_revision_metadata_does_not_change_canonical_columns_or_values():
-    narrow_collector = _build_daily_collector(
-        object(), _financial_supplier_calls(include_revision_evidence=False)
-    )
     evidence_collector = _build_daily_collector(
         object(), _financial_supplier_calls(include_revision_evidence=True)
     )
@@ -931,19 +929,27 @@ def test_financial_revision_metadata_does_not_change_canonical_columns_or_values
         "ts_code": ["000001.SZ"], "trade_date": [TARGET], "close": [11.0],
     })
 
-    narrow = narrow_collector._merge_financials(
-        daily,
-        narrow_collector._fetch_financials(TARGET, TARGET, ts_code="000001.SZ"),
-    )
     with_evidence = evidence_collector._merge_financials(
         daily,
-        evidence_collector._fetch_financials(TARGET, TARGET, ts_code="000001.SZ"),
+        evidence_collector._fetch_financials(
+            TARGET, TARGET, ts_code="000001.SZ", exact_ann_date=TARGET,
+        ),
     )
 
-    pd.testing.assert_frame_equal(narrow, with_evidence)
+    assert with_evidence.loc[0, "net_income"] == 2.0
+    assert with_evidence.loc[0, "revenue"] == 10.0
+    assert with_evidence.loc[0, "total_assets"] == 20.0
     assert {
         "f_ann_date", "report_type", "comp_type", "end_type", "update_flag",
     }.isdisjoint(with_evidence.columns)
+
+    narrow_collector = _build_daily_collector(
+        object(), _financial_supplier_calls(include_revision_evidence=False)
+    )
+    with pytest.raises(RuntimeError, match="missing_financial_fields"):
+        narrow_collector._fetch_financials(
+            TARGET, TARGET, ts_code="000001.SZ", exact_ann_date=TARGET,
+        )
 
 
 def test_daily_fastpath_writes_only_target_and_fetches_candidate_financials(tmp_path):
@@ -1022,19 +1028,26 @@ def test_daily_fastpath_writes_only_target_and_fetches_candidate_financials(tmp_
     }))
     calls["income"] = api(pd.DataFrame({
         "ts_code": ["000001.SZ"], "ann_date": [TARGET], "end_date": ["20260630"],
+        "f_ann_date": [TARGET], "report_type": ["1"], "comp_type": ["1"],
+        "end_type": ["2"], "update_flag": ["0"],
         "n_income": [2.0], "revenue": [10.0], "oper_cost": [6.0],
     }))
     calls["balancesheet"] = api(pd.DataFrame({
         "ts_code": ["000001.SZ"], "ann_date": [TARGET], "end_date": ["20260630"],
+        "f_ann_date": [TARGET], "report_type": ["1"], "comp_type": ["1"],
+        "end_type": ["2"], "update_flag": ["0"],
         "total_assets": [20.0], "total_hldr_eqy_exc_min_int": [8.0],
         "total_cur_assets": [12.0], "total_cur_liab": [6.0],
     }))
     calls["cashflow"] = api(pd.DataFrame({
         "ts_code": ["000001.SZ"], "ann_date": [TARGET], "end_date": ["20260630"],
+        "f_ann_date": [TARGET], "report_type": ["1"], "comp_type": ["1"],
+        "end_type": ["2"], "update_flag": ["0"],
         "n_cashflow_act": [4.0],
     }))
     calls["fina_indicator"] = api(pd.DataFrame({
         "ts_code": ["000001.SZ"], "ann_date": [TARGET], "end_date": ["20260630"],
+        "update_flag": ["0"],
         "roe": [0.25], "grossprofit_margin": [0.4], "debt_to_assets": [0.6],
         "current_ratio": [2.0], "q_dtprofit": [2.0], "q_gr_yoy": [0.1],
     }))
@@ -1061,10 +1074,12 @@ def test_daily_fastpath_writes_only_target_and_fetches_candidate_financials(tmp_
     assert all("ts_code" not in call for call in calls["disclosure_date"].calls)
     for name in ("income", "balancesheet", "cashflow", "fina_indicator"):
         # Ordinary financial endpoints always receive their required ts_code
-        # and a target-only range; no unsupported market-wide ann_date query.
+        # and exact announcement date.  This is also required for indicator,
+        # whose start/end parameters use the report-period axis.
         assert calls[name].last_kwargs["ts_code"] == "000001.SZ"
-        assert calls[name].last_kwargs["start_date"] == TARGET
-        assert calls[name].last_kwargs["end_date"] == TARGET
+        assert calls[name].last_kwargs["ann_date"] == TARGET
+        assert "start_date" not in calls[name].last_kwargs
+        assert "end_date" not in calls[name].last_kwargs
     changed = audit.changed_mutations("daily-bundle-run")
     assert changed[0]["endpoint"] == "daily_bundle"
     assert changed[0]["fetch_receipt_id"]
@@ -1474,6 +1489,15 @@ def test_financial_discovery_and_per_symbol_shards_resume_without_supplier_calls
             common = {
                 "ts_code": [code], "ann_date": [TARGET], "end_date": ["20260630"],
             }
+            evidence = (
+                {"update_flag": ["0"]}
+                if endpoint == "fina_indicator"
+                else {
+                    "f_ann_date": [TARGET], "report_type": ["1"],
+                    "comp_type": ["1"], "end_type": ["2"],
+                    "update_flag": ["0"],
+                }
+            )
             values = {
                 "income": {"n_income": [2.0], "revenue": [10.0], "oper_cost": [6.0]},
                 "balancesheet": {
@@ -1487,7 +1511,7 @@ def test_financial_discovery_and_per_symbol_shards_resume_without_supplier_calls
                     "q_dtprofit": [2.0], "q_gr_yoy": [0.1],
                 },
             }
-            return pd.DataFrame({**common, **values[endpoint]})
+            return pd.DataFrame({**common, **evidence, **values[endpoint]})
 
         fetch.calls = []
         return fetch
@@ -2183,18 +2207,17 @@ def test_candidate_financial_response_missing_ann_date_fails_closed():
 def test_candidate_financial_cross_date_response_is_filtered_before_merge():
     collector = TushareCollector.__new__(TushareCollector)
     collector._discover_financial_announcement_codes = lambda target, requested: {"000001.SZ"}
-    collector._fetch_financials = lambda start, end, ts_code: pd.DataFrame(
+    collector._fetch_financials = lambda start, end, ts_code, **kwargs: pd.DataFrame(
         {
             "ts_code": [ts_code, ts_code],
-            "ann_date": ["20260820", TARGET],
-            "end_date": ["20260331", "20260630"],
+            "availability_date": ["20260820", TARGET],
             "net_income": [1.0, 2.0],
         }
     )
 
     result = collector._fetch_financials_for_daily(TARGET, {"000001.SZ"})
 
-    assert result["ann_date"].astype(str).tolist() == [TARGET]
+    assert result["availability_date"].astype(str).tolist() == [TARGET]
     assert result["net_income"].tolist() == [2.0]
 
 

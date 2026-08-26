@@ -71,24 +71,58 @@ endpoints:
     taxonomy_gate: stage_level_recent_overlap_match_ratio_default_0_95
   income:
     capability: per_symbol_report_history_with_announcement_date
-    revision_capability: update_flag_timeline_requires_separate_audit
+    revision_capability: conservative_first_available_initial_value_only
     raw_revision_fields: [f_ann_date, report_type, comp_type, end_type, update_flag]
-    key_fields: [ts_code, ann_date, end_date]
+    logical_key_fields: [ts_code, end_date, report_type, comp_type, end_type]
+    history_query_axis: announcement_date_start_end
+    daily_query_axis: exact_ann_date
+    publication_date: max_ann_date_f_ann_date
+    availability_rule: publication_date_after_close_consumable_only_by_strictly_later_trade_date
+    request_variant: financial_first_available_v1
+    projection: availability_date_lte_cutoff_raw_future_rows_preserved
+    revision_selection: earliest_flag0_else_only_flag1_with_f_ann_after_ann
+    unproven_revision_rule: only_flag1_without_independent_later_f_ann_is_excluded
   balancesheet:
     capability: per_symbol_report_history_with_announcement_date
-    revision_capability: update_flag_timeline_requires_separate_audit
+    revision_capability: conservative_first_available_initial_value_only
     raw_revision_fields: [f_ann_date, report_type, comp_type, end_type, update_flag]
-    key_fields: [ts_code, ann_date, end_date]
+    logical_key_fields: [ts_code, end_date, report_type, comp_type, end_type]
+    history_query_axis: announcement_date_start_end
+    daily_query_axis: exact_ann_date
+    publication_date: max_ann_date_f_ann_date
+    availability_rule: publication_date_after_close_consumable_only_by_strictly_later_trade_date
+    request_variant: financial_first_available_v1
+    projection: availability_date_lte_cutoff_raw_future_rows_preserved
+    revision_selection: earliest_flag0_else_only_flag1_with_f_ann_after_ann
+    unproven_revision_rule: only_flag1_without_independent_later_f_ann_is_excluded
   cashflow:
     capability: per_symbol_report_history_with_announcement_date
-    revision_capability: update_flag_timeline_requires_separate_audit
+    revision_capability: conservative_first_available_initial_value_only
     raw_revision_fields: [f_ann_date, report_type, comp_type, end_type, update_flag]
-    key_fields: [ts_code, ann_date, end_date]
+    logical_key_fields: [ts_code, end_date, report_type, comp_type, end_type]
+    history_query_axis: announcement_date_start_end
+    daily_query_axis: exact_ann_date
+    publication_date: max_ann_date_f_ann_date
+    availability_rule: publication_date_after_close_consumable_only_by_strictly_later_trade_date
+    request_variant: financial_first_available_v1
+    projection: availability_date_lte_cutoff_raw_future_rows_preserved
+    revision_selection: earliest_flag0_else_only_flag1_with_f_ann_after_ann
+    unproven_revision_rule: only_flag1_without_independent_later_f_ann_is_excluded
   fina_indicator:
     capability: per_symbol_derived_report_history_with_announcement_date
-    revision_capability: historical_revision_timeline_unverified
+    revision_capability: conservative_first_available_initial_value_only
     raw_revision_fields: [update_flag]
-    key_fields: [ts_code, ann_date, end_date]
+    logical_key_fields: [ts_code, end_date]
+    history_query_axis: report_period_start_end
+    daily_query_axis: exact_ann_date
+    publication_date: ann_date
+    availability_rule: publication_date_after_close_consumable_only_by_strictly_later_trade_date
+    request_variant: financial_first_available_v1
+    supplier_row_limit: 100
+    truncation_rule: row_count_greater_than_or_equal_to_limit_is_partial
+    projection: availability_date_lte_cutoff_raw_future_rows_preserved
+    revision_selection: earliest_flag0_only
+    unproven_revision_rule: all_only_flag1_keys_are_excluded
   stk_holdernumber:
     capability: paged_announcement_date_history
     revision_capability: historical_revision_timeline_unverified

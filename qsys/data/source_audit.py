@@ -17,7 +17,7 @@ import tempfile
 import uuid
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Callable, Iterable, Mapping, Sequence
 
 import pandas as pd
 
@@ -822,6 +822,7 @@ class SourceAuditStore:
         self._validated_resume_cache[(resume_from_run_id, receipt_sha256)] = {
             "proof": dict(proof),
             "receipt_index": receipt_index,
+            "all_fetch_rows": [dict(row) for row in fetch_rows],
             "links_by_receipt": links_by_receipt,
             "validated_current_runs": set(),
         }
@@ -968,6 +969,172 @@ class SourceAuditStore:
             "frame": frame,
             "receipt_id": receipt_id,
             "status": str(selected["status"]),
+            "source_receipt_id": str(selected["receipt_id"]),
+        }
+
+    def reproject_legacy_financial_shard(
+        self,
+        *,
+        run_id: str,
+        resume_proof: Mapping[str, Any],
+        source: str,
+        endpoint: str,
+        contract_version: str,
+        requested_scope: Mapping[str, Any],
+        legacy_request_sha256: str,
+        response_validator: Callable[[pd.DataFrame], Mapping[str, Any] | None],
+        contract_name: str,
+    ) -> dict[str, Any]:
+        """Rebind one verified pre-availability financial shard offline.
+
+        This is intentionally narrower than ordinary resume reuse.  The
+        supplier query and base scope must be byte-identical; only the new
+        availability cutoff/scope labels and request variant may differ.
+        """
+
+        run_id = validate_run_id(run_id)
+        parent = validate_run_id(str(resume_proof.get("resume_from_run_id") or ""))
+        receipt_sha256 = str(resume_proof.get("receipt_sha256") or "")
+        cache = self._validated_resume_cache.get((parent, receipt_sha256))
+        if cache is None or dict(resume_proof) != cache["proof"]:
+            raise ValueError("resume proof was not validated by this audit store")
+        if run_id not in cache["validated_current_runs"]:
+            raise ValueError("current run lineage was not validated before legacy reprojection")
+
+        current = dict(requested_scope)
+        checkpoint_key = str(current.get("checkpoint_key") or "")
+        expected_checkpoint_key = fetch_checkpoint_key(
+            source=source,
+            endpoint=endpoint,
+            contract_version=contract_version,
+            scope_key=str(current.get("scope_key") or ""),
+            universe=str(current.get("universe") or ""),
+            date_start=str(current.get("date_start") or ""),
+            date_end=str(current.get("date_end") or ""),
+            symbols_sha256=str(current.get("symbols_sha256") or ""),
+            request_variant=current.get("request_variant"),
+            request_sha256=current.get("request_sha256"),
+        )
+        if not checkpoint_key or checkpoint_key != expected_checkpoint_key:
+            raise ValueError("financial reproject requested_scope checkpoint_key mismatch")
+        base_keys = (
+            "scope_key", "universe", "date_start", "date_end", "symbol_count",
+            "symbols_sha256",
+        )
+        candidates: list[dict[str, Any]] = []
+        for row in cache["all_fetch_rows"]:
+            if (
+                str(row.get("source") or "") != str(source)
+                or str(row.get("endpoint") or "") != str(endpoint)
+                or str(row.get("contract_version") or "") != str(contract_version)
+            ):
+                continue
+            scope = row.get("requested_scope")
+            if not isinstance(scope, Mapping):
+                continue
+            if all(str(scope.get(key) or "") == str(current.get(key) or "") for key in base_keys):
+                candidates.append(dict(row))
+        if not candidates:
+            return {"status": "missing"}
+
+        terminal_status_candidates = [
+            row for row in candidates if row.get("status") in {"success", "empty"}
+        ]
+        if not terminal_status_candidates:
+            return {"status": "incompatible", "reason": "legacy_receipt_not_terminal"}
+
+        compatible = [
+            row for row in terminal_status_candidates
+            if (
+                row["requested_scope"].get("request_variant") in {None, ""}
+                and str(row["requested_scope"].get("request_sha256") or "")
+                == str(legacy_request_sha256)
+                and row["requested_scope"].get("query_axis") in {None, ""}
+                and row["requested_scope"].get("availability_cutoff") in {None, ""}
+            )
+        ]
+        if not compatible:
+            return {"status": "incompatible", "reason": "legacy_supplier_request_mismatch"}
+        identities = {
+            (row.get("status"), row.get("response_hash"), row.get("payload_sha256"))
+            for row in compatible
+        }
+        if len(identities) != 1:
+            return {"status": "incompatible", "reason": "ambiguous_legacy_payloads"}
+        selected = compatible[0]
+        try:
+            frame = self._verified_reusable_frame(selected)
+        except Exception:
+            frame = None
+        if frame is None:
+            return {"status": "incompatible", "reason": "legacy_payload_invalid"}
+        try:
+            validation_error = response_validator(frame)
+        except Exception as exc:
+            validation_error = {
+                "reason": "validator_exception",
+                "exception_type": type(exc).__name__,
+                "message": str(exc),
+            }
+        if validation_error is not None:
+            return {
+                "status": "incompatible",
+                "reason": "legacy_response_validation_failed",
+                "details": dict(validation_error),
+            }
+
+        new_receipt_id = uuid.uuid4().hex
+        reprojected_at = utc_now()
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                """INSERT INTO fetch_receipts(
+                    receipt_id,run_id,source,endpoint,contract_version,status,
+                    requested_scope_json,returned_rows,response_hash,response_columns_json,
+                    response_date_min,response_date_max,attempt_count,payload_kind,payload_path,payload_sha256,
+                    published_at,observed_at,error_json
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    new_receipt_id, run_id, selected["source"], selected["endpoint"],
+                    selected["contract_version"], selected["status"],
+                    _json_text(current), selected["returned_rows"],
+                    selected["response_hash"], _json_text(selected["response_columns"]),
+                    selected["response_date_min"], selected["response_date_max"],
+                    selected["attempt_count"], selected["payload_kind"],
+                    selected["payload_path"], selected["payload_sha256"],
+                    selected["published_at"], selected["observed_at"], None,
+                ),
+            )
+            for link in cache["links_by_receipt"].get(selected["receipt_id"], []):
+                conn.execute(
+                    "INSERT INTO field_receipt_links(run_id,dataset,field_name,receipt_id) VALUES(?,?,?,?)",
+                    (run_id, link["dataset"], link["field_name"], new_receipt_id),
+                )
+            conn.execute(
+                "INSERT INTO audit_journal(run_id,event_type,payload_json,created_at) VALUES(?,?,?,?)",
+                (
+                    run_id,
+                    "financial_legacy_shard_reprojected",
+                    _json_text({
+                        "resume_from_run_id": parent,
+                        "source_receipt_id": selected["receipt_id"],
+                        "source_payload_sha256": selected["payload_sha256"],
+                        "receipt_id": new_receipt_id,
+                        "source": source,
+                        "endpoint": endpoint,
+                        "old_checkpoint_key": selected["requested_scope"].get("checkpoint_key"),
+                        "new_checkpoint_key": current.get("checkpoint_key"),
+                        "contract": contract_name,
+                        "validator_status": "success",
+                        "reprojected_at": reprojected_at,
+                    }),
+                    reprojected_at,
+                ),
+            )
+        return {
+            "status": "compatible",
+            "frame": frame,
+            "receipt_id": new_receipt_id,
             "source_receipt_id": str(selected["receipt_id"]),
         }
 

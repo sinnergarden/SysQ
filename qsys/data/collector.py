@@ -10,7 +10,13 @@ from qsys.config import cfg
 from qsys.utils.logger import log
 from qsys.data.storage import StockDataStore
 from qsys.data._collector_utils import _normalize_date, _dedupe_list
-from qsys.data._merge_helpers import merge_trade_frames, prepare_financial_frame
+from qsys.data._merge_helpers import (
+    FINANCIAL_AVAILABILITY_CONTRACT,
+    FinancialAvailabilityError,
+    merge_trade_frames,
+    prepare_financial_frame,
+    select_first_available_financial_rows,
+)
 from qsys.data._fetch_strategies import fetch_with_retry, fetch_by_stock_loop, fetch_by_date_loop
 from qsys.data.source_audit import (
     checkpoint_requested_scope,
@@ -46,6 +52,7 @@ HISTORY_FIELD_ENDPOINTS = {
     "revenue": "income",
     "oper_cost": "income",
     "total_assets": "balancesheet",
+    "total_hldr_eqy_exc_min_int": "balancesheet",
     "ann_date": "income",
     "end_date": "income",
     "report_type": "income",
@@ -365,6 +372,8 @@ class TushareCollector:
         resume_proof: Mapping[str, object] | None = None,
         scope_key: str = "ad_hoc",
         universe: str = "ad_hoc",
+        availability_cutoff: str | None = None,
+        exact_ann_date: str | None = None,
     ):
         start_date = _normalize_date(start_date)
         end_date = _normalize_date(end_date)
@@ -379,9 +388,13 @@ class TushareCollector:
         if not ts_code:
             return pd.DataFrame()
 
+        availability_cutoff = _normalize_date(availability_cutoff or end_date)
+        exact_ann_date = _normalize_date(exact_ann_date)
+
         requested_scope = {
             "date_start": start_date,
             "date_end": end_date,
+            "availability_cutoff": availability_cutoff,
             "symbol_count": 1,
             "symbols_sha256": stable_scope_hash([ts_code]),
         }
@@ -390,19 +403,100 @@ class TushareCollector:
 
         def fetch_statement(endpoint_name: str) -> pd.DataFrame:
             fields = tuple(self._get_interface_field_list(endpoint_name))
+            endpoint_scope = {
+                **requested_scope,
+                "query_axis": (
+                    "exact_announcement_date_query_axis"
+                    if exact_ann_date is not None
+                    else (
+                        "report_period_query_axis"
+                        if endpoint_name == "fina_indicator"
+                        else "announcement_date_query_axis"
+                    )
+                ),
+            }
+
+            def validate_response(raw: pd.DataFrame):
+                if raw is not None and not raw.empty:
+                    if "ts_code" not in raw.columns:
+                        return {"reason": "missing_financial_fields", "fields": ["ts_code"]}
+                    symbols = raw["ts_code"].astype(str).str.strip()
+                    if not symbols.eq(str(ts_code)).all():
+                        return {
+                            "reason": "financial_response_symbol_mismatch",
+                            "expected": str(ts_code),
+                            "values": sorted(symbols.unique().tolist())[:10],
+                        }
+                    axis_column = (
+                        "ann_date"
+                        if exact_ann_date is not None or endpoint_name != "fina_indicator"
+                        else "end_date"
+                    )
+                    if axis_column not in raw.columns:
+                        return {
+                            "reason": "missing_financial_fields",
+                            "fields": [axis_column],
+                        }
+                    axis_values = (
+                        raw[axis_column].astype(str).str.strip()
+                        .str.replace("-", "", regex=False).str.slice(0, 8)
+                    )
+                    axis_start = exact_ann_date or start_date
+                    axis_end = exact_ann_date or end_date
+                    in_scope = (
+                        axis_values.str.fullmatch(r"\d{8}", na=False)
+                        & axis_values.ge(axis_start)
+                        & axis_values.le(axis_end)
+                    )
+                    if not in_scope.all():
+                        return {
+                            "reason": "financial_response_query_axis_mismatch",
+                            "axis": axis_column,
+                            "expected_start": axis_start,
+                            "expected_end": axis_end,
+                            "values": sorted(axis_values.loc[~in_scope].unique().tolist())[:10],
+                        }
+                try:
+                    select_first_available_financial_rows(
+                        raw,
+                        endpoint=endpoint_name,
+                        availability_cutoff=availability_cutoff,
+                    )
+                except FinancialAvailabilityError as exc:
+                    return exc.details
+                return None
+
+            identity_columns = (
+                (
+                    "ts_code", "end_date", "report_type", "comp_type", "end_type",
+                    "ann_date", "f_ann_date", "update_flag",
+                )
+                if endpoint_name != "fina_indicator"
+                else ("ts_code", "end_date", "ann_date", "update_flag")
+            )
+            supplier_query = (
+                {"ann_date": exact_ann_date}
+                if exact_ann_date is not None
+                else {"start_date": start_date, "end_date": end_date}
+            )
             frame, receipt_id = self._fetch_daily_endpoint_with_receipt(
                 endpoint_name,
                 run_id=run_id,
                 audit_store=audit_store,
-                requested_scope=requested_scope,
+                requested_scope=endpoint_scope,
                 resume_proof=resume_proof,
                 scope_key=scope_key,
                 universe=universe,
-                identity_columns=("ts_code", "ann_date"),
+                request_variant=FINANCIAL_AVAILABILITY_CONTRACT,
+                identity_columns=identity_columns,
                 evidence_fields=(),
+                response_validator=validate_response,
+                legacy_financial_contract=(
+                    FINANCIAL_AVAILABILITY_CONTRACT
+                    if exact_ann_date is None else None
+                ),
                 ts_code=ts_code,
-                start_date=start_date,
-                end_date=end_date,
+                **supplier_query,
                 fields=self._get_interface_fields(endpoint_name),
             )
             if audit_store is not None and run_id is not None and receipt_id is not None:
@@ -414,9 +508,35 @@ class TushareCollector:
                         run_id=run_id,
                         receipt_id=receipt_id,
                         dataset="income_sidecar",
-                        fields=("ann_date", "end_date", "report_type", "n_income", "revenue", "oper_cost"),
+                        fields=(
+                            "ann_date", "f_ann_date", "end_date", "report_type",
+                            "comp_type", "end_type", "update_flag", "n_income",
+                            "revenue", "oper_cost",
+                        ),
                     )
-            return frame
+            semantic_error = validate_response(frame)
+            if semantic_error is not None:
+                raise RuntimeError(
+                    "financial response failed requested-scope/PIT validation: "
+                    f"{semantic_error}"
+                )
+            selected, projection = select_first_available_financial_rows(
+                frame,
+                endpoint=endpoint_name,
+                availability_cutoff=availability_cutoff,
+            )
+            if audit_store is not None and run_id is not None:
+                audit_store.append_event(
+                    run_id,
+                    "financial_availability_projection",
+                    {
+                        "endpoint": endpoint_name,
+                        "receipt_id": receipt_id,
+                        "ts_code": ts_code,
+                        **projection,
+                    },
+                )
+            return selected
 
         income_dfs = []
         balance_dfs = []
@@ -426,7 +546,7 @@ class TushareCollector:
         # 1. Income
         df = fetch_statement("income")
         if df is not None and not df.empty:
-            missing = {"ts_code", "ann_date"} - set(df.columns)
+            missing = {"ts_code", "availability_date"} - set(df.columns)
             if missing:
                 raise RuntimeError(f"income response missing fields: {sorted(missing)}")
             income_dfs.append(df)
@@ -434,7 +554,7 @@ class TushareCollector:
         # 2. Balancesheet
         df = fetch_statement("balancesheet")
         if df is not None and not df.empty:
-            missing = {"ts_code", "ann_date"} - set(df.columns)
+            missing = {"ts_code", "availability_date"} - set(df.columns)
             if missing:
                 raise RuntimeError(f"balancesheet response missing fields: {sorted(missing)}")
             balance_dfs.append(df)
@@ -442,7 +562,7 @@ class TushareCollector:
         # 3. Cashflow
         df = fetch_statement("cashflow")
         if df is not None and not df.empty:
-            missing = {"ts_code", "ann_date"} - set(df.columns)
+            missing = {"ts_code", "availability_date"} - set(df.columns)
             if missing:
                 raise RuntimeError(f"cashflow response missing fields: {sorted(missing)}")
             cashflow_dfs.append(df)
@@ -450,7 +570,7 @@ class TushareCollector:
         # 4. Fina Indicator
         df = fetch_statement("fina_indicator")
         if df is not None and not df.empty:
-            missing = {"ts_code", "ann_date"} - set(df.columns)
+            missing = {"ts_code", "availability_date"} - set(df.columns)
             if missing:
                 raise RuntimeError(f"fina_indicator response missing fields: {sorted(missing)}")
             fina_dfs.append(df)
@@ -496,18 +616,99 @@ class TushareCollector:
             ],
         )
         fina_indicator = self._normalize_percent_financial_columns(fina_indicator)
+
+        # Each endpoint is an independent publication stream.  Collapse
+        # same-day reports to the latest report period (the legacy canonical
+        # choice), then carry each endpoint's fields across the union of
+        # availability events so a later income publication does not erase an
+        # already-visible balance sheet, or vice versa.
+        def endpoint_events(frame: pd.DataFrame, endpoint_name: str) -> pd.DataFrame:
+            if frame.empty:
+                return frame
+            ordered = frame.sort_values(
+                ["ts_code", "availability_date", "end_date"], kind="mergesort",
+            )
+            same_day = ordered.drop_duplicates(
+                ["ts_code", "availability_date"], keep="last",
+            )
+            retained = []
+            for _, group in same_day.groupby("ts_code", sort=False):
+                report_period = pd.to_datetime(group["end_date"], errors="coerce")
+                latest_before = report_period.cummax().shift(1)
+                retained.append(
+                    group.loc[latest_before.isna() | report_period.gt(latest_before)]
+                )
+            result = pd.concat(retained, ignore_index=True)
+            return result.rename(columns={"end_date": f"_{endpoint_name}_end_date"})
+
+        income = endpoint_events(income, "income")
+        balancesheet = endpoint_events(balancesheet, "balancesheet")
+        cashflow = endpoint_events(cashflow, "cashflow")
+        fina_indicator = endpoint_events(fina_indicator, "fina_indicator")
         
         frames = [f for f in [income, balancesheet, cashflow, fina_indicator] if not f.empty]
         if not frames:
             return pd.DataFrame()
-        merged = frames[0]
-        for frame in frames[1:]:
-            # 必须同时匹配 ts_code, ann_date, end_date，确保是同一份财报的数据
-            merge_keys = ["ts_code", "ann_date"]
-            if "end_date" in merged.columns and "end_date" in frame.columns:
-                merge_keys.append("end_date")
-            merged = pd.merge(merged, frame, on=merge_keys, how="outer")
-        merged["ann_date"] = merged["ann_date"].astype(str)
+        union = pd.concat(
+            [frame[["ts_code", "availability_date"]] for frame in frames],
+            ignore_index=True,
+        ).drop_duplicates()
+        union["availability_date"] = union["availability_date"].astype(str)
+        union = union.sort_values(
+            ["ts_code", "availability_date"], kind="mergesort",
+        ).reset_index(drop=True)
+
+        # Carry the most recent row from each endpoint independently.  An
+        # endpoint's new row (including its NaNs) replaces its prior row; only
+        # the absence of an endpoint event on another endpoint's publication
+        # date carries the previous endpoint snapshot forward.
+        merged = union
+        for frame in frames:
+            carried = []
+            frame = frame.copy()
+            frame["availability_date"] = frame["availability_date"].astype(str)
+            for code, left in union.groupby("ts_code", sort=False):
+                left = left.copy()
+                left["_availability_ord"] = pd.to_numeric(
+                    left["availability_date"], errors="raise",
+                )
+                right = frame.loc[frame["ts_code"].eq(code)].copy()
+                if right.empty:
+                    continue
+                right["_availability_ord"] = pd.to_numeric(
+                    right["availability_date"], errors="raise",
+                )
+                right = right.drop(columns=["availability_date"])
+                projection = pd.merge_asof(
+                    left.sort_values("_availability_ord", kind="mergesort"),
+                    right.sort_values("_availability_ord", kind="mergesort"),
+                    on="_availability_ord",
+                    by="ts_code",
+                    direction="backward",
+                ).drop(columns=["_availability_ord"])
+                carried.append(projection)
+            if carried:
+                endpoint_projection = pd.concat(carried, ignore_index=True)
+                merged = pd.merge(
+                    merged,
+                    endpoint_projection,
+                    on=["ts_code", "availability_date"],
+                    how="left",
+                )
+        endpoint_period_columns = [
+            column for column in merged.columns if column.endswith("_end_date")
+        ]
+        if endpoint_period_columns:
+            merged["_financial_period_end"] = merged[endpoint_period_columns].apply(
+                lambda row: max(
+                    (str(value) for value in row if pd.notna(value)),
+                    default=pd.NA,
+                ),
+                axis=1,
+            )
+            merged = merged.drop(columns=endpoint_period_columns)
+        if exact_ann_date is None:
+            merged = merged.drop(columns=["_financial_period_end"], errors="ignore")
 
         for col in ["net_income", "equity", "total_assets", "revenue", "oper_cost", "total_cur_assets", "total_cur_liab"]:
             if col in merged.columns:
@@ -556,8 +757,8 @@ class TushareCollector:
         resume_proof: Mapping[str, object] | None = None,
         scope_key: str = "ad_hoc",
         universe: str = "ad_hoc",
-    ) -> set[str]:
-        """Find requested symbols with a disclosure event on ``target_date``.
+    ) -> dict[str, set[str]]:
+        """Map disclosure candidates to exact original announcement dates.
 
         Tushare's ordinary income/balancesheet/cashflow/fina_indicator APIs
         require ``ts_code``.  ``disclosure_date`` is the non-VIP, market-wide
@@ -565,21 +766,21 @@ class TushareCollector:
         signal, while the ``ann_date`` union catches revisions represented by
         the endpoint's alternate date predicate.  The two are intentionally
         only candidate discovery: disclosure_date's ``ann_date`` is not
-        treated as financial visibility.  The financial rows themselves must
-        still have their own report ``ann_date`` equal to the target for PIT
-        safety.
+        treated as financial visibility.  When ``actual_date`` is the target,
+        its original ``ann_date`` is retained so a later final-announcement
+        date can find the exact supplier row without a historical lookback.
         """
         target_date = _normalize_date(target_date)
         requested_codes = {str(code) for code in requested_codes if str(code).strip()}
         if target_date is None or not requested_codes:
-            return set()
+            return {}
 
         cfg_item = self._get_interface_config("disclosure_date")
         fields = cfg_item.get("fields") if isinstance(cfg_item, dict) else None
         if isinstance(fields, list):
             fields = ",".join(fields)
         fields = fields or "ts_code,ann_date,end_date,pre_date,actual_date"
-        candidates: set[str] = set()
+        candidates: dict[str, set[str]] = {}
         for date_field in ("actual_date", "ann_date"):
             frame, _ = self._fetch_daily_endpoint_with_receipt(
                 "disclosure_date",
@@ -601,7 +802,7 @@ class TushareCollector:
             )
             if frame is None or frame.empty:
                 continue
-            required = {"ts_code", date_field}
+            required = {"ts_code", date_field, "ann_date"}
             missing = required - set(frame.columns)
             if missing:
                 raise RuntimeError(
@@ -615,8 +816,18 @@ class TushareCollector:
                 .str.replace("-", "", regex=False)
                 .str.slice(0, 8)
             )
-            matching = frame.loc[dates == target_date, "ts_code"].astype(str)
-            candidates.update(set(matching).intersection(requested_codes))
+            matching = frame.loc[dates == target_date].copy()
+            for row in matching.itertuples(index=False):
+                code = str(getattr(row, "ts_code"))
+                if code not in requested_codes:
+                    continue
+                original_ann_date = _normalize_date(getattr(row, "ann_date"))
+                if original_ann_date is None:
+                    raise RuntimeError(
+                        "disclosure_date matched row has invalid ann_date: "
+                        f"ts_code={code}, date_field={date_field}"
+                    )
+                candidates.setdefault(code, set()).add(original_ann_date)
         return candidates
 
     def _fetch_financials_for_daily(
@@ -630,7 +841,14 @@ class TushareCollector:
         scope_key: str = "ad_hoc",
         universe: str = "ad_hoc",
     ):
-        """Fetch only requested reports announced on a single target date."""
+        """Fetch requested reports published after close on the target date.
+
+        The canonical row is dated on publication day; the baseline's
+        strict-before feature visibility contract makes it consumable only by
+        a later trade date.  All four suppliers are queried on the exact
+        ``ann_date`` axis, including ``fina_indicator`` whose historical
+        start/end parameters otherwise mean report periods.
+        """
         target_date = _normalize_date(target_date)
         requested_codes = {str(code) for code in requested_codes if str(code).strip()}
         discovery_kwargs = (
@@ -647,59 +865,71 @@ class TushareCollector:
         candidates = self._discover_financial_announcement_codes(
             target_date, requested_codes, **discovery_kwargs
         )
+        if isinstance(candidates, set):
+            # Compatibility for local callers/tests that stub the old helper.
+            candidates = {code: {target_date} for code in candidates}
         frames = []
-        for index, code in enumerate(sorted(candidates)):
-            # Match the historical per-stock fetcher's conservative pacing:
-            # each candidate expands to four financial API calls, so an
-            # unthrottled loop can exceed Tushare's request-rate contract on
-            # heavy reporting dates.
-            if index > 0:
-                time.sleep(0.3)
-            # Ordinary financial endpoints are deliberately called per
-            # candidate with ts_code; no unsupported market-wide ann_date
-            # query is allowed here.
-            statement_kwargs = (
-                {
-                    "run_id": run_id,
-                    "audit_store": audit_store,
-                    "resume_proof": resume_proof,
-                    "scope_key": scope_key,
-                    "universe": universe,
-                }
-                if run_id is not None or audit_store is not None or resume_proof is not None
-                else {}
-            )
-            frame = self._fetch_financials(
-                target_date, target_date, ts_code=code, **statement_kwargs
-            )
-            if frame is None or frame.empty:
-                continue
-            required = {"ts_code", "ann_date"}
-            missing = required - set(frame.columns)
-            if missing:
-                raise RuntimeError(
-                    f"financial response for {code} missing fields: {sorted(missing)}"
+        query_index = 0
+        for code in sorted(candidates):
+            for announcement_date in sorted(candidates[code]):
+                if query_index > 0:
+                    time.sleep(0.3)
+                query_index += 1
+                statement_kwargs = (
+                    {
+                        "run_id": run_id,
+                        "audit_store": audit_store,
+                        "resume_proof": resume_proof,
+                        "scope_key": scope_key,
+                        "universe": universe,
+                    }
+                    if run_id is not None or audit_store is not None or resume_proof is not None
+                    else {}
                 )
-            ann_dates = (
-                frame["ann_date"]
-                .astype(str)
-                .str.strip()
-                .str.replace("-", "", regex=False)
-                .str.slice(0, 8)
-            )
-            frame = frame.loc[
-                ann_dates.eq(target_date)
-                & frame["ts_code"].astype(str).isin(requested_codes)
-            ].copy()
-            if not frame.empty:
-                frames.append(frame)
+                frame = self._fetch_financials(
+                    announcement_date,
+                    announcement_date,
+                    ts_code=code,
+                    availability_cutoff=target_date,
+                    exact_ann_date=announcement_date,
+                    **statement_kwargs,
+                )
+                if frame is None or frame.empty:
+                    continue
+                required = {"ts_code", "availability_date"}
+                missing = required - set(frame.columns)
+                if missing:
+                    raise RuntimeError(
+                        f"financial response for {code} missing fields: {sorted(missing)}"
+                    )
+                dates = (
+                    frame["availability_date"].astype(str).str.strip()
+                    .str.replace("-", "", regex=False).str.slice(0, 8)
+                )
+                frame = frame.loc[
+                    dates.eq(target_date)
+                    & frame["ts_code"].astype(str).isin(requested_codes)
+                ].copy()
+                if not frame.empty:
+                    frames.append(frame)
         if not frames:
             return pd.DataFrame()
         merged = pd.concat(frames, ignore_index=True)
-        subset = ["ts_code", "ann_date"]
-        if "end_date" in merged.columns:
-            subset.append("end_date")
-        return merged.drop_duplicates(subset=subset, keep="last")
+        sort_columns = ["ts_code", "availability_date"]
+        if "_financial_period_end" in merged.columns:
+            sort_columns.append("_financial_period_end")
+        merged = merged.sort_values(sort_columns, kind="mergesort")
+        coalesce_columns = [
+            column for column in merged.columns
+            if column not in {"ts_code", "availability_date", "_financial_period_end"}
+        ]
+        if coalesce_columns:
+            merged[coalesce_columns] = merged.groupby(
+                ["ts_code", "availability_date"], sort=False,
+            )[coalesce_columns].ffill()
+        return merged.drop_duplicates(
+            subset=["ts_code", "availability_date"], keep="last",
+        ).reset_index(drop=True)
 
 
     def _merge_financials(self, daily_df, fin_df):
@@ -712,15 +942,21 @@ class TushareCollector:
             return daily_df
         daily_df = daily_df.copy()
         fin_df = self._normalize_percent_financial_columns(fin_df.copy())
+        if "availability_date" not in fin_df.columns:
+            raise RuntimeError(
+                "financial projection missing audited availability_date"
+            )
         daily_df["_orig_idx"] = np.arange(len(daily_df))
         daily_df["trade_date"] = daily_df["trade_date"].astype(str)
-        fin_df["ann_date"] = fin_df["ann_date"].astype(str)
+        fin_df["availability_date"] = fin_df["availability_date"].astype(str)
         daily_df["trade_date_dt"] = pd.to_datetime(daily_df["trade_date"], errors="coerce")
-        fin_df["ann_date_dt"] = pd.to_datetime(fin_df["ann_date"], errors="coerce")
+        fin_df["availability_date_dt"] = pd.to_datetime(
+            fin_df["availability_date"], errors="coerce"
+        )
         valid_left = daily_df[daily_df["trade_date_dt"].notna()].copy()
         invalid_left = daily_df[daily_df["trade_date_dt"].isna()].copy()
         valid_left["ts_code"] = valid_left["ts_code"].astype(str)
-        fin_df = fin_df[fin_df["ann_date_dt"].notna()].copy()
+        fin_df = fin_df[fin_df["availability_date_dt"].notna()].copy()
         fin_df["ts_code"] = fin_df["ts_code"].astype(str)
         merged_chunks = []
         for code, left_grp in valid_left.groupby("ts_code"):
@@ -732,12 +968,9 @@ class TushareCollector:
                         left_sorted[col] = np.nan
                 merged_chunks.append(left_sorted)
                 continue
-            # PIT 核心逻辑：
-            # 1. 必须按照 ann_date 排序，确保 merge_asof 找到的是 trade_date 之前(或当天)发布的记录
-            # 2. 如果同一天发布了多个报告（例如修正公告，或延期的Q1和正常的Q2同天发），
-            #    通常我们认为最新的报告期(end_date)更有价值，或者修正后的值（通常修正值在后，但Tushare数据不保证顺序）
-            #    这里增加按照 end_date 排序，确保同 ann_date 下，最新的报告期排在后面，被 merge_asof 选中。
-            sort_cols = ["ann_date_dt"]
+            # The selector has already proven publication-time visibility.  At a
+            # shared availability date, consume the latest eligible report period.
+            sort_cols = ["availability_date_dt"]
             if "end_date" in right_grp.columns:
                 right_grp["_end_dt"] = pd.to_datetime(right_grp["end_date"], errors="coerce")
                 sort_cols.append("_end_dt")
@@ -748,7 +981,7 @@ class TushareCollector:
                 left_sorted,
                 right_sorted,
                 left_on="trade_date_dt",
-                right_on="ann_date_dt",
+                right_on="availability_date_dt",
                 direction="backward",
             )
             merged_chunks.append(merged_chunk)
@@ -760,7 +993,13 @@ class TushareCollector:
             merged = pd.concat([merged_valid, invalid_left], ignore_index=True)
         else:
             merged = merged_valid
-        merged = merged.drop(columns=["trade_date_dt", "ann_date_dt", "ann_date"], errors="ignore")
+        merged = merged.drop(
+            columns=[
+                "trade_date_dt", "availability_date_dt", "availability_date",
+                "_financial_period_end",
+            ],
+            errors="ignore",
+        )
         for col in ["net_income", "revenue", "oper_cost", "total_assets", "equity", "total_cur_assets", "total_cur_liab", "roe", "grossprofit_margin", "debt_to_assets", "current_ratio"]:
             if col in merged.columns:
                 merged[col] = pd.to_numeric(merged[col], errors="coerce")
@@ -918,6 +1157,7 @@ class TushareCollector:
         response_validator: (
             Callable[[pd.DataFrame], Mapping[str, object] | None] | None
         ) = None,
+        legacy_financial_contract: str | None = None,
         required_endpoint: bool = True,
         **kwargs,
     ) -> tuple[pd.DataFrame, str | None]:
@@ -949,6 +1189,25 @@ class TushareCollector:
             )
             if reused is not None:
                 return reused["frame"], str(reused["receipt_id"])
+            if legacy_financial_contract is not None:
+                legacy = audit_store.reproject_legacy_financial_shard(
+                    run_id=run_id,
+                    resume_proof=resume_proof,
+                    source="tushare",
+                    endpoint=endpoint_name,
+                    contract_version="1",
+                    requested_scope=requested_scope,
+                    legacy_request_sha256=_supplier_request_sha256(kwargs),
+                    response_validator=response_validator or (lambda _frame: None),
+                    contract_name=legacy_financial_contract,
+                )
+                if legacy["status"] == "compatible":
+                    return legacy["frame"], str(legacy["receipt_id"])
+                if legacy["status"] == "incompatible":
+                    raise RuntimeError(
+                        "REPAIR_REQUIRED: legacy financial shard exists but cannot "
+                        f"be reprojected offline ({legacy.get('reason')})"
+                    )
 
         api = self._get_interface_api(endpoint_name)
         attempt_count = 0
@@ -1742,7 +2001,7 @@ class TushareCollector:
             return pd.DataFrame()
             
         merged = pd.concat(frames, ignore_index=True)
-        subset_cols = ["ts_code", "ann_date"]
+        subset_cols = ["ts_code", "availability_date"]
         if "end_date" in merged.columns:
             subset_cols.append("end_date")
         merged = merged.drop_duplicates(subset=subset_cols, keep="last")

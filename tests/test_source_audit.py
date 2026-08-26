@@ -103,8 +103,18 @@ def test_mutation_hashes_only_exact_affected_window() -> None:
     assert receipt["fields"] == ["close"]
     assert receipt["mutation_type"] == "update"
     assert receipt["before_hash"] != receipt["after_hash"]
-    assert "11.0" not in json.dumps(receipt)
-    assert "12.0" not in json.dumps(receipt)
+    assert set(receipt) == {
+        "symbol", "dataset", "source", "endpoint", "fetch_receipt_id",
+        "date_start", "date_end", "fields", "mutation_type", "before_hash",
+        "after_hash", "ingested_at",
+    }
+    assert all(
+        key not in receipt
+        for key in (
+            "before", "after", "before_value", "after_value", "values",
+            "payload", "payload_path",
+        )
+    )
 
 
 def test_noop_has_equal_hash_and_no_affected_fields() -> None:
@@ -1089,6 +1099,111 @@ def test_resume_requires_proof_current_lineage_and_exact_checkpoint_scope(tmp_pa
         store.reuse_fetch_shard(
             run_id=new_run, resume_proof=proof, source="tushare",
             endpoint="daily", contract_version="1", requested_scope=tampered_scope,
+        )
+
+
+@pytest.mark.parametrize(
+    ("case", "expected_status", "expected_reason"),
+    [
+        ("compatible", "compatible", None),
+        ("validator", "incompatible", "legacy_response_validation_failed"),
+        ("tampered", "incompatible", "legacy_payload_invalid"),
+        ("partial", "incompatible", "legacy_receipt_not_terminal"),
+        ("missing", "missing", None),
+    ],
+)
+def test_legacy_financial_reprojection_is_offline_and_fail_closed(
+    tmp_path: Path, case: str, expected_status: str, expected_reason: str | None,
+) -> None:
+    audit_root = tmp_path / "audit"
+    store = SourceAuditStore(audit_root / "audit.db")
+    old_run = f"legacy-financial-{case}"
+    lineage = {
+        "entrypoint": "scripts/data_sync.py", "universe": "csi1800",
+        "target_date": "20260821", "range_start": "20180313",
+    }
+    store.append_event(old_run, "run_started", lineage)
+    legacy_request_sha = "a" * 64
+    base_scope = {
+        "date_start": "20180313", "date_end": "20260821",
+        "symbol_count": 1,
+        "symbols_sha256": stable_scope_hash(["000001.SZ"]),
+    }
+    legacy_scope = checkpoint_requested_scope(
+        base_scope, source="tushare", endpoint="income", contract_version="1",
+        scope_key="csi1800", universe="csi1800",
+        request_sha256=legacy_request_sha,
+    )
+    frame = pd.DataFrame({
+        "ts_code": ["000001.SZ"], "ann_date": ["20260820"],
+        "f_ann_date": ["20260820"], "end_date": ["20260630"],
+        "report_type": ["1"], "comp_type": ["1"], "end_type": ["2"],
+        "update_flag": ["0"], "n_income": [2.0],
+    })
+    receipt_id = None
+    if case != "missing":
+        status = "partial" if case == "partial" else "success"
+        receipt_id = store.record_fetch(
+            run_id=old_run, source="tushare", endpoint="income",
+            contract_version="1", status=status, requested_scope=legacy_scope,
+            returned_rows=1, attempt_count=1, payload_frame=frame,
+            error="partial" if status == "partial" else None,
+            **normalized_response_metadata(frame),
+        )
+    store.record_crash_receipt(
+        run_id=old_run, receipt_root=audit_root / "source_runs",
+        entrypoint="scripts/data_sync.py", error="checkpoint",
+    )
+    proof = store.validate_resume_run(
+        resume_from_run_id=old_run, expected_entrypoint="scripts/data_sync.py",
+        universe="csi1800", target_date="20260821", range_start="20180313",
+    )
+    if case == "tampered":
+        with sqlite3.connect(store.db_path) as connection:
+            payload_path = connection.execute(
+                "SELECT payload_path FROM fetch_receipts WHERE receipt_id=?",
+                (receipt_id,),
+            ).fetchone()[0]
+        path = tmp_path / payload_path
+        path.write_bytes(path.read_bytes() + b"tampered")
+
+    new_run = f"current-financial-{case}"
+    store.append_event(new_run, "run_started", lineage)
+    current_scope = checkpoint_requested_scope(
+        {
+            **base_scope,
+            "availability_cutoff": "20260821",
+            "query_axis": "announcement_date_query_axis",
+        },
+        source="tushare", endpoint="income", contract_version="1",
+        scope_key="csi1800", universe="csi1800",
+        request_variant="financial_first_available_v1",
+        request_sha256="b" * 64,
+    )
+    assert store.reuse_fetch_shard(
+        run_id=new_run, resume_proof=proof, source="tushare",
+        endpoint="income", contract_version="1", requested_scope=current_scope,
+    ) is None
+
+    result = store.reproject_legacy_financial_shard(
+        run_id=new_run, resume_proof=proof, source="tushare", endpoint="income",
+        contract_version="1", requested_scope=current_scope,
+        legacy_request_sha256=legacy_request_sha,
+        response_validator=(
+            (lambda _frame: {"reason": "missing_required_field"})
+            if case == "validator" else (lambda _frame: None)
+        ),
+        contract_name="financial_first_available_v1",
+    )
+
+    assert result["status"] == expected_status
+    if expected_reason is not None:
+        assert result["reason"] == expected_reason
+    if case == "compatible":
+        assert result["frame"]["n_income"].tolist() == [2.0]
+        assert any(
+            event["event_type"] == "financial_legacy_shard_reprojected"
+            for event in store.run_evidence_summary(new_run)["events"]
         )
 
 
