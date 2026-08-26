@@ -1464,8 +1464,14 @@ class SourceAuditStore:
         target_date: str,
         fields: Sequence[str],
         previous_open_session: str | None,
+        allow_initial_history: bool = False,
     ) -> bool:
-        """Reject a watermark jump over an untrusted trading session."""
+        """Reject a watermark jump over an untrusted trading session.
+
+        An explicitly verified history run may seed fields that do not yet
+        have a watermark.  Fields with an existing watermark must still be
+        contiguous; the opt-in never repairs or bypasses their lineage.
+        """
 
         required = sorted({str(field) for field in fields})
         with self._connect() as conn:
@@ -1479,7 +1485,8 @@ class SourceAuditStore:
             # First segment starts exactly at this target; caller may not claim
             # an earlier range_start in finalize_run.
             return True
-        if set(required) - set(by_field):
+        missing_fields = set(required) - set(by_field)
+        if missing_fields and not allow_initial_history:
             return False
         return all(
             range_start >= str(by_field[field]["range_start"])
@@ -1491,6 +1498,7 @@ class SourceAuditStore:
                 )
             )
             for field in required
+            if field in by_field
         )
 
     def finalize_unchanged(
@@ -1654,6 +1662,7 @@ class SourceAuditStore:
             target_date=range_end,
             fields=fields,
             previous_open_session=previous_open_session,
+            allow_initial_history=allow_initial_history,
         )
         effective_gates["contiguous_range"] = bool(gates.get("contiguous_range")) and contiguous
         missing_gates = sorted(REQUIRED_TERMINAL_GATES - set(effective_gates))

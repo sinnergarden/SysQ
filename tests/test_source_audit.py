@@ -1138,6 +1138,85 @@ def test_explicit_initial_history_can_seed_one_verified_range(tmp_path: Path) ->
     )
 
 
+def test_initial_history_can_add_only_previously_unseen_fields(tmp_path: Path) -> None:
+    store = SourceAuditStore(tmp_path / "audit.db")
+    receipt_root = tmp_path / "receipts"
+    gates = {
+        "fetch": True,
+        "raw_payloads": True,
+        "canonical_commit": True,
+        "qlib_readback": True,
+        "readiness": True,
+        "contiguous_range": True,
+    }
+    _record_fetch(store, run_id="core-20", status="success", scope={"date": "20260820"})
+    seeded = store.finalize_run(
+        run_id="core-20", source="tushare", scope_key="csi1800",
+        range_start="20260820", range_end="20260820", fields=["close"],
+        gates=gates, receipt_root=receipt_root,
+    )
+    assert seeded["watermark_advanced"] is True
+    before = store.watermark_snapshot_bytes()
+
+    _record_fetch(store, run_id="new-field-denied", status="success", scope={"date": "20260821"})
+    denied = store.finalize_run(
+        run_id="new-field-denied", source="tushare", scope_key="csi1800",
+        range_start="20260821", range_end="20260821",
+        fields=["close", "holder_num"], gates=gates,
+        receipt_root=receipt_root, previous_open_session="20260820",
+    )
+    assert denied["watermark_advanced"] is False
+    assert store.watermark_snapshot_bytes() == before
+
+    _record_fetch(store, run_id="new-field-verified", status="success", scope={"date": "20260821"})
+    verified = store.finalize_run(
+        run_id="new-field-verified", source="tushare", scope_key="csi1800",
+        range_start="20260821", range_end="20260821",
+        fields=["close", "holder_num"], gates=gates,
+        receipt_root=receipt_root, previous_open_session="20260820",
+        allow_initial_history=True,
+    )
+    assert verified["watermark_advanced"] is True
+    assert store.has_trusted_range(
+        source="tushare", scope_key="csi1800",
+        range_start="20260821", range_end="20260821",
+        fields=["close", "holder_num"],
+    )
+
+
+def test_initial_history_does_not_bypass_existing_field_contiguity(tmp_path: Path) -> None:
+    store = SourceAuditStore(tmp_path / "audit.db")
+    receipt_root = tmp_path / "receipts"
+    gates = {
+        "fetch": True,
+        "raw_payloads": True,
+        "canonical_commit": True,
+        "qlib_readback": True,
+        "readiness": True,
+        "contiguous_range": True,
+    }
+    _record_fetch(store, run_id="core-20", status="success", scope={"date": "20260820"})
+    seeded = store.finalize_run(
+        run_id="core-20", source="tushare", scope_key="csi1800",
+        range_start="20260820", range_end="20260820", fields=["close"],
+        gates=gates, receipt_root=receipt_root,
+    )
+    assert seeded["watermark_advanced"] is True
+    before = store.watermark_snapshot_bytes()
+
+    _record_fetch(store, run_id="gap-with-new-field", status="success", scope={"date": "20260822"})
+    skipped = store.finalize_run(
+        run_id="gap-with-new-field", source="tushare", scope_key="csi1800",
+        range_start="20260822", range_end="20260822",
+        fields=["close", "holder_num"], gates=gates,
+        receipt_root=receipt_root, previous_open_session="20260821",
+        allow_initial_history=True,
+    )
+    assert skipped["watermark_advanced"] is False
+    assert skipped["trust_state"] == "untrusted"
+    assert store.watermark_snapshot_bytes() == before
+
+
 def test_same_day_runs_do_not_overwrite_and_legacy_cannot_be_trusted(tmp_path: Path) -> None:
     store = SourceAuditStore(tmp_path / "audit.db")
     receipt_root = tmp_path / "receipts"

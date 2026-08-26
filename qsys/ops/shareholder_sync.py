@@ -727,33 +727,62 @@ def fetch_shareholder_backfill(
         pd.concat(holder_pages, ignore_index=True) if holder_pages else pd.DataFrame()
     )
     top10_pages: list[pd.DataFrame] = []
-    periods = _quarter_ends(start_date, end_date)
-    for period in periods:
-        quarter = pd.Period(period, freq="Q-DEC")
-        quarter_start = quarter.start_time.strftime("%Y-%m-%d")
-        quarter_end = quarter.end_time.strftime("%Y-%m-%d")
-        page = (
-            _audited_paged_call(
-                collector,
-                endpoint="top10_holders",
-                dataset="shareholder_top10",
-                fields=("ann_date", "hold_ratio"),
-                response_fields="ts_code,ann_date,end_date,holder_name,hold_ratio",
-                limit=6000,
-                requested_scope=evidence_scope(quarter_start, quarter_end),
-                request_variant=f"report_period:{period}",
-                run_id=str(run_id),
-                audit_store=audit_store,
-                resume_proof=resume_proof,
-                scope_key=scope_key,
-                universe=universe,
-                period=period,
+    periods: list[str] = []
+    top10_chunks: list[dict[str, Any]] = []
+    if audited:
+        # ``period`` selects a report period, while PIT availability is keyed by
+        # ``ann_date``.  Exact announcement-date shards keep requested scope,
+        # response metadata and downstream terminal proof on the same axis.
+        for chunk_start, chunk_end in _calendar_year_chunks(start_date, end_date):
+            chunk_rows = 0
+            announcement_dates = pd.date_range(chunk_start, chunk_end, freq="D")
+            for announcement in announcement_dates:
+                requested_date = announcement.strftime("%Y-%m-%d")
+                api_date = announcement.strftime("%Y%m%d")
+                page = _audited_paged_call(
+                    collector,
+                    endpoint="top10_holders",
+                    dataset="shareholder_top10",
+                    fields=("ann_date", "hold_ratio"),
+                    response_fields="ts_code,ann_date,end_date,holder_name,hold_ratio",
+                    limit=6000,
+                    requested_scope=evidence_scope(requested_date, requested_date),
+                    request_variant=f"announcement_date:{api_date}",
+                    run_id=str(run_id),
+                    audit_store=audit_store,
+                    resume_proof=resume_proof,
+                    scope_key=scope_key,
+                    universe=universe,
+                    ann_date=api_date,
+                )
+                if page is None or page.empty:
+                    continue
+                if "ann_date" not in page.columns:
+                    raise RuntimeError("top10_holders response missing ann_date")
+                response_dates = {
+                    _normalise_date(value) for value in page["ann_date"].tolist()
+                }
+                if response_dates != {requested_date}:
+                    raise RuntimeError(
+                        "top10_holders response escaped requested announcement date: "
+                        f"requested={requested_date}, returned={sorted(response_dates, key=str)}"
+                    )
+                top10_pages.append(page)
+                chunk_rows += len(page)
+            top10_chunks.append({
+                "start_date": chunk_start,
+                "end_date": chunk_end,
+                "request_count": len(announcement_dates),
+                "rows": chunk_rows,
+            })
+    else:
+        periods = _quarter_ends(start_date, end_date)
+        for period in periods:
+            page = _paged_call(
+                collector.pro.top10_holders, limit=6000, period=period
             )
-            if audited
-            else _paged_call(collector.pro.top10_holders, limit=6000, period=period)
-        )
-        if page is not None and not page.empty:
-            top10_pages.append(page)
+            if page is not None and not page.empty:
+                top10_pages.append(page)
     top10_raw = (
         pd.concat(top10_pages, ignore_index=True) if top10_pages else pd.DataFrame()
     )
@@ -766,6 +795,7 @@ def fetch_shareholder_backfill(
         "end_date": end_date,
         "quarter_periods": periods,
         "holder_chunks": holder_chunks,
+        "top10_announcement_chunks": top10_chunks,
         "holder_source_rows": len(holder_raw),
         "top10_source_rows": len(top10_raw),
     }

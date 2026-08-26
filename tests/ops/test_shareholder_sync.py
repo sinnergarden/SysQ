@@ -35,7 +35,7 @@ CONTRACT = {
 
 def test_historical_shareholder_pages_emit_exact_durable_receipts(tmp_path: Path) -> None:
     holder = pd.DataFrame({
-        "ts_code": ["000001.SZ"], "ann_date": ["20200315"],
+        "ts_code": ["000001.SZ"], "ann_date": ["20200430"],
         "end_date": ["20191231"], "holder_num": [1000],
     })
     top10 = pd.DataFrame({
@@ -43,27 +43,30 @@ def test_historical_shareholder_pages_emit_exact_durable_receipts(tmp_path: Path
         "end_date": ["20191231"], "holder_name": ["holder"],
         "hold_ratio": [10.0],
     })
+    top10_calls: list[dict[str, object]] = []
+
+    def top10_api(**kwargs: object) -> pd.DataFrame:
+        top10_calls.append(kwargs)
+        return top10.copy() if kwargs.get("ann_date") == "20200430" else pd.DataFrame()
 
     collector = TushareCollector.__new__(TushareCollector)
     collector.max_retries = 1
     collector._collector_interfaces = {}
     collector.pro = SimpleNamespace(
         stk_holdernumber=lambda **_kwargs: holder.copy(),
-        top10_holders=lambda **kwargs: (
-            top10.copy() if kwargs.get("period") == "20200331" else pd.DataFrame()
-        ),
+        top10_holders=top10_api,
     )
     audit_root = tmp_path / "audit"
     audit = SourceAuditStore(audit_root / "audit.db")
     run_id = "shareholder-history"
     audit.append_event(run_id, "run_started", {
         "entrypoint": "scripts/data_sync.py", "universe": "csi1800",
-        "target_date": "20200331", "range_start": "20200101",
+        "target_date": "20200430", "range_start": "20200429",
     })
 
-    holder_rows, top10_rows, _ = fetch_shareholder_backfill(
+    holder_rows, top10_rows, fetch = fetch_shareholder_backfill(
         collector,
-        start_date="2020-01-01",
+        start_date="2020-04-29",
         end_date="2020-04-30",
         run_id=run_id,
         audit_store=audit,
@@ -74,6 +77,15 @@ def test_historical_shareholder_pages_emit_exact_durable_receipts(tmp_path: Path
 
     assert len(holder_rows) == 1
     assert len(top10_rows) == 1
+    assert [call["ann_date"] for call in top10_calls] == ["20200429", "20200430"]
+    assert all("start_date" not in call and "end_date" not in call for call in top10_calls)
+    assert fetch["quarter_periods"] == []
+    assert fetch["top10_announcement_chunks"] == [{
+        "start_date": "2020-04-29",
+        "end_date": "2020-04-30",
+        "request_count": 2,
+        "rows": 1,
+    }]
     with sqlite3.connect(audit_root / "audit.db") as conn:
         receipts = conn.execute(
             "SELECT endpoint,status,requested_scope_json,payload_path,response_date_max "
@@ -96,10 +108,49 @@ def test_historical_shareholder_pages_emit_exact_durable_receipts(tmp_path: Path
     top10_receipt = next(
         row for row in receipts if row[0] == "top10_holders" and row[1] == "success"
     )
+    empty_top10_receipt = next(
+        row for row in receipts if row[0] == "top10_holders" and row[1] == "empty"
+    )
+    empty_top10_scope = json.loads(empty_top10_receipt[2])
+    assert empty_top10_scope["date_start"] == empty_top10_scope["date_end"] == "20200429"
+    assert empty_top10_scope["checkpoint_key"]
+    assert empty_top10_receipt[3] is None
     assert top10_receipt[4] == "20200430"
-    assert json.loads(top10_receipt[2])["date_end"] == "20200331"
+    top10_scope = json.loads(top10_receipt[2])
+    assert top10_scope["date_start"] == top10_scope["date_end"] == "20200430"
+    assert top10_scope["request_variant"] == "announcement_date:20200430:offset=0"
     assert ("shareholder_holdernumber", "holder_num") in links
     assert ("shareholder_top10", "hold_ratio") in links
+
+
+def test_audited_top10_response_outside_requested_announcement_date_fails_closed(
+    tmp_path: Path,
+) -> None:
+    wrong_day = pd.DataFrame({
+        "ts_code": ["000001.SZ"], "ann_date": ["20200501"],
+        "end_date": ["20191231"], "holder_name": ["holder"],
+        "hold_ratio": [10.0],
+    })
+    collector = TushareCollector.__new__(TushareCollector)
+    collector.max_retries = 1
+    collector._collector_interfaces = {}
+    collector.pro = SimpleNamespace(
+        stk_holdernumber=lambda **_kwargs: pd.DataFrame(),
+        top10_holders=lambda **_kwargs: wrong_day.copy(),
+    )
+    audit = SourceAuditStore(tmp_path / "audit" / "audit.db")
+
+    with pytest.raises(RuntimeError, match="escaped requested announcement date"):
+        fetch_shareholder_backfill(
+            collector,
+            start_date="2020-04-30",
+            end_date="2020-04-30",
+            run_id="wrong-top10-announcement",
+            audit_store=audit,
+            scope_key="csi1800",
+            universe="csi1800",
+            evidence_symbols=["000001.SZ"],
+        )
 
 
 def test_normalises_corrupt_period_and_aggregates_top10() -> None:
