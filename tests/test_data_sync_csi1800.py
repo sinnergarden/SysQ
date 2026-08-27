@@ -71,6 +71,32 @@ def test_dry_run_does_not_forward_force_fetch_to_canonical_sync_entrypoint():
     assert run.call_args.kwargs["check"] is True
 
 
+def test_wrapper_forwards_qlib_max_workers_to_canonical_sync_entrypoint():
+    with patch.object(
+        sys,
+        "argv",
+        [
+            "data_sync.py", "--universe", "csi1800",
+            "--target-date", "2026-08-21", "--qlib-max-workers", "3",
+        ],
+    ), patch("scripts.data_sync.subprocess.run") as run:
+        data_sync.main()
+
+    command = run.call_args.args[0]
+    assert command[-2:] == ["--qlib-max-workers", "3"]
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "not-an-int"])
+def test_wrapper_rejects_non_positive_qlib_max_workers(value):
+    with patch.object(
+        sys,
+        "argv",
+        ["data_sync.py", "--universe", "csi1800", "--qlib-max-workers", value],
+    ), pytest.raises(SystemExit) as stopped:
+        data_sync._main_under_writer_lock(None)
+    assert stopped.value.code == 2
+
+
 def test_applied_wrapper_passes_verified_lock_fd_and_one_run_id(tmp_path: Path):
     with patch.object(
         sys,

@@ -63,6 +63,16 @@ from qsys.ops.industry_sync import (
 from qsys.utils.logger import log
 
 
+def _positive_int(value: str) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise argparse.ArgumentTypeError("must be a positive integer") from exc
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return parsed
+
+
 _DAILY_DATA_READY_CUTOFF = wall_time(18, 30)
 TRUSTED_DAILY_FIELDS = ("open", "high", "low", "close", "volume", "factor")
 TRUSTED_DAILY_FIELD_ENDPOINTS = {
@@ -389,6 +399,7 @@ def _repair_same_date_qlib_gap(
     universe: str,
     target_dt: str,
     apply: bool,
+    qlib_max_workers: int | None = None,
 ) -> dict:
     """Repair and verify canonical-vs-Qlib same-date symbol gaps.
 
@@ -421,7 +432,10 @@ def _repair_same_date_qlib_gap(
         return summary
 
     try:
-        result = adapter.convert_fix_symbols(missing_before, refresh_universes=[])
+        refresh_kwargs = {"refresh_universes": []}
+        if qlib_max_workers is not None:
+            refresh_kwargs["max_workers"] = qlib_max_workers
+        result = adapter.convert_fix_symbols(missing_before, **refresh_kwargs)
     except Exception as exc:
         summary.update({"status": "failed", "error": str(exc)})
         return summary
@@ -586,6 +600,7 @@ def _refresh_and_verify_changed_symbols(
     target_dt: str,
     apply: bool,
     history_mode: bool = False,
+    qlib_max_workers: int | None = None,
 ) -> dict:
     """Drive Qlib dump_fix from exact mutations, then read back changed values."""
 
@@ -604,8 +619,11 @@ def _refresh_and_verify_changed_symbols(
     if not apply:
         return {"status": "dry_run", "changed_symbols": symbols, "verified_value_count": 0}
 
+    refresh_kwargs = {"refresh_universes": []}
+    if qlib_max_workers is not None:
+        refresh_kwargs["max_workers"] = qlib_max_workers
     refresh = (
-        adapter.convert_fix_symbols(revision_symbols, refresh_universes=[])
+        adapter.convert_fix_symbols(revision_symbols, **refresh_kwargs)
         if revision_symbols
         else {"status": "skipped", "reason": "inserts_handled_by_incremental", "symbols_count": 0}
     )
@@ -751,6 +769,7 @@ def _refresh_and_verify_history_mutation_store(
     *,
     apply: bool,
     require_pit_industry: bool = False,
+    qlib_max_workers: int | None = None,
 ) -> dict:
     """Read and verify one symbol's historical mutations at a time."""
 
@@ -780,6 +799,8 @@ def _refresh_and_verify_history_mutation_store(
         }
 
     refresh_kwargs = {"refresh_universes": []}
+    if qlib_max_workers is not None:
+        refresh_kwargs["max_workers"] = qlib_max_workers
     if require_pit_industry:
         refresh_kwargs["require_pit_industry"] = True
     refresh = (
@@ -1705,6 +1726,12 @@ def _main_under_writer_lock(writer_lock: data_writer_lock) -> None:
     parser.add_argument("--no-qlib-convert", action="store_true", help="Skip qlib conversion after raw fetch")
     parser.add_argument("--apply", action="store_true", help="Apply data changes (default is dry-run)")
     parser.add_argument("--force-fetch", action="store_true", help="Skip pre-check, force fetch all stocks")
+    parser.add_argument(
+        "--qlib-max-workers",
+        type=_positive_int,
+        default=None,
+        help="Maximum workers for the Qlib dump process pool",
+    )
     parser.add_argument("--run-id", default=None, help="Explicit shared run identity from the canonical wrapper")
     parser.add_argument("--resume-from-run-id", default=None, help=argparse.SUPPRESS)
     parser.add_argument("--resume-from-receipt-sha256", default=None, help=argparse.SUPPRESS)
@@ -2048,7 +2075,10 @@ def _main_under_writer_lock(writer_lock: data_writer_lock) -> None:
         )
         try:
             t1 = time.time()
-            adapter.convert_incremental(since)
+            if args.qlib_max_workers is None:
+                adapter.convert_incremental(since)
+            else:
+                adapter.convert_incremental(since, max_workers=args.qlib_max_workers)
             elapsed = round(time.time() - t1, 1)
             qlib_summary = {"mode": "incremental", "status": "success", "elapsed_s": elapsed}
             log.info(f"Qlib incremental: {elapsed}s")
@@ -2056,7 +2086,10 @@ def _main_under_writer_lock(writer_lock: data_writer_lock) -> None:
             log.warning(f"Incremental failed ({e}), trying fix mode...")
             try:
                 t1 = time.time()
-                adapter.convert_fix(since)
+                if args.qlib_max_workers is None:
+                    adapter.convert_fix(since)
+                else:
+                    adapter.convert_fix(since, max_workers=args.qlib_max_workers)
                 elapsed = round(time.time() - t1, 1)
                 qlib_summary = {"mode": "fix", "status": "success", "elapsed_s": elapsed}
                 log.info(f"Qlib fix: {elapsed}s")
@@ -2111,6 +2144,7 @@ def _main_under_writer_lock(writer_lock: data_writer_lock) -> None:
             history_mutation_run_ids,
             apply=do_apply,
             require_pit_industry=(universe == "csi1800"),
+            qlib_max_workers=args.qlib_max_workers,
         )
     else:
         mutation_refresh = _refresh_and_verify_changed_symbols(
@@ -2120,6 +2154,7 @@ def _main_under_writer_lock(writer_lock: data_writer_lock) -> None:
             target_dt=target_dt,
             apply=do_apply,
             history_mode=False,
+            qlib_max_workers=args.qlib_max_workers,
         )
     report["steps"]["mutation_qlib_refresh"] = mutation_refresh
     if source_audit is not None:
@@ -2145,6 +2180,7 @@ def _main_under_writer_lock(writer_lock: data_writer_lock) -> None:
             universe=universe,
             target_dt=target_dt,
             apply=do_apply,
+            qlib_max_workers=args.qlib_max_workers,
         )
     except Exception as exc:
         same_date_summary = {

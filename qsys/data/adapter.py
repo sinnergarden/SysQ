@@ -953,7 +953,7 @@ class QlibAdapter:
         os.replace(temporary, map_path)
         return industry_map
 
-    def convert_incremental(self, since_date):
+    def convert_incremental(self, since_date, *, max_workers: int | None = None):
         """Incremental update using dump_update, with read-back verification."""
         log.info(f"Starting incremental update (since {since_date})...")
         csv_dir, count = self._prepare_csvs(since_date)
@@ -964,7 +964,7 @@ class QlibAdapter:
             return
 
         log.info(f"Found {count} stocks with new data. Running dump_update...")
-        self._run_dump_script(csv_dir, mode="dump_update")
+        self._run_dump_script(csv_dir, mode="dump_update", max_workers=max_workers)
 
         # Lightweight calendar verification: confirm dump_update advanced
         # the qlib calendar to include the target date.  This replaces the
@@ -985,7 +985,7 @@ class QlibAdapter:
             except Exception as exc:
                 log.warning(f"Calendar verification failed: {exc}")
 
-    def convert_fix(self, since_date):
+    def convert_fix(self, since_date, *, max_workers: int | None = None):
         """Repair same-date changes without collapsing symbol history to a one-day slice."""
         log.info(f"Starting same-date repair update (since {since_date})...")
         if since_date is None:
@@ -1020,13 +1020,14 @@ class QlibAdapter:
             return
 
         log.info(f"Found {count} stocks with repaired data. Running dump_fix...")
-        self._run_dump_script(csv_dir, mode="dump_fix")
+        self._run_dump_script(csv_dir, mode="dump_fix", max_workers=max_workers)
 
     def convert_fix_symbols(
         self,
         symbols: list[str],
         *,
         refresh_universes: list[str] | None = None,
+        max_workers: int | None = None,
         require_pit_industry: bool = False,
     ) -> dict:
         """Replace per-symbol qlib bins from canonical data using ``dump_fix``.
@@ -1054,6 +1055,7 @@ class QlibAdapter:
             csv_dir,
             mode="dump_fix",
             refresh_universes=refresh_universes,
+            max_workers=max_workers,
         )
         return {"status": "success", "symbols_count": len(symbols), "csv_count": count}
 
@@ -1076,7 +1078,15 @@ class QlibAdapter:
         finally:
             self.qlib_dir = original_qlib_dir
 
-    def _run_dump_script(self, csv_dir, mode="dump_all", *, refresh_universes=None, cleanup_csv_dir=True):
+    def _run_dump_script(
+        self,
+        csv_dir,
+        mode="dump_all",
+        *,
+        refresh_universes=None,
+        cleanup_csv_dir=True,
+        max_workers: int | None = None,
+    ):
         """Helper to run the dump_bin.py script"""
         # Use cfg.project_root to find the script reliably
         dump_script = cfg.project_root / "scripts" / "dev" / "dump_bin.py"
@@ -1102,6 +1112,8 @@ class QlibAdapter:
             "--symbol_field_name", "symbol",
             "--date_field_name", "date"
         ]
+        if max_workers is not None:
+            cmd.extend(["--max_workers", str(max_workers)])
             
         # log.info(f"Running command: {' '.join(cmd)}")
         try:
