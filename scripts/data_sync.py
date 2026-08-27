@@ -18,6 +18,16 @@ PROJ = Path(__file__).resolve().parent.parent
 _CRASH_EVIDENCE: dict | None = None
 
 
+def _positive_int(value: str) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise argparse.ArgumentTypeError("must be a positive integer") from exc
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return parsed
+
+
 def _run_market_child(cmd: list[str], *, do_apply: bool, writer_lock) -> None:
     kwargs = {"cwd": str(PROJ), "check": True}
     if do_apply:
@@ -284,6 +294,12 @@ def _main_under_writer_lock(writer_lock=None):
         "--resume-from-run-id",
         default=None,
         help="Explicit failed run whose verified durable remote shards may be reused",
+    )
+    p.add_argument(
+        "--qlib-max-workers",
+        type=_positive_int,
+        default=None,
+        help="Maximum workers for the Qlib dump process pool",
     )
     p.add_argument(
         "--skip-margin-repair",
@@ -586,6 +602,8 @@ def _main_under_writer_lock(writer_lock=None):
                 cmd.extend(["--repair-start-date", repair_start_date])
             if do_apply and args.force_fetch:
                 cmd.append("--force-fetch")
+            if args.qlib_max_workers is not None:
+                cmd.extend(["--qlib-max-workers", str(args.qlib_max_workers)])
             if do_apply:
                 sync_run_id, wrapper_audit, receipt_root, _CRASH_EVIDENCE = _prepare_applied_market_child(
                     cmd,
@@ -630,6 +648,8 @@ def _main_under_writer_lock(writer_lock=None):
             cmd.extend(["--repair-start-date", repair_start_date])
         if do_apply and args.force_fetch:
             cmd.append("--force-fetch")
+        if args.qlib_max_workers is not None:
+            cmd.extend(["--qlib-max-workers", str(args.qlib_max_workers)])
         if do_apply:
             from qsys.config import cfg
 

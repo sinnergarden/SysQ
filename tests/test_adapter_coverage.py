@@ -9,6 +9,19 @@ from qsys.data.health import inspect_qlib_data_health
 
 
 class TestAdapterCoverage(unittest.TestCase):
+    @patch("qsys.data.adapter.subprocess.run")
+    def test_run_dump_script_forwards_max_workers(self, mock_run):
+        adapter = QlibAdapter()
+        adapter._run_dump_script(
+            adapter.qlib_dir.parent / "qlib_csv_tmp_missing",
+            mode="dump_fix",
+            refresh_universes=[],
+            max_workers=3,
+        )
+
+        command = mock_run.call_args.args[0]
+        self.assertEqual(command[-2:], ["--max_workers", "3"])
+
     @patch.object(QlibAdapter, "_refresh_universe_instruments")
     @patch.object(QlibAdapter, "get_instrument_coverage_report")
     def test_ensure_instrument_coverage_refreshes_and_rechecks(self, mock_report, mock_refresh):
