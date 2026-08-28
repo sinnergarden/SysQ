@@ -4,6 +4,7 @@ import tushare as ts
 import pandas as pd
 import time
 import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from typing import Callable, Mapping, Optional
 from qsys.config import cfg
@@ -19,13 +20,24 @@ from qsys.data._merge_helpers import (
 )
 from qsys.data._fetch_strategies import fetch_with_retry, fetch_by_stock_loop, fetch_by_date_loop
 from qsys.data.source_audit import (
+    canonical_symbol_files_sha256,
     checkpoint_requested_scope,
+    history_scope_identity,
     normalized_response_metadata,
     redact_secrets,
     stable_scope_hash,
     utc_now,
 )
 import numpy as np
+
+
+HISTORY_SCOPE_PROCESSING_CONTRACT = (
+    "csi_history_bundle_v1:" + FINANCIAL_AVAILABILITY_CONTRACT
+)
+
+
+class _LocalResumeMiss(RuntimeError):
+    """Exact shard was not reusable; caller must use the serial remote lane."""
 
 
 HISTORY_FIELD_ENDPOINTS = {
@@ -361,6 +373,62 @@ class TushareCollector:
     def _prepare_financial_frame(self, df: pd.DataFrame, value_cols):
         return prepare_financial_frame(df, value_cols)
 
+    def _financial_response_error(
+        self, raw: pd.DataFrame, *, endpoint_name: str, ts_code: str,
+        start_date: str, end_date: str, availability_cutoff: str,
+        exact_ann_date: str | None,
+    ) -> Mapping[str, object] | None:
+        """Validate one raw financial shard against its exact PIT request."""
+
+        if raw is not None and not raw.empty:
+            if "ts_code" not in raw.columns:
+                return {"reason": "missing_financial_fields", "fields": ["ts_code"]}
+            symbols = raw["ts_code"].astype(str).str.strip()
+            if not symbols.eq(str(ts_code)).all():
+                return {
+                    "reason": "financial_response_symbol_mismatch",
+                    "expected": str(ts_code),
+                    "values": sorted(symbols.unique().tolist())[:10],
+                }
+            axis_column = (
+                "ann_date"
+                if exact_ann_date is not None or endpoint_name != "fina_indicator"
+                else "end_date"
+            )
+            if axis_column not in raw.columns:
+                return {
+                    "reason": "missing_financial_fields",
+                    "fields": [axis_column],
+                }
+            axis_values = (
+                raw[axis_column].astype(str).str.strip()
+                .str.replace("-", "", regex=False).str.slice(0, 8)
+            )
+            axis_start = exact_ann_date or start_date
+            axis_end = exact_ann_date or end_date
+            in_scope = (
+                axis_values.str.fullmatch(r"\d{8}", na=False)
+                & axis_values.ge(axis_start)
+                & axis_values.le(axis_end)
+            )
+            if not in_scope.all():
+                return {
+                    "reason": "financial_response_query_axis_mismatch",
+                    "axis": axis_column,
+                    "expected_start": axis_start,
+                    "expected_end": axis_end,
+                    "values": sorted(axis_values.loc[~in_scope].unique().tolist())[:10],
+                }
+        try:
+            select_first_available_financial_rows(
+                raw,
+                endpoint=endpoint_name,
+                availability_cutoff=availability_cutoff,
+            )
+        except FinancialAvailabilityError as exc:
+            return exc.details
+        return None
+
     def _fetch_financials(
         self,
         start_date,
@@ -374,6 +442,8 @@ class TushareCollector:
         universe: str = "ad_hoc",
         availability_cutoff: str | None = None,
         exact_ann_date: str | None = None,
+        local_reuse_only: bool = False,
+        prepared_reuse: Mapping[str, Mapping[str, object]] | None = None,
     ):
         start_date = _normalize_date(start_date)
         end_date = _normalize_date(end_date)
@@ -417,54 +487,15 @@ class TushareCollector:
             }
 
             def validate_response(raw: pd.DataFrame):
-                if raw is not None and not raw.empty:
-                    if "ts_code" not in raw.columns:
-                        return {"reason": "missing_financial_fields", "fields": ["ts_code"]}
-                    symbols = raw["ts_code"].astype(str).str.strip()
-                    if not symbols.eq(str(ts_code)).all():
-                        return {
-                            "reason": "financial_response_symbol_mismatch",
-                            "expected": str(ts_code),
-                            "values": sorted(symbols.unique().tolist())[:10],
-                        }
-                    axis_column = (
-                        "ann_date"
-                        if exact_ann_date is not None or endpoint_name != "fina_indicator"
-                        else "end_date"
-                    )
-                    if axis_column not in raw.columns:
-                        return {
-                            "reason": "missing_financial_fields",
-                            "fields": [axis_column],
-                        }
-                    axis_values = (
-                        raw[axis_column].astype(str).str.strip()
-                        .str.replace("-", "", regex=False).str.slice(0, 8)
-                    )
-                    axis_start = exact_ann_date or start_date
-                    axis_end = exact_ann_date or end_date
-                    in_scope = (
-                        axis_values.str.fullmatch(r"\d{8}", na=False)
-                        & axis_values.ge(axis_start)
-                        & axis_values.le(axis_end)
-                    )
-                    if not in_scope.all():
-                        return {
-                            "reason": "financial_response_query_axis_mismatch",
-                            "axis": axis_column,
-                            "expected_start": axis_start,
-                            "expected_end": axis_end,
-                            "values": sorted(axis_values.loc[~in_scope].unique().tolist())[:10],
-                        }
-                try:
-                    select_first_available_financial_rows(
-                        raw,
-                        endpoint=endpoint_name,
-                        availability_cutoff=availability_cutoff,
-                    )
-                except FinancialAvailabilityError as exc:
-                    return exc.details
-                return None
+                return self._financial_response_error(
+                    raw,
+                    endpoint_name=endpoint_name,
+                    ts_code=str(ts_code),
+                    start_date=start_date,
+                    end_date=end_date,
+                    availability_cutoff=availability_cutoff,
+                    exact_ann_date=exact_ann_date,
+                )
 
             identity_columns = (
                 (
@@ -495,6 +526,8 @@ class TushareCollector:
                     FINANCIAL_AVAILABILITY_CONTRACT
                     if exact_ann_date is None else None
                 ),
+                local_reuse_only=local_reuse_only,
+                prepared_reuse=(prepared_reuse or {}).get(endpoint_name),
                 ts_code=ts_code,
                 **supplier_query,
                 fields=self._get_interface_fields(endpoint_name),
@@ -1159,6 +1192,8 @@ class TushareCollector:
         ) = None,
         legacy_financial_contract: str | None = None,
         required_endpoint: bool = True,
+        local_reuse_only: bool = False,
+        prepared_reuse: Mapping[str, object] | None = None,
         **kwargs,
     ) -> tuple[pd.DataFrame, str | None]:
         """Fetch one endpoint and append a normalized, secret-safe receipt."""
@@ -1179,14 +1214,25 @@ class TushareCollector:
         if resume_proof is not None:
             if audit_store is None or run_id is None:
                 raise ValueError("resume proof requires run_id and audit_store")
-            reused = audit_store.reuse_fetch_shard(
-                run_id=run_id,
-                resume_proof=resume_proof,
-                source="tushare",
-                endpoint=endpoint_name,
-                contract_version="1",
-                requested_scope=requested_scope,
-            )
+            if prepared_reuse is None:
+                reused = audit_store.reuse_fetch_shard(
+                    run_id=run_id,
+                    resume_proof=resume_proof,
+                    source="tushare",
+                    endpoint=endpoint_name,
+                    contract_version="1",
+                    requested_scope=requested_scope,
+                )
+            elif prepared_reuse.get("kind") == "exact":
+                reused = audit_store.commit_prepared_fetch_shard_reuse(
+                    run_id=run_id, prepared=prepared_reuse["prepared"],
+                )
+            elif prepared_reuse.get("kind") == "legacy":
+                reused = audit_store.commit_prepared_legacy_financial_shard(
+                    run_id=run_id, prepared=prepared_reuse["prepared"],
+                )
+            else:
+                raise ValueError("prepared financial reuse kind is invalid")
             if reused is not None:
                 return reused["frame"], str(reused["receipt_id"])
             if legacy_financial_contract is not None:
@@ -1208,6 +1254,10 @@ class TushareCollector:
                         "REPAIR_REQUIRED: legacy financial shard exists but cannot "
                         f"be reprojected offline ({legacy.get('reason')})"
                     )
+            if local_reuse_only:
+                raise _LocalResumeMiss(
+                    f"no exact reusable local shard for {endpoint_name}"
+                )
 
         api = self._get_interface_api(endpoint_name)
         attempt_count = 0
@@ -1899,6 +1949,7 @@ class TushareCollector:
         include_margin=True, *, run_id: str | None = None, audit_store=None,
         resume_proof: Mapping[str, object] | None = None,
         scope_key: str | None = None, evidence_universe: str | None = None,
+        local_max_workers: int = 1,
     ):
         start_ts = time.time()
         start_date = _normalize_date(start_date)
@@ -1918,11 +1969,51 @@ class TushareCollector:
         code_batches = [codes[i:i + batch_size] for i in range(0, len(codes), batch_size)]
         total_batches = len(code_batches)
         mutation_count = 0
+        completed_scope_ids: list[str] = []
+        inherited_scope_ids: list[str] = []
+        completed_scopes = (
+            audit_store.resumable_history_scopes(resume_proof)
+            if audited and resume_proof is not None
+            else {}
+        )
         for i, batch_codes in enumerate(code_batches):
             batch_no = i + 1
             batch_str = ",".join(batch_codes)
             batch_start_ts = time.time()
+            scope_identity = history_scope_identity(
+                source="tushare",
+                scope_key=str(scope_key or "ad_hoc"),
+                universe=str(evidence_universe or "ad_hoc"),
+                range_start=start_date,
+                range_end=end_date,
+                symbols=batch_codes,
+                processing_contract=HISTORY_SCOPE_PROCESSING_CONTRACT,
+            )
+            checkpoint = completed_scopes.get(str(scope_identity["scope_id"]))
+            if checkpoint is not None:
+                canonical_hash = canonical_symbol_files_sha256(
+                    self.store.canonical_dir,
+                    batch_codes,
+                    max_workers=local_max_workers,
+                )
+                if canonical_hash == checkpoint["canonical_scope_sha256"]:
+                    audit_store.record_history_scope_inherited(
+                        run_id=run_id, checkpoint=checkpoint,
+                    )
+                    inherited_scope_ids.append(str(scope_identity["scope_id"]))
+                    log.info(
+                        "Inherited completed batch %s/%s (%s stocks) from %s",
+                        batch_no, total_batches, len(batch_codes),
+                        checkpoint["source_run_id"],
+                    )
+                    continue
+                log.warning(
+                    "History checkpoint canonical hash mismatch for batch %s/%s; "
+                    "replaying only this scope",
+                    batch_no, total_batches,
+                )
             log.info(f"Processing batch {batch_no}/{total_batches} ({len(batch_codes)} stocks)...")
+            before_receipts = set(audit_store.fetch_receipt_ids(run_id)) if audited else set()
             batch_result = self._update_batch_by_year(
                 batch_codes,
                 batch_str,
@@ -1938,8 +2029,24 @@ class TushareCollector:
                 resume_proof=resume_proof,
                 scope_key=str(scope_key or "ad_hoc"),
                 evidence_universe=str(evidence_universe or "ad_hoc"),
+                local_max_workers=local_max_workers,
             )
             mutation_count += int(batch_result.get("mutation_count", 0))
+            if audited:
+                all_receipts = audit_store.fetch_receipt_ids(run_id)
+                scope_receipts = [item for item in all_receipts if item not in before_receipts]
+                canonical_hash = canonical_symbol_files_sha256(
+                    self.store.canonical_dir,
+                    batch_codes,
+                    max_workers=local_max_workers,
+                )
+                audit_store.record_history_scope_completed(
+                    run_id=run_id,
+                    identity=scope_identity,
+                    canonical_scope_sha256=canonical_hash,
+                    receipt_ids=scope_receipts,
+                )
+                completed_scope_ids.append(str(scope_identity["scope_id"]))
             batch_elapsed = time.time() - batch_start_ts
             avg_elapsed = (time.time() - start_ts) / batch_no
             eta_seconds = max(int(avg_elapsed * (total_batches - batch_no)), 0)
@@ -1956,32 +2063,166 @@ class TushareCollector:
             "range_end": end_date,
             "symbol_count": len(codes),
             "symbols_sha256": stable_scope_hash(codes),
+            "history_scope_coverage": {
+                "status": (
+                    "success"
+                    if not audited
+                    or len(completed_scope_ids) + len(inherited_scope_ids) == total_batches
+                    else "failed"
+                ),
+                "expected_scope_count": total_batches,
+                "completed_scope_ids": completed_scope_ids,
+                "inherited_scope_ids": inherited_scope_ids,
+            },
         }
+
+    def _prepare_financial_exact_reuse(
+        self, code: str, start_date: str, end_date: str, *, run_id: str,
+        audit_store, resume_proof: Mapping[str, object], scope_key: str,
+        universe: str,
+    ) -> dict[str, Mapping[str, object]]:
+        """Worker lane: validate exact immutable financial shards, no writes."""
+
+        start_date = _normalize_date(start_date)
+        end_date = _normalize_date(end_date)
+        requested_scope = {
+            "date_start": start_date,
+            "date_end": end_date,
+            "availability_cutoff": end_date,
+            "symbol_count": 1,
+            "symbols_sha256": stable_scope_hash([code]),
+        }
+        if start_date != end_date:
+            requested_scope["symbols"] = [code]
+        prepared: dict[str, Mapping[str, object]] = {}
+        for endpoint_name in ("income", "balancesheet", "cashflow", "fina_indicator"):
+            endpoint_scope = {
+                **requested_scope,
+                "query_axis": (
+                    "report_period_query_axis"
+                    if endpoint_name == "fina_indicator"
+                    else "announcement_date_query_axis"
+                ),
+            }
+            supplier_query = {
+                "ts_code": code,
+                "start_date": start_date,
+                "end_date": end_date,
+                "fields": self._get_interface_fields(endpoint_name),
+            }
+            request_sha256 = _supplier_request_sha256(
+                supplier_query,
+                request_variant=FINANCIAL_AVAILABILITY_CONTRACT,
+            )
+            exact_scope = checkpoint_requested_scope(
+                endpoint_scope,
+                source="tushare",
+                endpoint=endpoint_name,
+                contract_version="1",
+                scope_key=scope_key,
+                universe=universe,
+                request_variant=FINANCIAL_AVAILABILITY_CONTRACT,
+                request_sha256=request_sha256,
+            )
+            item = audit_store.prepare_fetch_shard_reuse(
+                run_id=run_id,
+                resume_proof=resume_proof,
+                source="tushare",
+                endpoint=endpoint_name,
+                contract_version="1",
+                requested_scope=exact_scope,
+            )
+            if item is not None:
+                prepared[endpoint_name] = {
+                    "kind": "exact", "prepared": item,
+                }
+                continue
+            legacy = audit_store.prepare_legacy_financial_shard(
+                run_id=run_id,
+                resume_proof=resume_proof,
+                source="tushare",
+                endpoint=endpoint_name,
+                contract_version="1",
+                requested_scope=exact_scope,
+                legacy_request_sha256=_supplier_request_sha256(supplier_query),
+                response_validator=lambda raw, name=endpoint_name: (
+                    self._financial_response_error(
+                        raw,
+                        endpoint_name=name,
+                        ts_code=code,
+                        start_date=start_date,
+                        end_date=end_date,
+                        availability_cutoff=end_date,
+                        exact_ann_date=None,
+                    )
+                ),
+                contract_name=FINANCIAL_AVAILABILITY_CONTRACT,
+            )
+            if legacy["status"] == "compatible":
+                prepared[endpoint_name] = {
+                    "kind": "legacy", "prepared": legacy,
+                }
+                continue
+            if legacy["status"] == "incompatible":
+                raise RuntimeError(
+                    "REPAIR_REQUIRED: legacy financial shard exists but cannot "
+                    f"be reprojected offline ({legacy.get('reason')})"
+                )
+            raise _LocalResumeMiss(
+                f"no reusable local shard for {endpoint_name}"
+            )
+        return prepared
 
     def _fetch_financials_batch(
         self, code_str, start_date, end_date, *, run_id=None, audit_store=None,
         resume_proof=None, scope_key="ad_hoc", universe="ad_hoc",
+        local_max_workers=1,
     ):
         start_date = _normalize_date(start_date)
         end_date = _normalize_date(end_date)
         if start_date is None or end_date is None or not code_str:
             return pd.DataFrame()
-        
+
         codes = code_str.split(",") if isinstance(code_str, str) else code_str
         frames = []
+        workers = max(1, min(int(local_max_workers), 8, len(codes)))
+        local_plans: dict[str, Mapping[str, Mapping[str, object]]] = {}
 
-        # Optimization: Loop over stocks, fetch full range for each.
-        # This avoids loop-by-period which is inefficient for small batches,
-        # and works around Tushare's inability to batch-fetch financials by multiple codes.
-        
-        for i, code in enumerate(codes):
-            # Rate limiting protection: Tushare has QPS limits (e.g. 200/min)
-            # Fetching 4 tables per stock * 50 stocks = 200 requests instantly
-            # We add a small sleep to avoid hitting the limit too hard
-            if i > 0:
-                time.sleep(0.3)
-                
-            df = self._fetch_financials(
+        if resume_proof is not None and audit_store is not None and workers > 1:
+            # Validate the chain once on the writer thread.  Workers only read
+            # immutable payloads and prepare exact reuse objects.
+            audit_store._validated_resume_chain(resume_proof)
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                pending = {
+                    executor.submit(
+                        self._prepare_financial_exact_reuse,
+                        code, start_date, end_date,
+                        run_id=run_id,
+                        audit_store=audit_store,
+                        resume_proof=resume_proof,
+                        scope_key=scope_key,
+                        universe=universe,
+                    ): code
+                    for code in codes
+                }
+                for future in as_completed(pending):
+                    code = pending[future]
+                    try:
+                        local_plans[code] = future.result()
+                    except _LocalResumeMiss:
+                        pass
+
+        # Commit/reproject/fetch each code in its original order.  Exact local
+        # plans avoid supplier calls; missing or legacy shards use the existing
+        # single remote/reprojection lane.
+        remote_count = 0
+        for code in codes:
+            plan = local_plans.get(code)
+            if plan is None:
+                if remote_count > 0:
+                    time.sleep(0.3)
+                remote_count += 1
+            frame = self._fetch_financials(
                 start_date,
                 end_date,
                 ts_code=code,
@@ -1990,22 +2231,20 @@ class TushareCollector:
                 resume_proof=resume_proof,
                 scope_key=scope_key,
                 universe=universe,
+                prepared_reuse=plan,
             )
-            if df is not None and not df.empty:
-                frames.append(df)
-            
-        # Filter out empty or all-NA DataFrames before concat
-        frames = [f for f in frames if not f.empty and not f.isna().all().all()]
-        
+            if frame is not None and not frame.empty:
+                frames.append(frame)
+
+        frames = [frame for frame in frames if not frame.empty and not frame.isna().all().all()]
         if not frames:
             return pd.DataFrame()
-            
+
         merged = pd.concat(frames, ignore_index=True)
         subset_cols = ["ts_code", "availability_date"]
         if "end_date" in merged.columns:
             subset_cols.append("end_date")
-        merged = merged.drop_duplicates(subset=subset_cols, keep="last")
-        return merged
+        return merged.drop_duplicates(subset=subset_cols, keep="last")
 
 
     def _update_batch_by_year(
@@ -2013,6 +2252,7 @@ class TushareCollector:
         include_limit=True, include_adj=True, include_moneyflow=True,
         include_margin=True, *, run_id=None, audit_store=None,
         resume_proof=None, scope_key="ad_hoc", evidence_universe="ad_hoc",
+        local_max_workers=1,
     ):
         """
         [Optimization] 
@@ -2026,6 +2266,7 @@ class TushareCollector:
             code_str, start_date, end_date, run_id=run_id,
             audit_store=audit_store, resume_proof=resume_proof,
             scope_key=scope_key, universe=evidence_universe,
+            local_max_workers=local_max_workers,
         )
         
         # 2. Daily Basic (Outside Loop) -> Using the new Optimized Fetch (Stock Loop)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import os
@@ -1295,3 +1296,25 @@ def test_main_ignores_stale_qlib_watermark_unless_repair_is_explicit(tmp_path):
         "start_date": "20260820",
         "target_date": target,
     }
+
+
+@pytest.mark.parametrize("value", ["0", "9", "not-an-int"])
+def test_history_local_workers_cli_is_bounded_one_to_eight(value):
+    with pytest.raises(argparse.ArgumentTypeError):
+        data_sync._history_local_workers(value)
+    with pytest.raises(argparse.ArgumentTypeError):
+        daily_sync._history_local_workers(value)
+
+
+def test_wrapper_forwards_maximum_history_local_workers():
+    with patch.object(
+        sys,
+        "argv",
+        [
+            "data_sync.py", "--universe", "csi1800",
+            "--target-date", "2026-08-21", "--history-local-workers", "8",
+        ],
+    ), patch("scripts.data_sync.subprocess.run") as run:
+        data_sync.main()
+
+    assert run.call_args.args[0][-2:] == ["--history-local-workers", "8"]

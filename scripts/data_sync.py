@@ -28,6 +28,13 @@ def _positive_int(value: str) -> int:
     return parsed
 
 
+def _history_local_workers(value: str) -> int:
+    parsed = _positive_int(value)
+    if parsed > 8:
+        raise argparse.ArgumentTypeError("must be between 1 and 8")
+    return parsed
+
+
 def _run_market_child(cmd: list[str], *, do_apply: bool, writer_lock) -> None:
     kwargs = {"cwd": str(PROJ), "check": True}
     if do_apply:
@@ -300,6 +307,12 @@ def _main_under_writer_lock(writer_lock=None):
         type=_positive_int,
         default=None,
         help="Maximum workers for the Qlib dump process pool",
+    )
+    p.add_argument(
+        "--history-local-workers",
+        type=_history_local_workers,
+        default=None,
+        help="Bounded local workers for immutable history checkpoint verification (child default: half CPUs, max 8)",
     )
     p.add_argument(
         "--skip-margin-repair",
@@ -604,6 +617,8 @@ def _main_under_writer_lock(writer_lock=None):
                 cmd.append("--force-fetch")
             if args.qlib_max_workers is not None:
                 cmd.extend(["--qlib-max-workers", str(args.qlib_max_workers)])
+            if args.history_local_workers is not None:
+                cmd.extend(["--history-local-workers", str(args.history_local_workers)])
             if do_apply:
                 sync_run_id, wrapper_audit, receipt_root, _CRASH_EVIDENCE = _prepare_applied_market_child(
                     cmd,
@@ -650,6 +665,8 @@ def _main_under_writer_lock(writer_lock=None):
             cmd.append("--force-fetch")
         if args.qlib_max_workers is not None:
             cmd.extend(["--qlib-max-workers", str(args.qlib_max_workers)])
+        if args.history_local_workers is not None:
+            cmd.extend(["--history-local-workers", str(args.history_local_workers)])
         if do_apply:
             from qsys.config import cfg
 
