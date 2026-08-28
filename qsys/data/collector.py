@@ -20,6 +20,7 @@ from qsys.data._merge_helpers import (
 )
 from qsys.data._fetch_strategies import fetch_with_retry, fetch_by_stock_loop, fetch_by_date_loop
 from qsys.data.source_audit import (
+    canonical_history_scope_semantic_identity,
     canonical_symbol_files_sha256,
     checkpoint_requested_scope,
     history_scope_identity,
@@ -1991,12 +1992,41 @@ class TushareCollector:
             )
             checkpoint = completed_scopes.get(str(scope_identity["scope_id"]))
             if checkpoint is not None:
-                canonical_hash = canonical_symbol_files_sha256(
-                    self.store.canonical_dir,
-                    batch_codes,
-                    max_workers=local_max_workers,
+                semantic_sha = str(
+                    checkpoint.get("canonical_scope_semantic_sha256") or ""
                 )
-                if canonical_hash == checkpoint["canonical_scope_sha256"]:
+                if semantic_sha:
+                    mismatch_kind = "bounded semantic digest"
+                    try:
+                        current_identity = canonical_history_scope_semantic_identity(
+                            self.store.canonical_dir,
+                            batch_codes,
+                            range_start=start_date,
+                            range_end=end_date,
+                            fields=checkpoint["canonical_semantic_fields"],
+                            max_workers=local_max_workers,
+                        )
+                    except (OSError, ValueError):
+                        checkpoint_matches = False
+                    else:
+                        checkpoint_matches = (
+                            current_identity["sha256"] == semantic_sha
+                        )
+                else:
+                    mismatch_kind = "legacy whole-file hash"
+                    try:
+                        canonical_hash = canonical_symbol_files_sha256(
+                            self.store.canonical_dir,
+                            batch_codes,
+                            max_workers=local_max_workers,
+                        )
+                    except (OSError, ValueError):
+                        checkpoint_matches = False
+                    else:
+                        checkpoint_matches = (
+                            canonical_hash == checkpoint["canonical_scope_sha256"]
+                        )
+                if checkpoint_matches:
                     audit_store.record_history_scope_inherited(
                         run_id=run_id, checkpoint=checkpoint,
                     )
@@ -2008,9 +2038,9 @@ class TushareCollector:
                     )
                     continue
                 log.warning(
-                    "History checkpoint canonical hash mismatch for batch %s/%s; "
+                    "History checkpoint %s mismatch for batch %s/%s; "
                     "replaying only this scope",
-                    batch_no, total_batches,
+                    mismatch_kind, batch_no, total_batches,
                 )
             log.info(f"Processing batch {batch_no}/{total_batches} ({len(batch_codes)} stocks)...")
             before_receipts = set(audit_store.fetch_receipt_ids(run_id)) if audited else set()
@@ -2040,11 +2070,19 @@ class TushareCollector:
                     batch_codes,
                     max_workers=local_max_workers,
                 )
+                semantic_identity = canonical_history_scope_semantic_identity(
+                    self.store.canonical_dir,
+                    batch_codes,
+                    range_start=start_date,
+                    range_end=end_date,
+                    max_workers=local_max_workers,
+                )
                 audit_store.record_history_scope_completed(
                     run_id=run_id,
                     identity=scope_identity,
                     canonical_scope_sha256=canonical_hash,
                     receipt_ids=scope_receipts,
+                    canonical_semantic_identity=semantic_identity,
                 )
                 completed_scope_ids.append(str(scope_identity["scope_id"]))
             batch_elapsed = time.time() - batch_start_ts
