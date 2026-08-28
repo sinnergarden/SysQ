@@ -121,6 +121,7 @@ usecases:
       - qsys/data/income_sidecar.py
       - qsys/feature/
       - qsys/ops/shareholder_sync.py
+      - qsys/ops/inference_readiness.py
       - scripts/dev/
       - harness/checks/
       - docs/requirements/

@@ -26,7 +26,7 @@ import argparse
 import os
 import sys
 import warnings
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 warnings.filterwarnings("ignore")
@@ -59,6 +59,7 @@ from qsys.ops.attempts import (
     write_active_attempt,
 )
 from qsys.ops.run_context import DailyRunContext, resolve_run_root
+from qsys.ops.inference_readiness import check_inference_ready
 from qsys.ops.promotion_resolver import resolve_shadow_promotion
 from qsys.signal.model_blend_inference import run_candidate_inference
 from qsys.signal.top10_run import run_top10_signal
@@ -225,6 +226,21 @@ def run_daily_main(argv: list[str] | None = None) -> None:
     # UC_DAILY_INFERENCE_RUN is artifact-only.  Dispatch before creating a
     # strategy adapter, DailyRunner, promotion snapshot, or account context.
     if args.mode == "infer":
+        run_anchor = datetime.now(timezone.utc)
+        readiness = check_inference_ready(
+            args.signal_date,
+            strategy_id,
+            execution_date=args.execution_date,
+            project_root=PROJECT_ROOT,
+            now=run_anchor,
+            strategy_config=config,
+        )
+        ready = all(ok for _name, ok, _detail in readiness)
+        print(f"  Daily inference readiness: {'READY' if ready else 'BLOCKED'}")
+        for name, ok, detail in readiness:
+            print(f"    {'✅' if ok else '❌'} {name}: {detail}")
+        if not ready:
+            raise SystemExit(2)
         result = run_candidate_inference(
             strategy_id=strategy_id,
             strategy_config=config,
@@ -232,6 +248,7 @@ def run_daily_main(argv: list[str] | None = None) -> None:
             signal_date=args.signal_date,
             execution_date=args.execution_date,
             top_k=args.top_k,
+            now=run_anchor,
         )
         payload = result.payload
         print(f"  ✅ CandidateRun: {result.artifact_path}")
