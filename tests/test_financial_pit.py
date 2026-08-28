@@ -219,6 +219,31 @@ def test_consumed_company_type_conflict_fails_closed() -> None:
         )
 
 
+def test_later_company_type_revision_does_not_override_first_available_branch() -> None:
+    raw = pd.DataFrame([
+        _income_row(
+            ann_date="20230331", f_ann_date="20230331",
+            end_date="20221231", end_type="4", comp_type="2",
+            update_flag="0", revenue=100.0,
+        ),
+        _income_row(
+            ann_date="20230331", f_ann_date="20250423",
+            end_date="20221231", end_type="4", comp_type="7",
+            update_flag="1", revenue=200.0,
+        ),
+    ])
+
+    projected, stats = select_first_available_financial_rows(
+        raw, endpoint="income", availability_cutoff=TARGET,
+    )
+
+    assert len(projected) == 1
+    assert projected.iloc[0]["comp_type"] == "2"
+    assert projected.iloc[0]["availability_date"] == "20230331"
+    assert projected.iloc[0]["revenue"] == 100.0
+    assert stats["excluded_later_revision_rows"] == 1
+
+
 def _collector(responses: dict[str, pd.DataFrame], calls: list[tuple[str, dict]]) -> TushareCollector:
     collector = TushareCollector.__new__(TushareCollector)
     collector.max_retries = 1

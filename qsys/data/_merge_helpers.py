@@ -338,8 +338,13 @@ def select_first_available_financial_rows(
         for (symbol, end_date), group in eligible.groupby(
             ["ts_code", "end_date"], dropna=False, sort=True,
         ):
-            differing = _differing_columns(group, payload_columns)
-            branches = _diagnostic_json_value(group[
+            first_availability = group["availability_date"].min()
+            candidates = group.loc[
+                group["availability_date"].eq(first_availability)
+            ]
+            excluded_later_revision_rows += len(group) - len(candidates)
+            differing = _differing_columns(candidates, payload_columns)
+            branches = _diagnostic_json_value(candidates[
                 [
                     "comp_type", "end_type", "availability_date", "ann_date",
                     "f_ann_date", "update_flag",
@@ -354,7 +359,7 @@ def select_first_available_financial_rows(
                     endpoint=endpoint, ts_code=str(symbol), end_date=str(end_date),
                     differing_fields=consumed_conflicts, branches=branches,
                 )
-            row = _deterministic_first(group).copy()
+            row = _deterministic_first(candidates).copy()
             if differing:
                 # The baseline does not consume these fields.  Do not guess a
                 # company-type branch: retain the public column as missing and
@@ -371,7 +376,7 @@ def select_first_available_financial_rows(
                         "branches": branches,
                     })
             else:
-                collapsed_equivalent += max(len(group) - 1, 0)
+                collapsed_equivalent += max(len(candidates) - 1, 0)
             canonical_rows.append(row)
         eligible = pd.DataFrame(canonical_rows).reset_index(drop=True)
 
