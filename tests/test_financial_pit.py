@@ -201,6 +201,32 @@ def test_missing_end_type_projection_diagnostic_is_portable_json() -> None:
     assert exception["logical_key"]["end_type"] is None
     assert json.loads(json.dumps(stats, allow_nan=False)) == stats
 
+def test_unsupported_statement_period_is_excluded_with_diagnostic() -> None:
+    raw = pd.DataFrame([
+        _income_row(),
+        _income_row(
+            ann_date="20170630", f_ann_date="20170630",
+            end_date="20170131", end_type=pd.NA, update_flag="1",
+            n_income=pd.NA, revenue=81660000.0,
+        ),
+    ])
+
+    projected, stats = select_first_available_financial_rows(
+        raw, endpoint="income", availability_cutoff=TARGET,
+    )
+
+    assert projected["end_date"].tolist() == ["20260630"]
+    assert stats["excluded_unsupported_statement_period_rows"] == 1
+    assert stats["unsupported_statement_period_exceptions"] == [{
+        "reason": "unsupported_statement_period_excluded",
+        "endpoint": "income",
+        "ts_code": CODE,
+        "end_date": "20170131",
+        "row_count": 1,
+    }]
+    assert json.loads(json.dumps(stats, allow_nan=False)) == stats
+
+
 
 def test_consumed_company_type_conflict_fails_closed() -> None:
     raw = pd.DataFrame([
