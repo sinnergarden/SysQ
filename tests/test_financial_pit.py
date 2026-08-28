@@ -182,6 +182,26 @@ def test_expected_end_type_wins_and_non_consumed_balance_conflict_is_diagnostic(
     assert stats["non_consumed_branch_exceptions"][0]["fields"] == ["total_cur_assets"]
 
 
+def test_missing_end_type_projection_diagnostic_is_portable_json() -> None:
+    raw = pd.DataFrame([{
+        "ts_code": "001233.SZ", "ann_date": "20210101",
+        "f_ann_date": "20210101", "end_date": "20201231",
+        "report_type": "1", "comp_type": "1", "end_type": pd.NA,
+        "update_flag": "1", "total_assets": 100.0,
+        "total_hldr_eqy_exc_min_int": 20.0,
+    }])
+
+    projected, stats = select_first_available_financial_rows(
+        raw, endpoint="balancesheet", availability_cutoff=TARGET,
+    )
+
+    assert projected.empty
+    assert stats["missing_end_type_fallback_keys"] == 1
+    exception = stats["revision_timeline_unproven_exceptions"][0]
+    assert exception["logical_key"]["end_type"] is None
+    assert json.loads(json.dumps(stats, allow_nan=False)) == stats
+
+
 def test_consumed_company_type_conflict_fails_closed() -> None:
     raw = pd.DataFrame([
         {

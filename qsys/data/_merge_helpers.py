@@ -45,6 +45,32 @@ class FinancialAvailabilityError(RuntimeError):
         self.details = {"reason": message, **details}
 
 
+def _diagnostic_json_value(value: Any) -> Any:
+    """Keep bounded PIT diagnostics portable without changing data values."""
+
+    if isinstance(value, dict):
+        return {
+            str(key): _diagnostic_json_value(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_diagnostic_json_value(item) for item in value]
+    if value is None or value is pd.NA:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+    if hasattr(value, "item"):
+        value = value.item()
+    if isinstance(value, pd.Timestamp):
+        return value.isoformat()
+    if isinstance(value, (str, int, float, bool)):
+        return value
+    return str(value)
+
+
 def _normalized_date_column(
     frame: pd.DataFrame, column: str, *, allow_missing: bool,
 ) -> pd.Series:
@@ -55,7 +81,9 @@ def _normalized_date_column(
     parsed = pd.to_datetime(compact.where(valid_shape), format="%Y%m%d", errors="coerce")
     invalid = (~missing) & (~valid_shape | parsed.isna())
     if invalid.any() or (not allow_missing and missing.any()):
-        samples = values.loc[invalid | (missing if not allow_missing else False)].head(5).tolist()
+        samples = _diagnostic_json_value(
+            values.loc[invalid | (missing if not allow_missing else False)].head(5).tolist()
+        )
         raise FinancialAvailabilityError(
             "invalid_financial_date",
             column=column,
@@ -239,8 +267,8 @@ def select_first_available_financial_rows(
     unproven_row_count = 0
     unproven_exceptions: list[dict[str, Any]] = []
     for key, group in work.groupby(logical_key, dropna=False, sort=True):
-        logical_key_value = dict(
-            zip(logical_key, key if isinstance(key, tuple) else (key,))
+        logical_key_value = _diagnostic_json_value(
+            dict(zip(logical_key, key if isinstance(key, tuple) else (key,)))
         )
         initial = group.loc[group["update_flag"].eq("0")]
         if not initial.empty:
@@ -311,12 +339,12 @@ def select_first_available_financial_rows(
             ["ts_code", "end_date"], dropna=False, sort=True,
         ):
             differing = _differing_columns(group, payload_columns)
-            branches = group[
+            branches = _diagnostic_json_value(group[
                 [
                     "comp_type", "end_type", "availability_date", "ann_date",
                     "f_ann_date", "update_flag",
                 ]
-            ].to_dict(orient="records")
+            ].to_dict(orient="records"))
             consumed_conflicts = sorted(
                 set(differing).intersection(_CONSUMED_PAYLOAD_FIELDS[endpoint])
             )
