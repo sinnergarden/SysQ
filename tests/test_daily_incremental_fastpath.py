@@ -375,7 +375,7 @@ def _finalize_history_receipt(
 
 
 def test_history_suspension_stage_receipts_exact_union_and_loader_contract(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch,
 ) -> None:
     symbols = ["000001.SZ", "000002.SZ", "000003.SZ"]
     responses = {
@@ -397,6 +397,8 @@ def test_history_suspension_stage_receipts_exact_union_and_loader_contract(
     audit_root = tmp_path / "data" / "audit"
     audit = SourceAuditStore(audit_root / "audit.db")
     run_id = "history-suspension-complete"
+    sleeps = []
+    monkeypatch.setattr("qsys.data.collector.time.sleep", sleeps.append)
 
     summary, receipt_ids = _fetch_audited_history_suspensions(
         collector,
@@ -428,6 +430,7 @@ def test_history_suspension_stage_receipts_exact_union_and_loader_contract(
     assert all(call["end_date"] == TARGET for call in calls)
     assert all(call["suspend_type"] == "S" for call in calls)
     assert all(call["fields"] == "ts_code,trade_date,suspend_type" for call in calls)
+    assert sleeps == [0.35, 0.35, 0.35]
     with sqlite3.connect(audit_root / "audit.db") as connection:
         rows = connection.execute(
             "SELECT status,requested_scope_json FROM fetch_receipts "
@@ -476,7 +479,7 @@ def test_history_suspension_stage_receipts_exact_union_and_loader_contract(
 
 
 def test_history_suspension_stage_resume_reuses_exact_shards_without_supplier_calls(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch,
 ) -> None:
     symbols = ["000001.SZ", "000002.SZ", "000003.SZ"]
     responses = {
@@ -494,6 +497,8 @@ def test_history_suspension_stage_resume_reuses_exact_shards_without_supplier_ca
     }
     audit_root = tmp_path / "data" / "audit"
     audit = SourceAuditStore(audit_root / "audit.db")
+    sleeps = []
+    monkeypatch.setattr("qsys.data.collector.time.sleep", sleeps.append)
     old_run = "history-suspension-old"
     _append_history_run_started(audit, old_run)
     old_collector, old_calls = _history_suspension_collector(responses)
@@ -511,6 +516,8 @@ def test_history_suspension_stage_resume_reuses_exact_shards_without_supplier_ca
     )
     assert old_summary["status"] == "success"
     assert len(old_calls) == 3
+    assert sleeps == [0.35, 0.35, 0.35]
+    sleeps.clear()
     proof = _failed_history_run_proof(audit, audit_root, old_run)
 
     new_run = "history-suspension-resumed"
@@ -532,6 +539,7 @@ def test_history_suspension_stage_resume_reuses_exact_shards_without_supplier_ca
     )
 
     assert new_calls == []
+    assert sleeps == []
     assert summary["status"] == "success"
     assert summary["reused_count"] == 3
     assert len(receipt_ids) == 3

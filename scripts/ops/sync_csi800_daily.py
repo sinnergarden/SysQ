@@ -1102,6 +1102,7 @@ def _fetch_audited_history_suspensions(
                     )
                 ),
                 required_endpoint=True,
+                supplier_call_delay_seconds=0.35,
                 ts_code=symbol,
                 start_date=start,
                 end_date=end,
