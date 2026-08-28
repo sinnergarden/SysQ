@@ -73,6 +73,13 @@ def _positive_int(value: str) -> int:
     return parsed
 
 
+def _history_local_workers(value: str) -> int:
+    parsed = _positive_int(value)
+    if parsed > 8:
+        raise argparse.ArgumentTypeError("must be between 1 and 8")
+    return parsed
+
+
 _DAILY_DATA_READY_CUTOFF = wall_time(18, 30)
 TRUSTED_DAILY_FIELDS = ("open", "high", "low", "close", "volume", "factor")
 TRUSTED_DAILY_FIELD_ENDPOINTS = {
@@ -1211,6 +1218,7 @@ def _do_raw_fetch(
     resume_proof: dict | None = None,
     scope_key: str | None = None,
     universe: str | None = None,
+    local_max_workers: int = 1,
 ) -> dict:
     """
     Fetch raw data from ``since_date`` through the target date.
@@ -1266,6 +1274,7 @@ def _do_raw_fetch(
                 resume_proof=resume_proof,
                 scope_key=str(scope_key or universe or "ad_hoc"),
                 evidence_universe=str(universe or scope_key or "ad_hoc"),
+                local_max_workers=local_max_workers,
             )
         elapsed = time.time() - t0
         mutation_count = 0
@@ -1433,6 +1442,11 @@ def _do_raw_fetch(
             "mutation_count": mutation_count,
             "evidence_field_endpoints": (
                 collector_result.get("evidence_field_endpoints", {})
+                if isinstance(collector_result, dict)
+                else {}
+            ),
+            "history_scope_coverage": (
+                collector_result.get("history_scope_coverage", {})
                 if isinstance(collector_result, dict)
                 else {}
             ),
@@ -1732,6 +1746,12 @@ def _main_under_writer_lock(writer_lock: data_writer_lock) -> None:
         default=None,
         help="Maximum workers for the Qlib dump process pool",
     )
+    parser.add_argument(
+        "--history-local-workers",
+        type=_history_local_workers,
+        default=min(8, max(1, (os.cpu_count() or 2) // 2)),
+        help="Bounded local workers for immutable history checkpoint verification",
+    )
     parser.add_argument("--run-id", default=None, help="Explicit shared run identity from the canonical wrapper")
     parser.add_argument("--resume-from-run-id", default=None, help=argparse.SUPPRESS)
     parser.add_argument("--resume-from-receipt-sha256", default=None, help=argparse.SUPPRESS)
@@ -1973,6 +1993,7 @@ def _main_under_writer_lock(writer_lock: data_writer_lock) -> None:
                 resume_proof=resume_proof,
                 scope_key=universe,
                 universe=universe,
+                local_max_workers=args.history_local_workers,
             )
         report["steps"]["raw_fetch"] = raw_summary
     else:
@@ -2294,6 +2315,14 @@ def _main_under_writer_lock(writer_lock: data_writer_lock) -> None:
                 run_id=run_id, field_endpoints=evidence_field_endpoints
             )
         )
+        history_scope_checkpoints = (
+            source_audit.evaluate_history_scope_checkpoints(
+                run_id=run_id,
+                coverage=raw_summary.get("history_scope_coverage") or {},
+            )
+            if history_mode
+            else {"status": "not_required"}
+        )
         canonical_events = [
             event
             for event in evidence_summary["events"]
@@ -2348,6 +2377,7 @@ def _main_under_writer_lock(writer_lock: data_writer_lock) -> None:
             and suspension_evidence_ok
             and history_suspension_ok
             and history_industry_ok
+            and history_scope_checkpoints["status"] in {"success", "not_required"}
             and not untrusted_preexisting_symbols
         )
         evidence_fields = tuple(evidence_field_endpoints)
@@ -2367,7 +2397,8 @@ def _main_under_writer_lock(writer_lock: data_writer_lock) -> None:
             "fetch": prior_trusted if precheck_noop else field_receipts["status"] == "success"
             and source_scope_ok,
             "raw_payloads": prior_trusted if precheck_noop else field_receipts["status"] == "success"
-            and history_suspension_ok,
+            and history_suspension_ok
+            and history_scope_checkpoints["status"] in {"success", "not_required"},
             "canonical_commit": prior_trusted if precheck_noop else bool(canonical_events)
             and canonical_events[-1]["payload"].get("status") == "success",
             "qlib_readback": mutation_refresh.get("status") == "success",

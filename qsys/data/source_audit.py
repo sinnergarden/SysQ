@@ -15,6 +15,7 @@ import re
 import sqlite3
 import tempfile
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
@@ -34,6 +35,72 @@ _SECRET_VALUE = re.compile(
 )
 _RUN_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\Z")
 WRITER_LOCK_FD_ENV = "QSYS_DATA_WRITER_LOCK_FD"
+HISTORY_SCOPE_CHECKPOINT_VERSION = "history_scope_checkpoint_v1"
+
+
+def history_scope_identity(
+    *,
+    source: str,
+    scope_key: str,
+    universe: str,
+    range_start: str,
+    range_end: str,
+    symbols: Sequence[str],
+    processing_contract: str,
+) -> dict[str, Any]:
+    """Return the exact, versioned identity of one resumable history scope."""
+
+    normalized_symbols = sorted({str(symbol) for symbol in symbols if str(symbol).strip()})
+    if not normalized_symbols:
+        raise ValueError("history scope requires at least one symbol")
+    identity = {
+        "checkpoint_version": HISTORY_SCOPE_CHECKPOINT_VERSION,
+        "source": str(source),
+        "scope_key": str(scope_key),
+        "universe": str(universe),
+        "range_start": _normalise_trade_date(range_start),
+        "range_end": _normalise_trade_date(range_end),
+        "symbol_count": len(normalized_symbols),
+        "symbols_sha256": stable_scope_hash(normalized_symbols),
+        "processing_contract": str(processing_contract),
+    }
+    if not all(identity[key] for key in ("source", "scope_key", "universe", "processing_contract")):
+        raise ValueError("history scope identity contains an empty contract field")
+    identity["scope_id"] = hashlib.sha256(
+        _json_text(identity).encode("utf-8")
+    ).hexdigest()
+    return identity
+
+
+def canonical_symbol_files_sha256(
+    canonical_dir: str | Path,
+    symbols: Sequence[str],
+    *,
+    max_workers: int = 1,
+) -> str:
+    """Hash exact post-commit canonical files with bounded read-only workers."""
+
+    root = Path(canonical_dir).resolve()
+    normalized_symbols = sorted({str(symbol) for symbol in symbols if str(symbol).strip()})
+    if not normalized_symbols:
+        raise ValueError("canonical scope hash requires symbols")
+    workers = max(1, min(int(max_workers), 8, len(normalized_symbols)))
+
+    def digest(symbol: str) -> tuple[str, str]:
+        unresolved = root / f"{symbol}.feather"
+        if unresolved.is_symlink():
+            raise ValueError(f"canonical history file missing or unsafe: {symbol}")
+        path = resolve_under(root, unresolved)
+        if not path.is_file():
+            raise ValueError(f"canonical history file missing or unsafe: {symbol}")
+        return symbol, hashlib.sha256(path.read_bytes()).hexdigest()
+
+    if workers == 1:
+        rows = [digest(symbol) for symbol in normalized_symbols]
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            rows = list(executor.map(digest, normalized_symbols))
+    return hashlib.sha256(_json_text(rows).encode("utf-8")).hexdigest()
 
 
 def validate_run_id(run_id: str) -> str:
@@ -824,11 +891,334 @@ class SourceAuditStore:
             "receipt_index": receipt_index,
             "all_fetch_rows": [dict(row) for row in fetch_rows],
             "links_by_receipt": links_by_receipt,
+            "journal": [dict(row) for row in journal],
             "validated_current_runs": set(),
         }
         return proof
 
-    def reuse_fetch_shard(
+    def _resume_cache_for_proof(
+        self, resume_proof: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        parent = validate_run_id(str(resume_proof.get("resume_from_run_id") or ""))
+        receipt_sha256 = str(resume_proof.get("receipt_sha256") or "")
+        cache = self._validated_resume_cache.get((parent, receipt_sha256))
+        if cache is None or dict(resume_proof) != cache["proof"]:
+            raise ValueError("resume proof was not validated by this audit store")
+        return cache
+
+    def _validated_resume_chain(
+        self, resume_proof: Mapping[str, Any]
+    ) -> list[dict[str, Any]]:
+        """Validate the exact immutable direct-parent chain, newest first."""
+
+        first = self._resume_cache_for_proof(resume_proof)
+        cached = first.get("validated_chain")
+        if cached is not None:
+            return list(cached)
+        chain = [first]
+        seen = {str(first["proof"]["resume_from_run_id"])}
+        current = first
+        while True:
+            parent_events = [
+                event for event in current["journal"]
+                if event.get("event_type") == "resume_from_run"
+            ]
+            if not parent_events:
+                break
+            if len(parent_events) != 1:
+                raise ValueError("resume source has ambiguous direct-parent lineage")
+            payload = parent_events[0].get("payload")
+            if not isinstance(payload, Mapping):
+                raise ValueError("resume source parent lineage payload is invalid")
+            parent_run = validate_run_id(str(payload.get("resume_from_run_id") or ""))
+            parent_sha = str(payload.get("source_receipt_sha256") or "")
+            if parent_run in seen:
+                raise ValueError("resume lineage contains a cycle")
+            if not re.fullmatch(r"[0-9a-f]{64}", parent_sha):
+                raise ValueError("resume lineage parent receipt SHA-256 is invalid")
+            proof = self.validate_resume_run(
+                resume_from_run_id=parent_run,
+                expected_entrypoint=str(first["proof"]["entrypoint"]),
+                universe=str(first["proof"]["universe"]),
+                target_date=str(first["proof"]["target_date"]),
+                range_start=first["proof"].get("range_start"),
+                expected_receipt_sha256=parent_sha,
+            )
+            current = self._resume_cache_for_proof(proof)
+            chain.append(current)
+            seen.add(parent_run)
+        first["validated_chain"] = list(chain)
+        return chain
+
+    def fetch_receipt_ids(self, run_id: str) -> list[str]:
+        run_id = validate_run_id(run_id)
+        with self._connect() as conn:
+            return [
+                str(row[0])
+                for row in conn.execute(
+                    "SELECT receipt_id FROM fetch_receipts WHERE run_id=? ORDER BY rowid",
+                    (run_id,),
+                ).fetchall()
+            ]
+
+    def record_history_scope_completed(
+        self,
+        *,
+        run_id: str,
+        identity: Mapping[str, Any],
+        canonical_scope_sha256: str,
+        receipt_ids: Sequence[str],
+    ) -> dict[str, Any]:
+        """Commit a resumable scope marker after canonical/audit single-writer commit."""
+
+        run_id = validate_run_id(run_id)
+        scope = dict(identity)
+        if scope.get("checkpoint_version") != HISTORY_SCOPE_CHECKPOINT_VERSION:
+            raise ValueError("history scope checkpoint version mismatch")
+        if not re.fullmatch(r"[0-9a-f]{64}", str(scope.get("scope_id") or "")):
+            raise ValueError("history scope id is invalid")
+        if not re.fullmatch(r"[0-9a-f]{64}", str(canonical_scope_sha256)):
+            raise ValueError("canonical history scope hash is invalid")
+        unique_receipts = list(dict.fromkeys(str(item) for item in receipt_ids))
+        if not unique_receipts:
+            raise ValueError("completed history scope requires receipts")
+        placeholders = ",".join("?" for _ in unique_receipts)
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"SELECT receipt_id,status FROM fetch_receipts WHERE run_id=? AND receipt_id IN ({placeholders})",
+                [run_id, *unique_receipts],
+            ).fetchall()
+        by_id = {str(row["receipt_id"]): str(row["status"]) for row in rows}
+        if set(by_id) != set(unique_receipts):
+            raise ValueError("completed history scope references a missing receipt")
+        terminal_receipts = [
+            receipt_id for receipt_id in unique_receipts
+            if by_id[receipt_id] in {"success", "empty"}
+        ]
+        if not terminal_receipts:
+            raise ValueError("completed history scope has no reusable terminal receipts")
+        payload = {
+            **scope,
+            "canonical_scope_sha256": str(canonical_scope_sha256),
+            # Optional partial/failure observations remain in the failed run but
+            # are never authorized as inherited evidence.
+            "receipt_ids": terminal_receipts,
+        }
+        self.append_event(run_id, "history_scope_completed", payload)
+        return payload
+
+    def resumable_history_scopes(
+        self, resume_proof: Mapping[str, Any]
+    ) -> dict[str, dict[str, Any]]:
+        """Return conflict-free completed scopes from a validated failed-run chain."""
+
+        completed: dict[str, dict[str, Any]] = {}
+        for cache in self._validated_resume_chain(resume_proof):
+            source_run_id = str(cache["proof"]["resume_from_run_id"])
+            source_receipt_sha256 = str(cache["proof"]["receipt_sha256"])
+            available = {
+                str(row.get("receipt_id") or "")
+                for row in cache["all_fetch_rows"]
+                if row.get("status") in {"success", "empty"}
+            }
+            for event in cache["journal"]:
+                if event.get("event_type") != "history_scope_completed":
+                    continue
+                payload = event.get("payload")
+                if not isinstance(payload, Mapping):
+                    raise ValueError("history scope checkpoint payload is invalid")
+                scope = dict(payload)
+                scope_id = str(scope.get("scope_id") or "")
+                receipt_ids = [str(item) for item in scope.get("receipt_ids") or []]
+                if (
+                    scope.get("checkpoint_version") != HISTORY_SCOPE_CHECKPOINT_VERSION
+                    or not re.fullmatch(r"[0-9a-f]{64}", scope_id)
+                    or not re.fullmatch(
+                        r"[0-9a-f]{64}", str(scope.get("canonical_scope_sha256") or "")
+                    )
+                    or not receipt_ids
+                    or not set(receipt_ids).issubset(available)
+                ):
+                    raise ValueError("history scope checkpoint is incomplete")
+                candidate = {
+                    **scope,
+                    "source_run_id": source_run_id,
+                    "source_receipt_sha256": source_receipt_sha256,
+                }
+                previous = completed.get(scope_id)
+                if previous is not None:
+                    comparable = {
+                        key: value for key, value in previous.items()
+                        if key not in {"source_run_id", "source_receipt_sha256"}
+                    }
+                    if comparable != scope:
+                        raise ValueError("resume lineage has conflicting history scope checkpoints")
+                    continue
+                completed[scope_id] = candidate
+        return completed
+
+    def record_history_scope_inherited(
+        self, *, run_id: str, checkpoint: Mapping[str, Any]
+    ) -> None:
+        payload = dict(checkpoint)
+        required = {
+            "scope_id", "source_run_id", "source_receipt_sha256",
+            "canonical_scope_sha256", "receipt_ids",
+        }
+        if not required.issubset(payload):
+            raise ValueError("inherited history scope checkpoint is incomplete")
+        self.append_event(run_id, "history_scope_inherited", payload)
+
+    def _authorized_history_receipts(self, run_id: str) -> set[tuple[str, str]]:
+        run_id = validate_run_id(run_id)
+        with self._connect() as conn:
+            current = {
+                (run_id, str(row[0]))
+                for row in conn.execute(
+                    "SELECT receipt_id FROM fetch_receipts WHERE run_id=?", (run_id,)
+                ).fetchall()
+            }
+            inherited_rows = conn.execute(
+                """SELECT payload_json FROM audit_journal
+                   WHERE run_id=? AND event_type='history_scope_inherited' ORDER BY seq""",
+                (run_id,),
+            ).fetchall()
+        for row in inherited_rows:
+            payload = json.loads(row["payload_json"])
+            source_run = validate_run_id(str(payload.get("source_run_id") or ""))
+            for receipt_id in payload.get("receipt_ids") or []:
+                current.add((source_run, str(receipt_id)))
+        return current
+
+    def evaluate_history_scope_checkpoints(
+        self, *, run_id: str, coverage: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        """Verify exact scope coverage and inherited terminal hashes fail-closed."""
+
+        run_id = validate_run_id(run_id)
+        completed_ids = [str(item) for item in coverage.get("completed_scope_ids") or []]
+        inherited_ids = [str(item) for item in coverage.get("inherited_scope_ids") or []]
+        expected = completed_ids + inherited_ids
+        try:
+            expected_count = int(coverage.get("expected_scope_count"))
+        except (TypeError, ValueError):
+            expected_count = -1
+        if (
+            coverage.get("status") != "success"
+            or expected_count < 1
+            or len(expected) != expected_count
+            or len(set(expected)) != len(expected)
+        ):
+            return {"status": "failed", "reason": "scope_coverage_incomplete"}
+        with self._connect() as conn:
+            rows = conn.execute(
+                """SELECT event_type,payload_json FROM audit_journal
+                   WHERE run_id=? AND event_type IN (
+                     'history_scope_completed','history_scope_inherited'
+                   ) ORDER BY seq""",
+                (run_id,),
+            ).fetchall()
+            current_receipts = {
+                str(row["receipt_id"]): str(row["status"])
+                for row in conn.execute(
+                    "SELECT receipt_id,status FROM fetch_receipts WHERE run_id=?",
+                    (run_id,),
+                ).fetchall()
+            }
+        observed: dict[str, str] = {}
+        data_root = self._data_root()
+        for row in rows:
+            try:
+                payload = json.loads(row["payload_json"])
+                scope_id = str(payload.get("scope_id") or "")
+                identity = {
+                    key: payload[key]
+                    for key in (
+                        "checkpoint_version", "source", "scope_key", "universe",
+                        "range_start", "range_end", "symbol_count",
+                        "symbols_sha256", "processing_contract",
+                    )
+                }
+                recomputed = history_scope_identity(
+                    source=identity["source"],
+                    scope_key=identity["scope_key"],
+                    universe=identity["universe"],
+                    range_start=identity["range_start"],
+                    range_end=identity["range_end"],
+                    symbols=[identity["symbols_sha256"]],
+                    processing_contract=identity["processing_contract"],
+                )
+                # The stored symbol digest is the identity input; recompute the
+                # final scope id directly without needing the symbol plaintext.
+                recomputed.update({
+                    "symbol_count": int(identity["symbol_count"]),
+                    "symbols_sha256": str(identity["symbols_sha256"]),
+                })
+                recomputed.pop("scope_id", None)
+                calculated_scope_id = hashlib.sha256(
+                    _json_text(recomputed).encode("utf-8")
+                ).hexdigest()
+                receipt_ids = [str(item) for item in payload.get("receipt_ids") or []]
+            except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+                return {"status": "failed", "reason": "scope_marker_invalid"}
+            if (
+                scope_id != calculated_scope_id
+                or not re.fullmatch(r"[0-9a-f]{64}", str(payload.get("canonical_scope_sha256") or ""))
+                or not receipt_ids
+                or scope_id in observed
+            ):
+                return {"status": "failed", "reason": "scope_marker_invalid"}
+            event_type = str(row["event_type"])
+            observed[scope_id] = event_type
+            if event_type == "history_scope_completed":
+                if any(current_receipts.get(item) not in {"success", "empty"} for item in receipt_ids):
+                    return {"status": "failed", "reason": "scope_receipt_invalid"}
+                continue
+            source_run = validate_run_id(str(payload.get("source_run_id") or ""))
+            source_sha = str(payload.get("source_receipt_sha256") or "")
+            receipt_path = resolve_under(
+                data_root,
+                data_root / "audit" / "source_runs" / source_run / "receipt.json",
+            )
+            if (
+                not re.fullmatch(r"[0-9a-f]{64}", source_sha)
+                or not receipt_path.is_file()
+                or hashlib.sha256(receipt_path.read_bytes()).hexdigest() != source_sha
+            ):
+                return {"status": "failed", "reason": "inherited_terminal_hash_invalid"}
+            try:
+                terminal = json.loads(receipt_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                return {"status": "failed", "reason": "inherited_terminal_invalid"}
+            source_fetch = {
+                str(item.get("receipt_id") or ""): str(item.get("status") or "")
+                for item in terminal.get("fetch_receipts") or []
+                if isinstance(item, Mapping)
+            }
+            source_payload = {
+                key: value for key, value in payload.items()
+                if key not in {"source_run_id", "source_receipt_sha256"}
+            }
+            marker_found = any(
+                isinstance(item, Mapping)
+                and item.get("event_type") == "history_scope_completed"
+                and item.get("payload") == source_payload
+                for item in terminal.get("audit_journal") or []
+            )
+            if (
+                not marker_found
+                or any(source_fetch.get(item) not in {"success", "empty"} for item in receipt_ids)
+            ):
+                return {"status": "failed", "reason": "inherited_scope_not_anchored"}
+        expected_types = {
+            **{scope_id: "history_scope_completed" for scope_id in completed_ids},
+            **{scope_id: "history_scope_inherited" for scope_id in inherited_ids},
+        }
+        if observed != expected_types:
+            return {"status": "failed", "reason": "scope_event_coverage_mismatch"}
+        return {"status": "success", "scope_count": len(observed)}
+
+    def prepare_fetch_shard_reuse(
         self,
         *,
         run_id: str,
@@ -838,18 +1228,14 @@ class SourceAuditStore:
         contract_version: str,
         requested_scope: Mapping[str, Any],
     ) -> dict[str, Any] | None:
-        """Clone one verified durable remote shard into the fresh run."""
+        """Read and validate one reusable shard without mutating SQLite."""
 
         run_id = validate_run_id(run_id)
         resume_from_run_id = validate_run_id(str(resume_proof.get("resume_from_run_id") or ""))
         if run_id == resume_from_run_id:
             raise ValueError("resume must create a fresh run_id")
-        receipt_sha256 = str(resume_proof.get("receipt_sha256") or "")
-        cache = self._validated_resume_cache.get(
-            (resume_from_run_id, receipt_sha256)
-        )
-        if cache is None or dict(resume_proof) != cache["proof"]:
-            raise ValueError("resume proof was not validated by this audit store")
+        cache = self._resume_cache_for_proof(resume_proof)
+        chain = self._validated_resume_chain(resume_proof)
         validated_proof = cache["proof"]
         expected_current_lineage = {
             "entrypoint": validated_proof["entrypoint"],
@@ -910,8 +1296,15 @@ class SourceAuditStore:
             checkpoint_key,
             _json_text(expected_scope),
         )
-        selected = cache["receipt_index"].get(lookup_key)
-        if selected is None:
+        selected = None
+        selected_cache = None
+        for lineage_cache in chain:
+            candidate = lineage_cache["receipt_index"].get(lookup_key)
+            if candidate is not None:
+                selected = candidate
+                selected_cache = lineage_cache
+                break
+        if selected is None or selected_cache is None:
             return None
         try:
             frame = self._verified_reusable_frame(selected)
@@ -920,6 +1313,46 @@ class SourceAuditStore:
         if frame is None:
             return None
 
+        return {
+            "frame": frame,
+            "selected": dict(selected),
+            "source_run_id": str(selected_cache["proof"]["resume_from_run_id"]),
+            "source_terminal_receipt_sha256": str(
+                selected_cache["proof"]["receipt_sha256"]
+            ),
+            "old_links": [
+                dict(link)
+                for link in selected_cache["links_by_receipt"].get(
+                    selected["receipt_id"], []
+                )
+            ],
+            "checkpoint_key": checkpoint_key,
+        }
+
+    def commit_prepared_fetch_shard_reuse(
+        self,
+        *,
+        run_id: str,
+        prepared: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Commit a prepared shard on the canonical SQLite writer thread."""
+
+        run_id = validate_run_id(run_id)
+        selected = prepared.get("selected")
+        frame = prepared.get("frame")
+        if not isinstance(selected, Mapping) or not isinstance(frame, pd.DataFrame):
+            raise ValueError("prepared fetch shard is invalid")
+        source_run_id = validate_run_id(str(prepared.get("source_run_id") or ""))
+        source_sha = str(prepared.get("source_terminal_receipt_sha256") or "")
+        checkpoint_key = str(prepared.get("checkpoint_key") or "")
+        if (
+            not re.fullmatch(r"[0-9a-f]{64}", source_sha)
+            or not re.fullmatch(r"[0-9a-f]{64}", checkpoint_key)
+        ):
+            raise ValueError("prepared fetch shard lineage is invalid")
+        old_links = prepared.get("old_links")
+        if not isinstance(old_links, list):
+            raise ValueError("prepared fetch shard links are invalid")
         receipt_id = uuid.uuid4().hex
         reused_at = utc_now()
         with self._connect() as conn:
@@ -942,8 +1375,9 @@ class SourceAuditStore:
                     selected["published_at"], selected["observed_at"], None,
                 ),
             )
-            old_links = cache["links_by_receipt"].get(selected["receipt_id"], [])
             for link in old_links:
+                if not isinstance(link, Mapping):
+                    raise ValueError("prepared fetch shard link is invalid")
                 conn.execute(
                     "INSERT INTO field_receipt_links(run_id,dataset,field_name,receipt_id) VALUES(?,?,?,?)",
                     (run_id, link["dataset"], link["field_name"], receipt_id),
@@ -954,11 +1388,12 @@ class SourceAuditStore:
                     run_id,
                     "fetch_shard_reused",
                     _json_text({
-                        "resume_from_run_id": resume_from_run_id,
+                        "resume_from_run_id": source_run_id,
+                        "source_terminal_receipt_sha256": source_sha,
                         "source_receipt_id": selected["receipt_id"],
                         "receipt_id": receipt_id,
-                        "source": source,
-                        "endpoint": endpoint,
+                        "source": selected["source"],
+                        "endpoint": selected["endpoint"],
                         "checkpoint_key": checkpoint_key,
                         "reused_at": reused_at,
                     }),
@@ -970,9 +1405,37 @@ class SourceAuditStore:
             "receipt_id": receipt_id,
             "status": str(selected["status"]),
             "source_receipt_id": str(selected["receipt_id"]),
+            "source_run_id": source_run_id,
         }
 
-    def reproject_legacy_financial_shard(
+    def reuse_fetch_shard(
+        self,
+        *,
+        run_id: str,
+        resume_proof: Mapping[str, Any],
+        source: str,
+        endpoint: str,
+        contract_version: str,
+        requested_scope: Mapping[str, Any],
+    ) -> dict[str, Any] | None:
+        """Prepare read-only, then clone on the canonical SQLite writer."""
+
+        prepared = self.prepare_fetch_shard_reuse(
+            run_id=run_id,
+            resume_proof=resume_proof,
+            source=source,
+            endpoint=endpoint,
+            contract_version=contract_version,
+            requested_scope=requested_scope,
+        )
+        if prepared is None:
+            return None
+        return self.commit_prepared_fetch_shard_reuse(
+            run_id=run_id,
+            prepared=prepared,
+        )
+
+    def prepare_legacy_financial_shard(
         self,
         *,
         run_id: str,
@@ -985,7 +1448,7 @@ class SourceAuditStore:
         response_validator: Callable[[pd.DataFrame], Mapping[str, Any] | None],
         contract_name: str,
     ) -> dict[str, Any]:
-        """Rebind one verified pre-availability financial shard offline.
+        """Validate one legacy financial shard without mutating SQLite.
 
         This is intentionally narrower than ordinary resume reuse.  The
         supplier query and base scope must be byte-identical; only the new
@@ -993,11 +1456,8 @@ class SourceAuditStore:
         """
 
         run_id = validate_run_id(run_id)
-        parent = validate_run_id(str(resume_proof.get("resume_from_run_id") or ""))
-        receipt_sha256 = str(resume_proof.get("receipt_sha256") or "")
-        cache = self._validated_resume_cache.get((parent, receipt_sha256))
-        if cache is None or dict(resume_proof) != cache["proof"]:
-            raise ValueError("resume proof was not validated by this audit store")
+        cache = self._resume_cache_for_proof(resume_proof)
+        chain = self._validated_resume_chain(resume_proof)
         if run_id not in cache["validated_current_runs"]:
             raise ValueError("current run lineage was not validated before legacy reprojection")
 
@@ -1022,7 +1482,12 @@ class SourceAuditStore:
             "symbols_sha256",
         )
         candidates: list[dict[str, Any]] = []
-        for row in cache["all_fetch_rows"]:
+        lineage_rows = [
+            (lineage_index, row, lineage_cache)
+            for lineage_index, lineage_cache in enumerate(chain)
+            for row in lineage_cache["all_fetch_rows"]
+        ]
+        for lineage_index, row, lineage_cache in lineage_rows:
             if (
                 str(row.get("source") or "") != str(source)
                 or str(row.get("endpoint") or "") != str(endpoint)
@@ -1033,7 +1498,10 @@ class SourceAuditStore:
             if not isinstance(scope, Mapping):
                 continue
             if all(str(scope.get(key) or "") == str(current.get(key) or "") for key in base_keys):
-                candidates.append(dict(row))
+                candidate = dict(row)
+                candidate["_lineage_cache"] = lineage_cache
+                candidate["_lineage_index"] = lineage_index
+                candidates.append(candidate)
         if not candidates:
             return {"status": "missing"}
 
@@ -1055,6 +1523,11 @@ class SourceAuditStore:
         ]
         if not compatible:
             return {"status": "incompatible", "reason": "legacy_supplier_request_mismatch"}
+        newest_lineage = min(int(row["_lineage_index"]) for row in compatible)
+        compatible = [
+            row for row in compatible
+            if int(row["_lineage_index"]) == newest_lineage
+        ]
         identities = {
             (row.get("status"), row.get("response_hash"), row.get("payload_sha256"))
             for row in compatible
@@ -1062,6 +1535,9 @@ class SourceAuditStore:
         if len(identities) != 1:
             return {"status": "incompatible", "reason": "ambiguous_legacy_payloads"}
         selected = compatible[0]
+        selected_cache = selected.pop("_lineage_cache")
+        selected.pop("_lineage_index", None)
+        parent = str(selected_cache["proof"]["resume_from_run_id"])
         try:
             frame = self._verified_reusable_frame(selected)
         except Exception:
@@ -1083,6 +1559,48 @@ class SourceAuditStore:
                 "details": dict(validation_error),
             }
 
+        return {
+            "status": "compatible",
+            "frame": frame,
+            "selected": dict(selected),
+            "requested_scope": current,
+            "source_run_id": parent,
+            "source_terminal_receipt_sha256": str(
+                selected_cache["proof"]["receipt_sha256"]
+            ),
+            "old_links": [
+                dict(link)
+                for link in selected_cache["links_by_receipt"].get(
+                    selected["receipt_id"], []
+                )
+            ],
+            "contract": str(contract_name),
+        }
+
+    def commit_prepared_legacy_financial_shard(
+        self, *, run_id: str, prepared: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        """Commit a worker-validated legacy shard on the canonical writer."""
+
+        run_id = validate_run_id(run_id)
+        selected = prepared.get("selected")
+        current = prepared.get("requested_scope")
+        frame = prepared.get("frame")
+        old_links = prepared.get("old_links")
+        if (
+            not isinstance(selected, Mapping)
+            or not isinstance(current, Mapping)
+            or not isinstance(frame, pd.DataFrame)
+            or not isinstance(old_links, list)
+        ):
+            raise ValueError("prepared legacy financial shard is invalid")
+        parent = validate_run_id(str(prepared.get("source_run_id") or ""))
+        source_sha = str(prepared.get("source_terminal_receipt_sha256") or "")
+        if not re.fullmatch(r"[0-9a-f]{64}", source_sha):
+            raise ValueError("prepared legacy financial lineage is invalid")
+        source = str(selected.get("source") or "")
+        endpoint = str(selected.get("endpoint") or "")
+        contract_name = str(prepared.get("contract") or "")
         new_receipt_id = uuid.uuid4().hex
         reprojected_at = utc_now()
         with self._connect() as conn:
@@ -1105,7 +1623,7 @@ class SourceAuditStore:
                     selected["published_at"], selected["observed_at"], None,
                 ),
             )
-            for link in cache["links_by_receipt"].get(selected["receipt_id"], []):
+            for link in old_links:
                 conn.execute(
                     "INSERT INTO field_receipt_links(run_id,dataset,field_name,receipt_id) VALUES(?,?,?,?)",
                     (run_id, link["dataset"], link["field_name"], new_receipt_id),
@@ -1117,6 +1635,7 @@ class SourceAuditStore:
                     "financial_legacy_shard_reprojected",
                     _json_text({
                         "resume_from_run_id": parent,
+                        "source_terminal_receipt_sha256": source_sha,
                         "source_receipt_id": selected["receipt_id"],
                         "source_payload_sha256": selected["payload_sha256"],
                         "receipt_id": new_receipt_id,
@@ -1136,7 +1655,40 @@ class SourceAuditStore:
             "frame": frame,
             "receipt_id": new_receipt_id,
             "source_receipt_id": str(selected["receipt_id"]),
+            "source_run_id": parent,
         }
+
+    def reproject_legacy_financial_shard(
+        self,
+        *,
+        run_id: str,
+        resume_proof: Mapping[str, Any],
+        source: str,
+        endpoint: str,
+        contract_version: str,
+        requested_scope: Mapping[str, Any],
+        legacy_request_sha256: str,
+        response_validator: Callable[[pd.DataFrame], Mapping[str, Any] | None],
+        contract_name: str,
+    ) -> dict[str, Any]:
+        """Prepare read-only, then rebind on the canonical SQLite writer."""
+
+        prepared = self.prepare_legacy_financial_shard(
+            run_id=run_id,
+            resume_proof=resume_proof,
+            source=source,
+            endpoint=endpoint,
+            contract_version=contract_version,
+            requested_scope=requested_scope,
+            legacy_request_sha256=legacy_request_sha256,
+            response_validator=response_validator,
+            contract_name=contract_name,
+        )
+        if prepared.get("status") != "compatible":
+            return prepared
+        return self.commit_prepared_legacy_financial_shard(
+            run_id=run_id, prepared=prepared,
+        )
 
     def _verified_reusable_frame(self, row: Mapping[str, Any]) -> pd.DataFrame | None:
         response_columns = row.get("response_columns")
@@ -1352,20 +1904,27 @@ class SourceAuditStore:
         field_endpoints: Mapping[str, str],
         dataset: str = "canonical_daily",
     ) -> dict[str, Any]:
-        """Validate every completed shard for a historical field request."""
+        """Validate current plus explicitly inherited completed history shards."""
 
         run_id = validate_run_id(run_id)
+        authorized = self._authorized_history_receipts(run_id)
         data_root = self._data_root()
         fields: dict[str, dict[str, Any]] = {}
         with self._connect() as conn:
             for field_name, endpoint in field_endpoints.items():
-                rows = conn.execute(
-                    """SELECT f.receipt_id,f.status,f.returned_rows,f.payload_path,f.payload_sha256
-                       FROM field_receipt_links l JOIN fetch_receipts f ON f.receipt_id=l.receipt_id
-                       WHERE l.run_id=? AND l.dataset=? AND l.field_name=? AND f.endpoint=?
+                candidates = conn.execute(
+                    """SELECT l.run_id,f.receipt_id,f.status,f.returned_rows,
+                              f.payload_path,f.payload_sha256
+                       FROM field_receipt_links l JOIN fetch_receipts f
+                         ON f.receipt_id=l.receipt_id
+                       WHERE l.dataset=? AND l.field_name=? AND f.endpoint=?
                        ORDER BY f.rowid""",
-                    (run_id, dataset, field_name, endpoint),
+                    (dataset, field_name, endpoint),
                 ).fetchall()
+                rows = [
+                    row for row in candidates
+                    if (str(row["run_id"]), str(row["receipt_id"])) in authorized
+                ]
                 passed = bool(rows)
                 reason = "missing_field_receipt" if not rows else "ok"
                 for row in rows:

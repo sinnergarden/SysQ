@@ -6,12 +6,16 @@ import sqlite3
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pandas as pd
 import pytest
 
+from qsys.data.collector import HISTORY_SCOPE_PROCESSING_CONTRACT, TushareCollector
 from qsys.data.source_audit import (
     LEGACY_UNTRUSTED,
+    canonical_symbol_files_sha256,
+    history_scope_identity,
     SourceAuditStore,
     build_canonical_mutations,
     checkpoint_requested_scope,
@@ -1623,3 +1627,221 @@ def test_finalize_history_records_endpoint_specific_field_range_floor(tmp_path: 
             ("field-range-floor",),
         ).fetchall())
     assert rows == {"close": "20140101", "industry": "20180313"}
+
+
+def test_legacy_financial_reprojection_searches_validated_multi_hop_lineage(
+    tmp_path: Path,
+) -> None:
+    audit_root = tmp_path / "audit"
+    store = SourceAuditStore(audit_root / "audit.db")
+    lineage = {
+        "entrypoint": "scripts/data_sync.py", "universe": "csi1800",
+        "target_date": "20260821", "range_start": "20180313",
+    }
+    base_scope = {
+        "date_start": "20180313", "date_end": "20260821",
+        "symbol_count": 1,
+        "symbols_sha256": stable_scope_hash(["000001.SZ"]),
+    }
+    legacy_request_sha = "a" * 64
+    legacy_scope = checkpoint_requested_scope(
+        base_scope, source="tushare", endpoint="income", contract_version="1",
+        scope_key="csi1800", universe="csi1800",
+        request_sha256=legacy_request_sha,
+    )
+    frame = pd.DataFrame({
+        "ts_code": ["000001.SZ"], "ann_date": ["20260820"],
+        "f_ann_date": ["20260820"], "end_date": ["20260630"],
+        "report_type": ["1"], "comp_type": ["1"], "end_type": ["2"],
+        "update_flag": ["0"], "n_income": [2.0],
+    })
+
+    oldest = "legacy-hop-a"
+    store.append_event(oldest, "run_started", lineage)
+    store.record_fetch(
+        run_id=oldest, source="tushare", endpoint="income",
+        contract_version="1", status="success", requested_scope=legacy_scope,
+        returned_rows=1, attempt_count=1, payload_frame=frame,
+        **normalized_response_metadata(frame),
+    )
+    oldest_terminal = store.record_crash_receipt(
+        run_id=oldest, receipt_root=audit_root / "source_runs",
+        entrypoint="scripts/data_sync.py", error="oldest failed",
+    )
+    proof_a = store.validate_resume_run(
+        resume_from_run_id=oldest, expected_entrypoint="scripts/data_sync.py",
+        universe="csi1800", target_date="20260821", range_start="20180313",
+    )
+
+    middle = "legacy-hop-b"
+    store.append_event(middle, "run_started", lineage)
+    store.append_event(middle, "resume_from_run", {
+        "resume_from_run_id": oldest,
+        "source_receipt_sha256": proof_a["receipt_sha256"],
+        **lineage,
+    })
+    store.record_crash_receipt(
+        run_id=middle, receipt_root=audit_root / "source_runs",
+        entrypoint="scripts/data_sync.py", error="middle failed before financials",
+    )
+    proof_b = store.validate_resume_run(
+        resume_from_run_id=middle, expected_entrypoint="scripts/data_sync.py",
+        universe="csi1800", target_date="20260821", range_start="20180313",
+    )
+
+    current = "legacy-hop-c"
+    store.append_event(current, "run_started", lineage)
+    current_scope = checkpoint_requested_scope(
+        {
+            **base_scope,
+            "availability_cutoff": "20260821",
+            "query_axis": "announcement_date_query_axis",
+        },
+        source="tushare", endpoint="income", contract_version="1",
+        scope_key="csi1800", universe="csi1800",
+        request_variant="financial_first_available_v1",
+        request_sha256="b" * 64,
+    )
+    assert store.reuse_fetch_shard(
+        run_id=current, resume_proof=proof_b, source="tushare",
+        endpoint="income", contract_version="1", requested_scope=current_scope,
+    ) is None
+    prepared = store.prepare_legacy_financial_shard(
+        run_id=current, resume_proof=proof_b, source="tushare",
+        endpoint="income", contract_version="1", requested_scope=current_scope,
+        legacy_request_sha256=legacy_request_sha,
+        response_validator=lambda _frame: None,
+        contract_name="financial_first_available_v1",
+    )
+    assert prepared["status"] == "compatible"
+    with sqlite3.connect(store.db_path) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM fetch_receipts WHERE run_id=?", (current,),
+        ).fetchone()[0] == 0
+    result = store.commit_prepared_legacy_financial_shard(
+        run_id=current, prepared=prepared,
+    )
+
+    assert result["status"] == "compatible"
+    event = [
+        item["payload"] for item in store.run_evidence_summary(current)["events"]
+        if item["event_type"] == "financial_legacy_shard_reprojected"
+    ][0]
+    assert event["resume_from_run_id"] == oldest
+    assert Path(oldest_terminal["receipt_path"]).is_file()
+
+
+def test_completed_history_scope_is_skipped_and_tamper_fails_terminal_gate(
+    tmp_path: Path,
+) -> None:
+    codes = [f"{index:06d}.SZ" for index in range(1, 51)]
+    canonical = tmp_path / "data" / "canonical" / "daily"
+    canonical.mkdir(parents=True)
+    for code in codes:
+        pd.DataFrame({
+            "ts_code": [code], "trade_date": ["20260821"], "close": [10.0],
+        }).to_feather(canonical / f"{code}.feather")
+
+    audit_root = tmp_path / "data" / "audit"
+    store = SourceAuditStore(audit_root / "audit.db")
+    lineage = {
+        "entrypoint": "scripts/data_sync.py", "universe": "csi1800",
+        "target_date": "20260821", "range_start": "20180313",
+    }
+    source_run = "scope-source"
+    store.append_event(source_run, "run_started", lineage)
+    payload = pd.DataFrame({
+        "ts_code": codes, "trade_date": ["20260821"] * len(codes),
+        "close": [10.0] * len(codes),
+    })
+    receipt_id = store.record_fetch(
+        run_id=source_run, source="tushare", endpoint="daily",
+        status="success", requested_scope=_resume_scope(
+            "daily", symbols=tuple(codes), date_start="20180313",
+            date_end="20260821",
+        ),
+        returned_rows=len(codes), attempt_count=1, payload_frame=payload,
+        **normalized_response_metadata(payload),
+    )
+    identity = history_scope_identity(
+        source="tushare", scope_key="csi1800", universe="csi1800",
+        range_start="20180313", range_end="20260821", symbols=codes,
+        processing_contract=HISTORY_SCOPE_PROCESSING_CONTRACT,
+    )
+    store.record_history_scope_completed(
+        run_id=source_run, identity=identity,
+        canonical_scope_sha256=canonical_symbol_files_sha256(canonical, codes),
+        receipt_ids=[receipt_id],
+    )
+    source_terminal = store.record_crash_receipt(
+        run_id=source_run, receipt_root=audit_root / "source_runs",
+        entrypoint="scripts/data_sync.py", error="after completed scope",
+    )
+    proof = store.validate_resume_run(
+        resume_from_run_id=source_run, expected_entrypoint="scripts/data_sync.py",
+        universe="csi1800", target_date="20260821", range_start="20180313",
+    )
+
+    collector = TushareCollector.__new__(TushareCollector)
+    collector.store = SimpleNamespace(canonical_dir=canonical)
+    collector.batch_size = 50
+    collector.get_universe = lambda _universe: list(codes)
+    collector._update_batch_by_year = lambda *_args, **_kwargs: (
+        (_ for _ in ()).throw(AssertionError("completed scope must be skipped"))
+    )
+    resumed = "scope-resumed"
+    store.append_event(resumed, "run_started", lineage)
+    result = collector.update_universe_history(
+        "csi1800", start_date="20180313", end_date="20260821",
+        run_id=resumed, audit_store=store, resume_proof=proof,
+        scope_key="csi1800", evidence_universe="csi1800",
+        local_max_workers=8,
+    )
+    coverage = result["history_scope_coverage"]
+    assert coverage["completed_scope_ids"] == []
+    assert coverage["inherited_scope_ids"] == [identity["scope_id"]]
+    assert store.evaluate_history_scope_checkpoints(
+        run_id=resumed, coverage=coverage,
+    )["status"] == "success"
+
+    terminal_path = Path(source_terminal["receipt_path"])
+    terminal_path.write_bytes(terminal_path.read_bytes() + b"tampered")
+    failed = store.evaluate_history_scope_checkpoints(
+        run_id=resumed, coverage=coverage,
+    )
+    assert failed == {
+        "status": "failed", "reason": "inherited_terminal_hash_invalid",
+    }
+
+
+def test_partial_history_scope_cannot_be_completed_or_cover_terminal_gate(
+    tmp_path: Path,
+) -> None:
+    store = SourceAuditStore(tmp_path / "audit" / "audit.db")
+    run_id = "partial-scope"
+    frame = _row(11.0)
+    receipt_id = store.record_fetch(
+        run_id=run_id, source="tushare", endpoint="daily", status="partial",
+        requested_scope=_resume_scope("daily"), returned_rows=1,
+        attempt_count=1, payload_frame=frame, error="partial",
+        **normalized_response_metadata(frame),
+    )
+    identity = history_scope_identity(
+        source="tushare", scope_key="csi1800", universe="csi1800",
+        range_start="20260821", range_end="20260821",
+        symbols=["000001.SZ"],
+        processing_contract=HISTORY_SCOPE_PROCESSING_CONTRACT,
+    )
+    with pytest.raises(ValueError, match="no reusable terminal receipts"):
+        store.record_history_scope_completed(
+            run_id=run_id, identity=identity,
+            canonical_scope_sha256="a" * 64, receipt_ids=[receipt_id],
+        )
+    coverage = {
+        "status": "success", "expected_scope_count": 1,
+        "completed_scope_ids": [identity["scope_id"]],
+        "inherited_scope_ids": [],
+    }
+    assert store.evaluate_history_scope_checkpoints(
+        run_id=run_id, coverage=coverage,
+    )["status"] == "failed"

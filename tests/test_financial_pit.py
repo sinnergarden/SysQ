@@ -643,3 +643,70 @@ def test_full_range_reprojection_clears_legacy_value_excluded_as_unproven(
 
     saved = pd.read_feather(canonical / f"{CODE}.feather")
     assert pd.isna(saved.loc[0, "net_income"])
+
+
+def test_financial_resume_workers_one_and_eight_are_pit_equivalent(
+    tmp_path: Path,
+) -> None:
+    codes = ["000001.SZ", "000002.SZ"]
+    calls: list[tuple[str, dict]] = []
+    collector = _collector({}, calls)
+
+    def endpoint_api(name):
+        def fetch(**kwargs):
+            calls.append((name, dict(kwargs)))
+            code = kwargs["ts_code"]
+            common = {
+                "ts_code": code, "ann_date": "20260820",
+                "f_ann_date": "20260820", "end_date": "20260630",
+                "report_type": "1", "comp_type": "1", "end_type": "2",
+                "update_flag": "0",
+            }
+            if name == "income":
+                return pd.DataFrame([{**common, "n_income": 2.0,
+                                      "revenue": 10.0, "oper_cost": 6.0}])
+            if name == "balancesheet":
+                return pd.DataFrame([{**common, "total_assets": 20.0,
+                                      "total_hldr_eqy_exc_min_int": 8.0}])
+            if name == "cashflow":
+                return pd.DataFrame([{**common, "n_cashflow_act": 4.0}])
+            return pd.DataFrame([{
+                "ts_code": code, "ann_date": "20260820",
+                "end_date": "20260630", "update_flag": "0",
+                "roe": 0.25, "grossprofit_margin": 0.4,
+                "debt_to_assets": 0.6,
+            }])
+        return fetch
+
+    collector._get_interface_api = endpoint_api
+    root = tmp_path / "audit"
+    audit = SourceAuditStore(root / "audit.db")
+    source_run = "financial-workers-source"
+    _run_started(audit, source_run)
+    for code in codes:
+        collector._fetch_financials(
+            START, TARGET, ts_code=code, run_id=source_run,
+            audit_store=audit, scope_key="csi1800", universe="csi1800",
+        )
+    proof = _proof(audit, root, source_run)
+
+    results = {}
+    for workers in (1, 8):
+        run_id = f"financial-workers-{workers}"
+        _run_started(audit, run_id)
+        calls.clear()
+        results[workers] = collector._fetch_financials_batch(
+            ",".join(codes), START, TARGET, run_id=run_id,
+            audit_store=audit, resume_proof=proof,
+            scope_key="csi1800", universe="csi1800",
+            local_max_workers=workers,
+        ).sort_values(
+            ["ts_code", "availability_date"], kind="mergesort",
+        ).reset_index(drop=True)
+        assert calls == []
+        with sqlite3.connect(audit.db_path) as connection:
+            assert connection.execute(
+                "SELECT COUNT(*) FROM fetch_receipts WHERE run_id=?", (run_id,),
+            ).fetchone()[0] == 8
+
+    pd.testing.assert_frame_equal(results[1], results[8])
