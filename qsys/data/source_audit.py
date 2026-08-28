@@ -363,10 +363,25 @@ def normalized_response_metadata(frame: pd.DataFrame | None) -> dict[str, Any]:
     if frame is None:
         frame = pd.DataFrame()
     columns = sorted(str(column) for column in frame.columns)
-    rows: list[dict[str, Any]] = []
+    row_texts: list[str] = []
     for _, row in frame.reindex(columns=columns).iterrows():
-        rows.append({column: _stable_value(row[column]) for column in columns})
-    rows.sort(key=_json_text)
+        row_texts.append(
+            _json_text({column: _stable_value(row[column]) for column in columns})
+        )
+    row_texts.sort()
+
+    # Feed the exact canonical JSON bytes incrementally.  This preserves the
+    # legacy response hash without retaining a second list of row dictionaries
+    # and one giant serialized response in memory.
+    digest = hashlib.sha256()
+    digest.update(b'{"columns":')
+    digest.update(_json_text(columns).encode("utf-8"))
+    digest.update(b',"rows":[')
+    for index, row_text in enumerate(row_texts):
+        if index:
+            digest.update(b",")
+        digest.update(row_text.encode("utf-8"))
+    digest.update(b"]}")
     date_column = next((name for name in ("trade_date", "ann_date", "cal_date", "end_date") if name in frame.columns), None)
     dates = sorted(
         _normalise_trade_date(value)
@@ -374,7 +389,7 @@ def normalized_response_metadata(frame: pd.DataFrame | None) -> dict[str, Any]:
         if _normalise_trade_date(value)
     )
     return {
-        "response_hash": hashlib.sha256(_json_text({"columns": columns, "rows": rows}).encode("utf-8")).hexdigest(),
+        "response_hash": digest.hexdigest(),
         "response_columns": columns,
         "response_date_min": dates[0] if dates else None,
         "response_date_max": dates[-1] if dates else None,

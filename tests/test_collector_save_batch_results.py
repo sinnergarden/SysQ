@@ -56,3 +56,71 @@ def test_save_batch_results_ffills_financial_columns_from_existing_history():
     latest = saved.sort_values("trade_date").iloc[-1]
     assert latest["net_income"] == 123.0
     assert latest["roe"] == 0.12
+
+
+def test_coalesced_save_matches_sequential_quarter_final_frame():
+    class MemoryStore:
+        def __init__(self, frame):
+            self.frame = frame.copy()
+
+        def load_daily(self, _code):
+            return self.frame.copy()
+
+        def save_daily(self, frame, _code, existing_df=None):
+            self.frame = frame.copy()
+            return []
+
+    initial = pd.DataFrame({
+        "ts_code": ["000001.SZ"],
+        "trade_date": ["20260331"],
+        "net_income": [10.0],
+        "roe": [0.1],
+    })
+    first = pd.DataFrame({
+        "ts_code": ["000001.SZ"],
+        "trade_date": ["20260401"],
+        "net_income": [None],
+        "roe": [None],
+    })
+    second = pd.DataFrame({
+        "ts_code": ["000001.SZ"],
+        "trade_date": ["20260701"],
+        "net_income": [20.0],
+        "roe": [None],
+    })
+
+    sequential = _build_collector()
+    sequential.store = MemoryStore(initial)
+    sequential._save_batch_results(first, ["000001.SZ"])
+    sequential._save_batch_results(second, ["000001.SZ"])
+
+    coalesced = _build_collector()
+    coalesced.store = MemoryStore(initial)
+    coalesced._save_batch_results(
+        pd.concat([first, second], ignore_index=True), ["000001.SZ"]
+    )
+
+    pd.testing.assert_frame_equal(
+        sequential.store.frame.reset_index(drop=True),
+        coalesced.store.frame.reset_index(drop=True),
+        check_dtype=True,
+    )
+
+    sequential_empty = _build_collector()
+    sequential_empty.store = MemoryStore(pd.DataFrame())
+    sequential_empty._save_batch_results(first, ["000001.SZ"])
+    sequential_empty._save_batch_results(second, ["000001.SZ"])
+
+    coalesced_empty = _build_collector()
+    coalesced_empty.store = MemoryStore(pd.DataFrame())
+    coalesced_empty._save_batch_results(
+        pd.concat([first, second], ignore_index=True),
+        ["000001.SZ"],
+        fill_financial_without_existing=True,
+    )
+
+    pd.testing.assert_frame_equal(
+        sequential_empty.store.frame.reset_index(drop=True),
+        coalesced_empty.store.frame.reset_index(drop=True),
+        check_dtype=True,
+    )

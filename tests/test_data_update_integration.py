@@ -326,13 +326,14 @@ class TestDataUpdateIntegration(unittest.TestCase):
 
         collector._fetch_by_date_range = fake_fetch_by_date_range
 
-        saved = {}
+        saved = {"calls": 0}
 
         expected_mutation = {"symbol": "000001.SZ", "mutation_type": "update"}
 
         def fake_save_batch_results(
             df_big, code_list, ignore_columns=None, **_kwargs
         ):
+            saved["calls"] += 1
             saved["df"] = df_big.copy()
             saved["codes"] = code_list
             return [expected_mutation]
@@ -343,7 +344,7 @@ class TestDataUpdateIntegration(unittest.TestCase):
             ["000001.SZ"],
             "000001.SZ",
             "20260320",
-            "20260325",
+            "20260405",
             include_basic=False,
             include_limit=False,
             include_adj=False,
@@ -352,9 +353,77 @@ class TestDataUpdateIntegration(unittest.TestCase):
         )
 
         self.assertIn("df", saved)
+        self.assertEqual(saved["calls"], 1)
         self.assertIn("ts_code", saved["df"].columns)
         self.assertEqual(saved["codes"], ["000001.SZ"])
+        self.assertEqual(
+            saved["df"]["trade_date"].tolist(), ["20260320", "20260401"]
+        )
         self.assertEqual(result, {"status": "success", "mutation_count": 1})
+
+    def test_update_batch_records_one_full_range_bundle_receipt(self):
+        class Audit:
+            def __init__(self):
+                self.calls = []
+
+            def record_fetch(self, **kwargs):
+                self.calls.append(kwargs)
+                return "history-bundle"
+
+        collector = TushareCollector()
+        collector._fetch_financials_batch = (
+            lambda code_str, start_date, end_date, **_kwargs: pd.DataFrame()
+        )
+
+        def fake_fetch(endpoint, **kwargs):
+            start = kwargs["requested_scope"]["date_start"]
+            return pd.DataFrame({
+                "ts_code": ["000001.SZ"],
+                "trade_date": [start],
+                "open": [10.0],
+                "high": [10.5],
+                "low": [9.8],
+                "close": [10.2],
+                "vol": [1000.0],
+            }), f"{endpoint}-{start}"
+
+        collector._fetch_daily_endpoint_with_receipt = fake_fetch
+        audit = Audit()
+        saved = {}
+
+        def fake_save(df_big, code_list, **kwargs):
+            saved["frame"] = df_big.copy()
+            saved["bundle_receipt_id"] = kwargs["bundle_receipt_id"]
+            return []
+
+        collector._save_batch_results = fake_save
+        result = collector._update_batch_by_year(
+            ["000001.SZ"],
+            "000001.SZ",
+            "20260320",
+            "20260405",
+            include_basic=False,
+            include_limit=False,
+            include_adj=False,
+            include_moneyflow=False,
+            include_margin=False,
+            run_id="history-run",
+            audit_store=audit,
+            scope_key="csi1800",
+            evidence_universe="csi1800",
+        )
+
+        self.assertEqual(result, {"status": "success", "mutation_count": 0})
+        self.assertEqual(len(audit.calls), 1)
+        receipt = audit.calls[0]
+        self.assertEqual(receipt["endpoint"], "daily_bundle")
+        self.assertEqual(receipt["requested_scope"]["date_start"], "20260320")
+        self.assertEqual(receipt["requested_scope"]["date_end"], "20260405")
+        self.assertEqual(receipt["requested_scope"]["symbols"], ["000001.SZ"])
+        self.assertEqual(saved["bundle_receipt_id"], "history-bundle")
+        self.assertEqual(
+            saved["frame"]["trade_date"].tolist(), ["20260320", "20260401"]
+        )
 
 
 if __name__ == "__main__":

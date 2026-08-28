@@ -2326,6 +2326,8 @@ class TushareCollector:
         curr_dt = datetime.strptime(start_date, '%Y%m%d')
         end_dt = datetime.strptime(end_date, '%Y%m%d')
         mutation_count = 0
+        history_frames: list[pd.DataFrame] = []
+        history_ignore_columns: list[set[str]] = []
 
         while curr_dt <= end_dt:
             # Chunking: 3 Months (Quarterly)
@@ -2374,7 +2376,7 @@ class TushareCollector:
                 }
                 # 1. Daily (Batch)
                 if audited:
-                    df_daily, daily_receipt_id = self._fetch_daily_endpoint_with_receipt(
+                    df_daily, _ = self._fetch_daily_endpoint_with_receipt(
                         "daily", run_id=run_id, audit_store=audit_store,
                         requested_scope=requested_scope,
                         resume_proof=resume_proof, scope_key=scope_key,
@@ -2389,7 +2391,6 @@ class TushareCollector:
                         fields=self._get_interface_fields("daily"),
                     )
                 else:
-                    daily_receipt_id = None
                     df_daily = self._fetch_with_retry(
                         self._get_interface_api("daily"),
                         ts_code=valid_code_str,
@@ -2538,28 +2539,15 @@ class TushareCollector:
                 if fin_df_all is None or fin_df_all.empty:
                     ignore_columns += self.financial_cols
 
-                # Save
-                bundle_receipt_id = daily_receipt_id
-                if audited:
-                    bundle_receipt_id = audit_store.record_fetch(
-                        run_id=run_id,
-                        source="tushare",
-                        endpoint="daily_bundle",
-                        status="success",
-                        requested_scope=requested_scope,
-                        returned_rows=len(df_daily),
-                        attempt_count=1,
-                        payload_kind="derived",
-                        published_at=None,
-                        observed_at=utc_now(),
-                        **normalized_response_metadata(df_daily),
-                    )
-                chunk_mutations = self._save_batch_results(
-                    df_daily, valid_codes, ignore_columns=ignore_columns,
-                    run_id=run_id, audit_store=audit_store,
-                    bundle_receipt_id=bundle_receipt_id,
-                )
-                mutation_count += len(chunk_mutations)
+                # Keep quarterly source receipts, but coalesce the derived
+                # frames before touching canonical storage.  The former path
+                # rewrote each symbol's complete feather once per quarter
+                # (roughly 51 times for a full-history repair).  The final
+                # frame is equivalent because chunks do not overlap and the
+                # same validation, deduplication, sort, and financial forward
+                # fill still run in _save_batch_results.
+                history_frames.append(df_daily)
+                history_ignore_columns.append(set(ignore_columns))
 
             except Exception as e:
                 log.error(f"Failed batch chunk {chunk_start}-{chunk_end}: {e}")
@@ -2569,11 +2557,56 @@ class TushareCollector:
             # Next chunk
             curr_dt = chunk_end_dt + timedelta(days=1)
 
+        if history_frames:
+            df_history = pd.concat(history_frames, ignore_index=True)
+            # A field is globally ignorable only when every non-empty chunk
+            # lacked its endpoint.  This keeps validation conservative when
+            # an optional endpoint is present for only part of the history.
+            ignore_columns = (
+                sorted(set.intersection(*history_ignore_columns))
+                if history_ignore_columns
+                else []
+            )
+            bundle_receipt_id = None
+            if audited:
+                history_scope = {
+                    "date_start": start_date,
+                    "date_end": end_date,
+                    "symbol_count": len(code_list),
+                    "symbols": sorted(code_list),
+                    "symbols_sha256": stable_scope_hash(code_list),
+                }
+                bundle_receipt_id = audit_store.record_fetch(
+                    run_id=run_id,
+                    source="tushare",
+                    endpoint="daily_bundle",
+                    status="success",
+                    requested_scope=history_scope,
+                    returned_rows=len(df_history),
+                    attempt_count=1,
+                    payload_kind="derived",
+                    published_at=None,
+                    observed_at=utc_now(),
+                    **normalized_response_metadata(df_history),
+                )
+            log.info(
+                f"Saving coalesced history batch ({len(df_history)} rows, "
+                f"{len(history_frames)} chunks, {len(code_list)} stocks)..."
+            )
+            batch_mutations = self._save_batch_results(
+                df_history, code_list, ignore_columns=ignore_columns,
+                run_id=run_id, audit_store=audit_store,
+                bundle_receipt_id=bundle_receipt_id,
+                fill_financial_without_existing=len(history_frames) > 1,
+            )
+            mutation_count += len(batch_mutations)
+
         return {"status": "success", "mutation_count": mutation_count}
 
     def _save_batch_results(
         self, df_big, code_list, ignore_columns=None, *, run_id=None,
         audit_store=None, bundle_receipt_id=None,
+        fill_financial_without_existing=False,
     ):
         if df_big is None or df_big.empty:
             return []
@@ -2590,10 +2623,12 @@ class TushareCollector:
             df_part = grouped.get_group(code).copy()
             df_part = self._validate_and_clean(df_part, code, ignore_columns=ignore_columns)
             existing_df = self.store.load_daily(code)
-            if existing_df is not None and not existing_df.empty:
+            has_existing = existing_df is not None and not existing_df.empty
+            if has_existing:
                 df_part = pd.concat([existing_df, df_part], ignore_index=True)
                 df_part = df_part.drop_duplicates(subset=['trade_date'], keep='last')
                 df_part = df_part.sort_values('trade_date').reset_index(drop=True)
+            if has_existing or fill_financial_without_existing:
                 for col in financial_like_cols:
                     if col in df_part.columns:
                         df_part[col] = df_part[col].ffill()
