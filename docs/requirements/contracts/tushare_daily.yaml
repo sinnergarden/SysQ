@@ -166,6 +166,15 @@ trust_rules:
   history_suspension_terminal: all_union_symbol_shards_in_same_run_terminal_receipt_and_watermark_backlink
   history_industry_terminal: all_union_symbol_shards_success_or_empty_with_projection_cutoff_in_same_terminal_receipt
   history_industry_resume: exact_checkpoint_clone_chain_then_idempotent_canonical_projection
+  history_scope_checkpoint:
+    purpose: resume_optimization_not_certification
+    legacy_identity: exact_whole_file_sha256
+    current_identity: bounded_canonical_values_v1
+    bounded_through: explicit_history_target_date
+    fields: physical_columns_common_to_the_completed_scope
+    later_daily_rows: ignored
+    in_range_value_or_row_change: replay_affected_scope_only
+    legacy_hash_mismatch: local_scope_replay_with_verified_raw_shard_reuse
   backward_watermark_expansion: forbidden_without_separate_certification
   wrapper_finalize: outer_only_after_all_repairs_and_final_readiness
   unreceipted_outer_core_history_mutation: untrusted_and_requires_new_run

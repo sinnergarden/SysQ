@@ -20,7 +20,9 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
+import numpy as np
 import pandas as pd
+import pyarrow.ipc as pa_ipc
 
 
 AUDIT_SCHEMA_VERSION = 1
@@ -101,6 +103,157 @@ def canonical_symbol_files_sha256(
         with ThreadPoolExecutor(max_workers=workers) as executor:
             rows = list(executor.map(digest, normalized_symbols))
     return hashlib.sha256(_json_text(rows).encode("utf-8")).hexdigest()
+
+
+def canonical_history_scope_semantic_identity(
+    canonical_dir: str | Path,
+    symbols: Sequence[str],
+    *,
+    range_start: str,
+    range_end: str,
+    fields: Sequence[str] | None = None,
+    max_workers: int = 1,
+) -> dict[str, Any]:
+    """Identify bounded canonical values independent of file/container bytes."""
+
+    root = Path(canonical_dir).resolve()
+    normalized_symbols = sorted({str(symbol) for symbol in symbols if str(symbol).strip()})
+    if not normalized_symbols:
+        raise ValueError("canonical semantic scope requires symbols")
+    start = _normalise_trade_date(range_start)
+    end = _normalise_trade_date(range_end)
+    if start > end:
+        raise ValueError("canonical semantic scope range is reversed")
+
+    if fields is None:
+        common_fields: set[str] | None = None
+        for symbol in normalized_symbols:
+            unresolved = root / f"{symbol}.feather"
+            if unresolved.is_symlink():
+                raise ValueError(
+                    f"canonical history file missing or unsafe: {symbol}"
+                )
+            path = resolve_under(root, unresolved)
+            if not path.is_file():
+                raise ValueError(
+                    f"canonical history file missing or unsafe: {symbol}"
+                )
+            try:
+                columns = set(pa_ipc.open_file(path).schema.names)
+            except Exception as exc:
+                raise ValueError(
+                    f"canonical semantic schema is unreadable: {symbol}"
+                ) from exc
+            common_fields = (
+                columns if common_fields is None else common_fields & columns
+            )
+        normalized_fields = sorted(
+            (common_fields or set()) - {"ts_code", "trade_date"}
+        )
+    else:
+        normalized_fields = list(
+            dict.fromkeys(str(field) for field in fields if str(field).strip())
+        )
+    if not normalized_fields:
+        raise ValueError("canonical semantic scope requires value fields")
+    workers = max(1, min(int(max_workers), 8, len(normalized_symbols)))
+
+    def digest(symbol: str) -> tuple[str, str, int, str, str]:
+        unresolved = root / f"{symbol}.feather"
+        if unresolved.is_symlink():
+            raise ValueError(f"canonical history file missing or unsafe: {symbol}")
+        path = resolve_under(root, unresolved)
+        if not path.is_file():
+            raise ValueError(f"canonical history file missing or unsafe: {symbol}")
+        columns = ["ts_code", "trade_date", *normalized_fields]
+        try:
+            frame = pd.read_feather(path, columns=columns)
+        except Exception as exc:
+            raise ValueError(f"canonical semantic fields are unreadable: {symbol}") from exc
+        observed_symbols = {
+            str(value) for value in frame["ts_code"].dropna().unique().tolist()
+        }
+        if observed_symbols != {symbol}:
+            raise ValueError(f"canonical history symbol mismatch: {symbol}")
+        dates = (
+            frame["trade_date"].astype(str).str.replace("-", "", regex=False).str[:8]
+        )
+        if not dates.str.fullmatch(r"\d{8}").all():
+            raise ValueError(f"canonical history date is invalid: {symbol}")
+        bounded = frame.loc[dates.between(start, end), columns].copy()
+        bounded["_checkpoint_trade_date"] = dates.loc[bounded.index]
+        if bounded.empty:
+            raise ValueError(f"canonical history range is empty: {symbol}")
+        if bool(bounded["_checkpoint_trade_date"].duplicated().any()):
+            raise ValueError(f"canonical history dates are duplicated: {symbol}")
+        bounded = bounded.sort_values("_checkpoint_trade_date")
+
+        digest_builder = hashlib.sha256()
+        digest_builder.update(_json_text({
+            "contract": "bounded_canonical_values_v1",
+            "symbol": symbol,
+            "range_start": start,
+            "range_end": end,
+            "fields": normalized_fields,
+            "dates": bounded["_checkpoint_trade_date"].tolist(),
+        }).encode("utf-8"))
+        for field in normalized_fields:
+            original = bounded[field]
+            non_null = original.notna()
+            numeric = pd.to_numeric(original, errors="coerce")
+            if numeric.notna().equals(non_null):
+                values = numeric.to_numpy(dtype=np.float64, na_value=np.nan)
+                if np.isinf(values).any():
+                    raise ValueError(
+                        f"canonical semantic value is non-finite: {symbol}/{field}"
+                    )
+                missing = np.isnan(values)
+                values[missing] = 0.0
+                values[values == 0.0] = 0.0
+                digest_builder.update(b"N")
+                digest_builder.update(field.encode("utf-8"))
+                digest_builder.update(missing.astype(np.uint8).tobytes())
+                digest_builder.update(values.astype("<f8", copy=False).tobytes())
+                continue
+            digest_builder.update(b"S")
+            digest_builder.update(field.encode("utf-8"))
+            for value in original:
+                if pd.isna(value):
+                    digest_builder.update((-1).to_bytes(8, "little", signed=True))
+                    continue
+                encoded = str(value).encode("utf-8")
+                digest_builder.update(
+                    len(encoded).to_bytes(8, "little", signed=True)
+                )
+                digest_builder.update(encoded)
+        observed_dates = bounded["_checkpoint_trade_date"]
+        return (
+            symbol,
+            digest_builder.hexdigest(),
+            len(bounded),
+            str(observed_dates.iloc[0]),
+            str(observed_dates.iloc[-1]),
+        )
+
+    if workers == 1:
+        rows = [digest(symbol) for symbol in normalized_symbols]
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            rows = list(executor.map(digest, normalized_symbols))
+    digest_rows = [[row[0], row[1]] for row in rows]
+    return {
+        "contract": "bounded_canonical_values_v1",
+        "sha256": hashlib.sha256(
+            _json_text(digest_rows).encode("utf-8")
+        ).hexdigest(),
+        "fields": normalized_fields,
+        "range_start": start,
+        "range_end": end,
+        "symbol_count": len(rows),
+        "row_count": sum(row[2] for row in rows),
+        "observed_date_min": min(row[3] for row in rows),
+        "observed_date_max": max(row[4] for row in rows),
+    }
 
 
 def validate_run_id(run_id: str) -> str:
@@ -983,6 +1136,7 @@ class SourceAuditStore:
         identity: Mapping[str, Any],
         canonical_scope_sha256: str,
         receipt_ids: Sequence[str],
+        canonical_semantic_identity: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Commit a resumable scope marker after canonical/audit single-writer commit."""
 
@@ -1012,9 +1166,55 @@ class SourceAuditStore:
         ]
         if not terminal_receipts:
             raise ValueError("completed history scope has no reusable terminal receipts")
+        semantic_payload: dict[str, Any] = {}
+        if canonical_semantic_identity is not None:
+            semantic_sha = str(canonical_semantic_identity.get("sha256") or "")
+            semantic_fields = [
+                str(item) for item in canonical_semantic_identity.get("fields") or []
+            ]
+            semantic_row_count = int(
+                canonical_semantic_identity.get("row_count") or 0
+            )
+            semantic_symbol_count = int(
+                canonical_semantic_identity.get("symbol_count") or 0
+            )
+            semantic_range_start = _normalise_trade_date(
+                canonical_semantic_identity.get("range_start")
+            )
+            semantic_range_end = _normalise_trade_date(
+                canonical_semantic_identity.get("range_end")
+            )
+            observed_min = _normalise_trade_date(
+                canonical_semantic_identity.get("observed_date_min")
+            )
+            observed_max = _normalise_trade_date(
+                canonical_semantic_identity.get("observed_date_max")
+            )
+            if (
+                canonical_semantic_identity.get("contract")
+                != "bounded_canonical_values_v1"
+                or not re.fullmatch(r"[0-9a-f]{64}", semantic_sha)
+                or not semantic_fields
+                or len(set(semantic_fields)) != len(semantic_fields)
+                or semantic_row_count < semantic_symbol_count
+                or semantic_symbol_count != int(scope["symbol_count"])
+                or semantic_range_start != scope["range_start"]
+                or semantic_range_end != scope["range_end"]
+                or not (semantic_range_start <= observed_min <= observed_max <= semantic_range_end)
+            ):
+                raise ValueError("canonical semantic checkpoint identity is invalid")
+            semantic_payload = {
+                "canonical_semantic_contract": "bounded_canonical_values_v1",
+                "canonical_scope_semantic_sha256": semantic_sha,
+                "canonical_semantic_fields": semantic_fields,
+                "canonical_semantic_row_count": semantic_row_count,
+                "canonical_semantic_observed_date_min": observed_min,
+                "canonical_semantic_observed_date_max": observed_max,
+            }
         payload = {
             **scope,
             "canonical_scope_sha256": str(canonical_scope_sha256),
+            **semantic_payload,
             # Optional partial/failure observations remain in the failed run but
             # are never authorized as inherited evidence.
             "receipt_ids": terminal_receipts,
@@ -1055,6 +1255,66 @@ class SourceAuditStore:
                     or not set(receipt_ids).issubset(available)
                 ):
                     raise ValueError("history scope checkpoint is incomplete")
+                semantic_sha = str(
+                    scope.get("canonical_scope_semantic_sha256") or ""
+                )
+                semantic_fields = scope.get("canonical_semantic_fields") or []
+                semantic_contract = str(
+                    scope.get("canonical_semantic_contract") or ""
+                )
+                semantic_keys = {
+                    "canonical_semantic_contract",
+                    "canonical_scope_semantic_sha256",
+                    "canonical_semantic_fields",
+                    "canonical_semantic_row_count",
+                    "canonical_semantic_observed_date_min",
+                    "canonical_semantic_observed_date_max",
+                }
+                if semantic_keys & set(scope):
+                    try:
+                        semantic_row_count = int(
+                            scope["canonical_semantic_row_count"]
+                        )
+                        semantic_observed_min = _normalise_trade_date(
+                            scope["canonical_semantic_observed_date_min"]
+                        )
+                        semantic_observed_max = _normalise_trade_date(
+                            scope["canonical_semantic_observed_date_max"]
+                        )
+                        scope_range_start = _normalise_trade_date(
+                            scope["range_start"]
+                        )
+                        scope_range_end = _normalise_trade_date(scope["range_end"])
+                        scope_symbol_count = int(scope["symbol_count"])
+                    except (KeyError, TypeError, ValueError) as exc:
+                        raise ValueError(
+                            "history semantic checkpoint is incomplete"
+                        ) from exc
+                    if (
+                        semantic_contract != "bounded_canonical_values_v1"
+                        or not re.fullmatch(r"[0-9a-f]{64}", semantic_sha)
+                        or not isinstance(semantic_fields, list)
+                        or not semantic_fields
+                        or any(
+                            not isinstance(field, str) or not field.strip()
+                            for field in semantic_fields
+                        )
+                        or any(
+                            field in {"ts_code", "trade_date"}
+                            for field in semantic_fields
+                        )
+                        or len(set(semantic_fields)) != len(semantic_fields)
+                        or semantic_row_count < scope_symbol_count
+                        or not (
+                            scope_range_start
+                            <= semantic_observed_min
+                            <= semantic_observed_max
+                            <= scope_range_end
+                        )
+                    ):
+                        raise ValueError(
+                            "history semantic checkpoint is incomplete"
+                        )
                 candidate = {
                     **scope,
                     "source_run_id": source_run_id,
@@ -1066,9 +1326,23 @@ class SourceAuditStore:
                         key: value for key, value in previous.items()
                         if key not in {"source_run_id", "source_receipt_sha256"}
                     }
-                    if comparable != scope:
-                        raise ValueError("resume lineage has conflicting history scope checkpoints")
-                    continue
+                    if comparable == scope:
+                        continue
+                    previous_is_semantic = bool(
+                        previous.get("canonical_scope_semantic_sha256")
+                    )
+                    ancestor_is_legacy = not bool(
+                        scope.get("canonical_scope_semantic_sha256")
+                    )
+                    if previous_is_semantic and ancestor_is_legacy:
+                        # The chain is newest-first.  A verified local replay
+                        # may upgrade the same scope from the legacy whole-file
+                        # marker to the semantic marker.  Any other conflict
+                        # remains fail-closed.
+                        continue
+                    raise ValueError(
+                        "resume lineage has conflicting history scope checkpoints"
+                    )
                 completed[scope_id] = candidate
         return completed
 
@@ -1181,6 +1455,16 @@ class SourceAuditStore:
                 or not re.fullmatch(r"[0-9a-f]{64}", str(payload.get("canonical_scope_sha256") or ""))
                 or not receipt_ids
                 or scope_id in observed
+            ):
+                return {"status": "failed", "reason": "scope_marker_invalid"}
+            semantic_sha = str(payload.get("canonical_scope_semantic_sha256") or "")
+            semantic_fields = payload.get("canonical_semantic_fields") or []
+            semantic_contract = str(payload.get("canonical_semantic_contract") or "")
+            if any((semantic_sha, semantic_fields, semantic_contract)) and (
+                semantic_contract != "bounded_canonical_values_v1"
+                or not re.fullmatch(r"[0-9a-f]{64}", semantic_sha)
+                or not isinstance(semantic_fields, list)
+                or not semantic_fields
             ):
                 return {"status": "failed", "reason": "scope_marker_invalid"}
             event_type = str(row["event_type"])

@@ -13,7 +13,9 @@ import pytest
 
 from qsys.data.collector import HISTORY_SCOPE_PROCESSING_CONTRACT, TushareCollector
 from qsys.data.source_audit import (
+    HISTORY_SCOPE_CHECKPOINT_VERSION,
     LEGACY_UNTRUSTED,
+    canonical_history_scope_semantic_identity,
     canonical_symbol_files_sha256,
     history_scope_identity,
     SourceAuditStore,
@@ -1795,10 +1797,13 @@ def test_completed_history_scope_is_skipped_and_tamper_fails_terminal_gate(
         range_start="20180313", range_end="20260821", symbols=codes,
         processing_contract=HISTORY_SCOPE_PROCESSING_CONTRACT,
     )
-    store.record_history_scope_completed(
+    checkpoint = store.record_history_scope_completed(
         run_id=source_run, identity=identity,
         canonical_scope_sha256=canonical_symbol_files_sha256(canonical, codes),
         receipt_ids=[receipt_id],
+        canonical_semantic_identity=canonical_history_scope_semantic_identity(
+            canonical, codes, range_start="20180313", range_end="20260821",
+        ),
     )
     source_terminal = store.record_crash_receipt(
         run_id=source_run, receipt_root=audit_root / "source_runs",
@@ -1808,6 +1813,21 @@ def test_completed_history_scope_is_skipped_and_tamper_fails_terminal_gate(
         resume_from_run_id=source_run, expected_entrypoint="scripts/data_sync.py",
         universe="csi1800", target_date="20260821", range_start="20180313",
     )
+
+    # A normal daily append rewrites container bytes but cannot change the
+    # completed pre-cutoff semantic identity.
+    for code in codes:
+        target = canonical / f"{code}.feather"
+        frame = pd.read_feather(target)
+        pd.concat([
+            frame,
+            pd.DataFrame({
+                "ts_code": [code], "trade_date": ["20260828"], "close": [11.0],
+            }),
+        ], ignore_index=True).to_feather(target)
+    assert canonical_symbol_files_sha256(
+        canonical, codes
+    ) != checkpoint["canonical_scope_sha256"]
 
     collector = TushareCollector.__new__(TushareCollector)
     collector.store = SimpleNamespace(canonical_dir=canonical)
@@ -1839,6 +1859,141 @@ def test_completed_history_scope_is_skipped_and_tamper_fails_terminal_gate(
     assert failed == {
         "status": "failed", "reason": "inherited_terminal_hash_invalid",
     }
+
+
+def test_semantic_history_change_replays_only_affected_scope(tmp_path: Path) -> None:
+    code = "000001.SZ"
+    canonical = tmp_path / "data" / "canonical" / "daily"
+    canonical.mkdir(parents=True)
+    target = canonical / f"{code}.feather"
+    pd.DataFrame({
+        "ts_code": [code], "trade_date": ["20260821"], "close": [10.0],
+    }).to_feather(target)
+
+    audit_root = tmp_path / "data" / "audit"
+    store = SourceAuditStore(audit_root / "audit.db")
+    lineage = {
+        "entrypoint": "scripts/data_sync.py", "universe": "csi1800",
+        "target_date": "20260821", "range_start": "20180313",
+    }
+    source_run = "semantic-source"
+    store.append_event(source_run, "run_started", lineage)
+    payload = pd.DataFrame({
+        "ts_code": [code], "trade_date": ["20260821"], "close": [10.0],
+    })
+    receipt_id = store.record_fetch(
+        run_id=source_run, source="tushare", endpoint="daily",
+        status="success", requested_scope=_resume_scope(
+            "daily", symbols=(code,), date_start="20180313",
+            date_end="20260821",
+        ),
+        returned_rows=1, attempt_count=1, payload_frame=payload,
+        **normalized_response_metadata(payload),
+    )
+    identity = history_scope_identity(
+        source="tushare", scope_key="csi1800", universe="csi1800",
+        range_start="20180313", range_end="20260821", symbols=[code],
+        processing_contract=HISTORY_SCOPE_PROCESSING_CONTRACT,
+    )
+    store.record_history_scope_completed(
+        run_id=source_run, identity=identity,
+        canonical_scope_sha256=canonical_symbol_files_sha256(canonical, [code]),
+        receipt_ids=[receipt_id],
+        canonical_semantic_identity=canonical_history_scope_semantic_identity(
+            canonical, [code], range_start="20180313", range_end="20260821",
+        ),
+    )
+    store.record_crash_receipt(
+        run_id=source_run, receipt_root=audit_root / "source_runs",
+        entrypoint="scripts/data_sync.py", error="after completed scope",
+    )
+    proof = store.validate_resume_run(
+        resume_from_run_id=source_run, expected_entrypoint="scripts/data_sync.py",
+        universe="csi1800", target_date="20260821", range_start="20180313",
+    )
+
+    mutations = {
+        "value-change": pd.DataFrame({
+            "ts_code": [code], "trade_date": ["20260821"], "close": [99.0],
+        }),
+        "bounded-rows-deleted": pd.DataFrame({
+            "ts_code": pd.Series(dtype="object"),
+            "trade_date": pd.Series(dtype="object"),
+            "close": pd.Series(dtype="float64"),
+        }),
+        "checkpoint-field-deleted": pd.DataFrame({
+            "ts_code": [code], "trade_date": ["20260821"],
+        }),
+    }
+    for mutation_name, mutated_frame in mutations.items():
+        mutated_frame.to_feather(target)
+        collector = TushareCollector.__new__(TushareCollector)
+        collector.store = SimpleNamespace(canonical_dir=canonical)
+        collector.batch_size = 1
+        collector.get_universe = lambda _universe: [code]
+        collector._update_batch_by_year = lambda *_args, **_kwargs: (
+            (_ for _ in ()).throw(RuntimeError("scope replayed"))
+        )
+        resumed = f"semantic-resumed-{mutation_name}"
+        store.append_event(resumed, "run_started", lineage)
+        with pytest.raises(RuntimeError, match="scope replayed"):
+            collector.update_universe_history(
+                "csi1800", start_date="20180313", end_date="20260821",
+                run_id=resumed, audit_store=store, resume_proof=proof,
+                scope_key="csi1800", evidence_universe="csi1800",
+            )
+
+
+def test_resumable_semantic_checkpoint_metadata_is_fail_closed(
+    tmp_path: Path,
+) -> None:
+    store = SourceAuditStore(tmp_path / "audit.db")
+    identity = history_scope_identity(
+        source="tushare", scope_key="csi1800", universe="csi1800",
+        range_start="20180313", range_end="20260821",
+        symbols=["000001.SZ"],
+        processing_contract=HISTORY_SCOPE_PROCESSING_CONTRACT,
+    )
+    valid = {
+        **identity,
+        "checkpoint_version": HISTORY_SCOPE_CHECKPOINT_VERSION,
+        "canonical_scope_sha256": "a" * 64,
+        "receipt_ids": ["receipt-1"],
+        "canonical_semantic_contract": "bounded_canonical_values_v1",
+        "canonical_scope_semantic_sha256": "b" * 64,
+        "canonical_semantic_fields": ["close"],
+        "canonical_semantic_row_count": 1,
+        "canonical_semantic_observed_date_min": "20260821",
+        "canonical_semantic_observed_date_max": "20260821",
+    }
+    malformed = [
+        {"canonical_semantic_fields": [""]},
+        {"canonical_semantic_fields": [None]},
+        {"canonical_semantic_fields": [123]},
+        {"canonical_semantic_fields": ["trade_date"]},
+        {"canonical_semantic_row_count": 0},
+        {"canonical_semantic_observed_date_min": "20260822"},
+        {"canonical_semantic_observed_date_max": None},
+    ]
+    for override in malformed:
+        payload = {**valid, **override}
+        cache = {
+            "proof": {
+                "resume_from_run_id": "malformed-source",
+                "receipt_sha256": "c" * 64,
+            },
+            "all_fetch_rows": [
+                {"receipt_id": "receipt-1", "status": "success"},
+            ],
+            "journal": [
+                {"event_type": "history_scope_completed", "payload": payload},
+            ],
+        }
+        store._validated_resume_chain = lambda _proof, cache=cache: [cache]
+        with pytest.raises(
+            ValueError, match="history semantic checkpoint is incomplete",
+        ):
+            store.resumable_history_scopes({})
 
 
 def test_partial_history_scope_cannot_be_completed_or_cover_terminal_gate(

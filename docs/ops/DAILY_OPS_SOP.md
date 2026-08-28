@@ -167,6 +167,12 @@ CSI1800 历史修复只使用 immutable historical union 作为请求集合，�
 由下面的离线 materializer 生成 consumed immutable snapshot，再由 certifier 绑定 snapshot 与
 terminal watermark，不能直接把 mutable canonical sidecar 当成已认证输入。
 
+history batch checkpoint 只负责中断恢复，不代表 baseline 已认证。新完成批次记录显式
+history cutoff 内的稳定 canonical 语义 digest；后来 daily update 追加新日期或改写 Feather
+容器不会让批次失效，cutoff 内行或值变化则只重放该批次。旧 checkpoint 只有 whole-file hash；
+如果 live 文件已经变化，需要一次本地批次重放来建立新 digest，但仍复用 verified raw shard，
+不得重新远程拉取或把简单非空检查冒充等价证明。
+
 wrapper 每次 resume 仍创建新的 shared run_id，并在同一个 writer lock 内运行完整 market
 child、outer repairs 和 readiness。已验证且持久化的 success/empty supplier shard 会克隆到
 新 run 并保留原始 observed/published metadata；partial、failure、缺失或 hash 不符的 shard

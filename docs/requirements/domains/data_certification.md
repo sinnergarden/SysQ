@@ -123,6 +123,13 @@ trusted terminal 的 verified raw payload 重建 immutable v2 snapshot，不联�
   contiguous-range gates 全部通过后由唯一 terminal owner 推进；legacy/untrusted 永不推进；
 - backfill 若开始写 canonical 而缺少对应 source evidence，必须留下保守 mutation scope，
   本 run 不得把 target-day receipt 借给该历史范围，修复后用新 run 重审。
+- history scope checkpoint 只用于中断恢复，不是 certification 结果。新 checkpoint 将完成时
+  scope 的公共物理列、日期行集合和值按显式截止日生成稳定语义 digest；截止日后的 daily append
+  不参与比较，截止日内任一行/值变化只重放相交 scope。旧 whole-file checkpoint 若文件字节
+  已变化，必须做一次本地 scope 重放，但继续复用其 verified raw shards，不重新拉取。
+- 不把 feature 代码、审计代码或 Git commit 写入数据 digest。新增 feature 若只消费既有字段，
+  不失效 source/canonical checkpoint；新增 source 字段由新的 processing contract 和后续
+  checkpoint 自然覆盖。最终 DataPack hash 仍只绑定冻结的 certified artifact。
 
 这些是可运行语义检查而非文档存在性检查：producer 改动运行
 `tests/test_data_sync_csi1800.py` 与 `tests/ops/test_universe_history.py`，audit store/水位改动运行
