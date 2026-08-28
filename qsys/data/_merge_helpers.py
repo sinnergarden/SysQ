@@ -154,6 +154,8 @@ def select_first_available_financial_rows(
             "excluded_future_rows": 0,
             "excluded_later_revision_rows": 0,
             "excluded_non_primary_report_type_rows": 0,
+            "excluded_unsupported_statement_period_rows": 0,
+            "unsupported_statement_period_exceptions": [],
             "collapsed_equivalent_branch_rows": 0,
             "missing_end_type_fallback_keys": 0,
             "non_consumed_branch_exception_count": 0,
@@ -214,6 +216,8 @@ def select_first_available_financial_rows(
     )
     excluded_non_primary = 0
     missing_end_type_fallback_keys = 0
+    unsupported_statement_period_rows = 0
+    unsupported_statement_period_exceptions: list[dict[str, Any]] = []
     metadata = _STATEMENT_METADATA if is_statement else _INDICATOR_METADATA
     payload_columns = sorted(set(work.columns) - metadata - {"availability_date"})
     if not payload_columns:
@@ -231,6 +235,24 @@ def select_first_available_financial_rows(
         primary = work["report_type"].eq("1")
         excluded_non_primary = int((~primary).sum())
         work = work.loc[primary].copy()
+        supported_period = work["end_date"].astype(str).str.slice(4).isin(
+            _EXPECTED_END_TYPE
+        )
+        unsupported = work.loc[~supported_period]
+        unsupported_statement_period_rows = len(unsupported)
+        for (symbol, end_date), group in unsupported.groupby(
+            ["ts_code", "end_date"], dropna=False, sort=True,
+        ):
+            if len(unsupported_statement_period_exceptions) >= 100:
+                break
+            unsupported_statement_period_exceptions.append({
+                "reason": "unsupported_statement_period_excluded",
+                "endpoint": endpoint,
+                "ts_code": str(symbol),
+                "end_date": str(end_date),
+                "row_count": len(group),
+            })
+        work = work.loc[supported_period].copy()
 
         end_type_rows: list[pd.DataFrame] = []
         for (symbol, end_date), group in work.groupby(
@@ -391,6 +413,12 @@ def select_first_available_financial_rows(
         "excluded_future_rows": excluded_future_rows,
         "excluded_later_revision_rows": excluded_later_revision_rows,
         "excluded_non_primary_report_type_rows": excluded_non_primary,
+        "excluded_unsupported_statement_period_rows": (
+            unsupported_statement_period_rows
+        ),
+        "unsupported_statement_period_exceptions": (
+            unsupported_statement_period_exceptions
+        ),
         "collapsed_equivalent_branch_rows": collapsed_equivalent,
         "missing_end_type_fallback_keys": missing_end_type_fallback_keys,
         "non_consumed_branch_exception_count": non_consumed_branch_exception_count,
