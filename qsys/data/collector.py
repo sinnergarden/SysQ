@@ -1250,9 +1250,9 @@ class TushareCollector:
                 if legacy["status"] == "compatible":
                     return legacy["frame"], str(legacy["receipt_id"])
                 if legacy["status"] == "incompatible":
-                    raise RuntimeError(
-                        "REPAIR_REQUIRED: legacy financial shard exists but cannot "
-                        f"be reprojected offline ({legacy.get('reason')})"
+                    log.warning(
+                        f"Legacy {endpoint_name} shard is not reusable "
+                        f"({legacy.get('reason')}); fetching only this financial shard"
                     )
             if local_reuse_only:
                 raise _LocalResumeMiss(
@@ -2164,9 +2164,8 @@ class TushareCollector:
                 }
                 continue
             if legacy["status"] == "incompatible":
-                raise RuntimeError(
-                    "REPAIR_REQUIRED: legacy financial shard exists but cannot "
-                    f"be reprojected offline ({legacy.get('reason')})"
+                raise _LocalResumeMiss(
+                    f"legacy {endpoint_name} shard requires supplier repair"
                 )
             raise _LocalResumeMiss(
                 f"no reusable local shard for {endpoint_name}"
