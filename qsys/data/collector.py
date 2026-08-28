@@ -1195,6 +1195,7 @@ class TushareCollector:
         required_endpoint: bool = True,
         local_reuse_only: bool = False,
         prepared_reuse: Mapping[str, object] | None = None,
+        supplier_call_delay_seconds: float = 0.0,
         **kwargs,
     ) -> tuple[pd.DataFrame, str | None]:
         """Fetch one endpoint and append a normalized, secret-safe receipt."""
@@ -1266,6 +1267,8 @@ class TushareCollector:
         def counted_api(**call_kwargs):
             nonlocal attempt_count
             attempt_count += 1
+            if supplier_call_delay_seconds > 0:
+                time.sleep(supplier_call_delay_seconds)
             return api(**call_kwargs)
 
         try:
