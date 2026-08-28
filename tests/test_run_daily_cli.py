@@ -178,9 +178,13 @@ class TestDispatch(unittest.TestCase):
     @patch("scripts.run_daily.DailyRunner")
     @patch("scripts.run_daily.create_strategy")
     @patch("scripts.run_daily.run_candidate_inference")
+    @patch(
+        "scripts.run_daily.check_inference_ready",
+        return_value=[("daily gate", True, "ready")],
+    )
     @patch("scripts.run_daily.load_strategy_config")
     def test_dispatch_infer_is_artifact_only(
-        self, mock_load_cfg, mock_infer, mock_create, mock_runner_cls,
+        self, mock_load_cfg, mock_ready, mock_infer, mock_create, mock_runner_cls,
     ):
         mock_infer.return_value.artifact_path = "/tmp/candidate_run.json"
         mock_infer.return_value.payload = {
@@ -196,9 +200,33 @@ class TestDispatch(unittest.TestCase):
             "--signal-date", "2026-08-07", "--top-k", "20",
         ])
 
+        mock_ready.assert_called_once()
         mock_infer.assert_called_once()
+        self.assertIs(
+            mock_ready.call_args.kwargs["now"],
+            mock_infer.call_args.kwargs["now"],
+        )
         mock_create.assert_not_called()
         mock_runner_cls.assert_not_called()
+
+    @patch("scripts.run_daily.run_candidate_inference")
+    @patch(
+        "scripts.run_daily.check_inference_ready",
+        return_value=[("canonical data freshness", False, "stale")],
+    )
+    @patch("scripts.run_daily.load_strategy_config")
+    def test_dispatch_infer_blocks_before_artifact(
+        self, mock_load_cfg, mock_ready, mock_infer,
+    ):
+        with self.assertRaises(SystemExit) as raised:
+            run_daily_main([
+                "--strategy", "financial_rc", "--mode", "infer",
+                "--signal-date", "auto",
+            ])
+
+        self.assertEqual(raised.exception.code, 2)
+        mock_ready.assert_called_once()
+        mock_infer.assert_not_called()
 
     @patch("scripts.run_daily.DailyRunner")
     @patch("scripts.run_daily.create_strategy")

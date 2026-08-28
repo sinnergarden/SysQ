@@ -192,6 +192,14 @@ blend-weight 与组合构建对照研究完成前，不得据此晋级 shadow/pr
 - `harness/checks/check_inference_artifact.py`
 - `harness/checks/check_shareholder_data_freshness.py`
 
+`scripts/run_daily.py --mode infer` 在生成任何 CandidateRun 前自动执行同一套轻量
+readiness gate，并把一次捕获的 `run_anchor` 同时传给日期解析与真正推理。门只验证本次
+模型实际依赖的 pinned bundle、日期契约、universe lookback、股东 PIT freshness、
+canonical 与 Qlib 水位；全部通过打印 `READY` 后继续，任一失败打印 `BLOCKED`、
+退出 2 且不生成候选。它不是 full-history certification，也不重新 hash DataPack 或
+重扫所有历史；full audit 只在 baseline 发布、受影响历史修复或 consumed scope
+变更时运行。日常路径的性能目标是三分钟内完成 gate，超时属于运维异常而不是放宽检查的理由。
+
 ### Operator Runbook
 
 ```bash
@@ -254,6 +262,7 @@ operator_agent
 - `qsys/signal/`
 - `qsys/data/adapter.py`
 - `qsys/feature/`
+- `qsys/ops/inference_readiness.py`
 - `scripts/dev/`
 - `harness/checks/`
 - `docs/requirements/`

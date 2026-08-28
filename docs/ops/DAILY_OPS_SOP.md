@@ -481,7 +481,14 @@ cat daily/YYYY-MM-DD/post_close/daily_ops_digest_*.json | python -m json.tool
 ```bash
 # 手动触发数据同步
 python scripts/data_sync.py --universe csi1800 --apply
+
+# infer 会先自动执行轻量 READY/BLOCKED gate；BLOCKED 时退出 2 且不写 CandidateRun。
 python scripts/run_daily.py --strategy financial_rc --mode infer --signal-date auto --top-k 200
+
+# 可选：只运行同一 gate 做排障，不执行推理。
+python harness/checks/check_daily_inference_ready.py \
+  --strategy-id financial_rc \
+  --trade-date auto
 
 # 数据健康检查（已实现）
 python -c "from qsys.data.health import inspect_qlib_data_health; r = inspect_qlib_data_health('$(date +%Y-%m-%d)', ['\$open', '\$high', '\$low', '\$close', '\$volume', '\$factor'], universe='csi800'); print(r.to_markdown())"
@@ -495,6 +502,12 @@ python -c "import json; print(json.load(open('data/audit/' + sorted(__import__('
 
 # 实际 qlib bin 路径：data/qlib_bin/
 ```
+
+日常 gate 只核对本次 inference 所需的最近数据与已 pin 模型，不要求每天重新做
+full-history audit、DataPack hash 或 68 窗训练。完成当日 `data_sync` 后即可运行；
+margin 在约 08:30 到齐时，同步加 gate 的窗口目标应控制在开盘前完成。若 gate 超过
+三分钟、数据水位不足或任一 freshness 检查失败，应当 `BLOCKED` 并排障，不能沿用旧候选。
+full certification 仅在发布 baseline、修复 consumed history 或输入契约变化时重跑。
 
 CSI1800 同步不会把“今天的 1800 只”倒灌到历史。目标交易日 `T` 分别解析
 `000906.SH` 与 `000852.SH` 在 `T` 当日或之前最新发布的 `index_weight` 月度快照，
