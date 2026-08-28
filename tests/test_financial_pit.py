@@ -614,6 +614,71 @@ def test_legacy_financial_resume_reprojects_offline_with_new_identity(tmp_path: 
     assert len(reused) == 4
 
 
+def test_incompatible_legacy_financial_shard_refetches_only_that_endpoint(
+    tmp_path: Path,
+) -> None:
+    statement = {
+        "ts_code": CODE, "ann_date": "20260820", "f_ann_date": "20260820",
+        "end_date": "20260331", "report_type": "1", "comp_type": "1",
+        "end_type": "1", "update_flag": "0",
+    }
+    valid_responses = {
+        "income": pd.DataFrame([{**statement, "n_income": 2.0,
+                                  "revenue": 10.0, "oper_cost": 6.0}]),
+        "balancesheet": pd.DataFrame([{**statement, "total_assets": 20.0,
+                                        "total_hldr_eqy_exc_min_int": 8.0}]),
+        "cashflow": pd.DataFrame([{**statement, "n_cashflow_act": 4.0}]),
+        "fina_indicator": pd.DataFrame([{
+            "ts_code": CODE, "ann_date": "20260820",
+            "end_date": "20260331", "update_flag": "0", "roe": 0.25,
+            "grossprofit_margin": 0.4, "debt_to_assets": 0.6,
+        }]),
+    }
+    legacy_responses = dict(valid_responses)
+    legacy_responses["income"] = valid_responses["income"].assign(
+        ts_code="999999.SZ",
+    )
+    calls: list[tuple[str, dict]] = []
+    legacy_collector = _collector(legacy_responses, calls)
+    root = tmp_path / "audit"
+    audit = SourceAuditStore(root / "audit.db")
+    old_run = "legacy-invalid-financial"
+    _run_started(audit, old_run)
+    old_scope = {
+        "date_start": START, "date_end": TARGET, "symbol_count": 1,
+        "symbols": [CODE], "symbols_sha256": stable_scope_hash([CODE]),
+    }
+    for endpoint in valid_responses:
+        legacy_collector._fetch_daily_endpoint_with_receipt(
+            endpoint, run_id=old_run, audit_store=audit,
+            requested_scope=old_scope, scope_key="csi1800",
+            universe="csi1800", identity_columns=("ts_code", "ann_date"),
+            ts_code=CODE, start_date=START, end_date=TARGET,
+            fields=legacy_collector._get_interface_fields(endpoint),
+        )
+    proof = _proof(audit, root, old_run)
+
+    current_run = "repair-invalid-financial"
+    _run_started(audit, current_run)
+    calls.clear()
+    repaired = _collector(valid_responses, calls)._fetch_financials_batch(
+        CODE, START, TARGET, run_id=current_run, audit_store=audit,
+        resume_proof=proof, scope_key="csi1800", universe="csi1800",
+        local_max_workers=8,
+    )
+
+    assert [endpoint for endpoint, _ in calls] == ["income"]
+    assert repaired["net_income"].tolist() == [2.0]
+    with sqlite3.connect(audit.db_path) as connection:
+        rows = connection.execute(
+            "SELECT endpoint,status FROM fetch_receipts WHERE run_id=?",
+            (current_run,),
+        ).fetchall()
+    assert sorted(rows) == sorted(
+        (endpoint, "success") for endpoint in valid_responses
+    )
+
+
 def test_full_range_reprojection_clears_legacy_value_excluded_as_unproven(
     tmp_path: Path,
 ) -> None:
