@@ -39,6 +39,33 @@ def _row(close: float) -> pd.DataFrame:
     )
 
 
+def test_normalized_response_metadata_preserves_legacy_hash_contract() -> None:
+    frame = pd.DataFrame(
+        {
+            "trade_date": ["20260822", "20260821"],
+            "ts_code": ["B.SZ", "A.SZ"],
+            "close": [float("nan"), 1.5],
+            "api_token": ["token=abc", "plain"],
+        }
+    )
+
+    metadata = normalized_response_metadata(frame)
+    assert metadata == {
+        "response_hash": "69251c18980bc1a0d25511fea06ff63664998bcf8166c2dcdcb92f2f9e7a1988",
+        "response_columns": [
+            "api_token",
+            "close",
+            "trade_date",
+            "ts_code",
+        ],
+        "response_date_min": "20260821",
+        "response_date_max": "20260822",
+    }
+    assert normalized_response_metadata(
+        frame.sample(frac=1, random_state=7).reset_index(drop=True)
+    ) == metadata
+
+
 def _record_fetch(store: SourceAuditStore, *, run_id: str, status: str, scope: dict, error=None) -> None:
     frame = _row(11.0) if status in {"success", "partial"} else pd.DataFrame()
     metadata = normalized_response_metadata(frame)
