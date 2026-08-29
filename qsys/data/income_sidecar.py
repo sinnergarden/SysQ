@@ -46,6 +46,7 @@ _REQUIRED_INCOME_COLUMNS = {
     "revenue",
     "oper_cost",
 }
+_REQUIRED_INCOME_LINK_FIELDS = _REQUIRED_INCOME_COLUMNS - {"ts_code"}
 _TRUSTED_INCOME_FIELDS = {
     "ann_date", "end_date", "report_type", "n_income", "revenue", "oper_cost",
 }
@@ -549,7 +550,9 @@ def materialize_audited_income_sidecar(
                 raise IncomeSidecarError(f"duplicate income shard for symbol: {symbol}")
             seen_symbols.add(symbol)
             symbols.append(symbol)
-            if not _REQUIRED_INCOME_COLUMNS.issubset(linked_fields.get(receipt_id, set())):
+            if not _REQUIRED_INCOME_LINK_FIELDS.issubset(
+                linked_fields.get(receipt_id, set())
+            ):
                 raise IncomeSidecarError(
                     f"income receipt field links are incomplete: {receipt_id}"
                 )

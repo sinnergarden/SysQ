@@ -259,6 +259,19 @@ def test_builder_projects_income_from_explicit_inherited_history_scope(
     } == {"income-history-source"}
 
 
+def test_builder_uses_scope_bound_symbol_without_ts_code_field_link(
+    tmp_path: Path,
+) -> None:
+    _, receipt = _trusted_terminal(
+        tmp_path,
+        linked_fields=tuple(field for field in FIELDS if field != "ts_code"),
+    )
+
+    result = _build(tmp_path, receipt)
+
+    assert result["status"] == "published"
+
+
 def test_builder_rejects_untrusted_terminal(tmp_path: Path) -> None:
     _, receipt = _trusted_terminal(tmp_path)
     payload = json.loads(receipt.read_text(encoding="utf-8"))
