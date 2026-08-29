@@ -510,12 +510,22 @@ def _expected_qlib_value(raw_field: str, value):
     return expected
 
 
-def _historical_mutation_readback(adapter, store, changed: list[dict]) -> dict:
+def _historical_mutation_readback(
+    adapter,
+    store,
+    changed: list[dict],
+    *,
+    industry_map: dict[str, int] | None = None,
+) -> dict:
     """Verify each exact historical mutation at its own date."""
 
     mismatches: list[dict[str, object]] = []
     verified = 0
     verified_fields: set[str] = set()
+    if industry_map is None and any(
+        "industry" in item.get("fields", []) for item in changed
+    ):
+        industry_map = adapter._load_industry_map(store.get_stock_list())
     for symbol in sorted({str(item["symbol"]) for item in changed}):
         items = [item for item in changed if str(item["symbol"]) == symbol]
         raw_fields = sorted({
@@ -550,17 +560,28 @@ def _historical_mutation_readback(adapter, store, changed: list[dict]) -> dict:
             continue
         qlib_dates = _target_date_values(qlib_rows[date_column])
         canonical_dates = _target_date_values(canonical["trade_date"])
+        canonical_by_date = canonical.copy()
+        canonical_by_date["_qsys_readback_date"] = canonical_dates.to_numpy()
+        canonical_by_date = (
+            canonical_by_date
+            .drop_duplicates("_qsys_readback_date", keep="last")
+            .set_index("_qsys_readback_date")
+        )
+        qlib_symbol_mask = qlib_rows[symbol_column].astype(str) == symbol
+        qlib_by_date = qlib_rows.loc[qlib_symbol_mask].copy()
+        qlib_by_date["_qsys_readback_date"] = qlib_dates.loc[qlib_symbol_mask].to_numpy()
+        qlib_by_date = (
+            qlib_by_date
+            .drop_duplicates("_qsys_readback_date", keep="last")
+            .set_index("_qsys_readback_date")
+        )
         for item in items:
             mutation_date = str(item["date_start"])
-            raw_rows = canonical.loc[canonical_dates == mutation_date]
-            q_rows = qlib_rows.loc[
-                (qlib_rows[symbol_column].astype(str) == symbol) & (qlib_dates == mutation_date)
-            ]
-            if raw_rows.empty or q_rows.empty:
+            if mutation_date not in canonical_by_date.index or mutation_date not in qlib_by_date.index:
                 mismatches.append({"symbol": symbol, "date": mutation_date, "field": "*", "reason": "readback_row_missing"})
                 continue
-            raw_row = raw_rows.iloc[-1]
-            qlib_row = q_rows.iloc[-1]
+            raw_row = canonical_by_date.loc[mutation_date]
+            qlib_row = qlib_by_date.loc[mutation_date]
             by_qlib: dict[str, str] = {}
             for raw_field in item.get("fields", []):
                 qlib_field = _CANONICAL_TO_QLIB_READBACK.get(raw_field)
@@ -574,8 +595,7 @@ def _historical_mutation_readback(adapter, store, changed: list[dict]) -> dict:
                     mismatches.append({"symbol": symbol, "date": mutation_date, "field": qlib_field, "reason": "readback_field_missing"})
                     continue
                 if raw_field == "industry":
-                    industry_map = adapter._load_industry_map(store.get_stock_list())
-                    expected = industry_map.get(str(raw_row[raw_field]).strip())
+                    expected = (industry_map or {}).get(str(raw_row[raw_field]).strip())
                     if expected is None:
                         mismatches.append({"symbol": symbol, "date": mutation_date, "field": qlib_field, "reason": "industry_mapping_missing"})
                         continue
@@ -835,16 +855,25 @@ def _refresh_and_verify_history_mutation_store(
     verified_value_count = 0
     mismatch_count = 0
     mismatch_samples: list[dict[str, object]] = []
+    industry_map: dict[str, int] | None = None
     for symbol in symbols:
         symbol_mutations: list[dict] = []
         for item in run_ids:
             symbol_mutations.extend(
                 audit_store.changed_mutations(item, symbol=symbol)
             )
+        if industry_map is None and any(
+            "industry" in item.get("fields", []) for item in symbol_mutations
+        ):
+            industry_map = adapter._load_industry_map(store.get_stock_list())
+        verification_kwargs = (
+            {"industry_map": industry_map} if industry_map is not None else {}
+        )
         verification = _historical_mutation_readback(
             adapter,
             store,
             symbol_mutations,
+            **verification_kwargs,
         )
         verified_fields.update(verification.get("verified_fields", []))
         verified_value_count += int(verification.get("verified_value_count", 0))

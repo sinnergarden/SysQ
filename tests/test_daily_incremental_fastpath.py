@@ -22,6 +22,7 @@ from scripts.ops.sync_csi800_daily import (
     _do_raw_fetch,
     _fetch_daily_industry_after_precheck,
     _fetch_audited_history_suspensions,
+    _historical_mutation_readback,
     _refresh_and_verify_changed_symbols,
     _refresh_and_verify_history_mutation_store,
     _verify_history_suspension_receipts,
@@ -1717,6 +1718,75 @@ def test_historical_mutation_readback_uses_mutation_date_not_target_date():
     assert result["status"] == "success"
     assert result["mode"] == "historical_mutation_fix"
     assert result["verified_value_count"] == 1
+
+
+def test_historical_mutation_readback_indexes_dates_and_loads_industry_map_once(monkeypatch):
+    dates = pd.date_range("2020-01-02", periods=250, freq="D")
+    canonical_dates = dates.strftime("%Y%m%d").tolist()
+    mutations = [
+        {
+            "symbol": "000001.SZ",
+            "date_start": date,
+            "date_end": date,
+            "fields": ["close", "industry"],
+            "mutation_type": "update",
+        }
+        for date in canonical_dates
+    ]
+
+    class Store:
+        def __init__(self):
+            self.stock_list_calls = 0
+
+        def load_daily_window(self, symbol, *, start_date, end_date, columns):
+            assert symbol == "000001.SZ"
+            return pd.DataFrame({
+                "trade_date": canonical_dates,
+                "close": [11.0] * len(dates),
+                "industry": ["Sector"] * len(dates),
+            })
+
+        def get_stock_list(self):
+            self.stock_list_calls += 1
+            return pd.DataFrame({"ts_code": ["000001.SZ"], "industry": ["Sector"]})
+
+    class Adapter:
+        def __init__(self):
+            self.industry_map_calls = 0
+
+        def _load_industry_map(self, _stock_list):
+            self.industry_map_calls += 1
+            return {"Sector": 7}
+
+        def get_features(self, symbols, fields, start_time=None, end_time=None):
+            index = pd.MultiIndex.from_arrays(
+                [dates, ["000001.SZ"] * len(dates)],
+                names=["datetime", "instrument"],
+            )
+            return pd.DataFrame(
+                {"$close": [11.0] * len(dates), "$industry": [7.0] * len(dates)},
+                index=index,
+            )
+
+    equality_calls = 0
+    original_eq = pd.Series.__eq__
+
+    def tracked_eq(series, other):
+        nonlocal equality_calls
+        if series.name == "instrument":
+            equality_calls += 1
+        return original_eq(series, other)
+
+    monkeypatch.setattr(pd.Series, "__eq__", tracked_eq)
+    store = Store()
+    adapter = Adapter()
+    result = _historical_mutation_readback(adapter, store, mutations)
+
+    assert result["status"] == "success"
+    assert result["verified_value_count"] == 500
+    assert equality_calls == 1
+    assert store.stock_list_calls == 1
+    assert adapter.industry_map_calls == 1
 
 
 def test_historical_mutation_store_reads_one_symbol_at_a_time(tmp_path):
