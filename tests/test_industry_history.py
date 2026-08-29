@@ -159,8 +159,12 @@ def test_canonical_merge_replaces_legacy_and_a_later_receipt_can_correct(configu
     assert target_mutation["fields"] == ["industry"]
 
 
-def test_history_stage_all_history_cutoff_and_crash_resume_multihop(configured_store) -> None:
+def test_history_stage_all_history_cutoff_and_crash_resume_multihop(
+    configured_store, monkeypatch,
+) -> None:
     store, root = configured_store
+    sleeps = []
+    monkeypatch.setattr("qsys.data.collector.time.sleep", sleeps.append)
     collector, calls = _collector(store, _response())
     audit = SourceAuditStore(root / "audit" / "audit.db")
     run_a = "industry-run-a"
@@ -175,6 +179,7 @@ def test_history_stage_all_history_cutoff_and_crash_resume_multihop(configured_s
         )
     audit.record_mutations = original_record
     assert calls == [{"ts_code": SYMBOL, "fields": "trade_date,ts_code,industry"}]
+    assert sleeps == [0.35]
     canonical = pd.read_feather(store.canonical_dir / f"{SYMBOL}.feather")
     assert canonical["industry"].tolist() == ["OldSector", "NewSector"]
 
@@ -190,6 +195,7 @@ def test_history_stage_all_history_cutoff_and_crash_resume_multihop(configured_s
     assert summary_b["excluded_before_rows"] == 1
     assert summary_b["excluded_future_rows"] == 1
     assert len(calls) == 1
+    assert sleeps == [0.35]
 
     proof_b = _proof(audit, root, run_b)
     run_c = "industry-run-c"
