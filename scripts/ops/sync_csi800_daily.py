@@ -36,6 +36,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from tqdm import tqdm
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
@@ -856,7 +857,12 @@ def _refresh_and_verify_history_mutation_store(
     mismatch_count = 0
     mismatch_samples: list[dict[str, object]] = []
     industry_map: dict[str, int] | None = None
-    for symbol in symbols:
+    for symbol in tqdm(
+        symbols,
+        desc="Qlib historical readback",
+        unit="symbol",
+        dynamic_ncols=True,
+    ):
         symbol_mutations: list[dict] = []
         for item in run_ids:
             symbol_mutations.extend(
