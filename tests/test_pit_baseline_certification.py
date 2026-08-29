@@ -81,6 +81,182 @@ def test_receipt_shards_must_cover_the_instrument_interval_without_gap() -> None
     ], scope) == []
 
 
+def test_inherited_raw_evidence_requires_exact_terminal_event_and_qlib_readback(
+    tmp_path: Path,
+) -> None:
+    data_root = tmp_path / "data"
+    audit_root = data_root / "audit"
+    database = _write(audit_root / "audit.db", b"sqlite-placeholder")
+    raw = _write(data_root / "raw/source.parquet", b"raw")
+    requested_scope = {
+        "date_start": "20200101", "date_end": "20200131",
+        "symbol_count": 1, "symbols": ["000001.SZ"],
+        "symbols_sha256": stable_scope_hash(["000001.SZ"]),
+    }
+    raw_receipt = {
+        "receipt_id": "raw-1", "run_id": "source-run", "source": "tushare",
+        "endpoint": "daily", "status": "success", "requested_scope": requested_scope,
+        "returned_rows": 1, "response_hash": "a" * 64,
+        "response_columns": ["ts_code", "trade_date", "close"],
+        "response_date_min": "20200101", "response_date_max": "20200131",
+        "payload_kind": "raw_supplier", "payload_path": "raw/source.parquet",
+        "payload_sha256": sha256_file(raw),
+    }
+    source_terminal = {
+        "schema_version": 1, "run_id": "source-run", "trust_state": "untrusted",
+        "terminal_gates": {name: False for name in pit_certification.REQUIRED_TERMINAL_GATES},
+        "fetch_receipts": [raw_receipt],
+        "field_receipt_links": [{
+            "run_id": "source-run", "dataset": "canonical_daily",
+            "field_name": "close", "receipt_id": "raw-1",
+        }],
+        "audit_journal": [],
+    }
+    source_path = _write(
+        audit_root / "source_runs/source-run/receipt.json",
+        json.dumps(source_terminal, sort_keys=True) + "\n",
+    )
+    readback = _write(
+        audit_root / "source_runs/trusted-run/qlib_readback.json", b"verified",
+    )
+    terminal = {
+        "schema_version": 1, "run_id": "trusted-run", "trust_state": "trusted",
+        "terminal_gates": {name: True for name in pit_certification.REQUIRED_TERMINAL_GATES},
+        "fetch_receipts": [], "field_receipt_links": [],
+        "audit_journal": [
+            {
+                "event_type": "history_scope_inherited",
+                "payload": {
+                    "source": "tushare", "scope_key": "tiny",
+                    "source_run_id": "source-run",
+                    "source_receipt_sha256": sha256_file(source_path),
+                    "receipt_ids": ["raw-1"],
+                    "range_start": "20200101", "range_end": "20200131",
+                    "symbol_count": 1,
+                    "symbols_sha256": stable_scope_hash(["000001.SZ"]),
+                    "canonical_semantic_contract": "bounded_canonical_values_v1",
+                    "canonical_semantic_fields": ["close"],
+                },
+            },
+            {
+                "event_type": "qlib_readback",
+                "payload": {
+                    "status": "success", "mismatch_count": 0,
+                    "verified_fields": ["$close"],
+                    "artifact_path": "audit/source_runs/trusted-run/qlib_readback.json",
+                    "artifact_sha256": sha256_file(readback),
+                },
+            },
+        ],
+    }
+    terminal_path = _write(
+        audit_root / "source_runs/trusted-run/receipt.json",
+        json.dumps(terminal, sort_keys=True) + "\n",
+    )
+    watermark = {
+        "run_id": "trusted-run", "source": "tushare", "field_name": "close",
+        "scope_key": "tiny", "range_start": "20200101", "trusted_through": "20200131",
+        "terminal_receipt_sha256": sha256_file(terminal_path),
+    }
+    link = source_terminal["field_receipt_links"][0]
+    receipt = {**raw_receipt, "payload_verified": True}
+    scope = {
+        "source": "tushare", "dataset": "canonical_daily", "endpoint": "daily",
+        "field": "close", "instrument": "000001.SZ",
+        "date_start": "20200101", "date_end": "20200131",
+    }
+
+    assert pit_certification._inherited_terminal_proof_valid(
+        audit_db=database, watermark=watermark, receipt=receipt, link=link,
+        scope=scope, consumed_instruments=frozenset({"000001.SZ"}),
+        terminal_cache={}, inherited_cache={}, required_dataset="canonical_daily",
+    )
+    readback.write_bytes(b"tampered")
+    assert not pit_certification._inherited_terminal_proof_valid(
+        audit_db=database, watermark=watermark, receipt=receipt, link=link,
+        scope=scope, consumed_instruments=frozenset({"000001.SZ"}),
+        terminal_cache={}, inherited_cache={}, required_dataset="canonical_daily",
+    )
+
+
+def test_terminal_proof_accepts_hashed_empty_supplier_response(tmp_path: Path) -> None:
+    audit_db = _write(tmp_path / "data/audit/audit.db", b"sqlite-placeholder")
+    symbols = ["000001.SZ"]
+    requested_scope = {
+        "date_start": "20200115", "date_end": "20200115",
+        "symbol_count": 1, "symbols": symbols,
+        "symbols_sha256": stable_scope_hash(symbols),
+    }
+    receipt = {
+        "receipt_id": "empty-1", "run_id": "trusted-run", "source": "tushare",
+        "endpoint": "top10_holders", "status": "empty",
+        "requested_scope": requested_scope, "returned_rows": 0,
+        "response_hash": "a" * 64, "response_columns": ["ann_date", "hold_ratio"],
+        "response_date_min": None, "response_date_max": None,
+        "payload_kind": "raw_supplier", "payload_path": None, "payload_sha256": None,
+    }
+    link = {
+        "run_id": "trusted-run", "dataset": "shareholder_top10",
+        "field_name": "hold_ratio", "receipt_id": "empty-1",
+    }
+    terminal = {
+        "schema_version": 1, "run_id": "trusted-run", "trust_state": "trusted",
+        "terminal_gates": {name: True for name in pit_certification.REQUIRED_TERMINAL_GATES},
+        "fetch_receipts": [receipt], "field_receipt_links": [link],
+    }
+    terminal_path = _write(
+        audit_db.parent / "source_runs/trusted-run/receipt.json",
+        json.dumps(terminal, sort_keys=True) + "\n",
+    )
+    watermark = {
+        "run_id": "trusted-run", "terminal_receipt_sha256": sha256_file(terminal_path),
+    }
+
+    assert pit_certification._terminal_proof_valid(
+        audit_db=audit_db, watermark=watermark, receipt=receipt, link=link,
+        scope_start="20200115", scope_end="20200115", consumed_instruments=symbols,
+    )
+    assert not pit_certification._terminal_proof_valid(
+        audit_db=audit_db, watermark=watermark,
+        receipt={**receipt, "returned_rows": 1}, link=link,
+        scope_start="20200115", scope_end="20200115", consumed_instruments=symbols,
+    )
+
+
+def test_projected_raw_receipts_use_their_declared_query_axis() -> None:
+    receipt = {
+        "endpoint": "daily", "status": "success", "returned_rows": 2,
+        "response_hash": "a" * 64, "response_columns": ["date", "value"],
+        "response_date_min": "20191231", "response_date_max": "20200201",
+        "payload_kind": "raw_supplier", "payload_verified": True,
+        "requested_scope": {"date_start": "20200101", "date_end": "20200131"},
+    }
+    assert not pit_certification._raw_supplier_receipt_valid(receipt)
+
+    industry = copy.deepcopy(receipt)
+    industry["endpoint"] = "bak_basic"
+    industry["requested_scope"].update({
+        "query_axis": "all_history", "availability_cutoff": "20200131",
+        "request_variant": "history_bak_basic_industry_v1",
+    })
+    assert pit_certification._raw_supplier_receipt_valid(industry)
+    industry["requested_scope"]["query_axis"] = "trade_date_market_snapshot"
+    assert not pit_certification._raw_supplier_receipt_valid(industry)
+
+    financial = copy.deepcopy(receipt)
+    financial["endpoint"] = "income"
+    financial["requested_scope"].update({
+        "query_axis": "announcement_date_query_axis",
+        "availability_cutoff": "20200131",
+        "request_variant": "financial_first_available_v1",
+    })
+    assert pit_certification._raw_supplier_receipt_valid(financial)
+    financial["endpoint"] = "fina_indicator"
+    assert not pit_certification._raw_supplier_receipt_valid(financial)
+    financial["requested_scope"]["query_axis"] = "report_period_query_axis"
+    assert pit_certification._raw_supplier_receipt_valid(financial)
+
+
 def _write(path: Path, value: str | bytes) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     if isinstance(value, bytes):
@@ -176,6 +352,8 @@ def _make_db(path: Path, *, evidence: bool = True, mutation: dict | None = None)
             "fetch_receipts": [{
                 "receipt_id": "receipt-1", "run_id": "evidence-1", "source": "tushare",
                 "endpoint": "daily", "status": "success", "requested_scope": requested_scope,
+                "returned_rows": 1, "response_hash": "a" * 64,
+                "response_columns": ["ts_code", "trade_date", "close"],
                 "response_date_min": "20200101", "response_date_max": "20200131",
                 "payload_kind": "raw_supplier", "payload_path": "raw.parquet",
                 "payload_sha256": sha256_file(payload),
@@ -1426,9 +1604,12 @@ def test_shareholder_terminal_proof_requires_announcement_aligned_request_scope(
             "run_id": run_id,
             "source": "tushare",
             "endpoint": endpoint,
-            "status": "success",
-            "requested_scope": requested_scope,
-            "response_date_min": "20200430",
+                "status": "success",
+                "requested_scope": requested_scope,
+                "returned_rows": 1,
+                "response_hash": "a" * 64,
+                "response_columns": ["ts_code", "ann_date", field_name],
+                "response_date_min": "20200430",
             "response_date_max": "20200430",
             "payload_kind": "raw_supplier",
             "payload_path": f"raw/{run_id}.parquet",
@@ -1887,4 +2068,21 @@ def test_real_shareholder_dependencies_remain_fail_closed() -> None:
         "SHAREHOLDER_REVISION_CAPABILITY_UNVERIFIED"
         in dependency.get("blocker_codes", [])
         for dependency in shareholder
+    )
+
+
+def test_real_financial_dependencies_use_receipt_evidence_not_static_blockers() -> None:
+    dependencies = yaml.safe_load(REAL_DEPENDENCIES.read_text(encoding="utf-8"))
+    financial = [
+        dependency
+        for feature in dependencies["features"]
+        for dependency in feature["dependencies"]
+        if dependency["endpoint"] == "fina_indicator"
+    ]
+
+    assert financial
+    assert all(
+        "FINANCIAL_FALLBACK_PROVENANCE_UNBOUND"
+        not in dependency.get("blocker_codes", [])
+        for dependency in financial
     )

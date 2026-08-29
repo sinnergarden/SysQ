@@ -18,8 +18,6 @@ features:
     - roe
     visibility: announcement_date_asof
     pit_status: evidence_required
-    blocker_codes:
-    - FINANCIAL_FALLBACK_PROVENANCE_UNBOUND
 - feature: $grossprofit_margin
   required: true
   dependencies:
@@ -30,8 +28,6 @@ features:
     - grossprofit_margin
     visibility: announcement_date_asof
     pit_status: evidence_required
-    blocker_codes:
-    - FINANCIAL_FALLBACK_PROVENANCE_UNBOUND
 - feature: $debt_to_assets
   required: true
   dependencies:
@@ -42,8 +38,6 @@ features:
     - debt_to_assets
     visibility: announcement_date_asof
     pit_status: evidence_required
-    blocker_codes:
-    - FINANCIAL_FALLBACK_PROVENANCE_UNBOUND
 - feature: $op_cashflow
   required: true
   dependencies:
@@ -109,8 +103,6 @@ features:
     - roe
     visibility: announcement_date_asof
     pit_status: evidence_required
-    blocker_codes:
-    - FINANCIAL_FALLBACK_PROVENANCE_UNBOUND
 - feature: grossprofit_margin_delta_252d
   required: true
   dependencies:
@@ -121,8 +113,6 @@ features:
     - grossprofit_margin
     visibility: announcement_date_asof
     pit_status: evidence_required
-    blocker_codes:
-    - FINANCIAL_FALLBACK_PROVENANCE_UNBOUND
 - feature: debt_to_assets_delta_252d
   required: true
   dependencies:
@@ -133,8 +123,6 @@ features:
     - debt_to_assets
     visibility: announcement_date_asof
     pit_status: evidence_required
-    blocker_codes:
-    - FINANCIAL_FALLBACK_PROVENANCE_UNBOUND
 - feature: op_cashflow_delta_252d
   required: true
   dependencies:
@@ -576,8 +564,6 @@ features:
     - roe
     visibility: announcement_date_asof
     pit_status: evidence_required
-    blocker_codes:
-    - FINANCIAL_FALLBACK_PROVENANCE_UNBOUND
 - feature: net_margin_delta_756d
   required: true
   dependencies:
@@ -738,8 +724,6 @@ features:
     - roe
     visibility: announcement_date_asof
     pit_status: evidence_required
-    blocker_codes:
-    - FINANCIAL_FALLBACK_PROVENANCE_UNBOUND
   - source: tushare
     dataset: canonical_daily
     endpoint: income

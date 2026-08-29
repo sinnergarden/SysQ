@@ -594,22 +594,19 @@ def _scope_rows(
     return rows, keys
 
 
-def _terminal_proof_valid(
-    *, audit_db: Path, watermark: Mapping[str, Any], receipt: Mapping[str, Any],
-    link: Mapping[str, Any],
-    scope_start: str, scope_end: str, consumed_instruments: Sequence[str],
-    terminal_cache: dict[str, Any] | None = None,
-) -> bool:
+def _trusted_terminal_index(
+    *, audit_db: Path, watermark: Mapping[str, Any], terminal_cache: dict[str, Any],
+) -> dict[str, Any] | None:
     run_id = str(watermark.get("run_id") or "")
     if (
         not run_id or run_id in {".", ".."}
         or not all(char.isalnum() or char in "_.-" for char in run_id)
     ):
-        return False
+        return None
     expected_terminal_sha = str(watermark.get("terminal_receipt_sha256") or "")
     if len(expected_terminal_sha) != 64:
-        return False
-    cache = terminal_cache if terminal_cache is not None else {}
+        return None
+    cache = terminal_cache
     cache_key = (run_id, expected_terminal_sha)
     terminal_index = cache.get(cache_key)
     if terminal_index is None:
@@ -619,12 +616,12 @@ def _terminal_proof_valid(
             _reject_symlink_components(terminal_path.absolute())
             resolved = terminal_path.resolve(strict=True)
             if audit_root != resolved and audit_root not in resolved.parents:
-                return False
+                return None
             if sha256_file(resolved) != expected_terminal_sha:
-                return False
+                return None
             terminal = json.loads(resolved.read_text(encoding="utf-8"))
         except (OSError, ValueError, json.JSONDecodeError, CertificationError):
-            return False
+            return None
         gates = terminal.get("terminal_gates")
         terminal_fetches = terminal.get("fetch_receipts")
         terminal_links = terminal.get("field_receipt_links")
@@ -637,8 +634,9 @@ def _terminal_proof_valid(
             or not isinstance(terminal_fetches, list)
             or not isinstance(terminal_links, list)
         ):
-            return False
+            return None
         terminal_index = {
+            "terminal": terminal,
             "fetches": {
                 str(row.get("receipt_id")): row
                 for row in terminal_fetches
@@ -656,6 +654,86 @@ def _terminal_proof_valid(
             },
         }
         cache[cache_key] = terminal_index
+    return terminal_index
+
+
+def _raw_supplier_receipt_valid(receipt: Mapping[str, Any]) -> bool:
+    """Accept either a verified payload or an immutable proof of an empty response."""
+
+    requested = receipt.get("requested_scope")
+    if receipt.get("payload_kind") != "raw_supplier" or not isinstance(requested, Mapping):
+        return False
+    try:
+        requested_start = _normal_date(requested["date_start"])
+        requested_end = _normal_date(requested["date_end"])
+    except (KeyError, CertificationError):
+        return False
+    if requested_start > requested_end:
+        return False
+    if receipt.get("status") == "empty":
+        return (
+            receipt.get("returned_rows") == 0
+            and receipt.get("payload_path") is None
+            and receipt.get("payload_sha256") is None
+            and receipt.get("response_date_min") is None
+            and receipt.get("response_date_max") is None
+            and len(str(receipt.get("response_hash") or "")) == 64
+            and isinstance(receipt.get("response_columns"), list)
+        )
+    if (
+        receipt.get("status") != "success"
+        or receipt.get("payload_verified") is not True
+        or type(receipt.get("returned_rows")) is not int
+        or receipt.get("returned_rows") <= 0
+        or len(str(receipt.get("response_hash") or "")) != 64
+        or not isinstance(receipt.get("response_columns"), list)
+    ):
+        return False
+    try:
+        response_start = _normal_date(receipt["response_date_min"])
+        response_end = _normal_date(receipt["response_date_max"])
+    except (KeyError, CertificationError):
+        return False
+    if response_start > response_end:
+        return False
+    request_variant = requested.get("request_variant")
+    query_axis = requested.get("query_axis")
+    if request_variant == "history_bak_basic_industry_v1":
+        return (
+            receipt.get("endpoint") == "bak_basic"
+            and query_axis == "all_history"
+            and requested.get("availability_cutoff") == requested_end
+        )
+    if request_variant == "financial_first_available_v1":
+        endpoint = receipt.get("endpoint")
+        expected_axis = (
+            "report_period_query_axis"
+            if endpoint == "fina_indicator" else "announcement_date_query_axis"
+        )
+        return (
+            endpoint in {"income", "balancesheet", "cashflow", "fina_indicator"}
+            and query_axis in {expected_axis, "exact_announcement_date_query_axis"}
+            and requested.get("availability_cutoff") == requested_end
+            and (
+                query_axis != "exact_announcement_date_query_axis"
+                or requested_start == requested_end
+            )
+        )
+    return requested_start <= response_start <= response_end <= requested_end
+
+
+def _terminal_proof_valid(
+    *, audit_db: Path, watermark: Mapping[str, Any], receipt: Mapping[str, Any],
+    link: Mapping[str, Any],
+    scope_start: str, scope_end: str, consumed_instruments: Sequence[str],
+    terminal_cache: dict[str, Any] | None = None,
+) -> bool:
+    cache = terminal_cache if terminal_cache is not None else {}
+    terminal_index = _trusted_terminal_index(
+        audit_db=audit_db, watermark=watermark, terminal_cache=cache,
+    )
+    if terminal_index is None:
+        return False
     embedded = terminal_index["fetches"].get(str(receipt.get("receipt_id") or ""))
     if embedded is None:
         return False
@@ -671,17 +749,15 @@ def _terminal_proof_valid(
         return False
     for name in (
         "run_id", "source", "endpoint", "status", "payload_kind", "payload_path",
-        "payload_sha256", "response_date_min", "response_date_max",
+        "payload_sha256", "returned_rows", "response_hash", "response_columns",
+        "response_date_min", "response_date_max",
     ):
         if embedded.get(name) != receipt.get(name):
             return False
     requested = receipt.get("requested_scope")
     if embedded.get("requested_scope") != requested or not isinstance(requested, dict):
         return False
-    if receipt.get("payload_kind") != "raw_supplier":
-        return False
-    status = receipt.get("status")
-    if status != "success" or receipt.get("payload_verified") is not True:
+    if not _raw_supplier_receipt_valid(receipt):
         return False
     try:
         requested_start = _normal_date(requested["date_start"])
@@ -689,13 +765,6 @@ def _terminal_proof_valid(
     except (KeyError, CertificationError):
         return False
     if requested_start > requested_end:
-        return False
-    try:
-        response_start = _normal_date(receipt["response_date_min"])
-        response_end = _normal_date(receipt["response_date_max"])
-    except (KeyError, CertificationError):
-        return False
-    if not requested_start <= response_start <= response_end <= requested_end:
         return False
     expected_instruments = sorted({str(value).strip() for value in consumed_instruments if str(value).strip()})
     symbols = requested.get("symbols")
@@ -711,6 +780,242 @@ def _terminal_proof_valid(
         and requested.get("symbol_count") == len(requested_symbols)
         and requested.get("symbols_sha256") == stable_scope_hash(requested_symbols)
     )
+
+
+def _source_receipt_index(
+    *, audit_db: Path, run_id: str, receipt_sha256: str,
+    source_cache: dict[tuple[str, str], Any],
+) -> dict[str, Any] | None:
+    cache_key = (run_id, receipt_sha256)
+    if cache_key in source_cache:
+        return source_cache[cache_key]
+    if (
+        not run_id or run_id in {".", ".."}
+        or not all(char.isalnum() or char in "_.-" for char in run_id)
+        or len(receipt_sha256) != 64
+    ):
+        source_cache[cache_key] = None
+        return None
+    audit_root = audit_db.resolve().parent
+    path = audit_root / "source_runs" / run_id / "receipt.json"
+    try:
+        _reject_symlink_components(path.absolute())
+        resolved = path.resolve(strict=True)
+        if audit_root != resolved and audit_root not in resolved.parents:
+            raise CertificationError("source receipt escapes audit root")
+        if sha256_file(resolved) != receipt_sha256:
+            raise CertificationError("source receipt sha256 mismatch")
+        value = json.loads(resolved.read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError, CertificationError):
+        source_cache[cache_key] = None
+        return None
+    fetches = value.get("fetch_receipts")
+    links = value.get("field_receipt_links")
+    if (
+        value.get("schema_version") != 1 or value.get("run_id") != run_id
+        or not isinstance(fetches, list) or not isinstance(links, list)
+    ):
+        source_cache[cache_key] = None
+        return None
+    result = {
+        "receipt": value,
+        "fetches": {
+            str(row.get("receipt_id")): row
+            for row in fetches
+            if isinstance(row, Mapping) and row.get("receipt_id")
+        },
+        "links": {
+            (
+                str(row.get("run_id") or ""), str(row.get("dataset") or ""),
+                normalize_field(row.get("field_name")),
+                str(row.get("receipt_id") or ""),
+            )
+            for row in links
+            if isinstance(row, Mapping)
+        },
+    }
+    source_cache[cache_key] = result
+    return result
+
+
+def _verified_terminal_readback_fields(
+    *, audit_db: Path, terminal: Mapping[str, Any],
+) -> frozenset[str] | None:
+    readbacks = [
+        event.get("payload")
+        for event in terminal.get("audit_journal") or []
+        if isinstance(event, Mapping)
+        and event.get("event_type") == "qlib_readback"
+        and isinstance(event.get("payload"), Mapping)
+    ]
+    if not readbacks:
+        return None
+    readback = readbacks[-1]
+    if readback.get("status") != "success" or int(readback.get("mismatch_count", -1)) != 0:
+        return None
+    artifact_path = readback.get("artifact_path")
+    artifact_sha = str(readback.get("artifact_sha256") or "")
+    data_root = audit_db.resolve().parent.parent
+    try:
+        resolved = (data_root / str(artifact_path)).resolve(strict=True)
+        if data_root != resolved and data_root not in resolved.parents:
+            return None
+        if len(artifact_sha) != 64 or sha256_file(resolved) != artifact_sha:
+            return None
+    except (OSError, ValueError):
+        return None
+    fields = frozenset(
+        field for field in map(normalize_field, readback.get("verified_fields") or [])
+        if field is not None
+    )
+    return fields or None
+
+
+def _inherited_terminal_proof_valid(
+    *, audit_db: Path, watermark: Mapping[str, Any], receipt: Mapping[str, Any],
+    link: Mapping[str, Any], scope: Mapping[str, Any],
+    consumed_instruments: Sequence[str], terminal_cache: dict[str, Any],
+    inherited_cache: dict[Any, Any], required_dataset: str,
+) -> bool:
+    """Validate raw evidence explicitly inherited by a later trusted terminal."""
+
+    terminal_index = _trusted_terminal_index(
+        audit_db=audit_db, watermark=watermark, terminal_cache=terminal_cache,
+    )
+    if terminal_index is None:
+        return False
+    terminal = terminal_index["terminal"]
+    terminal_key = (
+        str(terminal.get("run_id") or ""),
+        str(watermark.get("terminal_receipt_sha256") or ""),
+    )
+    inheritance_index = inherited_cache.get(terminal_key)
+    if inheritance_index is None:
+        source_cache = inherited_cache.setdefault("source_receipts", {})
+        by_receipt: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        invalid = False
+        for event in terminal.get("audit_journal") or []:
+            if not isinstance(event, Mapping) or event.get("event_type") != "history_scope_inherited":
+                continue
+            payload = event.get("payload")
+            if not isinstance(payload, Mapping):
+                invalid = True
+                break
+            source_run = str(payload.get("source_run_id") or "")
+            source_sha = str(payload.get("source_receipt_sha256") or "")
+            source_index = _source_receipt_index(
+                audit_db=audit_db, run_id=source_run, receipt_sha256=source_sha,
+                source_cache=source_cache,
+            )
+            receipt_ids = payload.get("receipt_ids")
+            semantic_fields = frozenset(
+                field for field in map(
+                    normalize_field, payload.get("canonical_semantic_fields") or []
+                ) if field is not None
+            )
+            if (
+                source_index is None or not isinstance(receipt_ids, list)
+                or not receipt_ids or len(receipt_ids) != len(set(receipt_ids))
+                or payload.get("canonical_semantic_contract") != "bounded_canonical_values_v1"
+                or not semantic_fields
+            ):
+                invalid = True
+                break
+            source_fetches = source_index["fetches"]
+            embedded = [source_fetches.get(str(receipt_id)) for receipt_id in receipt_ids]
+            if any(item is None for item in embedded):
+                invalid = True
+                break
+            symbols = sorted({
+                str(symbol)
+                for item in embedded if isinstance(item, Mapping)
+                for symbol in ((item.get("requested_scope") or {}).get("symbols") or [])
+            })
+            if (
+                int(payload.get("symbol_count", -1)) != len(symbols)
+                or payload.get("symbols_sha256") != stable_scope_hash(symbols)
+            ):
+                invalid = True
+                break
+            normalized = {
+                "payload": payload,
+                "semantic_fields": semantic_fields,
+                "symbols": frozenset(symbols),
+                "source_index": source_index,
+            }
+            for receipt_id in receipt_ids:
+                by_receipt.setdefault((source_run, str(receipt_id)), []).append(normalized)
+        if invalid:
+            by_receipt = {}
+        inheritance_index = {
+            "by_receipt": by_receipt,
+            "readback_fields": _verified_terminal_readback_fields(
+                audit_db=audit_db, terminal=terminal,
+            ),
+        }
+        inherited_cache[terminal_key] = inheritance_index
+    candidates = inheritance_index["by_receipt"].get(
+        (str(link.get("run_id") or ""), str(receipt.get("receipt_id") or "")), []
+    )
+    field = normalize_field(link.get("field_name"))
+    instrument = str(scope.get("instrument") or "")
+    expected_instruments = (
+        consumed_instruments if isinstance(consumed_instruments, frozenset)
+        else frozenset(
+            str(value).strip() for value in consumed_instruments if str(value).strip()
+        )
+    )
+    requested = receipt.get("requested_scope")
+    requested_symbols = (
+        frozenset(str(value) for value in requested.get("symbols") or [])
+        if isinstance(requested, Mapping) else frozenset()
+    )
+    if (
+        field is None or not instrument or instrument not in expected_instruments
+        or not requested_symbols or not requested_symbols.issubset(expected_instruments)
+        or not _raw_supplier_receipt_valid(receipt)
+    ):
+        return False
+    expected_link = (
+        str(link.get("run_id") or ""), str(link.get("dataset") or ""), field,
+        str(link.get("receipt_id") or ""),
+    )
+    for candidate in candidates:
+        payload = candidate["payload"]
+        source_index = candidate["source_index"]
+        embedded = source_index["fetches"].get(str(receipt.get("receipt_id") or ""))
+        if (
+            embedded is None or expected_link not in source_index["links"]
+            or instrument not in candidate["symbols"]
+            or not requested_symbols.issubset(candidate["symbols"])
+            or (
+                required_dataset != "income_sidecar"
+                and field not in candidate["semantic_fields"]
+            )
+            or payload.get("source") != receipt.get("source")
+            or payload.get("scope_key") != watermark.get("scope_key")
+            or not _range_covers(
+                payload.get("range_start"), payload.get("range_end"),
+                scope.get("date_start"), scope.get("date_end"),
+            )
+        ):
+            continue
+        if any(
+            embedded.get(name) != receipt.get(name)
+            for name in (
+                "run_id", "source", "endpoint", "status", "payload_kind",
+                "payload_path", "payload_sha256", "returned_rows", "response_hash",
+                "response_columns", "response_date_min", "response_date_max",
+            )
+        ) or embedded.get("requested_scope") != requested:
+            continue
+        if required_dataset == "canonical_daily" and (
+            inheritance_index["readback_fields"] is None
+            or field not in inheritance_index["readback_fields"]
+        ):
+            continue
+        return True
+    return False
 
 
 def _proofs_cover_scope(
@@ -765,13 +1070,17 @@ def _proofs_cover_scope(
 def _coverage_for_scopes(
     scopes: Sequence[Mapping[str, Any]], evidence: Mapping[str, Any], scope_key: str,
     *, audit_db: Path, consumed_instruments: Sequence[str],
+    income_sidecar_receipts: frozenset[tuple[str, str]] = frozenset(),
+    income_sidecar_identity: Mapping[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[int, list[dict[str, Any]]]]:
     receipts = {row["receipt_id"]: row for row in evidence["tables"]["fetch_receipts"]}
     links = evidence["tables"]["field_receipt_links"]
     watermarks = evidence["tables"]["trusted_watermarks"]
     scope_start = min(str(scope["date_start"]) for scope in scopes)
     scope_end = max(str(scope["date_end"]) for scope in scopes)
-    candidate_type = tuple[int, dict[str, Any], dict[str, Any], dict[str, Any]]
+    candidate_type = tuple[
+        int, dict[str, Any], dict[str, Any], dict[str, Any], str,
+    ]
     universal_candidates: dict[tuple[str, str, str, str], list[candidate_type]] = {}
     broad_candidates: dict[tuple[str, str, str, str], list[candidate_type]] = {}
     instrument_candidates: dict[
@@ -780,47 +1089,141 @@ def _coverage_for_scopes(
     requested_symbols_cache: dict[str, frozenset[str] | None] = {}
     consumed_instrument_set = frozenset(str(value) for value in consumed_instruments)
     terminal_cache: dict[str, Any] = {}
+    inherited_cache: dict[Any, Any] = {}
+    inherited_valid_cache: dict[tuple[str, str, str, str, str, str], bool] = {}
+    watermark_index: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+    for watermark in watermarks:
+        field = normalize_field(watermark.get("field_name"))
+        if field is not None:
+            watermark_index.setdefault(
+                (str(watermark.get("source")), field, str(watermark.get("scope_key"))), []
+            ).append(watermark)
+    income_terminal_watermarks = [
+        watermark for watermark in watermarks
+        if income_sidecar_identity
+        and str(watermark.get("run_id") or "")
+        == str(income_sidecar_identity.get("source_run_id") or "")
+        and str(watermark.get("terminal_receipt_sha256") or "")
+        == str(income_sidecar_identity.get("terminal_receipt_sha256") or "")
+        and str(watermark.get("scope_key") or "") == scope_key
+        and _range_covers(
+            watermark.get("range_start"), watermark.get("trusted_through"),
+            income_sidecar_identity.get("range_start"),
+            income_sidecar_identity.get("range_end"),
+        )
+    ]
+
+    def add_candidate(
+        key: tuple[str, str, str, str], candidate: candidate_type,
+        normalized_symbols: frozenset[str] | None,
+    ) -> None:
+        if normalized_symbols is None or consumed_instrument_set.issubset(normalized_symbols):
+            universal_candidates.setdefault(key, []).append(candidate)
+        elif len(normalized_symbols) <= 16:
+            for instrument in normalized_symbols:
+                instrument_candidates.setdefault((key, instrument), []).append(candidate)
+        else:
+            broad_candidates.setdefault(key, []).append(candidate)
+
     for order, link in enumerate(links):
         receipt = receipts.get(link["receipt_id"])
         if receipt is None:
             continue
         field = normalize_field(link["field_name"])
-        watermark = next((
+        direct_watermark = next((
             row for row in watermarks
             if row["run_id"] == link["run_id"] and row["source"] == receipt["source"]
             and normalize_field(row["field_name"]) == field and row["scope_key"] == scope_key
         ), None)
-        if watermark is not None and _terminal_proof_valid(
-            audit_db=audit_db, watermark=watermark, receipt=receipt, link=link,
+        direct_valid = direct_watermark is not None and _terminal_proof_valid(
+            audit_db=audit_db, watermark=direct_watermark, receipt=receipt, link=link,
             scope_start=scope_start, scope_end=scope_end,
             consumed_instruments=consumed_instruments,
             terminal_cache=terminal_cache,
+        )
+        requested = receipt.get("requested_scope") or {}
+        symbols = requested.get("symbols")
+        normalized_symbols = (
+            None if symbols is None else frozenset(str(value) for value in symbols)
+        )
+        receipt_id = str(receipt.get("receipt_id") or "")
+        requested_symbols_cache[receipt_id] = normalized_symbols
+        actual_key = (
+            str(receipt["source"]), str(link["dataset"]),
+            str(receipt["endpoint"]), str(field),
+        )
+        manifest_income_receipt = (
+            str(link.get("run_id")), receipt_id
+        ) in income_sidecar_receipts
+        keys = [
+            actual_key
+        ] if actual_key[1] != "income_sidecar" or manifest_income_receipt else []
+        if (
+            str(link.get("dataset")) == "canonical_daily"
+            and str(receipt.get("endpoint")) == "income"
+            and manifest_income_receipt
         ):
-            key = (receipt["source"], link["dataset"], receipt["endpoint"], str(field))
-            requested = receipt.get("requested_scope") or {}
-            symbols = requested.get("symbols")
-            normalized_symbols = (
-                None if symbols is None
-                else frozenset(str(value) for value in symbols)
-            )
-            receipt_id = str(receipt.get("receipt_id") or "")
-            requested_symbols_cache[receipt_id] = normalized_symbols
-            candidate = (order, link, receipt, watermark)
-            if (
-                normalized_symbols is None
-                or consumed_instrument_set.issubset(normalized_symbols)
-            ):
-                universal_candidates.setdefault(key, []).append(candidate)
-            elif len(normalized_symbols) <= 16:
-                for instrument in normalized_symbols:
-                    instrument_candidates.setdefault((key, instrument), []).append(candidate)
-            else:
-                broad_candidates.setdefault(key, []).append(candidate)
+            keys.append((actual_key[0], "income_sidecar", actual_key[2], actual_key[3]))
+        if direct_valid:
+            for key in keys:
+                add_candidate(
+                    key, (order, link, receipt, direct_watermark, "direct"),
+                    normalized_symbols,
+                )
+            continue
+        field_inherited_watermarks = list(watermark_index.get(
+            (str(receipt.get("source")), str(field), scope_key), []
+        ))
+        for key in keys:
+            inherited_watermarks = list(field_inherited_watermarks)
+            if manifest_income_receipt and key[1] == "income_sidecar":
+                # The DB watermark key omits dataset, so a later shareholder ann_date
+                # can replace the income ann_date row.  The immutable sidecar manifest
+                # binds its fields and receipts as one artifact; use any exact backlink
+                # to that same certifying terminal for those manifest-listed receipts.
+                inherited_watermarks.extend(
+                    watermark for watermark in income_terminal_watermarks
+                    if watermark not in inherited_watermarks
+                )
+            for inherited_watermark in inherited_watermarks:
+                proof_key = (
+                    str(inherited_watermark.get("run_id")), str(link.get("run_id")),
+                    receipt_id, str(link.get("dataset")), str(field), key[1],
+                )
+                valid = inherited_valid_cache.get(proof_key)
+                if valid is None:
+                    try:
+                        probe_start = max(scope_start, _normal_date(requested["date_start"]))
+                        probe_end = min(scope_end, _normal_date(requested["date_end"]))
+                    except (KeyError, CertificationError):
+                        probe_start, probe_end = "1", "0"
+                    valid = (
+                        probe_start <= probe_end and bool(normalized_symbols)
+                        and _inherited_terminal_proof_valid(
+                            audit_db=audit_db, watermark=inherited_watermark,
+                            receipt=receipt, link=link,
+                            scope={
+                                "instrument": min(normalized_symbols) if normalized_symbols else "",
+                                "date_start": probe_start,
+                                "date_end": probe_end,
+                            },
+                            consumed_instruments=consumed_instrument_set,
+                            terminal_cache=terminal_cache, inherited_cache=inherited_cache,
+                            required_dataset=key[1],
+                        )
+                    )
+                    inherited_valid_cache[proof_key] = valid
+                if valid:
+                    add_candidate(
+                        key, (order, link, receipt, inherited_watermark, "inherited"),
+                        normalized_symbols,
+                    )
     rows: list[dict[str, Any]] = []
     proofs: dict[int, list[dict[str, Any]]] = {}
     universal_coverage_cache: dict[
         tuple[tuple[str, str, str, str], str, str], list[dict[str, Any]]
     ] = {}
+    instrument_candidate_keys = {index_key[0] for index_key in instrument_candidates}
     for scope_index, scope in enumerate(scopes):
         key = (scope["source"], scope["dataset"], scope["endpoint"], scope["field"])
         chosen = None
@@ -834,16 +1237,16 @@ def _coverage_for_scopes(
         cacheable = (
             bool(universal_candidates.get(key))
             and not broad_candidates.get(key)
-            and not any(index_key[0] == key for index_key in instrument_candidates)
+            and key not in instrument_candidate_keys
         )
         cache_key = (
             key, str(scope["date_start"]), str(scope["date_end"]),
         )
         covering = universal_coverage_cache.get(cache_key) if cacheable else None
         if covering is None:
-            for _order, link, receipt, watermark in candidates:
+            for _order, link, receipt, watermark, _proof_mode in candidates:
                 if (
-                    receipt.get("status") == "success"
+                    receipt.get("status") in {"success", "empty"}
                     and _range_covers(
                         watermark.get("range_start"), watermark.get("trusted_through"),
                         scope.get("date_start"), scope.get("date_end"),
@@ -1451,6 +1854,39 @@ def _validate_consumed_sidecars(
     return result
 
 
+def _income_sidecar_receipt_ids(
+    *, project: Path, consumed_sidecars: Mapping[str, Any],
+) -> frozenset[tuple[str, str]]:
+    income = consumed_sidecars.get("income")
+    if not isinstance(income, Mapping):
+        return frozenset()
+    manifest_spec = income.get("manifest")
+    if not isinstance(manifest_spec, Mapping):
+        raise CertificationError("validated income sidecar manifest identity missing")
+    manifest_path = _verify_identity(project, manifest_spec, "income coverage manifest")
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise CertificationError("income coverage manifest is invalid JSON") from exc
+    source_evidence = manifest.get("source_evidence")
+    rows = source_evidence.get("receipts") if isinstance(source_evidence, Mapping) else None
+    if not isinstance(rows, list) or not rows:
+        raise CertificationError("income coverage receipt identities missing")
+    identities = []
+    for row in rows:
+        if not isinstance(row, Mapping):
+            raise CertificationError("income coverage receipt identity is invalid")
+        run_id = str(row.get("evidence_run_id") or "")
+        receipt_id = str(row.get("receipt_id") or "")
+        if not run_id or not receipt_id:
+            raise CertificationError("income coverage receipt identity is incomplete")
+        identities.append((run_id, receipt_id))
+    result = frozenset(identities)
+    if len(result) != len(identities):
+        raise CertificationError("income coverage receipt identities are duplicated")
+    return result
+
+
 def _reject_symlink_components(path: Path) -> None:
     current = Path(path.anchor) if path.is_absolute() else Path()
     for part in path.parts[1:] if path.is_absolute() else path.parts:
@@ -1526,11 +1962,16 @@ def certify_pit_baseline(
         spans=spans,
         evidence=evidence,
     )
+    income_sidecar_receipts = _income_sidecar_receipt_ids(
+        project=project, consumed_sidecars=consumed_sidecars,
+    )
     scopes, dependency_features = _scope_rows(dependencies, spans)
     consumed_instruments = sorted({str(span["instrument"]) for span in spans})
     coverage, coverage_proofs = _coverage_for_scopes(
         scopes, evidence, str(request["scope_key"]), audit_db=Path(audit_db),
         consumed_instruments=consumed_instruments,
+        income_sidecar_receipts=income_sidecar_receipts,
+        income_sidecar_identity=consumed_sidecars.get("income"),
     )
     exceptions: list[dict[str, Any]] = []
     if not evidence_run_ids:
