@@ -24,6 +24,9 @@ stable
 - 从一个显式 trusted source run 离线 bootstrap immutable income PIT sidecar；
   该模式复核 terminal receipt、watermark backlink、field links 与 raw payload SHA，
   不调用供应商，也不会被 normal daily 隐式触发。
+- 从一个精确 receipt SHA 锚定的 trusted CSI1800 terminal 补充 audited shareholder
+  history；该 supporting mode 只生产 holdernumber/top10 evidence、canonical sidecar 与新的
+  terminal，不调用 market/Qlib child。
 - 盘前推理（signal → prediction → plan）
 - 盘后执行（simulated fills → ledger → MTM）
 - 通知（Telegram）
@@ -57,6 +60,9 @@ stable
 - `scripts/data_sync.py --build-income-sidecar-from-run-id ... --apply` — 仅供
   certification/bootstrap 明确调用的离线 supporting mode；不是新入口，normal daily
   不构建全量 sidecar。
+- `scripts/data_sync.py --repair-shareholder-history-from-trusted-run-id ... --apply` —
+  certification 前的显式 shareholder history supporting mode；必须同时提供 trusted base
+  receipt SHA、CSI1800 target date 与 history start。
 
 对齐 `docs/USE_CASES.md` §7。
 

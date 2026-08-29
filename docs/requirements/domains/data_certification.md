@@ -85,8 +85,10 @@ Qlib readback 和 terminal watermark 做交集验证，产出不可变 certifica
 
 该 entrypoint 必须只读，不得 import/call daily fetch、repair、research runner 或 production
 runner。daily evidence 仍由 `UC_DAILY_OPS` 的既有 entrypoint 生产。`scripts/data_sync.py`
-另有显式、与 normal sync 互斥的 offline shareholder snapshot bootstrap mode；它只从指定
-trusted terminal 的 verified raw payload 重建 immutable v2 snapshot，不联网，也不由 certifier 调度。
+另有显式、与 normal sync 互斥的 shareholder history supporting mode 与 offline snapshot
+bootstrap mode；前者从精确 SHA 锚定的 trusted base terminal 生产 shareholder evidence，后者
+只从指定 trusted terminal 的 verified raw payload 重建 immutable v2 snapshot。两者都不由
+certifier 调度。
 
 ### Key Artifacts
 
@@ -149,7 +151,8 @@ reviewer_agent
 - `qsys/ops/shareholder_sync.py`（仅 terminal-backed offline snapshot materializer）
 - `qsys/research/generators/lightgbm_single_label.py`
 - `qsys/research/matrix_job.py`
-- `scripts/data_sync.py`（仅显式 offline snapshot bootstrap mode）
+- `scripts/data_sync.py`（仅显式 shareholder history supporting mode 与 offline snapshot
+  bootstrap mode）
 - `configs/audit/csi1800_s180_baseline_v1_r1.yaml`
 - `configs/audit/feature_dependencies/v3a_plus_liquidity_financial_rc_v1.yaml`
 - `docs/requirements/`

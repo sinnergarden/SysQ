@@ -196,6 +196,120 @@ def _terminal_receipt_identity(row: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _income_evidence_receipt(
+    terminal: Mapping[str, Any],
+    *,
+    terminal_run_id: str,
+    terminal_receipt_path: Path,
+    data_root: Path,
+) -> tuple[str, str, list[dict[str, Any]], list[dict[str, Any]]]:
+    """Resolve direct or explicitly inherited income shards fail-closed."""
+
+    direct_fetches = [
+        dict(row) for row in terminal.get("fetch_receipts") or []
+        if isinstance(row, Mapping) and row.get("endpoint") == "income"
+    ]
+    if direct_fetches:
+        return (
+            terminal_run_id,
+            _sha256_file(terminal_receipt_path),
+            direct_fetches,
+            [
+                dict(row) for row in terminal.get("field_receipt_links") or []
+                if isinstance(row, Mapping)
+            ],
+        )
+
+    inherited = [
+        dict(event["payload"])
+        for event in terminal.get("audit_journal") or []
+        if (
+            isinstance(event, Mapping)
+            and event.get("event_type") == "history_scope_inherited"
+            and isinstance(event.get("payload"), Mapping)
+        )
+    ]
+    if not inherited:
+        raise IncomeSidecarError("terminal receipt contains no income shards")
+
+    source_identities = {
+        (
+            str(row.get("source_run_id") or ""),
+            str(row.get("source_receipt_sha256") or "").lower(),
+        )
+        for row in inherited
+    }
+    if len(source_identities) != 1:
+        raise IncomeSidecarError("inherited income lineage has multiple source terminals")
+    evidence_run_id, evidence_terminal_sha256 = next(iter(source_identities))
+    if not evidence_run_id or not _is_sha256(evidence_terminal_sha256):
+        raise IncomeSidecarError("inherited income source identity is invalid")
+    source_path = (
+        data_root / "audit" / "source_runs" / evidence_run_id / "receipt.json"
+    )
+    if (
+        source_path.is_symlink()
+        or not source_path.is_file()
+        or source_path.resolve().parent.name != evidence_run_id
+        or _sha256_file(source_path) != evidence_terminal_sha256
+    ):
+        raise IncomeSidecarError("inherited income source receipt sha256 mismatch")
+    try:
+        source_terminal = json.loads(source_path.read_bytes())
+    except json.JSONDecodeError as exc:
+        raise IncomeSidecarError("inherited income source receipt is invalid JSON") from exc
+    if (
+        not isinstance(source_terminal, dict)
+        or source_terminal.get("schema_version") != 1
+        or source_terminal.get("run_id") != evidence_run_id
+        or not isinstance(source_terminal.get("fetch_receipts"), list)
+        or not isinstance(source_terminal.get("field_receipt_links"), list)
+        or not isinstance(source_terminal.get("audit_journal"), list)
+    ):
+        raise IncomeSidecarError("inherited income source receipt is invalid")
+
+    authorized_ids: set[str] = set()
+    source_journal = source_terminal["audit_journal"]
+    for checkpoint in inherited:
+        receipt_ids = checkpoint.get("receipt_ids")
+        source_payload = {
+            key: value for key, value in checkpoint.items()
+            if key not in {"source_run_id", "source_receipt_sha256"}
+        }
+        anchored = any(
+            isinstance(event, Mapping)
+            and event.get("event_type") == "history_scope_completed"
+            and event.get("payload") == source_payload
+            for event in source_journal
+        )
+        if not anchored or not isinstance(receipt_ids, list) or not receipt_ids:
+            raise IncomeSidecarError("inherited income scope is not source-anchored")
+        authorized_ids.update(str(value) for value in receipt_ids)
+
+    source_fetch_by_id = {
+        str(row.get("receipt_id") or ""): dict(row)
+        for row in source_terminal["fetch_receipts"]
+        if isinstance(row, Mapping)
+    }
+    if any(receipt_id not in source_fetch_by_id for receipt_id in authorized_ids):
+        raise IncomeSidecarError("inherited income scope references a missing receipt")
+    income_fetches = [
+        source_fetch_by_id[receipt_id]
+        for receipt_id in sorted(authorized_ids)
+        if source_fetch_by_id[receipt_id].get("endpoint") == "income"
+    ]
+    if not income_fetches:
+        raise IncomeSidecarError("inherited terminal contains no authorized income shards")
+    links = [
+        dict(row) for row in source_terminal["field_receipt_links"]
+        if (
+            isinstance(row, Mapping)
+            and str(row.get("receipt_id") or "") in authorized_ids
+        )
+    ]
+    return evidence_run_id, evidence_terminal_sha256, income_fetches, links
+
+
 def _projection_totals(stats_rows: list[dict[str, Any]]) -> dict[str, int]:
     fields = (
         "raw_rows",
@@ -350,7 +464,12 @@ def materialize_audited_income_sidecar(
         raise IncomeSidecarError("income terminal receipt is not trusted with all gates true")
     fetches = terminal.get("fetch_receipts")
     links = terminal.get("field_receipt_links")
-    if not isinstance(fetches, list) or not isinstance(links, list):
+    journal = terminal.get("audit_journal")
+    if (
+        not isinstance(fetches, list)
+        or not isinstance(links, list)
+        or not isinstance(journal, list)
+    ):
         raise IncomeSidecarError("income terminal receipt evidence sections are invalid")
 
     db_path = data_root / "audit" / "audit.db"
@@ -381,14 +500,19 @@ def materialize_audited_income_sidecar(
                     f"income terminal watermark does not cover requested scope: {field}"
                 )
 
-        income_fetches = [
-            fetch for fetch in fetches
-            if isinstance(fetch, dict) and fetch.get("endpoint") == "income"
-        ]
-        if not income_fetches:
-            raise IncomeSidecarError("terminal receipt contains no income shards")
+        (
+            evidence_run_id,
+            evidence_terminal_sha256,
+            income_fetches,
+            evidence_links,
+        ) = _income_evidence_receipt(
+            terminal,
+            terminal_run_id=source_run_id,
+            terminal_receipt_path=receipt_path,
+            data_root=data_root,
+        )
         linked_fields: dict[str, set[str]] = {}
-        for link in links:
+        for link in evidence_links:
             if not isinstance(link, dict) or link.get("dataset") != "income_sidecar":
                 continue
             linked_fields.setdefault(str(link.get("receipt_id") or ""), set()).add(
@@ -402,7 +526,7 @@ def materialize_audited_income_sidecar(
         seen_symbols: set[str] = set()
         for fetch in income_fetches:
             if (
-                fetch.get("run_id") != source_run_id
+                fetch.get("run_id") != evidence_run_id
                 or fetch.get("source") != "tushare"
                 or fetch.get("contract_version") != "1"
                 or fetch.get("status") not in {"success", "empty"}
@@ -431,7 +555,7 @@ def materialize_audited_income_sidecar(
                 )
             db_row = connection.execute(
                 "SELECT * FROM fetch_receipts WHERE run_id=? AND receipt_id=?",
-                (source_run_id, receipt_id),
+                (evidence_run_id, receipt_id),
             ).fetchone()
             if db_row is None or _db_receipt_identity(db_row) != _terminal_receipt_identity(fetch):
                 raise IncomeSidecarError(
@@ -458,6 +582,8 @@ def materialize_audited_income_sidecar(
             receipt_lineage.append({
                 "symbol": symbol,
                 "receipt_id": receipt_id,
+                "evidence_run_id": evidence_run_id,
+                "evidence_terminal_receipt_sha256": evidence_terminal_sha256,
                 "status": fetch["status"],
                 "returned_rows": int(fetch["returned_rows"]),
                 "response_hash": fetch.get("response_hash"),
@@ -469,7 +595,8 @@ def materialize_audited_income_sidecar(
             })
             if not projected.empty:
                 projected = projected.copy()
-                projected["source_run_id"] = source_run_id
+                projected["source_run_id"] = evidence_run_id
+                projected["certifying_run_id"] = source_run_id
                 projected["source_receipt_id"] = receipt_id
                 projected["source_payload_sha256"] = str(
                     fetch.get("payload_sha256") or ""

@@ -759,6 +759,36 @@ def test_data_sync_shareholder_snapshot_bootstrap_is_explicit_offline_only(
     )
 
 
+def test_data_sync_shareholder_history_extension_bypasses_market_child() -> None:
+    writer_lock = object()
+    expected = {"status": "success", "run_id": "shareholder-run"}
+    with patch.object(
+        sys,
+        "argv",
+        [
+            "scripts/data_sync.py",
+            "--apply",
+            "--universe", "csi1800",
+            "--target-date", "2026-08-21",
+            "--shareholder-start-date", "2017-01-01",
+            "--repair-shareholder-history-from-trusted-run-id", "source-run",
+            "--trusted-base-receipt-sha256", DUMMY_RECEIPT_SHA,
+        ],
+    ), patch.object(
+        data_sync,
+        "_run_shareholder_only_repair",
+        return_value=expected,
+    ) as repair, patch.object(data_sync.subprocess, "run") as market_child:
+        data_sync._main_under_writer_lock(writer_lock)
+
+    repair.assert_called_once()
+    parsed_args, parsed_lock = repair.call_args.args
+    assert parsed_lock is writer_lock
+    assert parsed_args.repair_shareholder_history_from_trusted_run_id == "source-run"
+    assert parsed_args.trusted_base_receipt_sha256 == DUMMY_RECEIPT_SHA
+    market_child.assert_not_called()
+
+
 def test_csi1800_audit_uses_distinct_target_date_path(tmp_path: Path):
     path = _write_audit(
         tmp_path,
