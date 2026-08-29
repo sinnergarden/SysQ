@@ -889,6 +889,7 @@ features:
   dependencies:
   - source: tushare
     dataset: shareholder_holdernumber
+    evidence_date_floor: '20170101'
     endpoint: stk_holdernumber
     leaf_fields:
     - holder_num
@@ -902,6 +903,7 @@ features:
   dependencies:
   - source: tushare
     dataset: shareholder_holdernumber
+    evidence_date_floor: '20170101'
     endpoint: stk_holdernumber
     leaf_fields:
     - holder_num
@@ -915,6 +917,7 @@ features:
   dependencies:
   - source: tushare
     dataset: shareholder_holdernumber
+    evidence_date_floor: '20170101'
     endpoint: stk_holdernumber
     leaf_fields:
     - holder_num
@@ -928,6 +931,7 @@ features:
   dependencies:
   - source: tushare
     dataset: shareholder_top10
+    evidence_date_floor: '20170101'
     endpoint: top10_holders
     leaf_fields:
     - hold_ratio
@@ -941,6 +945,7 @@ features:
   dependencies:
   - source: tushare
     dataset: shareholder_holdernumber
+    evidence_date_floor: '20170101'
     endpoint: stk_holdernumber
     leaf_fields:
     - holder_num
@@ -951,6 +956,7 @@ features:
     - SHAREHOLDER_REVISION_CAPABILITY_UNVERIFIED
   - source: tushare
     dataset: shareholder_top10
+    evidence_date_floor: '20170101'
     endpoint: top10_holders
     leaf_fields:
     - hold_ratio
@@ -964,6 +970,7 @@ features:
   dependencies:
   - source: tushare
     dataset: shareholder_holdernumber
+    evidence_date_floor: '20170101'
     endpoint: stk_holdernumber
     leaf_fields:
     - holder_num
@@ -984,6 +991,7 @@ features:
   dependencies:
   - source: tushare
     dataset: shareholder_holdernumber
+    evidence_date_floor: '20170101'
     endpoint: stk_holdernumber
     leaf_fields:
     - holder_num
@@ -994,6 +1002,7 @@ features:
     - SHAREHOLDER_REVISION_CAPABILITY_UNVERIFIED
   - source: tushare
     dataset: shareholder_top10
+    evidence_date_floor: '20170101'
     endpoint: top10_holders
     leaf_fields:
     - hold_ratio
@@ -1014,6 +1023,7 @@ features:
   dependencies:
   - source: tushare
     dataset: shareholder_holdernumber
+    evidence_date_floor: '20170101'
     endpoint: stk_holdernumber
     leaf_fields:
     - holder_num
@@ -1027,6 +1037,7 @@ features:
   dependencies:
   - source: tushare
     dataset: shareholder_top10
+    evidence_date_floor: '20170101'
     endpoint: top10_holders
     leaf_fields:
     - hold_ratio
@@ -1040,6 +1051,7 @@ features:
   dependencies:
   - source: tushare
     dataset: shareholder_top10
+    evidence_date_floor: '20170101'
     endpoint: top10_holders
     leaf_fields:
     - hold_ratio

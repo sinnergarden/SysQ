@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import copy
 import hashlib
 import json
 from pathlib import Path
@@ -512,6 +513,23 @@ def test_consumed_sidecars_require_exact_request_config_signal_and_terminal_back
     assert validated["income"]["required_history_start"] == "20200101"
     assert validated["shareholder"]["terminal_receipt_sha256"] == terminal_sha
     assert validated["shareholder"]["symbol_count"] == 2
+
+    floored_dependencies = copy.deepcopy(dependencies)
+    for item in floored_dependencies["features"]:
+        for dependency in item["dependencies"]:
+            dependency["evidence_date_floor"] = "20200101"
+    floored = pit_certification._validate_consumed_sidecars(
+        project=project, request=request, dependencies=floored_dependencies,
+        lineage_context=context,
+        spans=[{
+            "instrument": "000001.SZ",
+            "date_start": "20190101",
+            "date_end": "20200131",
+        }],
+        evidence=evidence,
+    )
+    assert floored["income"]["range_start"] == "20200101"
+    assert floored["shareholder"]["range_start"] == "20200101"
 
     old_request = {"scope_key": "tiny"}
     with pytest.raises(CertificationError, match="must exactly match"):

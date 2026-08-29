@@ -1357,24 +1357,37 @@ def _validate_consumed_sidecars(
     symbols = sorted({str(span["instrument"]) for span in spans})
     consumed_start = min(_normal_date(span["date_start"]) for span in spans)
     consumed_end = max(_normal_date(span["date_end"]) for span in spans)
+    def dataset_start(names: set[str]) -> str:
+        starts = [
+            max(consumed_start, _normal_date(dependency["evidence_date_floor"]))
+            if dependency.get("evidence_date_floor") else consumed_start
+            for item in dependencies["features"]
+            for dependency in item["dependencies"]
+            if str(dependency.get("dataset") or "") in names
+        ]
+        return min(starts, default=consumed_start)
+
     common = {
         "project": project,
         "generator_params": lineage_context["generator_params"],
         "feature_lineage": lineage_context["feature_source_lineage"],
         "request_scope_key": str(request["scope_key"]),
         "consumed_symbols": symbols,
-        "consumed_start": consumed_start,
         "consumed_end": consumed_end,
         "evidence": evidence,
     }
     result: dict[str, Any] = {}
     if "income" in required:
         result["income"] = _validate_income_consumed_sidecar(
-            spec=declared["income"], **common,
+            spec=declared["income"],
+            consumed_start=dataset_start({"income_sidecar"}), **common,
         )
     if "shareholder" in required:
         result["shareholder"] = _validate_shareholder_consumed_sidecar(
-            spec=declared["shareholder"], **common,
+            spec=declared["shareholder"],
+            consumed_start=dataset_start({
+                "shareholder_holdernumber", "shareholder_top10",
+            }), **common,
         )
     return result
 
