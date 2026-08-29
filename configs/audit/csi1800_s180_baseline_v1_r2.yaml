@@ -48,7 +48,7 @@ consumed_sidecars:
     range_end: "20260821"
     symbol_count: 3131
     symbols_sha256: b594264308b7f1fb890cb1c6019b387994816ae7fc7f947ba50b5463a1806897
-    transform_contract: shareholder_announcement_asof_from_terminal_raw_v1
+    transform_contract: shareholder_exact_event_complete_top10_v2
 
 identities:
   research_config:

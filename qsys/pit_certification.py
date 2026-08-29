@@ -191,6 +191,24 @@ def validate_feature_dependencies(
     for name in ("runtime_max_lookback_trading_sessions", "input_warmup_calendar_days"):
         if not isinstance(lookback.get(name), int) or lookback[name] < 0:
             raise CertificationError(f"invalid lookback contract: {name}")
+    semantic_blockers = dependency.get("semantic_blockers", [])
+    if not isinstance(semantic_blockers, list):
+        raise CertificationError("feature dependency semantic_blockers must be a list")
+    for blocker in semantic_blockers:
+        if not isinstance(blocker, dict):
+            raise CertificationError("semantic blocker must be a mapping")
+        if not all(
+            isinstance(blocker.get(name), str) and blocker[name].strip()
+            for name in ("code", "required_contract", "reason")
+        ):
+            raise CertificationError("semantic blocker identity is incomplete")
+        endpoints = blocker.get("endpoints")
+        if (
+            not isinstance(endpoints, list)
+            or not endpoints
+            or any(not isinstance(value, str) or not value.strip() for value in endpoints)
+        ):
+            raise CertificationError("semantic blocker endpoints must be literals")
     return registry, dependency
 
 
@@ -1998,6 +2016,25 @@ def certify_pit_baseline(
                     str(code), "BLOCKING", [item["feature"]],
                     {**location, "pit_status": dependency["pit_status"]}, **location,
                 ))
+    for blocker in dependencies.get("semantic_blockers", []):
+        endpoints = set(blocker["endpoints"])
+        affected_features = sorted({
+            item["feature"]
+            for item in dependencies["features"]
+            if any(
+                dependency["endpoint"] in endpoints
+                for dependency in item["dependencies"]
+            )
+        })
+        if affected_features:
+            exceptions.append(_exception(
+                str(blocker["code"]), "BLOCKING", affected_features,
+                {
+                    "required_contract": blocker["required_contract"],
+                    "endpoints": sorted(endpoints),
+                    "reason": blocker["reason"],
+                },
+            ))
     missing_keys = {
         (row["source"], row["dataset"], row["endpoint"], row["field"])
         for row in coverage if row["status"] != "COVERED"

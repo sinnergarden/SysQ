@@ -120,6 +120,10 @@ certifier 调度。
 - `published_at` 未知必须为 null，`observed_at` 与 `ingested_at` 不得替代它；
 - required endpoint 的 empty/partial/failure、无法解释的 requested-symbol 缺口、null
   required field、canonical/Qlib mismatch 均 fail closed；
+- 财务认证的目标语义是 `financial_latest_known_actual_publication_v1`：首次披露公开后使用初值，
+  修订披露公开后才切换修订值。`financial_first_available_v1` 可以作为保守研究输入，但不能据此
+  声称完整 latest-known PIT；若修订有效日无法由独立 publication evidence 证明，或当前派生层
+  尚未按修订事件投影，必须产生 `FINANCIAL_LATEST_KNOWN_REVISION_CAPABILITY_UNVERIFIED` blocker；
 - same-key value revision 必须进入 canonical mutation 与 Qlib value readback，不能只看新增日；
 - watermark 只能在 fetch/raw payload、canonical commit、Qlib readback、readiness 和
   contiguous-range gates 全部通过后由唯一 terminal owner 推进；legacy/untrusted 永不推进；

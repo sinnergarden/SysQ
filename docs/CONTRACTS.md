@@ -187,12 +187,22 @@ docs/schema/       → 部分 artifact 的字段级 schema
   可用，否则计入 `revision_timeline_unproven_excluded`；indicator only-flag1 全部排除。raw payload
   完整保留 cutoff 后合法行，canonical 只投影 availability cutoff 内行。fina_indicator
   返回 100 行或更多按 supplier cap 视为可能截断并阻断。
+- `fina_indicator` 的百分数字段遵循
+  `tushare_fina_indicator_percent_points_to_ratio_v1`：Tushare 原始百分数按字段合同在进入
+  canonical 时无条件除以 100；`2.5%` 必须成为 `0.025`。单位不能按数值大小猜测，canonical
+  到 Qlib 只透传，也不得在 readback 预期值中重复同一转换。该合同进入 history checkpoint
+  identity，旧单位语义的 checkpoint 不可复用。
 - resume 优先复用 exact current-contract shard。若 parent 中存在 supplier request/base scope 完全
   等价、payload hash 可复核且新 selector 验证通过的 legacy financial shard，则离线克隆为新
   checkpoint receipt 并指向同一 immutable raw payload；存在但不兼容时 `REPAIR_REQUIRED`，parent
   根本无 shard 时才允许正常 fetch。各 endpoint 是独立 publication stream，canonical event 表在
   union availability 轴内逐 endpoint carry-forward，避免不同公告日互相擦除；但 endpoint 自身
   新报告的 NaN 是新事实并覆盖旧季度值，不能被 forward-fill 成旧值。
+- shareholder audited sidecar 使用 `shareholder_exact_event_complete_top10_v2`。原始事件键固定为
+  `(ts_code, ann_date, end_date)`；同公告日先选最新报告期，再判断值是否有效，因此最新报告期
+  为空时不得让更老报告期获得新 freshness。Top10 对名称做 NFKC、空白和破折号标准化；同一
+  标准化名称的比例冲突、标准化后不是恰好 10 名、或合计不在 `[0,100]`，均 fail closed，不能
+  把部分股东比例之和当成完整 Top10。
 
 **Terminal watermark invariant**:
 

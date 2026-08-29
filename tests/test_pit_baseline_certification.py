@@ -1234,6 +1234,36 @@ def test_zero_or_missing_evidence_produces_complete_blocked_report(
     assert "MUTATION_RUN_MISSING" in reasons
 
 
+def test_semantic_requirement_emits_blocking_certification_exception(
+    tiny_project: tuple[Path, Path, Path], tmp_path: Path,
+) -> None:
+    project, request, database = tiny_project
+    dependencies_path = project / "dependencies.yaml"
+    dependencies = yaml.safe_load(dependencies_path.read_text(encoding="utf-8"))
+    dependencies["semantic_blockers"] = [{
+        "code": "TEST_SEMANTIC_CAPABILITY_UNVERIFIED",
+        "required_contract": "test_latest_known_v1",
+        "endpoints": ["daily"],
+        "reason": "fixture intentionally lacks the required semantic capability",
+    }]
+    dependencies_path.write_text(
+        yaml.safe_dump(dependencies, sort_keys=False), encoding="utf-8"
+    )
+
+    result = certify_pit_baseline(
+        request_path=request, audit_db=database, output_root=tmp_path / "semantic",
+        evidence_run_ids=["evidence-1"], project_root=project,
+    )
+
+    assert result["status"] == "BLOCKED"
+    exceptions = pd.read_parquet(Path(result["output_dir"]) / "exceptions.parquet")
+    blocker = exceptions.loc[
+        exceptions["reason_code"].eq("TEST_SEMANTIC_CAPABILITY_UNVERIFIED")
+    ].iloc[0]
+    assert blocker["severity"] == "BLOCKING"
+    assert json.loads(blocker["affected_features_json"]) == ["ret_1d"]
+
+
 def test_tampered_supplier_payload_blocks_coverage(
     tiny_project: tuple[Path, Path, Path], tmp_path: Path,
 ) -> None:
@@ -2071,7 +2101,7 @@ def test_real_shareholder_dependencies_remain_fail_closed() -> None:
     )
 
 
-def test_real_financial_dependencies_use_receipt_evidence_not_static_blockers() -> None:
+def test_real_financial_dependencies_require_latest_known_revision_capability() -> None:
     dependencies = yaml.safe_load(REAL_DEPENDENCIES.read_text(encoding="utf-8"))
     financial = [
         dependency
@@ -2081,8 +2111,13 @@ def test_real_financial_dependencies_use_receipt_evidence_not_static_blockers() 
     ]
 
     assert financial
-    assert all(
-        "FINANCIAL_FALLBACK_PROVENANCE_UNBOUND"
-        not in dependency.get("blocker_codes", [])
-        for dependency in financial
-    )
+    assert dependencies["semantic_blockers"] == [{
+        "code": "FINANCIAL_LATEST_KNOWN_REVISION_CAPABILITY_UNVERIFIED",
+        "required_contract": "financial_latest_known_actual_publication_v1",
+        "endpoints": ["income", "balancesheet", "cashflow", "fina_indicator"],
+        "reason": (
+            "current first-available projection does not apply later public revisions, "
+            "and same-announcement fina_indicator revisions lack an independently "
+            "proven effective date"
+        ),
+    }]

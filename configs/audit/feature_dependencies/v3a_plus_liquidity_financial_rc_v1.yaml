@@ -7,6 +7,11 @@ lookback_contract:
   runtime_max_lookback_trading_sessions: 756
   input_warmup_calendar_days: 1461
   provenance: runtime_feature_builders_plus_explicit_conservative_input_warmup
+semantic_blockers:
+- code: FINANCIAL_LATEST_KNOWN_REVISION_CAPABILITY_UNVERIFIED
+  required_contract: financial_latest_known_actual_publication_v1
+  endpoints: [income, balancesheet, cashflow, fina_indicator]
+  reason: current first-available projection does not apply later public revisions, and same-announcement fina_indicator revisions lack an independently proven effective date
 features:
 - feature: $roe
   required: true
