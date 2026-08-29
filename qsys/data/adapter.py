@@ -475,6 +475,25 @@ class QlibAdapter:
             open_dates=open_dates,
         )
 
+        # The caller may intentionally request calendar padding beyond the
+        # frozen market-data terminal (for example predict_end + 30 days to
+        # resolve the next trading session).  Income is consumed only for rows
+        # that actually exist in the Qlib frame, so bind the sidecar coverage
+        # gate to that consumed terminal instead of an empty padded interval.
+        consumed_income_end = None
+        if "trade_date" in semantic_input.columns:
+            observed_end = pd.to_datetime(
+                semantic_input["trade_date"], errors="coerce"
+            ).max()
+            if pd.notna(observed_end):
+                consumed_income_end = observed_end.strftime("%Y-%m-%d")
+        if end_time is not None:
+            requested_end = str(end_time)[:10]
+            consumed_income_end = min(
+                requested_end,
+                consumed_income_end or requested_end,
+            )
+
         try:
             flags = self._semantic_feature_flags(derived_fields)
             if self.shareholder_holder_path is not None:
@@ -500,7 +519,7 @@ class QlibAdapter:
                         str(start_time)[:10] if start_time is not None else None
                     ),
                     "income_sidecar_required_end": (
-                        str(end_time)[:10] if end_time is not None else None
+                        consumed_income_end
                     ),
                     "income_sidecar_required_history_start": (
                         self.income_sidecar_required_history_start
