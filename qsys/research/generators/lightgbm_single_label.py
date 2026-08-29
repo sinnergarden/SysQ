@@ -433,6 +433,8 @@ class LightGBMSingleLabelGenerator:
                 "required_history_start": manifest["scope"][
                     "required_history_start"
                 ],
+                "symbol_count": int(manifest["scope"]["symbol_count"]),
+                "symbols_sha256": str(manifest["scope"]["symbols_sha256"]),
                 "transform_contract": manifest["contracts"]["transform"],
                 "financial_availability_contract": manifest["contracts"][
                     "financial_availability"

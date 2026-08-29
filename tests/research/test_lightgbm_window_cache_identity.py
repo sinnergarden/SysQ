@@ -333,6 +333,8 @@ def test_income_sidecar_manifest_identity_enters_lineage_cache_and_checkpoint(
         "income_sidecar_manifest_sha256"
     ]
     assert lineage["source_run_id"] == "run-income"
+    assert lineage["symbol_count"] == 1
+    assert lineage["symbols_sha256"]
     assert generator.checkpoint_input_artifacts == [
         {"name": "income_sidecar", "sha256": identity["income_sidecar_sha256"]},
         {
