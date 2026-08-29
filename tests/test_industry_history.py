@@ -16,6 +16,7 @@ from qsys.ops.industry_sync import (
     BAK_BASIC_ROW_LIMIT,
     fetch_audited_daily_industry,
     fetch_audited_history_industry,
+    UNCLASSIFIED_INDUSTRY,
     validate_history_industry_response,
 )
 
@@ -133,7 +134,13 @@ def test_history_validator_keeps_valid_outside_projection_and_rejects_semantic_g
     assert validate_history_industry_response(
         no_prior_state, symbol=SYMBOL, target_date=TARGET,
         required_dates={HISTORY_START},
-    )["reason"] == "canonical_coverage_missing"
+    ) is None
+    all_unclassified = frame.copy()
+    all_unclassified["industry"] = None
+    assert validate_history_industry_response(
+        all_unclassified, symbol=SYMBOL, target_date=TARGET,
+        required_dates={HISTORY_START},
+    )["reason"] == "required_history_unclassified"
 
 
 def test_history_stage_projects_latest_prior_industry_without_future_fill(
@@ -182,6 +189,30 @@ def test_history_stage_ignores_null_state_before_first_canonical_date(
     assert summary["status"] == "success"
     assert len(receipts) == 1
     assert len(calls) == 1
+
+
+def test_history_stage_marks_leading_unknown_without_future_fill(
+    configured_store, monkeypatch,
+) -> None:
+    store, root = configured_store
+    response = _response()
+    response.loc[response["trade_date"] == HISTORY_START, "industry"] = None
+    collector, calls = _collector(store, response)
+    monkeypatch.setattr("qsys.data.collector.time.sleep", lambda _seconds: None)
+    audit = SourceAuditStore(root / "audit" / "audit.db")
+
+    summary, receipts = fetch_audited_history_industry(
+        collector, [SYMBOL], TARGET, is_history_repair=True,
+        run_id="industry-leading-unknown", audit_store=audit, resume_proof=None,
+        scope_key="csi1800", universe="csi1800",
+    )
+
+    assert summary["status"] == "success"
+    assert summary["unclassified_row_count"] == 1
+    assert len(receipts) == 1
+    assert len(calls) == 1
+    canonical = pd.read_feather(store.canonical_dir / f"{SYMBOL}.feather")
+    assert canonical["industry"].tolist() == [UNCLASSIFIED_INDUSTRY, "NewSector"]
 
 
 def test_canonical_merge_replaces_legacy_and_a_later_receipt_can_correct(configured_store) -> None:

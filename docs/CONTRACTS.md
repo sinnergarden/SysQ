@@ -302,7 +302,8 @@ preserves the complete valid supplier payload, and atomically projects only
 Feather. Daily CSI1800 sync uses one `bak_basic(trade_date=T)` market snapshot. Qlib uses
 the per-row canonical value; current `stock_basic.industry` is only an explicit legacy
 fallback outside the certified path. A T classification is available after T close for
-T+1 decisions.
+T+1 decisions. Canonical dates before the first non-empty supplier classification for a
+symbol use the explicit 未分类 category; future classifications are never backfilled.
 
 **Invariants**:
 - feature 必须避免未来数据泄露。
