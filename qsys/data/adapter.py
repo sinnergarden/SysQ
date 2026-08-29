@@ -622,7 +622,7 @@ class QlibAdapter:
                 collapsed[col] = selected
         return collapsed
 
-    def _prepare_csvs(self, since_date=None, *, until_date=None, selected_symbols=None, output_dir=None, require_pit_industry=False):
+    def _prepare_csvs(self, since_date=None, *, until_date=None, selected_symbols=None, output_dir=None, require_pit_industry=False, pit_industry_until_date=None):
         """
         Prepare CSVs from Feather files.
         If ``since_date`` is provided, only include rows on/after that date.
@@ -859,6 +859,10 @@ class QlibAdapter:
                         if pit_dates is None:
                             raise RuntimeError(f"PIT industry date identity missing for {symbol}")
                         required_mask &= pit_dates <= pd.Timestamp(until_date)
+                    if pit_industry_until_date is not None:
+                        if pit_dates is None:
+                            raise RuntimeError(f"PIT industry date identity missing for {symbol}")
+                        required_mask &= pit_dates <= pd.Timestamp(pit_industry_until_date)
                     if require_pit_industry and (missing & required_mask).any():
                         raise RuntimeError(f"PIT industry coverage missing for {symbol}")
                     if missing.any():
@@ -1029,6 +1033,7 @@ class QlibAdapter:
         refresh_universes: list[str] | None = None,
         max_workers: int | None = None,
         require_pit_industry: bool = False,
+        pit_industry_until_date=None,
     ) -> dict:
         """Replace per-symbol qlib bins from canonical data using ``dump_fix``.
 
@@ -1044,7 +1049,9 @@ class QlibAdapter:
             return {"status": "skipped", "reason": "empty_symbol_list"}
 
         csv_dir, count = self._prepare_csvs(
-            selected_symbols=symbols, require_pit_industry=require_pit_industry
+            selected_symbols=symbols,
+            require_pit_industry=require_pit_industry,
+            pit_industry_until_date=pit_industry_until_date,
         )
         if count == 0:
             log.info("convert_fix_symbols: no CSV generated from selected symbols.")
