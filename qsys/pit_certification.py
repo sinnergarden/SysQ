@@ -772,11 +772,13 @@ def _coverage_for_scopes(
     scope_start = min(str(scope["date_start"]) for scope in scopes)
     scope_end = max(str(scope["date_end"]) for scope in scopes)
     candidate_type = tuple[int, dict[str, Any], dict[str, Any], dict[str, Any]]
+    universal_candidates: dict[tuple[str, str, str, str], list[candidate_type]] = {}
     broad_candidates: dict[tuple[str, str, str, str], list[candidate_type]] = {}
     instrument_candidates: dict[
         tuple[tuple[str, str, str, str], str], list[candidate_type]
     ] = {}
     requested_symbols_cache: dict[str, frozenset[str] | None] = {}
+    consumed_instrument_set = frozenset(str(value) for value in consumed_instruments)
     terminal_cache: dict[str, Any] = {}
     for order, link in enumerate(links):
         receipt = receipts.get(link["receipt_id"])
@@ -804,38 +806,59 @@ def _coverage_for_scopes(
             receipt_id = str(receipt.get("receipt_id") or "")
             requested_symbols_cache[receipt_id] = normalized_symbols
             candidate = (order, link, receipt, watermark)
-            if normalized_symbols is not None and len(normalized_symbols) <= 16:
+            if (
+                normalized_symbols is None
+                or consumed_instrument_set.issubset(normalized_symbols)
+            ):
+                universal_candidates.setdefault(key, []).append(candidate)
+            elif len(normalized_symbols) <= 16:
                 for instrument in normalized_symbols:
                     instrument_candidates.setdefault((key, instrument), []).append(candidate)
             else:
                 broad_candidates.setdefault(key, []).append(candidate)
     rows: list[dict[str, Any]] = []
     proofs: dict[int, list[dict[str, Any]]] = {}
+    universal_coverage_cache: dict[
+        tuple[tuple[str, str, str, str], str, str], list[dict[str, Any]]
+    ] = {}
     for scope_index, scope in enumerate(scopes):
         key = (scope["source"], scope["dataset"], scope["endpoint"], scope["field"])
         chosen = None
         valid_proofs: list[dict[str, Any]] = []
         candidates = sorted(
-            broad_candidates.get(key, [])
+            universal_candidates.get(key, [])
+            + broad_candidates.get(key, [])
             + instrument_candidates.get((key, str(scope["instrument"])), []),
             key=lambda item: item[0],
         )
-        for _order, link, receipt, watermark in candidates:
-            if (
-                receipt.get("status") == "success"
-                and _range_covers(
-                    watermark.get("range_start"), watermark.get("trusted_through"),
-                    scope.get("date_start"), scope.get("date_end"),
-                )
-                and watermark.get("terminal_receipt_sha256")
-            ):
-                valid_proofs.append(
-                    {"link": link, "receipt": receipt, "watermark": watermark}
-                )
-        covering = _proofs_cover_scope(
-            valid_proofs, scope,
-            requested_symbols_cache=requested_symbols_cache,
+        cacheable = (
+            bool(universal_candidates.get(key))
+            and not broad_candidates.get(key)
+            and not any(index_key[0] == key for index_key in instrument_candidates)
         )
+        cache_key = (
+            key, str(scope["date_start"]), str(scope["date_end"]),
+        )
+        covering = universal_coverage_cache.get(cache_key) if cacheable else None
+        if covering is None:
+            for _order, link, receipt, watermark in candidates:
+                if (
+                    receipt.get("status") == "success"
+                    and _range_covers(
+                        watermark.get("range_start"), watermark.get("trusted_through"),
+                        scope.get("date_start"), scope.get("date_end"),
+                    )
+                    and watermark.get("terminal_receipt_sha256")
+                ):
+                    valid_proofs.append(
+                        {"link": link, "receipt": receipt, "watermark": watermark}
+                    )
+            covering = _proofs_cover_scope(
+                valid_proofs, scope,
+                requested_symbols_cache=requested_symbols_cache,
+            )
+            if cacheable:
+                universal_coverage_cache[cache_key] = covering
         if covering:
             proofs[scope_index] = covering
             chosen = (covering[0]["link"], covering[0]["receipt"])
