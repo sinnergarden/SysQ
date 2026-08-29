@@ -714,7 +714,8 @@ def _terminal_proof_valid(
 
 
 def _proofs_cover_scope(
-    proofs: Sequence[Mapping[str, Any]], scope: Mapping[str, Any]
+    proofs: Sequence[Mapping[str, Any]], scope: Mapping[str, Any],
+    *, requested_symbols_cache: Mapping[str, frozenset[str] | None] | None = None,
 ) -> list[dict[str, Any]]:
     """Return the exact receipt shards whose requested intervals cover a scope."""
 
@@ -728,7 +729,16 @@ def _proofs_cover_scope(
         if not isinstance(requested, Mapping):
             continue
         symbols = requested.get("symbols")
-        if symbols is not None and instrument not in {str(value) for value in symbols}:
+        receipt_id = str(receipt.get("receipt_id") or "")
+        requested_symbols = (
+            requested_symbols_cache.get(receipt_id)
+            if requested_symbols_cache is not None
+            else None if symbols is None
+            else frozenset(str(value) for value in symbols)
+        )
+        if symbols is not None and (
+            requested_symbols is None or instrument not in requested_symbols
+        ):
             continue
         try:
             left = max(start, _normal_date(requested["date_start"]))
@@ -761,9 +771,14 @@ def _coverage_for_scopes(
     watermarks = evidence["tables"]["trusted_watermarks"]
     scope_start = min(str(scope["date_start"]) for scope in scopes)
     scope_end = max(str(scope["date_end"]) for scope in scopes)
-    candidates: dict[tuple[str, str, str, str], list[tuple[dict[str, Any], dict[str, Any], dict[str, Any]]]] = {}
+    candidate_type = tuple[int, dict[str, Any], dict[str, Any], dict[str, Any]]
+    broad_candidates: dict[tuple[str, str, str, str], list[candidate_type]] = {}
+    instrument_candidates: dict[
+        tuple[tuple[str, str, str, str], str], list[candidate_type]
+    ] = {}
+    requested_symbols_cache: dict[str, frozenset[str] | None] = {}
     terminal_cache: dict[str, Any] = {}
-    for link in links:
+    for order, link in enumerate(links):
         receipt = receipts.get(link["receipt_id"])
         if receipt is None:
             continue
@@ -780,14 +795,32 @@ def _coverage_for_scopes(
             terminal_cache=terminal_cache,
         ):
             key = (receipt["source"], link["dataset"], receipt["endpoint"], str(field))
-            candidates.setdefault(key, []).append((link, receipt, watermark))
+            requested = receipt.get("requested_scope") or {}
+            symbols = requested.get("symbols")
+            normalized_symbols = (
+                None if symbols is None
+                else frozenset(str(value) for value in symbols)
+            )
+            receipt_id = str(receipt.get("receipt_id") or "")
+            requested_symbols_cache[receipt_id] = normalized_symbols
+            candidate = (order, link, receipt, watermark)
+            if normalized_symbols is not None and len(normalized_symbols) <= 16:
+                for instrument in normalized_symbols:
+                    instrument_candidates.setdefault((key, instrument), []).append(candidate)
+            else:
+                broad_candidates.setdefault(key, []).append(candidate)
     rows: list[dict[str, Any]] = []
     proofs: dict[int, list[dict[str, Any]]] = {}
     for scope_index, scope in enumerate(scopes):
         key = (scope["source"], scope["dataset"], scope["endpoint"], scope["field"])
         chosen = None
         valid_proofs: list[dict[str, Any]] = []
-        for link, receipt, watermark in candidates.get(key, []):
+        candidates = sorted(
+            broad_candidates.get(key, [])
+            + instrument_candidates.get((key, str(scope["instrument"])), []),
+            key=lambda item: item[0],
+        )
+        for _order, link, receipt, watermark in candidates:
             if (
                 receipt.get("status") == "success"
                 and _range_covers(
@@ -799,7 +832,10 @@ def _coverage_for_scopes(
                 valid_proofs.append(
                     {"link": link, "receipt": receipt, "watermark": watermark}
                 )
-        covering = _proofs_cover_scope(valid_proofs, scope)
+        covering = _proofs_cover_scope(
+            valid_proofs, scope,
+            requested_symbols_cache=requested_symbols_cache,
+        )
         if covering:
             proofs[scope_index] = covering
             chosen = (covering[0]["link"], covering[0]["receipt"])

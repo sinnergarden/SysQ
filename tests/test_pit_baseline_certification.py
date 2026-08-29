@@ -49,19 +49,32 @@ REAL_REQUEST = yaml.safe_load(
 
 def test_receipt_shards_must_cover_the_instrument_interval_without_gap() -> None:
     def proof(left: str, right: str, symbols: list[str]) -> dict:
-        return {"receipt": {"requested_scope": {
-            "date_start": left, "date_end": right, "symbols": symbols,
-        }}}
+        return {"receipt": {
+            "receipt_id": f"{left}:{right}:{','.join(symbols)}",
+            "requested_scope": {
+                "date_start": left, "date_end": right, "symbols": symbols,
+            },
+        }}
 
     scope = {
         "instrument": "000001.SZ", "date_start": "20200101", "date_end": "20201231",
     }
-    covered = _proofs_cover_scope([
+    proofs = [
         proof("20200101", "20200630", ["000001.SZ"]),
         proof("20200630", "20201231", ["000001.SZ"]),
         proof("20200101", "20201231", ["000002.SZ"]),
-    ], scope)
+    ]
+    covered = _proofs_cover_scope(proofs, scope)
     assert len(covered) == 2
+    cache = {
+        item["receipt"]["receipt_id"]: frozenset(
+            item["receipt"]["requested_scope"]["symbols"]
+        )
+        for item in proofs
+    }
+    assert _proofs_cover_scope(
+        proofs, scope, requested_symbols_cache=cache,
+    ) == covered
     assert _proofs_cover_scope([
         proof("20200101", "20200629", ["000001.SZ"]),
         proof("20200701", "20201231", ["000001.SZ"]),
