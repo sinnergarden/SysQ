@@ -68,9 +68,15 @@ def validate_history_industry_response(
         return {"reason": "response_industry_missing"}
     if pd.DataFrame({"ts_code": symbols, "trade_date": dates}).duplicated().any():
         return {"reason": "response_duplicate_key"}
-    eligible = frame.loc[dates <= target_date].copy()
-    eligible_dates = set(_dates(eligible).tolist()) if not eligible.empty else set()
-    missing_dates = sorted(required_dates - eligible_dates)
+    eligible_dates = sorted(
+        date for date in dates.tolist()
+        if BAK_BASIC_START <= date <= target_date
+    )
+    first_available = eligible_dates[0] if eligible_dates else None
+    missing_dates = sorted(
+        date for date in required_dates
+        if first_available is None or date < first_available
+    )
     if missing_dates:
         return {"reason": "canonical_coverage_missing", "missing_count": len(missing_dates), "sample": missing_dates[:10]}
     return None
@@ -82,6 +88,38 @@ def _canonical_required_dates(store, symbol: str, target_date: str) -> set[str]:
         return set()
     dates = _dates(daily)
     return set(dates.loc[(dates >= PIT_INDUSTRY_FEATURE_START) & (dates <= target_date)].tolist())
+
+
+def _project_history_industry(
+    frame: pd.DataFrame,
+    *,
+    symbol: str,
+    target_date: str,
+    required_dates: set[str],
+) -> pd.DataFrame:
+    """Project the latest known industry state without using future rows."""
+
+    ordered_required = sorted(required_dates)
+    if not ordered_required:
+        return pd.DataFrame(columns=["ts_code", "trade_date", "industry"])
+    dates = _dates(frame)
+    eligible = frame.loc[
+        (dates >= BAK_BASIC_START) & (dates <= target_date),
+        ["trade_date", "industry"],
+    ].copy()
+    eligible["trade_date"] = dates.loc[eligible.index]
+    states = eligible.sort_values("trade_date").set_index("trade_date")["industry"]
+    timeline = states.reindex(
+        states.index.union(pd.Index(ordered_required))
+    ).sort_index().ffill()
+    projected = timeline.reindex(ordered_required)
+    if projected.isna().any():
+        raise ValueError("industry history has no state available at required date")
+    return pd.DataFrame({
+        "ts_code": symbol,
+        "trade_date": ordered_required,
+        "industry": projected.astype("string").tolist(),
+    })
 
 
 def fetch_audited_history_industry(
@@ -201,7 +239,12 @@ def fetch_audited_history_industry(
                 "reason": "no_consumed_canonical_rows",
             })
             continue
-        projection = frame.loc[(dates >= BAK_BASIC_START) & (dates <= target), ["ts_code", "trade_date", "industry"]].copy()
+        projection = _project_history_industry(
+            frame,
+            symbol=symbol,
+            target_date=target,
+            required_dates=required_dates,
+        )
         symbol_mutations = collector.store.merge_daily_industry(
             projection, symbol, source_run_id=run_id, source_receipt_id=str(receipt_id)
         )
