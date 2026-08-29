@@ -13,6 +13,7 @@ from qsys.research.generators.lightgbm_single_label import (
 from qsys.data._merge_helpers import (
     FINANCIAL_AVAILABILITY_CONTRACT,
     FINANCIAL_AVAILABILITY_RULE,
+    TUSHARE_FINA_INDICATOR_UNIT_CONTRACT,
 )
 from qsys.data.income_sidecar import (
     INCOME_SOURCE_MODE_AUDITED,
@@ -183,6 +184,18 @@ def test_cache_key_binds_source_universe_and_ordered_features(tmp_path: Path) ->
         tmp_path, universe="csi800"
     )._window_key("2020-01-01", "2021-01-01", ["f1", "f2"])
     assert key != base._window_key("2020-01-01", "2021-01-01", ["f2", "f1"])
+
+
+def test_cache_identity_binds_financial_processing_contracts(tmp_path: Path) -> None:
+    generator = _generator(tmp_path)
+    identity = generator._cache_identity("2020-01-01", "2021-01-01", ["f1"])
+
+    assert identity["schema_version"] == 5
+    assert identity["canonical_financial_contracts"] == {
+        "availability": FINANCIAL_AVAILABILITY_CONTRACT,
+        "fina_indicator_units": TUSHARE_FINA_INDICATOR_UNIT_CONTRACT,
+    }
+    assert "qsys.data._merge_helpers" in generator.checkpoint_code_dependencies
 
 
 def test_cache_key_binds_opt_in_shareholder_freshness_contract(tmp_path: Path) -> None:

@@ -774,14 +774,117 @@ def _main_under_writer_lock(writer_lock=None):
         default=None,
         help="Exact shareholder announcement-date history end (YYYYMMDD)",
     )
+    p.add_argument(
+        "--replay-financial-units-from-run-id",
+        default=None,
+        metavar="RUN_ID",
+        help=(
+            "Explicit offline canonical replay from one immutable failed source "
+            "run; supplier access is forbidden"
+        ),
+    )
+    p.add_argument("--financial-replay-source-receipt-sha256", default=None)
+    p.add_argument("--financial-replay-trusted-base-run-id", default=None)
+    p.add_argument("--financial-replay-registry-path", default=None)
+    p.add_argument("--financial-replay-range-start", default=None)
+    p.add_argument("--financial-replay-range-end", default=None)
+    p.add_argument("--financial-replay-output-root", default=None)
+    p.add_argument("--financial-replay-readback-mutation-run-id", default=None)
+    p.add_argument(
+        "--financial-replay-readback-mutation-receipt-sha256", default=None
+    )
     args = p.parse_args()
     explicit_modes = [
         args.build_income_sidecar_from_run_id,
         args.build_shareholder_sidecar_from_run_id,
         args.repair_shareholder_history_from_trusted_run_id,
+        args.replay_financial_units_from_run_id,
     ]
     if sum(value is not None for value in explicit_modes) > 1:
-        p.error("income/shareholder bootstrap and shareholder-only repair are mutually exclusive")
+        p.error("offline bootstrap/repair modes are mutually exclusive")
+    if args.replay_financial_units_from_run_id:
+        required = {
+            "--apply": args.apply,
+            "--financial-replay-source-receipt-sha256": (
+                args.financial_replay_source_receipt_sha256
+            ),
+            "--financial-replay-trusted-base-run-id": (
+                args.financial_replay_trusted_base_run_id
+            ),
+            "--trusted-base-receipt-sha256": args.trusted_base_receipt_sha256,
+            "--financial-replay-registry-path": args.financial_replay_registry_path,
+            "--financial-replay-range-start": args.financial_replay_range_start,
+            "--financial-replay-range-end": args.financial_replay_range_end,
+            "--financial-replay-output-root": args.financial_replay_output_root,
+        }
+        missing = [name for name, value in required.items() if not value]
+        if missing:
+            p.error("financial replay missing required arguments: " + ", ".join(missing))
+        conflicting = {
+            "--config": args.config,
+            "--universe": args.universe,
+            "--target-date": args.target_date,
+            "--repair-start-date": args.repair_start_date,
+            "--resume-from-run-id": args.resume_from_run_id,
+            "--force-fetch": args.force_fetch,
+        }
+        used_conflicts = [name for name, value in conflicting.items() if value]
+        if used_conflicts:
+            p.error(
+                "financial replay cannot run normal sync options: "
+                + ", ".join(used_conflicts)
+            )
+        if writer_lock is None:
+            raise RuntimeError("financial replay requires the data-root writer lock")
+        readback_mutation_values = (
+            args.financial_replay_readback_mutation_run_id,
+            args.financial_replay_readback_mutation_receipt_sha256,
+        )
+        if any(readback_mutation_values) and not all(readback_mutation_values):
+            p.error(
+                "financial replay readback mutation run id and receipt SHA-256 "
+                "must be provided together"
+            )
+        from qsys.config import cfg
+        from qsys.data.source_audit import resolve_under, validate_run_id
+        from qsys.ops.financial_replay import replay_audited_financial_canonical
+
+        data_root = Path(cfg.get_path("root")).resolve()
+        registry_path = Path(args.financial_replay_registry_path).expanduser()
+        if not registry_path.is_absolute():
+            registry_path = PROJ / registry_path
+        registry_path = registry_path.resolve()
+        if registry_path != PROJ and PROJ not in registry_path.parents:
+            p.error("financial replay registry must remain under the project root")
+        output_root = Path(args.financial_replay_output_root).expanduser()
+        if not output_root.is_absolute():
+            output_root = data_root / output_root
+        output_root = resolve_under(data_root, output_root)
+        result = replay_audited_financial_canonical(
+            data_root=data_root,
+            source_run_id=validate_run_id(args.replay_financial_units_from_run_id),
+            source_receipt_sha256=args.financial_replay_source_receipt_sha256,
+            trusted_base_run_id=validate_run_id(
+                args.financial_replay_trusted_base_run_id
+            ),
+            trusted_base_receipt_sha256=args.trusted_base_receipt_sha256,
+            registry_path=registry_path,
+            range_start=args.financial_replay_range_start,
+            range_end=args.financial_replay_range_end,
+            output_root=output_root,
+            readback_mutation_run_id=(
+                validate_run_id(args.financial_replay_readback_mutation_run_id)
+                if args.financial_replay_readback_mutation_run_id
+                else None
+            ),
+            readback_mutation_receipt_sha256=(
+                args.financial_replay_readback_mutation_receipt_sha256
+            ),
+            local_workers=args.history_local_workers or 8,
+            qlib_workers=args.qlib_max_workers or 8,
+        )
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return
     if args.repair_shareholder_history_from_trusted_run_id:
         required = {
             "--apply": args.apply,

@@ -42,9 +42,58 @@ from qsys.pit_datapack import (
 
 ROOT = Path(__file__).resolve().parents[1]
 REAL_DEPENDENCIES = ROOT / "configs/audit/feature_dependencies/v3a_plus_liquidity_financial_rc_v1.yaml"
+REAL_SOURCE_CONTRACT_PATH = ROOT / "docs/requirements/contracts/tushare_daily.yaml"
+REAL_R2_RESEARCH_CONFIG = (
+    ROOT
+    / "configs/research/60d/financial_rc_180d_rolling_5y_to_202607_v3_pit_csi1800_terminal_r2.yaml"
+)
+REAL_R3_RESEARCH_CONFIG = (
+    ROOT
+    / "configs/research/60d/financial_rc_180d_rolling_5y_to_202607_v3_pit_csi1800_terminal_r3.yaml"
+)
 REAL_REQUEST = yaml.safe_load(
     (ROOT / "configs/audit/csi1800_s180_baseline_v1_r1.yaml").read_text(encoding="utf-8")
 )
+
+
+def test_current_tushare_source_contract_digest_is_frozen() -> None:
+    assert sha256_file(REAL_SOURCE_CONTRACT_PATH) == (
+        "ca61a95d9226930b7da0f7a9379c60a3978a094f77cbff396f72601704caae08"
+    )
+
+
+def test_r3_research_semantics_differ_only_by_data_and_run_identity() -> None:
+    left = yaml.safe_load(REAL_R2_RESEARCH_CONFIG.read_text(encoding="utf-8"))
+    right = yaml.safe_load(REAL_R3_RESEARCH_CONFIG.read_text(encoding="utf-8"))
+    differences: set[str] = set()
+
+    def compare(first, second, path: str = "") -> None:
+        if isinstance(first, dict) and isinstance(second, dict):
+            assert first.keys() == second.keys()
+            for key in first:
+                compare(first[key], second[key], f"{path}/{key}")
+            return
+        if isinstance(first, list) and isinstance(second, list):
+            assert len(first) == len(second)
+            for index, (first_item, second_item) in enumerate(zip(first, second)):
+                compare(first_item, second_item, f"{path}/{index}")
+            return
+        if first != second:
+            differences.add(path)
+
+    compare(left, right)
+    assert differences == {
+        "/experiment_id",
+        "/source_manifest_hash",
+        "/signal/signal_id",
+        "/generators/0/generator_id",
+        "/generators/0/params/shareholder_holder_path",
+        "/generators/0/params/shareholder_holder_sha256",
+        "/generators/0/params/shareholder_top10_path",
+        "/generators/0/params/shareholder_top10_sha256",
+        "/generators/0/params/shareholder_manifest_path",
+        "/generators/0/params/shareholder_manifest_sha256",
+    }
 
 
 def test_receipt_shards_must_cover_the_instrument_interval_without_gap() -> None:

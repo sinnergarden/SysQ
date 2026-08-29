@@ -27,7 +27,6 @@ from typing import Any
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_PROJECT_ROOT))
 
-import duckdb
 import numpy as np
 import pandas as pd
 
@@ -289,101 +288,82 @@ def _run_mode(
     return payload
 
 
-def _quoted(name: str) -> str:
-    return '"' + name.replace('"', '""') + '"'
-
-
 def _compare_features(
     direct_path: Path,
     cache_path: Path,
     features: list[str],
     temp_dir: Path,
 ) -> dict[str, Any]:
-    connection = duckdb.connect()
-    connection.execute(f"SET temp_directory='{str(temp_dir).replace(chr(39), chr(39)*2)}'")
-    connection.execute("SET preserve_insertion_order=false")
-    direct_sql = str(direct_path).replace("'", "''")
-    cache_sql = str(cache_path).replace("'", "''")
-    connection.execute(
-        f"CREATE VIEW direct_frame AS SELECT * FROM read_parquet('{direct_sql}')"
-    )
-    connection.execute(
-        f"CREATE VIEW cache_frame AS SELECT * FROM read_parquet('{cache_sql}')"
-    )
-    direct_rows, direct_distinct = connection.execute(
-        "SELECT count(*), count(DISTINCT (instrument, trade_date)) FROM direct_frame"
-    ).fetchone()
-    cache_rows, cache_distinct = connection.execute(
-        "SELECT count(*), count(DISTINCT (instrument, trade_date)) FROM cache_frame"
-    ).fetchone()
-    direct_only = connection.execute(
-        "SELECT count(*) FROM direct_frame d ANTI JOIN cache_frame c "
-        "USING (instrument, trade_date)"
-    ).fetchone()[0]
-    cache_only = connection.execute(
-        "SELECT count(*) FROM cache_frame c ANTI JOIN direct_frame d "
-        "USING (instrument, trade_date)"
-    ).fetchone()[0]
-    if direct_rows != direct_distinct or cache_rows != cache_distinct:
+    del temp_dir  # Kept in the public helper signature for artifact compatibility.
+    keys = ["instrument", "trade_date"]
+    columns = [*keys, *features]
+    direct = pd.read_parquet(direct_path, columns=columns).sort_values(
+        keys, kind="mergesort"
+    ).reset_index(drop=True)
+    cache = pd.read_parquet(cache_path, columns=columns).sort_values(
+        keys, kind="mergesort"
+    ).reset_index(drop=True)
+    direct_rows = len(direct)
+    cache_rows = len(cache)
+    direct_duplicate_keys = int(direct.duplicated(keys).sum())
+    cache_duplicate_keys = int(cache.duplicated(keys).sum())
+    keys_equal = direct[keys].equals(cache[keys])
+    direct_only = 0
+    cache_only = 0
+    if not keys_equal:
+        direct_index = pd.MultiIndex.from_frame(direct[keys])
+        cache_index = pd.MultiIndex.from_frame(cache[keys])
+        direct_only = len(direct_index.difference(cache_index))
+        cache_only = len(cache_index.difference(direct_index))
+    if direct_duplicate_keys or cache_duplicate_keys:
         raise RuntimeError("Duplicate feature keys prevent one-to-one comparison")
-    if direct_only or cache_only:
+    if not keys_equal:
         return {
             "direct_rows": direct_rows,
             "cache_rows": cache_rows,
-            "direct_duplicate_keys": direct_rows - direct_distinct,
-            "cache_duplicate_keys": cache_rows - cache_distinct,
+            "direct_duplicate_keys": direct_duplicate_keys,
+            "cache_duplicate_keys": cache_duplicate_keys,
             "direct_only_keys": direct_only,
             "cache_only_keys": cache_only,
             "status": "fail",
             "feature_metrics": [],
         }
-
-    expressions: list[str] = []
-    aliases: list[tuple[str, str]] = []
-    for index, feature in enumerate(features):
-        column = _quoted(feature)
-        d = f"d.{column}"
-        c = f"c.{column}"
-        d_missing = f"({d} IS NULL OR isnan({d}))"
-        c_missing = f"({c} IS NULL OR isnan({c}))"
-        both_finite = f"(isfinite({d}) AND isfinite({c}))"
-        specs = {
-            "direct_missing": f"sum(CASE WHEN {d_missing} THEN 1 ELSE 0 END)",
-            "cache_missing": f"sum(CASE WHEN {c_missing} THEN 1 ELSE 0 END)",
-            "missing_mask_mismatch": (
-                f"sum(CASE WHEN {d_missing} <> {c_missing} THEN 1 ELSE 0 END)"
+    by_feature: dict[str, dict[str, Any]] = {}
+    for feature in features:
+        direct_values = pd.to_numeric(direct[feature], errors="coerce").to_numpy(
+            dtype=float
+        )
+        cache_values = pd.to_numeric(cache[feature], errors="coerce").to_numpy(
+            dtype=float
+        )
+        direct_missing = np.isnan(direct_values)
+        cache_missing = np.isnan(cache_values)
+        finite_pair = np.isfinite(direct_values) & np.isfinite(cache_values)
+        finite_diff = np.abs(
+            direct_values[finite_pair] - cache_values[finite_pair]
+        )
+        by_feature[feature] = {
+            "direct_missing": int(direct_missing.sum()),
+            "cache_missing": int(cache_missing.sum()),
+            "missing_mask_mismatch": int(
+                np.logical_xor(direct_missing, cache_missing).sum()
             ),
-            "finite_exact_mismatch": (
-                f"sum(CASE WHEN {both_finite} AND {d} <> {c} THEN 1 ELSE 0 END)"
+            "finite_exact_mismatch": int(
+                (direct_values[finite_pair] != cache_values[finite_pair]).sum()
             ),
-            "finite_tolerance_mismatch": (
-                f"sum(CASE WHEN {both_finite} AND abs({d} - {c}) > "
-                f"{ABS_TOLERANCE:.17g} THEN 1 ELSE 0 END)"
+            "finite_tolerance_mismatch": int(
+                (finite_diff > ABS_TOLERANCE).sum()
             ),
-            "nonfinite_mismatch": (
-                f"sum(CASE WHEN NOT {d_missing} AND NOT {c_missing} "
-                f"AND NOT ({both_finite}) AND {d} <> {c} THEN 1 ELSE 0 END)"
+            "nonfinite_mismatch": int(
+                (
+                    ~direct_missing
+                    & ~cache_missing
+                    & ~finite_pair
+                    & (direct_values != cache_values)
+                ).sum()
             ),
-            "max_abs_diff": (
-                f"max(CASE WHEN {both_finite} THEN abs({d} - {c}) ELSE NULL END)"
-            ),
+            "max_abs_diff": float(finite_diff.max(initial=0.0)),
         }
-        for metric, expression in specs.items():
-            alias = f"m{index}_{metric}"
-            expressions.append(f"{expression} AS {_quoted(alias)}")
-            aliases.append((feature, metric))
-    row = connection.execute(
-        "SELECT " + ",".join(expressions) + " FROM direct_frame d "
-        "JOIN cache_frame c USING (instrument, trade_date)"
-    ).fetchone()
-    connection.close()
-
-    by_feature: dict[str, dict[str, Any]] = {feature: {} for feature in features}
-    for (feature, metric), value in zip(aliases, row, strict=True):
-        if metric == "max_abs_diff":
-            by_feature[feature][metric] = 0.0 if value is None else float(value)
-        else:
-            by_feature[feature][metric] = int(value or 0)
     failing_features = [
         feature
         for feature, metrics in by_feature.items()
@@ -394,8 +374,8 @@ def _compare_features(
     return {
         "direct_rows": int(direct_rows),
         "cache_rows": int(cache_rows),
-        "direct_duplicate_keys": int(direct_rows - direct_distinct),
-        "cache_duplicate_keys": int(cache_rows - cache_distinct),
+        "direct_duplicate_keys": direct_duplicate_keys,
+        "cache_duplicate_keys": cache_duplicate_keys,
         "direct_only_keys": int(direct_only),
         "cache_only_keys": int(cache_only),
         "absolute_tolerance": ABS_TOLERANCE,
@@ -448,12 +428,28 @@ def _compare_predictions(left_path: Path, right_path: Path) -> dict[str, Any]:
         metrics["status"] = "fail"
         return metrics
     for column in ("score_model_raw", "score"):
-        diff = np.abs(
-            left[column].to_numpy(dtype=float) - right[column].to_numpy(dtype=float)
+        left_values = left[column].to_numpy(dtype=float)
+        right_values = right[column].to_numpy(dtype=float)
+        left_missing = np.isnan(left_values)
+        right_missing = np.isnan(right_values)
+        finite_pair = np.isfinite(left_values) & np.isfinite(right_values)
+        finite_diff = np.abs(left_values[finite_pair] - right_values[finite_pair])
+        metrics[f"{column}_missing_mask_mismatch"] = int(
+            np.logical_xor(left_missing, right_missing).sum()
         )
-        metrics[f"{column}_max_abs_diff"] = float(diff.max(initial=0.0))
+        metrics[f"{column}_nonfinite_mismatch"] = int(
+            (
+                ~left_missing
+                & ~right_missing
+                & ~finite_pair
+                & (left_values != right_values)
+            ).sum()
+        )
+        metrics[f"{column}_max_abs_diff"] = float(
+            finite_diff.max(initial=0.0)
+        )
         metrics[f"{column}_mismatch_gt_tolerance"] = int(
-            (diff > ABS_TOLERANCE).sum()
+            (finite_diff > ABS_TOLERANCE).sum()
         )
     left_orders = _ordered_instruments(left)
     right_orders = _ordered_instruments(right)
@@ -471,7 +467,11 @@ def _compare_predictions(left_path: Path, right_path: Path) -> dict[str, Any]:
             if all(
                 (
                     metrics["score_model_raw_mismatch_gt_tolerance"] == 0,
+                    metrics["score_model_raw_missing_mask_mismatch"] == 0,
+                    metrics["score_model_raw_nonfinite_mismatch"] == 0,
                     metrics["score_mismatch_gt_tolerance"] == 0,
+                    metrics["score_missing_mask_mismatch"] == 0,
+                    metrics["score_nonfinite_mismatch"] == 0,
                     full_order_exact == len(dates),
                     top5_exact == len(dates),
                 )
@@ -529,6 +529,15 @@ def _parse_args() -> argparse.Namespace:
             "all generation identity fields except verifier script hash match."
         ),
     )
+    parser.add_argument(
+        "--reference-config",
+        type=Path,
+        help=(
+            "Optional frozen prior research config whose official checkpoints "
+            "are compared read-only. Reference differences are diagnostic and "
+            "do not weaken the direct/cache equivalence gate."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -558,6 +567,14 @@ def main() -> int:
     if len(generators) != 1:
         raise ValueError(f"Expected one expanded generator, found {len(generators)}")
     gen_config = generators[0]
+    reference_config_path = (
+        args.reference_config.resolve()
+        if args.reference_config is not None
+        else None
+    )
+    reference_config_hash = (
+        _sha256(reference_config_path) if reference_config_path else None
+    )
     run_identity = hashlib.sha256(
         _canonical_json(
             {
@@ -565,6 +582,7 @@ def main() -> int:
                 "script_sha256": script_hash,
                 "positions": positions,
                 "source_manifest_hash": config.source_manifest_hash,
+                "reference_config_sha256": reference_config_hash,
             }
         )
     ).hexdigest()[:16]
@@ -575,12 +593,23 @@ def main() -> int:
         / f"{config.experiment_id}__p{'-'.join(map(str, positions))}__{run_identity}"
     )
     run_dir.mkdir(parents=True, exist_ok=True)
-    checkpoint_dir = (
-        Path("data/research/experiments")
-        / config.experiment_id
-        / "window_checkpoints"
-        / gen_config["generator_id"]
-    ).resolve()
+    reference_checkpoint_dir: Path | None = None
+    if reference_config_path is not None:
+        reference_config = RollingResearchConfig.from_file(reference_config_path)
+        reference_generators = expand_multi_label_generators(
+            reference_config.generators
+        )
+        if len(reference_generators) != 1:
+            raise ValueError(
+                "Expected one expanded reference generator, found "
+                f"{len(reference_generators)}"
+            )
+        reference_checkpoint_dir = (
+            Path("data/research/experiments")
+            / reference_config.experiment_id
+            / "window_checkpoints"
+            / reference_generators[0]["generator_id"]
+        ).resolve()
     print(
         f"cache-equivalence run={run_dir.name} windows={positions}/{len(windows)}",
         flush=True,
@@ -627,7 +656,7 @@ def main() -> int:
             comparison_columns.append("$close")
         auxiliary_columns = comparison_columns[len(consumed_features):]
         print(
-            f"[{position}/{len(windows)}][compare] streaming keyed comparison of "
+            f"[{position}/{len(windows)}][compare] keyed comparison of "
             f"{len(consumed_features)} consumed features"
             + (
                 f" + auxiliary {', '.join(auxiliary_columns)}"
@@ -647,10 +676,15 @@ def main() -> int:
         prediction_comparison = _compare_predictions(
             direct_predictions, cache_predictions
         )
-        official_path, official_identity = _official_checkpoint(
-            checkpoint_dir, window.window_id
-        )
-        official_comparison = _compare_predictions(cache_predictions, official_path)
+        reference_identity: dict[str, Any] | None = None
+        reference_comparison: dict[str, Any] | None = None
+        if reference_checkpoint_dir is not None:
+            reference_path, reference_identity = _official_checkpoint(
+                reference_checkpoint_dir, window.window_id
+            )
+            reference_comparison = _compare_predictions(
+                cache_predictions, reference_path
+            )
         tree_count_exact = (
             direct["training"]["tree_count"] == cache["training"]["tree_count"]
         )
@@ -661,7 +695,6 @@ def main() -> int:
             "pass"
             if feature_comparison["status"] == "pass"
             and prediction_comparison["status"] == "pass"
-            and official_comparison["status"] == "pass"
             and tree_count_exact
             and rank_ic_exact
             else "fail"
@@ -681,8 +714,9 @@ def main() -> int:
             "cache": cache,
             "feature_comparison": feature_comparison,
             "prediction_comparison": prediction_comparison,
-            "official_checkpoint": official_identity,
-            "official_checkpoint_comparison": official_comparison,
+            "reference_checkpoint": reference_identity,
+            "reference_checkpoint_comparison": reference_comparison,
+            "reference_difference_is_diagnostic_only": True,
             "tree_count_exact": tree_count_exact,
             "train_rank_ic_exact_at_logged_precision": rank_ic_exact,
         }
@@ -708,6 +742,21 @@ def main() -> int:
                     "full_daily_order_exact_dates"
                 ),
                 "top5_exact_dates": prediction_comparison.get("top5_exact_dates"),
+                "reference_status": (
+                    reference_comparison.get("status")
+                    if reference_comparison is not None
+                    else None
+                ),
+                "reference_raw_max_abs_diff": (
+                    reference_comparison.get("score_model_raw_max_abs_diff")
+                    if reference_comparison is not None
+                    else None
+                ),
+                "reference_top5_exact_dates": (
+                    reference_comparison.get("top5_exact_dates")
+                    if reference_comparison is not None
+                    else None
+                ),
                 "tree_count": direct["training"]["tree_count"],
                 "train_rank_ic": direct["training"]["rank_ic"],
                 "report_path": str(report_path.resolve()),
@@ -741,6 +790,10 @@ def main() -> int:
         "config_sha256": config_hash,
         "script_sha256": script_hash,
         "source_manifest_hash": config.source_manifest_hash,
+        "reference_config_path": (
+            str(reference_config_path) if reference_config_path else None
+        ),
+        "reference_config_sha256": reference_config_hash,
         "requested_positions": positions,
         "total_window_count": len(windows),
         "absolute_tolerance": ABS_TOLERANCE,

@@ -2196,7 +2196,7 @@ class TushareCollector:
     def _fetch_financials_batch(
         self, code_str, start_date, end_date, *, run_id=None, audit_store=None,
         resume_proof=None, scope_key="ad_hoc", universe="ad_hoc",
-        local_max_workers=1,
+        local_max_workers=1, local_reuse_only=False,
     ):
         start_date = _normalize_date(start_date)
         end_date = _normalize_date(end_date)
@@ -2251,6 +2251,7 @@ class TushareCollector:
                 resume_proof=resume_proof,
                 scope_key=scope_key,
                 universe=universe,
+                local_reuse_only=local_reuse_only,
                 prepared_reuse=plan,
             )
             if frame is not None and not frame.empty:

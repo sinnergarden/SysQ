@@ -108,6 +108,7 @@ certifier 调度。
 - `tests/ops/test_shareholder_sync.py`
 - `tests/research/test_lightgbm_window_cache_identity.py`
 - `tests/test_data_sync_csi1800.py`
+- `tests/test_financial_replay.py`
 
 ### Execution Guidance For Future Audit Tasks
 

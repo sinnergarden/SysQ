@@ -1733,6 +1733,42 @@ def test_historical_mutation_readback_uses_mutation_date_not_target_date():
     assert result["verified_value_count"] == 1
 
 
+def test_historical_mutation_readback_verifies_bounded_multi_day_scope():
+    dates = pd.date_range("2020-01-02", periods=3, freq="D")
+    canonical_dates = dates.strftime("%Y%m%d").tolist()
+    mutation = [{
+        "symbol": "000001.SZ",
+        "date_start": canonical_dates[0],
+        "date_end": canonical_dates[-1],
+        "fields": ["close"],
+        "mutation_type": "update",
+    }]
+
+    class Store:
+        def load_daily_window(self, symbol, *, start_date, end_date, columns):
+            assert (start_date, end_date, columns) == (
+                canonical_dates[0], canonical_dates[-1], ["close"]
+            )
+            return pd.DataFrame({
+                "trade_date": canonical_dates,
+                "close": [11.0, 12.0, 13.0],
+            })
+
+    class Adapter:
+        def get_features(self, symbols, fields, start_time=None, end_time=None):
+            index = pd.MultiIndex.from_arrays(
+                [dates, ["000001.SZ"] * len(dates)],
+                names=["datetime", "instrument"],
+            )
+            return pd.DataFrame({"$close": [11.0, 12.0, 13.0]}, index=index)
+
+    result = _historical_mutation_readback(Adapter(), Store(), mutation)
+
+    assert result["status"] == "success"
+    assert result["verified_value_count"] == 3
+    assert result["mismatch_count"] == 0
+
+
 def test_historical_mutation_readback_indexes_dates_and_loads_industry_map_once(monkeypatch):
     dates = pd.date_range("2020-01-02", periods=250, freq="D")
     canonical_dates = dates.strftime("%Y%m%d").tolist()

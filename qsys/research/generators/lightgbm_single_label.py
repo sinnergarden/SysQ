@@ -37,8 +37,8 @@ from qsys.research.generators.utils import (
 from qsys.utils.logger import log
 
 
-_WINDOW_CACHE_SCHEMA_VERSION = 4
-_WINDOW_CACHE_BUILDER_ID = "lightgbm_single_label_qlib_frame_v4_pit_content_bound"
+_WINDOW_CACHE_SCHEMA_VERSION = 5
+_WINDOW_CACHE_BUILDER_ID = "lightgbm_single_label_qlib_frame_v5_financial_contract_bound"
 _ANNUAL_SHARD_SCHEMA_VERSION = 1
 FEATURE_VISIBILITY_CONTRACT = (
     "actual_feature_date_strictly_before_trade_date_v1"
@@ -509,7 +509,7 @@ class LightGBMSingleLabelGenerator:
         predictions.  Paths are resolved by the pipeline and only the stable
         dependency name plus content hash enter checkpoint identity.
         """
-        from qsys.data import adapter
+        from qsys.data import _merge_helpers, adapter
         from qsys.feature import builder
         from qsys.feature.groups import growth_confirmation_v0
         from qsys.feature.groups import value_growth_v3a
@@ -517,6 +517,7 @@ class LightGBMSingleLabelGenerator:
         from qsys.signal.alpha_v1 import training
 
         dependencies = {
+            "qsys.data._merge_helpers": Path(_merge_helpers.__file__).resolve(),
             "qsys.data.adapter": Path(adapter.__file__).resolve(),
             "qsys.feature.builder": Path(builder.__file__).resolve(),
             "qsys.feature.groups.value_growth_v3a": Path(
@@ -543,6 +544,11 @@ class LightGBMSingleLabelGenerator:
         end: str,
         features: list[str],
     ) -> dict[str, object]:
+        from qsys.data._merge_helpers import (
+            FINANCIAL_AVAILABILITY_CONTRACT,
+            TUSHARE_FINA_INDICATOR_UNIT_CONTRACT,
+        )
+
         mode = self._effective_pit_filter_mode()
         membership_hash = ""
         if mode:
@@ -572,6 +578,10 @@ class LightGBMSingleLabelGenerator:
         identity = {
             "schema_version": _WINDOW_CACHE_SCHEMA_VERSION,
             "builder_id": _WINDOW_CACHE_BUILDER_ID,
+            "canonical_financial_contracts": {
+                "availability": FINANCIAL_AVAILABILITY_CONTRACT,
+                "fina_indicator_units": TUSHARE_FINA_INDICATOR_UNIT_CONTRACT,
+            },
             "source_manifest_hash": self.source_manifest_hash,
             "universe": self.universe,
             "feature_list_id": self.feature_list_id,

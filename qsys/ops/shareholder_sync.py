@@ -225,38 +225,65 @@ def normalise_top10_rows(
         | out["hold_ratio"].isna()
         | ~out["hold_ratio"].between(0, 100)
     )
-    if require_complete_raw and invalid.any():
-        raise ShareholderProjectionError(
-            f"raw top10 event has {int(invalid.sum())} invalid holder rows"
-        )
-    out = out.loc[~invalid].copy()
     exact_rows: list[dict[str, Any]] = []
     event_key = ["inst", "ann_date", "end_date"]
+    stats = {
+        "exact_event_count": 0,
+        "accepted_exact_event_count": 0,
+        "accepted_cutoff_tie_event_count": 0,
+        "excluded_invalid_event_count": 0,
+        "excluded_conflicting_ratio_event_count": 0,
+        "excluded_incomplete_event_count": 0,
+        "excluded_ambiguous_overfull_event_count": 0,
+    }
     for key, event in out.groupby(event_key, dropna=False, sort=True):
+        stats["exact_event_count"] += 1
+        event_invalid = invalid.loc[event.index]
+        if require_complete_raw and event_invalid.any():
+            stats["excluded_invalid_event_count"] += 1
+            continue
+        event = event.loc[~event_invalid]
         ratios: list[float] = []
+        conflicting = False
         for identity, holder_rows in event.groupby("_holder_identity", sort=True):
             values = holder_rows["hold_ratio"].dropna().unique().tolist()
             if len(values) != 1:
+                if require_complete_raw:
+                    conflicting = True
+                    break
                 raise ShareholderProjectionError(
                     f"conflicting ratio for holder {identity!r} in exact event {key}"
                 )
             ratios.append(float(values[0]))
-        if require_complete_raw and len(ratios) != 10:
-            raise ShareholderProjectionError(
-                f"incomplete top10 exact event {key}: normalized_holder_count={len(ratios)}"
-            )
+        if conflicting:
+            stats["excluded_conflicting_ratio_event_count"] += 1
+            continue
+        if require_complete_raw:
+            ratios.sort(reverse=True)
+            if len(ratios) < 10:
+                stats["excluded_incomplete_event_count"] += 1
+                continue
+            if len(ratios) > 10:
+                cutoff = ratios[9]
+                if any(abs(value - cutoff) > 1e-12 for value in ratios[10:]):
+                    stats["excluded_ambiguous_overfull_event_count"] += 1
+                    continue
+                ratios = ratios[:10]
+                stats["accepted_cutoff_tie_event_count"] += 1
         total = float(sum(ratios)) if ratios else float("nan")
         if not 0 <= total <= 100.0001:
             if require_complete_raw:
-                raise ShareholderProjectionError(
-                    f"invalid top10 ratio sum for exact event {key}: {total}"
-                )
+                stats["excluded_invalid_event_count"] += 1
+                continue
             continue
         exact_rows.append({
             "inst": key[0], "ann_date": key[1], "end_date": key[2],
             "top10_ratio": min(total, 100.0),
         })
-    return pd.DataFrame(exact_rows, columns=columns).reset_index(drop=True)
+        stats["accepted_exact_event_count"] += 1
+    result = pd.DataFrame(exact_rows, columns=columns).reset_index(drop=True)
+    result.attrs["projection_stats"] = stats
+    return result
 
 
 def merge_shareholder_rows(
@@ -687,6 +714,9 @@ def materialize_audited_shareholder_snapshot(
         pd.concat(top10_frames, ignore_index=True) if top10_frames else None,
         require_complete_raw=True,
     )
+    projection_stats["top10_holders"].update(
+        top10.attrs.get("projection_stats", {})
+    )
     if holder.empty or top10.empty:
         raise RuntimeError(
             "audited shareholder snapshot requires non-empty holder and top10 artifacts"
@@ -762,6 +792,9 @@ def materialize_audited_shareholder_snapshot(
                     "availability_rule": "announcement_date_asof",
                     "holder_key": ["inst", "ann_date"],
                     "top10_key": ["inst", "ann_date"],
+                    "top10_exact_event_policy": (
+                        "accept_exactly_ten_or_cutoff_ties_exclude_ambiguous_v1"
+                    ),
                 },
                 "projection": {
                     "by_endpoint": projection_stats,

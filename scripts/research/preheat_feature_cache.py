@@ -116,7 +116,12 @@ def main() -> int:
             for window in windows
         )
         ranges = _annual_ranges(train_start, load_end)
-        for shard_start, shard_end in ranges:
+        for shard_number, (shard_start, shard_end) in enumerate(ranges, start=1):
+            print(
+                f"[{shard_number}/{len(ranges)}] preheat "
+                f"{generator_config['generator_id']} {shard_start}..{shard_end}",
+                flush=True,
+            )
             frame, features = generator._load_data(shard_start, shard_end)
             path = generator._annual_shard_path(shard_start, shard_end, features)
             identity = generator._cache_identity(shard_start, shard_end, features)
@@ -131,6 +136,11 @@ def main() -> int:
                 "source_manifest_hash": config.source_manifest_hash,
                 "identity": identity,
             }
+            print(
+                f"[{shard_number}/{len(ranges)}] ready rows={len(frame)} "
+                f"path={path}",
+                flush=True,
+            )
 
     manifest_path = args.feature_cache_root / "annual_shards" / (
         f"{config.experiment_id}.manifest.json"

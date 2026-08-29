@@ -401,11 +401,13 @@ def test_strict_top10_rejects_partial_latest_period_instead_of_using_older() -> 
         "hold_ratio": [5.0, 5.0],
     })
 
-    with pytest.raises(ShareholderProjectionError, match="normalized_holder_count=2"):
-        normalise_top10_rows(
-            pd.concat([older, newer], ignore_index=True),
-            require_complete_raw=True,
-        )
+    projected = normalise_top10_rows(
+        pd.concat([older, newer], ignore_index=True),
+        require_complete_raw=True,
+    )
+
+    assert projected.empty
+    assert projected.attrs["projection_stats"]["excluded_incomplete_event_count"] == 1
 
 
 def test_strict_top10_rejects_normalized_holder_ratio_conflict() -> None:
@@ -417,8 +419,38 @@ def test_strict_top10_rejects_normalized_holder_ratio_conflict() -> None:
         "hold_ratio": [10.0, 9.0],
     })
 
-    with pytest.raises(ShareholderProjectionError, match="conflicting ratio"):
-        normalise_top10_rows(raw, require_complete_raw=True)
+    projected = normalise_top10_rows(raw, require_complete_raw=True)
+
+    assert projected.empty
+    assert (
+        projected.attrs["projection_stats"]["excluded_conflicting_ratio_event_count"]
+        == 1
+    )
+
+
+def test_strict_top10_accepts_cutoff_ties_but_excludes_ambiguous_overfill() -> None:
+    base = {
+        "ts_code": ["000001.SZ"] * 11,
+        "ann_date": ["20260430"] * 11,
+        "end_date": ["20260331"] * 11,
+        "holder_name": [f"holder-{index}" for index in range(11)],
+    }
+    tied = normalise_top10_rows(
+        pd.DataFrame({**base, "hold_ratio": list(range(10, 1, -1)) + [1.0, 1.0]}),
+        require_complete_raw=True,
+    )
+    ambiguous = normalise_top10_rows(
+        pd.DataFrame({**base, "hold_ratio": list(range(11, 0, -1))}),
+        require_complete_raw=True,
+    )
+
+    assert tied["top10_ratio"].tolist() == [55.0]
+    assert tied.attrs["projection_stats"]["accepted_cutoff_tie_event_count"] == 1
+    assert ambiguous.empty
+    assert (
+        ambiguous.attrs["projection_stats"]["excluded_ambiguous_overfull_event_count"]
+        == 1
+    )
 
 
 def test_health_uses_announcement_date_asof_and_fails_stale_rows(tmp_path: Path) -> None:
