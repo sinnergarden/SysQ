@@ -23,6 +23,7 @@ from scripts.ops.sync_csi800_daily import (
     _do_raw_fetch,
     _fetch_daily_industry_after_precheck,
     _fetch_audited_history_suspensions,
+    _expected_qlib_value,
     _historical_mutation_readback,
     _qlib_values_equal,
     _refresh_and_verify_changed_symbols,
@@ -40,6 +41,11 @@ def test_qlib_readback_compares_the_float32_storage_value():
 
     assert _qlib_values_equal(expected, np.float32(expected))
     assert not _qlib_values_equal(expected, np.float32(expected) + np.float32(256.0))
+
+
+def test_qlib_readback_applies_the_existing_percent_transform():
+    assert _expected_qlib_value("roe", 8.06185509) == pytest.approx(0.0806185509)
+    assert _expected_qlib_value("roe", 2.5) == 2.5
 
 
 def _seed_target_watermarks(
