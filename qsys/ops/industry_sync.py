@@ -18,6 +18,7 @@ BAK_BASIC_ROW_LIMIT = 7000
 BAK_BASIC_FIELDS = "trade_date,ts_code,industry"
 HISTORY_REQUEST_VARIANT = "history_bak_basic_industry_v1"
 DAILY_REQUEST_VARIANT = "daily_bak_basic_industry_v1"
+UNCLASSIFIED_INDUSTRY = "未分类"
 
 
 def _dates(frame: pd.DataFrame) -> pd.Series:
@@ -71,13 +72,8 @@ def validate_history_industry_response(
         if BAK_BASIC_START <= date <= target_date
         and pd.notna(industry) and industry != ""
     )
-    first_available = eligible_dates[0] if eligible_dates else None
-    missing_dates = sorted(
-        date for date in required_dates
-        if first_available is None or date < first_available
-    )
-    if missing_dates:
-        return {"reason": "canonical_coverage_missing", "missing_count": len(missing_dates), "sample": missing_dates[:10]}
+    if required_dates and not eligible_dates:
+        return {"reason": "required_history_unclassified"}
     return None
 
 
@@ -113,9 +109,7 @@ def _project_history_industry(
     timeline = states.reindex(
         states.index.union(pd.Index(ordered_required))
     ).sort_index().ffill()
-    projected = timeline.reindex(ordered_required)
-    if projected.isna().any():
-        raise ValueError("industry history has no state available at required date")
+    projected = timeline.reindex(ordered_required).fillna(UNCLASSIFIED_INDUSTRY)
     return pd.DataFrame({
         "ts_code": symbol,
         "trade_date": ordered_required,
@@ -167,6 +161,7 @@ def fetch_audited_history_industry(
     before_rows = 0
     taxonomy_comparisons = 0
     taxonomy_mismatches = 0
+    unclassified_rows = 0
     failure: dict | None = None
     for symbol in symbols:
         required_dates = _canonical_required_dates(collector.store, symbol, target)
@@ -246,6 +241,10 @@ def fetch_audited_history_industry(
             target_date=target,
             required_dates=required_dates,
         )
+        symbol_unclassified_rows = int(
+            projection["industry"].eq(UNCLASSIFIED_INDUSTRY).sum()
+        )
+        unclassified_rows += symbol_unclassified_rows
         symbol_mutations = collector.store.merge_daily_industry(
             projection, symbol, source_run_id=run_id, source_receipt_id=str(receipt_id)
         )
@@ -255,6 +254,7 @@ def fetch_audited_history_industry(
         audit_store.append_event(run_id, "industry_symbol_committed", {
             "symbol": symbol, "receipt_id": str(receipt_id),
             "projected_rows": len(projection),
+            "unclassified_rows": symbol_unclassified_rows,
             "excluded_before_rows": int((dates < BAK_BASIC_START).sum()),
             "excluded_future_rows": int((dates > target).sum()),
         })
@@ -268,6 +268,7 @@ def fetch_audited_history_industry(
         "empty_count": empty, "mutation_count": mutations,
         "excluded_future_rows": future_rows,
         "excluded_before_rows": before_rows,
+        "unclassified_row_count": unclassified_rows,
         "taxonomy_comparison_count": taxonomy_comparisons,
         "taxonomy_expected_comparison_count": expected_taxonomy_comparisons,
         "taxonomy_mismatch_count": taxonomy_mismatches,
