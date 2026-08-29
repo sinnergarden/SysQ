@@ -154,7 +154,8 @@ def fetch_audited_history_industry(
                 request_variant=HISTORY_REQUEST_VARIANT,
                 identity_columns=("ts_code", "trade_date"),
                 evidence_fields=("industry",), response_validator=validator,
-                required_endpoint=True, ts_code=symbol, fields=BAK_BASIC_FIELDS,
+                required_endpoint=True, supplier_call_delay_seconds=0.35,
+                ts_code=symbol, fields=BAK_BASIC_FIELDS,
             )
         except Exception as exc:
             failure = {"symbol": symbol, "reason": "supplier_failure", "error": str(exc)}
