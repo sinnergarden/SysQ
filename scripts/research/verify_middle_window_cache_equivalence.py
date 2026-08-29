@@ -136,12 +136,23 @@ class _Tee:
         return "".join(self.parts)
 
 
-def _stage_valid(stage_path: Path, identity: dict[str, Any]) -> dict[str, Any] | None:
+def _stage_valid(
+    stage_path: Path,
+    identity: dict[str, Any],
+    *,
+    allow_prior_verifier: bool = False,
+) -> dict[str, Any] | None:
     if not stage_path.is_file():
         return None
     payload = json.loads(stage_path.read_text(encoding="utf-8"))
-    if payload.get("identity") != identity:
-        return None
+    actual_identity = payload.get("identity")
+    if actual_identity != identity:
+        comparable_actual = dict(actual_identity or {})
+        comparable_expected = dict(identity)
+        comparable_actual.pop("script_sha256", None)
+        comparable_expected.pop("script_sha256", None)
+        if not allow_prior_verifier or comparable_actual != comparable_expected:
+            return None
     for artifact in payload.get("artifacts", {}).values():
         path = Path(artifact["path"])
         if not path.is_file() or _sha256(path) != artifact["sha256"]:
@@ -160,6 +171,7 @@ def _run_mode(
     config_hash: str,
     script_hash: str,
     window_dir: Path,
+    allow_prior_verifier: bool = False,
 ) -> dict[str, Any]:
     identity = {
         "schema_version": "middle_window_cache_equivalence_stage_v1",
@@ -171,7 +183,9 @@ def _run_mode(
         "source_manifest_hash": config.source_manifest_hash,
     }
     stage_path = window_dir / f"{mode}.stage.json"
-    complete = _stage_valid(stage_path, identity)
+    complete = _stage_valid(
+        stage_path, identity, allow_prior_verifier=allow_prior_verifier
+    )
     if complete is not None:
         print(
             f"[{window_position}/{total_windows}][{mode}] validated checkpoint reuse",
@@ -507,6 +521,14 @@ def _parse_args() -> argparse.Namespace:
         type=Path,
         default=Path("data/research/cache_equivalence"),
     )
+    parser.add_argument(
+        "--resume-run-dir",
+        type=Path,
+        help=(
+            "Explicit interrupted run directory. Reuse is allowed only when "
+            "all generation identity fields except verifier script hash match."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -547,7 +569,9 @@ def main() -> int:
         )
     ).hexdigest()[:16]
     run_dir = (
-        args.output_root.resolve()
+        args.resume_run_dir.resolve()
+        if args.resume_run_dir
+        else args.output_root.resolve()
         / f"{config.experiment_id}__p{'-'.join(map(str, positions))}__{run_identity}"
     )
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -576,6 +600,7 @@ def main() -> int:
             config_hash=config_hash,
             script_hash=script_hash,
             window_dir=window_dir,
+            allow_prior_verifier=bool(args.resume_run_dir),
         )
         cache = _run_mode(
             mode="cache",
@@ -587,6 +612,7 @@ def main() -> int:
             config_hash=config_hash,
             script_hash=script_hash,
             window_dir=window_dir,
+            allow_prior_verifier=bool(args.resume_run_dir),
         )
         direct_features = Path(direct["artifacts"]["loaded_features"]["path"])
         cache_features = Path(cache["artifacts"]["loaded_features"]["path"])
@@ -594,7 +620,10 @@ def main() -> int:
         if consumed_features != cache["load"]["consumed_features"]:
             raise RuntimeError("Direct/cache consumed-feature lists differ")
         comparison_columns = [*consumed_features]
-        if "$close" in direct["load"]["columns"]:
+        if (
+            "$close" in direct["load"]["columns"]
+            and "$close" in cache["load"]["columns"]
+        ):
             comparison_columns.append("$close")
         print(
             f"[{position}/{len(windows)}][compare] streaming keyed comparison of "
@@ -641,7 +670,7 @@ def main() -> int:
             "config_sha256": config_hash,
             "source_manifest_hash": config.source_manifest_hash,
             "consumed_feature_count": len(consumed_features),
-            "auxiliary_comparison_columns": ["$close"],
+            "auxiliary_comparison_columns": comparison_columns[len(consumed_features):],
             "direct": direct,
             "cache": cache,
             "feature_comparison": feature_comparison,
