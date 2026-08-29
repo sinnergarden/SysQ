@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from pathlib import Path
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -23,6 +24,7 @@ from scripts.ops.sync_csi800_daily import (
     _fetch_daily_industry_after_precheck,
     _fetch_audited_history_suspensions,
     _historical_mutation_readback,
+    _qlib_values_equal,
     _refresh_and_verify_changed_symbols,
     _refresh_and_verify_history_mutation_store,
     _verify_history_suspension_receipts,
@@ -31,6 +33,13 @@ from scripts.ops.sync_csi800_daily import (
 
 TARGET = "20260821"
 HISTORY_START = "20260819"
+
+
+def test_qlib_readback_compares_the_float32_storage_value():
+    expected = 1_515_692_068.0
+
+    assert _qlib_values_equal(expected, np.float32(expected))
+    assert not _qlib_values_equal(expected, np.float32(expected) + np.float32(256.0))
 
 
 def _seed_target_watermarks(

@@ -501,14 +501,34 @@ _CANONICAL_TO_QLIB_READBACK = {
 
 
 def _expected_qlib_value(raw_field: str, value):
-    expected = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
-    if pd.isna(expected):
-        return expected
+    try:
+        expected = float(value)
+    except (TypeError, ValueError):
+        return np.nan
+    if np.isnan(expected):
+        return np.nan
     if raw_field in {"volume", "vol"}:
         return float(expected) * 100.0
     if raw_field in {"total_mv", "circ_mv"}:
         return float(expected) * 10000.0
     return expected
+
+
+def _qlib_values_equal(expected, actual) -> bool:
+    """Compare values using Qlib's on-disk float32 representation."""
+
+    return (pd.isna(expected) and pd.isna(actual)) or (
+        pd.notna(expected)
+        and pd.notna(actual)
+        and bool(
+            np.isclose(
+                float(expected),
+                float(actual),
+                rtol=np.finfo(np.float32).eps,
+                atol=np.finfo(np.float32).tiny,
+            )
+        )
+    )
 
 
 def _historical_mutation_readback(
@@ -602,11 +622,11 @@ def _historical_mutation_readback(
                         continue
                 else:
                     expected = _expected_qlib_value(raw_field, raw_row[raw_field])
-                actual = pd.to_numeric(pd.Series([qlib_row[qlib_field]]), errors="coerce").iloc[0]
-                same = (pd.isna(expected) and pd.isna(actual)) or (
-                    pd.notna(expected) and pd.notna(actual)
-                    and bool(np.isclose(float(expected), float(actual), rtol=1e-10, atol=1e-12))
-                )
+                try:
+                    actual = float(qlib_row[qlib_field])
+                except (TypeError, ValueError):
+                    actual = np.nan
+                same = _qlib_values_equal(expected, actual)
                 if same:
                     verified += 1
                 else:
@@ -768,10 +788,11 @@ def _refresh_and_verify_changed_symbols(
                     continue
             else:
                 expected = _expected_qlib_value(raw_field, raw_row[raw_field])
-            actual = pd.to_numeric(pd.Series([qlib_row[qlib_field]]), errors="coerce").iloc[0]
-            same = (pd.isna(expected) and pd.isna(actual)) or (
-                pd.notna(expected) and pd.notna(actual) and bool(np.isclose(float(expected), float(actual), rtol=1e-10, atol=1e-12))
-            )
+            try:
+                actual = float(qlib_row[qlib_field])
+            except (TypeError, ValueError):
+                actual = np.nan
+            same = _qlib_values_equal(expected, actual)
             if not same:
                 mismatches.append({"symbol": symbol, "field": qlib_field, "reason": "value_mismatch"})
             else:
