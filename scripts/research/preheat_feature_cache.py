@@ -116,28 +116,60 @@ def main() -> int:
             for window in windows
         )
         ranges = _annual_ranges(train_start, load_end)
+        generator.write_through = False
         for shard_number, (shard_start, shard_end) in enumerate(ranges, start=1):
+            source_end = min(shard_end, load_end)
             print(
                 f"[{shard_number}/{len(ranges)}] preheat "
-                f"{generator_config['generator_id']} {shard_start}..{shard_end}",
+                f"{generator_config['generator_id']} {shard_start}..{source_end} "
+                f"(cache identity through {shard_end})",
                 flush=True,
             )
-            frame, features = generator._load_data(shard_start, shard_end)
+            frame, features = generator._load_data(shard_start, source_end)
             path = generator._annual_shard_path(shard_start, shard_end, features)
+            meta_path = generator._annual_shard_meta_path(
+                shard_start, shard_end, features
+            )
+            cached = generator._load_annual_shard_cache(
+                shard_start, source_end, features
+            )
+            if cached is None:
+                path = generator._write_cache_frame(
+                    frame,
+                    shard_start,
+                    shard_end,
+                    features,
+                    source_coverage_start=shard_start,
+                    source_coverage_end=source_end,
+                )
+                cached = generator._load_annual_shard_cache(
+                    shard_start, source_end, features
+                )
+                if cached is None:
+                    raise ValueError(
+                        "annual shard failed read-after-write validation: "
+                        f"{path}"
+                    )
+            elif not path.is_file() or not meta_path.is_file():
+                raise ValueError(
+                    "annual shard validator returned data without durable files: "
+                    f"{path}"
+                )
             identity = generator._cache_identity(shard_start, shard_end, features)
             key = (shard_start, shard_end, str(path))
             records[key] = {
                 "generator_id": generator_config["generator_id"],
                 "start": shard_start,
                 "end": shard_end,
+                "source_coverage_end": source_end,
                 "path": str(path),
-                "rows": len(frame),
+                "rows": len(cached),
                 "data_sha256": _sha256_file(path),
                 "source_manifest_hash": config.source_manifest_hash,
                 "identity": identity,
             }
             print(
-                f"[{shard_number}/{len(ranges)}] ready rows={len(frame)} "
+                f"[{shard_number}/{len(ranges)}] ready rows={len(cached)} "
                 f"path={path}",
                 flush=True,
             )

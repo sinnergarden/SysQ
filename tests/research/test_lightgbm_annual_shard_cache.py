@@ -34,9 +34,17 @@ def _write_annual(
     frame: pd.DataFrame,
     start: str,
     end: str,
+    *,
+    source_coverage_end: str | None = None,
 ) -> None:
     generator.cache_write_scope = "annual_shard"
-    generator._write_cache_frame(frame, start, end, ["f1", "f2"])
+    generator._write_cache_frame(
+        frame,
+        start,
+        end,
+        ["f1", "f2"],
+        source_coverage_end=source_coverage_end,
+    )
 
 
 def test_annual_ranges_are_full_years_for_clipped_request() -> None:
@@ -71,6 +79,32 @@ def test_annual_shards_compose_to_exact_window_frame(tmp_path: Path) -> None:
     expected = pd.concat([first, second], ignore_index=True).reset_index(drop=True)
     assert composed is not None
     pd.testing.assert_frame_equal(composed, expected)
+
+
+def test_terminal_partial_year_shard_is_bounded_by_source_coverage(
+    tmp_path: Path,
+) -> None:
+    generator = _generator(tmp_path)
+    partial = _frame([
+        ("2026-01-02", "A", 1.0),
+        ("2026-07-31", "B", 2.0),
+    ])
+    _write_annual(
+        generator,
+        partial,
+        "2026-01-01",
+        "2026-12-31",
+        source_coverage_end="2026-07-31",
+    )
+
+    composed = generator._load_annual_shard_cache(
+        "2026-01-01", "2026-07-31", ["f1", "f2"]
+    )
+    assert composed is not None
+    pd.testing.assert_frame_equal(composed, partial)
+    assert generator._load_annual_shard_cache(
+        "2026-01-01", "2026-08-01", ["f1", "f2"]
+    ) is None
 
 
 def test_annual_shards_fail_closed_on_duplicate_keys(tmp_path: Path) -> None:

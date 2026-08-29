@@ -736,6 +736,12 @@ class LightGBMSingleLabelGenerator:
                 return None
             if meta.get("identity") != identity:
                 return None
+            coverage_start = str(meta.get("source_coverage_start", shard_start))
+            coverage_end = str(meta.get("source_coverage_end", shard_end))
+            required_start = max(start, shard_start)
+            required_end = min(end, shard_end)
+            if coverage_start > required_start or coverage_end < required_end:
+                return None
             piece = self._read_cache_frame(
                 path,
                 features,
@@ -776,6 +782,9 @@ class LightGBMSingleLabelGenerator:
         start: str,
         end: str,
         features: list[str],
+        *,
+        source_coverage_start: str | None = None,
+        source_coverage_end: str | None = None,
     ) -> Path:
         if self.cache_write_scope == "annual_shard":
             path = self._annual_shard_path(start, end, features)
@@ -786,6 +795,8 @@ class LightGBMSingleLabelGenerator:
                 "identity": identity,
                 "rows": len(frame),
                 "cols": len(frame.columns),
+                "source_coverage_start": source_coverage_start or start,
+                "source_coverage_end": source_coverage_end or end,
             }
         else:
             path = self._window_cache_path(start, end, features)
