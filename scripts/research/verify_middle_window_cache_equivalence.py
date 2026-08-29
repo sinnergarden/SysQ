@@ -625,9 +625,15 @@ def main() -> int:
             and "$close" in cache["load"]["columns"]
         ):
             comparison_columns.append("$close")
+        auxiliary_columns = comparison_columns[len(consumed_features):]
         print(
             f"[{position}/{len(windows)}][compare] streaming keyed comparison of "
-            f"{len(consumed_features)} consumed features + auxiliary $close",
+            f"{len(consumed_features)} consumed features"
+            + (
+                f" + auxiliary {', '.join(auxiliary_columns)}"
+                if auxiliary_columns
+                else ""
+            ),
             flush=True,
         )
         feature_comparison = _compare_features(
@@ -670,7 +676,7 @@ def main() -> int:
             "config_sha256": config_hash,
             "source_manifest_hash": config.source_manifest_hash,
             "consumed_feature_count": len(consumed_features),
-            "auxiliary_comparison_columns": comparison_columns[len(consumed_features):],
+            "auxiliary_comparison_columns": auxiliary_columns,
             "direct": direct,
             "cache": cache,
             "feature_comparison": feature_comparison,
