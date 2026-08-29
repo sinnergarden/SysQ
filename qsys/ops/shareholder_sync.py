@@ -291,11 +291,13 @@ def _load_audited_shareholder_payload(
         raise RuntimeError("success shareholder receipt has an empty payload")
     raw_symbols = frame["ts_code"].astype(str)
     normalized_symbols = raw_symbols.str.strip().str.upper()
-    if (
-        normalized_symbols.empty
-        or not raw_symbols.eq(normalized_symbols).all()
-        or not normalized_symbols.str.fullmatch(r"\d{6}\.(?:SH|SZ|BJ)").all()
-    ):
+    canonical_equity = raw_symbols.eq(normalized_symbols) & (
+        normalized_symbols.str.fullmatch(r"\d{6}\.(?:SH|SZ|BJ)")
+    )
+    supplier_non_equity = raw_symbols.eq(normalized_symbols) & (
+        normalized_symbols.str.fullmatch(r"C\d{5}")
+    )
+    if normalized_symbols.empty or not (canonical_equity | supplier_non_equity).all():
         raise RuntimeError(f"{endpoint} payload has invalid ts_code values")
     dates = frame["ann_date"].map(_normalise_date)
     if dates.isna().any() or not dates.between(
@@ -310,11 +312,14 @@ def _load_audited_shareholder_payload(
         scope_start, scope_end,
     ).all():
         raise RuntimeError(f"{endpoint} payload escaped its receipt scope")
-    projected = frame.loc[normalized_symbols.isin(expected_symbols)].copy()
+    projected = frame.loc[
+        canonical_equity & normalized_symbols.isin(expected_symbols)
+    ].copy()
     return projected, {
         "source_rows": int(len(frame)),
         "projected_rows": int(len(projected)),
         "excluded_outside_union_rows": int(len(frame) - len(projected)),
+        "excluded_non_equity_identifier_rows": int(supplier_non_equity.sum()),
     }
 
 
@@ -441,6 +446,7 @@ def materialize_audited_shareholder_snapshot(
                 "source_rows": 0,
                 "projected_rows": 0,
                 "excluded_outside_union_rows": 0,
+                "excluded_non_equity_identifier_rows": 0,
             }
             for endpoint in endpoint_specs
         }
@@ -662,6 +668,10 @@ def materialize_audited_shareholder_snapshot(
                     ),
                     "excluded_outside_union_rows": sum(
                         row["excluded_outside_union_rows"]
+                        for row in projection_stats.values()
+                    ),
+                    "excluded_non_equity_identifier_rows": sum(
+                        row["excluded_non_equity_identifier_rows"]
                         for row in projection_stats.values()
                     ),
                 },

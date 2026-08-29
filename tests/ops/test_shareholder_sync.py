@@ -135,11 +135,11 @@ def test_materializes_terminal_backed_immutable_shareholder_snapshot(
         "end_date": ["20191231", "20191231"], "holder_num": [1000, 2000],
     })
     top10 = pd.DataFrame({
-        "ts_code": ["000001.SZ", "000001.SZ", "600000.SH"],
-        "ann_date": ["20200430", "20200430", "20200430"],
-        "end_date": ["20191231", "20191231", "20191231"],
-        "holder_name": ["A", "B", "outside"],
-        "hold_ratio": [10.0, 5.0, 50.0],
+        "ts_code": ["000001.SZ", "000001.SZ", "600000.SH", "C18001"],
+        "ann_date": ["20200430", "20200430", "20200430", "20200430"],
+        "end_date": ["20191231", "20191231", "20191231", "20191231"],
+        "holder_name": ["A", "B", "outside", "non-equity"],
+        "hold_ratio": [10.0, 5.0, 50.0, 25.0],
     })
     collector = TushareCollector.__new__(TushareCollector)
     collector.max_retries = 1
@@ -186,7 +186,8 @@ def test_materializes_terminal_backed_immutable_shareholder_snapshot(
         "terminal_receipt_sha256"
     ]
     assert manifest["scope"]["symbols"] == ["000001.SZ", "000002.SZ"]
-    assert manifest["projection"]["excluded_outside_union_rows"] == 2
+    assert manifest["projection"]["excluded_outside_union_rows"] == 3
+    assert manifest["projection"]["excluded_non_equity_identifier_rows"] == 1
     projected = pd.read_parquet(result["top10_path"])
     assert projected.loc[0, "top10_ratio"] == 15.0
     assert set(projected["inst"]) == {"000001.SZ"}
