@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from qsys.feature.transforms import rolling_zscore
+from qsys.feature.transforms import cross_section_transform, rolling_zscore
 
 
 def build_liquidity_features(df: pd.DataFrame) -> pd.DataFrame:
@@ -28,8 +28,9 @@ def build_liquidity_features(df: pd.DataFrame) -> pd.DataFrame:
     # This prevents high-amount industries (e.g. 证券, 白酒) from being
     # systematically over-predicted vs low-amount ones (e.g. 纺织, 钢铁)
     if "industry" in out.columns:
-        ind_mean = out.groupby(["trade_date", "industry"])["amount_log"].transform("mean")
-        ind_std = out.groupby(["trade_date", "industry"])["amount_log"].transform("std")
+        groups = ["trade_date", "industry"]
+        ind_mean = cross_section_transform(out, "amount_log", groups, "mean")
+        ind_std = cross_section_transform(out, "amount_log", groups, "std")
         amount_zscore = (out["amount_log"] - ind_mean) / ind_std.replace(0, np.nan)
         # A one-member industry has a defined cross-sectional deviation of zero.
         # Treating its sample std as missing silently excludes that instrument.
@@ -38,8 +39,12 @@ def build_liquidity_features(df: pd.DataFrame) -> pd.DataFrame:
         )
 
         if "turnover_rate" in out.columns:
-            tr_mean = out.groupby(["trade_date", "industry"])["turnover_rate"].transform("mean")
-            tr_std = out.groupby(["trade_date", "industry"])["turnover_rate"].transform("std")
+            tr_mean = cross_section_transform(
+                out, "turnover_rate", groups, "mean"
+            )
+            tr_std = cross_section_transform(
+                out, "turnover_rate", groups, "std"
+            )
             turnover_zscore = (
                 out["turnover_rate"] - tr_mean
             ) / tr_std.replace(0, np.nan)

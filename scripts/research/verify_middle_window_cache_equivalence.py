@@ -64,6 +64,19 @@ def _canonical_json(payload: Any) -> bytes:
     ).encode("utf-8")
 
 
+def _generator_code_identity(generator: Any) -> dict[str, Any]:
+    module_path = Path(sys.modules[generator.__class__.__module__].__file__).resolve()
+    declared = generator.checkpoint_code_dependencies
+    dependencies = [
+        {"name": name, "sha256": _sha256(Path(path).resolve())}
+        for name, path in sorted(declared.items())
+    ]
+    return {
+        "generator_source_sha256": _sha256(module_path),
+        "dependencies": dependencies,
+    }
+
+
 def _write_json_atomic(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temp_name = tempfile.mkstemp(
@@ -169,6 +182,7 @@ def _run_mode(
     config: RollingResearchConfig,
     config_hash: str,
     script_hash: str,
+    generator_code_identity: dict[str, Any],
     window_dir: Path,
     allow_prior_verifier: bool = False,
 ) -> dict[str, Any]:
@@ -179,6 +193,7 @@ def _run_mode(
         "window": asdict(window),
         "config_sha256": config_hash,
         "script_sha256": script_hash,
+        "generator_code_identity": generator_code_identity,
         "source_manifest_hash": config.source_manifest_hash,
     }
     stage_path = window_dir / f"{mode}.stage.json"
@@ -567,6 +582,16 @@ def main() -> int:
     if len(generators) != 1:
         raise ValueError(f"Expected one expanded generator, found {len(generators)}")
     gen_config = generators[0]
+    identity_generator = _create_generator_from_config(
+        gen_config,
+        feature_list_id=config.feature_list_id,
+        use_feature_cache=False,
+        write_through=False,
+        feature_cache_root=config.feature_cache_root,
+        source_manifest_hash=config.source_manifest_hash,
+    )
+    generator_code_identity = _generator_code_identity(identity_generator)
+    del identity_generator
     reference_config_path = (
         args.reference_config.resolve()
         if args.reference_config is not None
@@ -582,6 +607,7 @@ def main() -> int:
                 "script_sha256": script_hash,
                 "positions": positions,
                 "source_manifest_hash": config.source_manifest_hash,
+                "generator_code_identity": generator_code_identity,
                 "reference_config_sha256": reference_config_hash,
             }
         )
@@ -628,6 +654,7 @@ def main() -> int:
             config=config,
             config_hash=config_hash,
             script_hash=script_hash,
+            generator_code_identity=generator_code_identity,
             window_dir=window_dir,
             allow_prior_verifier=bool(args.resume_run_dir),
         )
@@ -640,6 +667,7 @@ def main() -> int:
             config=config,
             config_hash=config_hash,
             script_hash=script_hash,
+            generator_code_identity=generator_code_identity,
             window_dir=window_dir,
             allow_prior_verifier=bool(args.resume_run_dir),
         )
@@ -789,6 +817,7 @@ def main() -> int:
         "config_path": str(config_path),
         "config_sha256": config_hash,
         "script_sha256": script_hash,
+        "generator_code_identity": generator_code_identity,
         "source_manifest_hash": config.source_manifest_hash,
         "reference_config_path": (
             str(reference_config_path) if reference_config_path else None

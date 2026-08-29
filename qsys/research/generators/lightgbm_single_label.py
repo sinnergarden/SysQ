@@ -37,8 +37,10 @@ from qsys.research.generators.utils import (
 from qsys.utils.logger import log
 
 
-_WINDOW_CACHE_SCHEMA_VERSION = 5
-_WINDOW_CACHE_BUILDER_ID = "lightgbm_single_label_qlib_frame_v5_financial_contract_bound"
+_WINDOW_CACHE_SCHEMA_VERSION = 6
+_WINDOW_CACHE_BUILDER_ID = (
+    "lightgbm_single_label_qlib_frame_v6_continuous_history_member_cs"
+)
 _ANNUAL_SHARD_SCHEMA_VERSION = 1
 FEATURE_VISIBILITY_CONTRACT = (
     "actual_feature_date_strictly_before_trade_date_v1"
@@ -510,19 +512,34 @@ class LightGBMSingleLabelGenerator:
         dependency name plus content hash enter checkpoint identity.
         """
         from qsys.data import _merge_helpers, adapter
-        from qsys.feature import builder
-        from qsys.feature.groups import growth_confirmation_v0
-        from qsys.feature.groups import value_growth_v3a
+        from qsys.feature import builder, transforms
+        from qsys.feature.groups import (
+            fundamental_context,
+            growth_confirmation_v0,
+            liquidity,
+            relative_strength,
+            value_growth_v3a,
+        )
         from qsys.data import income_sidecar
+        from qsys.research import pit_universe
         from qsys.signal.alpha_v1 import training
 
         dependencies = {
             "qsys.data._merge_helpers": Path(_merge_helpers.__file__).resolve(),
             "qsys.data.adapter": Path(adapter.__file__).resolve(),
             "qsys.feature.builder": Path(builder.__file__).resolve(),
+            "qsys.feature.transforms": Path(transforms.__file__).resolve(),
+            "qsys.feature.groups.fundamental_context": Path(
+                fundamental_context.__file__
+            ).resolve(),
+            "qsys.feature.groups.liquidity": Path(liquidity.__file__).resolve(),
+            "qsys.feature.groups.relative_strength": Path(
+                relative_strength.__file__
+            ).resolve(),
             "qsys.feature.groups.value_growth_v3a": Path(
                 value_growth_v3a.__file__
             ).resolve(),
+            "qsys.research.pit_universe": Path(pit_universe.__file__).resolve(),
             "qsys.signal.alpha_v1.training": Path(training.__file__).resolve(),
         }
         if self._income_source_lineage:
@@ -582,6 +599,9 @@ class LightGBMSingleLabelGenerator:
                 "availability": FINANCIAL_AVAILABILITY_CONTRACT,
                 "fina_indicator_units": TUSHARE_FINA_INDICATOR_UNIT_CONTRACT,
             },
+            "feature_history_contract": (
+                "continuous_listed_history_member_only_cross_section_v1"
+            ),
             "source_manifest_hash": self.source_manifest_hash,
             "universe": self.universe,
             "feature_list_id": self.feature_list_id,
@@ -942,8 +962,30 @@ class LightGBMSingleLabelGenerator:
             ),
         )
 
+        feature_instruments: str | list[str] = self.universe
+        semantic_spans: pd.DataFrame | None = None
+        semantic_mode = self._effective_pit_filter_mode()
+        if semantic_mode:
+            if self._pit_store is None:
+                from qsys.research.pit_universe import PitUniverseStore
+
+                self._pit_store = PitUniverseStore(self.pit_universe_artifact)
+            # Materialize time-series features from continuous listed history
+            # for every symbol that ever appears in the frozen PIT artifact.
+            # The adapter carries the spans as a separate mask so same-date
+            # ranks/z-scores still use only the eligible PIT cross-section.
+            feature_instruments = self._pit_store.instruments
+            semantic_spans = self._pit_store.spans
+
         # Build features via qlib + phase1 builder
-        raw = adapter.get_features(self.universe, clean + ["$close"], start_time=start, end_time=end)
+        raw = adapter.get_features(
+            feature_instruments,
+            clean + ["$close"],
+            start_time=start,
+            end_time=end,
+            semantic_pit_membership_spans=semantic_spans,
+            semantic_pit_filter_mode=semantic_mode,
+        )
         frame = raw.reset_index().rename(columns={"datetime": "trade_date"})
         frame = frame.loc[:, ~frame.columns.duplicated()]
         frame["trade_date"] = frame["trade_date"].astype(str).str[:10]

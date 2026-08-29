@@ -72,6 +72,39 @@ class TestAdapterSemanticFeatures(unittest.TestCase):
             1461,
         )
 
+    def test_semantic_pit_mask_preserves_reentry_gaps(self):
+        frame = pd.DataFrame(
+            {
+                "ts_code": ["AAA"] * 5 + ["BBB"] * 5,
+                "trade_date": pd.to_datetime(
+                    [
+                        "2023-01-02",
+                        "2023-01-03",
+                        "2023-01-04",
+                        "2023-01-05",
+                        "2023-01-06",
+                    ]
+                    * 2
+                ),
+            }
+        )
+        spans = pd.DataFrame(
+            {
+                "instrument": ["AAA", "AAA", "BBB"],
+                "effective_from": ["20230102", "20230106", "20230103"],
+                "effective_to": ["20230103", "20230106", "20230105"],
+            }
+        )
+
+        marked = QlibAdapter._attach_semantic_pit_membership(
+            frame, spans, "member_as_of"
+        )
+
+        self.assertEqual(
+            marked["_pit_member"].tolist(),
+            [True, True, False, False, True, False, True, True, True, False],
+        )
+
     @patch("qsys.data.adapter.build_phase1_features")
     def test_growth_sidecar_identity_is_forwarded_with_requested_window(
         self, mock_build

@@ -35,6 +35,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from qsys.feature.transforms import PIT_CROSS_SECTION_COLUMN
+
 from qsys.config import cfg
 
 warnings.filterwarnings("ignore")
@@ -559,7 +561,11 @@ def build_growth_confirmation_features(
         out["days_since_252d_high"] = np.nan
 
     # ── Clean up ──
-    prefix_cols = [c for c in list(out.columns) if c.startswith("_")]
+    prefix_cols = [
+        c
+        for c in list(out.columns)
+        if c.startswith("_") and c != PIT_CROSS_SECTION_COLUMN
+    ]
     for c in prefix_cols:
         if c not in ("_dt",):
             out = out.drop(columns=[c], errors="ignore")

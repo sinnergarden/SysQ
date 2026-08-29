@@ -4,6 +4,56 @@ import numpy as np
 import pandas as pd
 
 
+PIT_CROSS_SECTION_COLUMN = "_pit_member"
+
+
+def cross_section_mask(frame: pd.DataFrame) -> pd.Series:
+    """Rows eligible to influence a cross-sectional statistic.
+
+    Feature materialization may retain continuous listed history for every
+    instrument so rolling features remain well-defined across index exits and
+    re-entries.  When a PIT membership mask is present, only current members
+    may enter same-date ranks, winsorization, means or z-scores.
+    """
+
+    if PIT_CROSS_SECTION_COLUMN not in frame.columns:
+        return pd.Series(True, index=frame.index, dtype=bool)
+    return frame[PIT_CROSS_SECTION_COLUMN].fillna(False).astype(bool)
+
+
+def cross_section_transform(
+    frame: pd.DataFrame,
+    column: str,
+    by: str | list[str],
+    function,
+) -> pd.Series:
+    """Group transform over eligible PIT rows, aligned to the full frame."""
+
+    eligible = cross_section_mask(frame)
+    result = pd.Series(np.nan, index=frame.index, dtype="float64")
+    if not eligible.any():
+        return result
+    subset = frame.loc[eligible]
+    transformed = subset.groupby(by, group_keys=False)[column].transform(function)
+    result.loc[subset.index] = pd.to_numeric(transformed, errors="coerce")
+    return result
+
+
+def cross_section_rank(
+    frame: pd.DataFrame,
+    column: str,
+    by: str | list[str],
+    *,
+    method: str = "average",
+) -> pd.Series:
+    return cross_section_transform(
+        frame,
+        column,
+        by,
+        lambda values: values.rank(pct=True, method=method),
+    )
+
+
 def winsorize_series(series: pd.Series, lower: float = 0.01, upper: float = 0.99) -> pd.Series:
     # Pandas 2.3 may silently downcast ``float32`` values to integers when
     # ``clip`` receives scalar bounds.  Small-valued features such as Amihud
@@ -37,9 +87,15 @@ def apply_cross_sectional_standardization(df: pd.DataFrame, columns: list[str], 
     for col in columns:
         if col not in out.columns:
             continue
-        out[col] = out.groupby(date_col, group_keys=False)[col].apply(winsorize_series)
-        out[f"{col}_z"] = out.groupby(date_col, group_keys=False)[col].apply(cs_zscore)
-        out[f"{col}_rank"] = out.groupby(date_col, group_keys=False)[col].apply(cs_rank_pct)
+        out[col] = cross_section_transform(
+            out, col, date_col, winsorize_series
+        )
+        out[f"{col}_z"] = cross_section_transform(
+            out, col, date_col, cs_zscore
+        )
+        out[f"{col}_rank"] = cross_section_transform(
+            out, col, date_col, cs_rank_pct
+        )
     return out
 
 

@@ -434,6 +434,84 @@ class QlibAdapter:
         return out
 
     @staticmethod
+    def _attach_semantic_pit_membership(
+        frame: pd.DataFrame,
+        spans: pd.DataFrame | None,
+        mode: str,
+    ) -> pd.DataFrame:
+        """Mark rows eligible for same-date cross-sectional features.
+
+        The input frame deliberately contains continuous listed history for
+        every instrument in the immutable PIT union.  Rolling computations use
+        all of that per-instrument history, while this mask prevents rows
+        outside the active membership span from influencing cross-sectional
+        ranks and z-scores.
+        """
+
+        if spans is None or not mode:
+            return frame
+        if mode not in {"member_as_of", "ever_member_as_of"}:
+            raise ValueError(f"unsupported semantic PIT filter mode: {mode}")
+        required = {"instrument", "effective_from", "effective_to"}
+        missing = required - set(spans.columns)
+        if missing:
+            raise ValueError(
+                f"semantic PIT membership spans missing columns: {sorted(missing)}"
+            )
+        if not {"ts_code", "trade_date"}.issubset(frame.columns):
+            raise ValueError(
+                "semantic PIT membership requires ts_code and trade_date"
+            )
+
+        out = frame.copy()
+        instruments = out["ts_code"].astype(str).str.strip().str.upper()
+        dates = pd.to_numeric(
+            pd.to_datetime(out["trade_date"], errors="coerce").dt.strftime(
+                "%Y%m%d"
+            ),
+            errors="coerce",
+        ).fillna(-1).astype("int64")
+        normalized = spans[
+            ["instrument", "effective_from", "effective_to"]
+        ].copy()
+        normalized["instrument"] = (
+            normalized["instrument"].astype(str).str.strip().str.upper()
+        )
+        normalized["effective_from"] = pd.to_numeric(
+            normalized["effective_from"].astype(str).str.replace("-", "", regex=False),
+            errors="raise",
+        ).astype("int64")
+        normalized["effective_to"] = pd.to_numeric(
+            normalized["effective_to"].astype(str).str.replace("-", "", regex=False),
+            errors="raise",
+        ).astype("int64")
+
+        eligible = np.zeros(len(out), dtype=bool)
+        span_groups = {
+            instrument: group
+            for instrument, group in normalized.groupby("instrument", sort=False)
+        }
+        for instrument, positions in instruments.groupby(
+            instruments, sort=False
+        ).indices.items():
+            group = span_groups.get(str(instrument))
+            if group is None:
+                continue
+            pos = np.asarray(positions, dtype=int)
+            row_dates = dates.iloc[pos].to_numpy(dtype="int64")
+            starts = group["effective_from"].to_numpy(dtype="int64")
+            if mode == "ever_member_as_of":
+                eligible[pos] = row_dates >= starts.min()
+                continue
+            ends = group["effective_to"].to_numpy(dtype="int64")
+            member = np.zeros(len(pos), dtype=bool)
+            for start, end in zip(starts, ends, strict=True):
+                member |= (row_dates >= start) & (row_dates <= end)
+            eligible[pos] = member
+        out["_pit_member"] = eligible
+        return out
+
+    @staticmethod
     def _semantic_feature_flags(derived_fields):
         flags = {key: False for key in RESEARCH_FEATURE_FLAGS}
         groups = list_feature_groups()
@@ -459,6 +537,8 @@ class QlibAdapter:
         end_time=None,
         *,
         margin_lag_sessions: int = 0,
+        semantic_pit_membership_spans: pd.DataFrame | None = None,
+        semantic_pit_filter_mode: str = "",
     ) -> pd.DataFrame:
         semantic_input = self._to_semantic_builder_frame(base_df)
         if semantic_input.empty:
@@ -473,6 +553,11 @@ class QlibAdapter:
             semantic_input,
             lag_sessions=margin_lag_sessions,
             open_dates=open_dates,
+        )
+        semantic_input = self._attach_semantic_pit_membership(
+            semantic_input,
+            semantic_pit_membership_spans,
+            semantic_pit_filter_mode,
         )
 
         # The caller may intentionally request calendar padding beyond the
@@ -556,6 +641,8 @@ class QlibAdapter:
         inst_processors=None,
         *,
         margin_lag_sessions: int = 0,
+        semantic_pit_membership_spans: pd.DataFrame | None = None,
+        semantic_pit_filter_mode: str = "",
     ):
         inst = self.normalize_instruments(instruments)
         field_list = self._normalize_field_list(fields)
@@ -587,6 +674,8 @@ class QlibAdapter:
             start_time=start_time,
             end_time=end_time,
             margin_lag_sessions=margin_lag_sessions,
+            semantic_pit_membership_spans=semantic_pit_membership_spans,
+            semantic_pit_filter_mode=semantic_pit_filter_mode,
         )
 
         native_current = native_df
