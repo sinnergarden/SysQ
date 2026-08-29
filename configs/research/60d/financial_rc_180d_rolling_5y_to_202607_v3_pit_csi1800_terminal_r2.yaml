@@ -13,6 +13,8 @@ signal:
 feature_list_id: v3a_plus_liquidity_financial_rc
 source_manifest_hash: f656bd0bdee1718823d12fb28e23234273cdd3f4771ac6352f71e810b7a875f6
 window_checkpoints: true
+use_feature_cache: true
+feature_cache_root: data/feature_cache
 generators:
   - generator_id: v3a_growth_financial_180d_pit_csi1800_terminal_r2
     type: multi_label_lightgbm
