@@ -159,6 +159,31 @@ def test_history_stage_projects_latest_prior_industry_without_future_fill(
     assert canonical["industry"].tolist() == ["OldSector", "NewSector"]
 
 
+def test_history_stage_ignores_null_state_before_first_canonical_date(
+    configured_store, monkeypatch,
+) -> None:
+    store, root = configured_store
+    response = _response()
+    response.loc[len(response)] = {
+        "ts_code": SYMBOL,
+        "trade_date": "20170101",
+        "industry": None,
+    }
+    collector, calls = _collector(store, response)
+    monkeypatch.setattr("qsys.data.collector.time.sleep", lambda _seconds: None)
+    audit = SourceAuditStore(root / "audit" / "audit.db")
+
+    summary, receipts = fetch_audited_history_industry(
+        collector, [SYMBOL], TARGET, is_history_repair=True,
+        run_id="industry-precanonical-null", audit_store=audit, resume_proof=None,
+        scope_key="csi1800", universe="csi1800",
+    )
+
+    assert summary["status"] == "success"
+    assert len(receipts) == 1
+    assert len(calls) == 1
+
+
 def test_canonical_merge_replaces_legacy_and_a_later_receipt_can_correct(configured_store) -> None:
     store, _root = configured_store
     path = store.canonical_dir / f"{SYMBOL}.feather"

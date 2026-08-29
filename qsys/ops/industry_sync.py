@@ -64,13 +64,12 @@ def validate_history_industry_response(
     if parsed.isna().any():
         return {"reason": "response_date_invalid"}
     industries = frame["industry"].astype("string").str.strip()
-    if industries.isna().any() or industries.eq("").any():
-        return {"reason": "response_industry_missing"}
     if pd.DataFrame({"ts_code": symbols, "trade_date": dates}).duplicated().any():
         return {"reason": "response_duplicate_key"}
     eligible_dates = sorted(
-        date for date in dates.tolist()
+        date for date, industry in zip(dates.tolist(), industries.tolist())
         if BAK_BASIC_START <= date <= target_date
+        and pd.notna(industry) and industry != ""
     )
     first_available = eligible_dates[0] if eligible_dates else None
     missing_dates = sorted(
@@ -103,8 +102,10 @@ def _project_history_industry(
     if not ordered_required:
         return pd.DataFrame(columns=["ts_code", "trade_date", "industry"])
     dates = _dates(frame)
+    industries = frame["industry"].astype("string").str.strip()
     eligible = frame.loc[
-        (dates >= BAK_BASIC_START) & (dates <= target_date),
+        (dates >= BAK_BASIC_START) & (dates <= target_date)
+        & industries.notna() & industries.ne(""),
         ["trade_date", "industry"],
     ].copy()
     eligible["trade_date"] = dates.loc[eligible.index]
