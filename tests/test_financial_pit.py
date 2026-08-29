@@ -9,7 +9,9 @@ import pytest
 
 from qsys.data._merge_helpers import (
     FINANCIAL_AVAILABILITY_CONTRACT,
+    TUSHARE_FINA_INDICATOR_UNIT_CONTRACT,
     FinancialAvailabilityError,
+    convert_tushare_fina_indicator_units,
     select_first_available_financial_rows,
 )
 from qsys.data.collector import TushareCollector
@@ -20,6 +22,26 @@ from qsys.data.storage import StockDataStore
 TARGET = "20260821"
 START = "20180313"
 CODE = "000001.SZ"
+
+
+def test_fina_indicator_units_are_field_contract_driven_not_value_driven() -> None:
+    raw = pd.DataFrame({
+        "roe": [2.5, 8.0, -2.5, 80618.5509],
+        "grossprofit_margin": [1.0, 40.0, -1.0, pd.NA],
+        "current_ratio": [2.5, 2.5, 2.5, 2.5],
+    })
+
+    converted = convert_tushare_fina_indicator_units(raw)
+
+    assert TUSHARE_FINA_INDICATOR_UNIT_CONTRACT.endswith("_v1")
+    assert converted["roe"].tolist() == pytest.approx([
+        0.025, 0.08, -0.025, 806.185509,
+    ])
+    assert converted["grossprofit_margin"].iloc[:3].tolist() == pytest.approx([
+        0.01, 0.4, -0.01,
+    ])
+    assert converted["current_ratio"].tolist() == [2.5, 2.5, 2.5, 2.5]
+    assert raw["roe"].tolist() == [2.5, 8.0, -2.5, 80618.5509]
 
 
 def _income_row(**overrides) -> dict:
@@ -279,8 +301,6 @@ def _collector(responses: dict[str, pd.DataFrame], calls: list[tuple[str, dict]]
         "cashflow": {"fields": "ts_code,ann_date,end_date,f_ann_date,report_type,comp_type,end_type,update_flag,n_cashflow_act"},
         "fina_indicator": {"fields": "ts_code,ann_date,end_date,update_flag,roe,grossprofit_margin,debt_to_assets"},
     }
-    collector._percent_financial_cols = {"roe", "grossprofit_margin", "debt_to_assets"}
-    collector._percent_like_threshold = 3.0
 
     def endpoint_api(name):
         def fetch(**kwargs):

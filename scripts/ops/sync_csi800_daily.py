@@ -511,11 +511,6 @@ def _expected_qlib_value(raw_field: str, value):
         return float(expected) * 100.0
     if raw_field in {"total_mv", "circ_mv"}:
         return float(expected) * 10000.0
-    if (
-        raw_field in QlibAdapter._PERCENT_FINANCIAL_COLS
-        and abs(expected) > QlibAdapter._PERCENT_LIKE_THRESHOLD
-    ):
-        return expected / 100.0
     return expected
 
 

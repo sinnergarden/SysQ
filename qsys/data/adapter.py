@@ -44,18 +44,6 @@ class InstrumentCoverageReport:
 
 
 class QlibAdapter:
-    _PERCENT_FINANCIAL_COLS = {
-        "roe",
-        "roe_waa",
-        "roe_ttm",
-        "grossprofit_margin",
-        "debt_to_assets",
-        "q_gr_yoy",
-        "dt_netprofit_yoy",
-        "profit_to_gr",
-        "net_profit_margin",
-    }
-    _PERCENT_LIKE_THRESHOLD = 3.0
     # The longest semantic transform currently uses a 756-session shift.
     # 820 calendar days only contains roughly 585 A-share sessions and made
     # the 3-year fundamental deltas entirely NaN at inference time.  Four
@@ -745,14 +733,6 @@ class QlibAdapter:
                         deduped[col_name] = collapsed
                 df = pd.DataFrame(deduped)
                 
-                for col in self._PERCENT_FINANCIAL_COLS:
-                    if col not in df.columns:
-                        continue
-                    values = pd.to_numeric(df[col], errors="coerce")
-                    mask = values.abs() > self._PERCENT_LIKE_THRESHOLD
-                    if mask.any():
-                        df.loc[mask, col] = values.loc[mask] / 100.0
-
                 # Unit Conversion (Tushare -> Qlib Standard)
                 # Tushare vol is in lots (100 shares), Qlib expects shares
                 if 'volume' in df.columns:

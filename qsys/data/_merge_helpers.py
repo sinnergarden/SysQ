@@ -14,6 +14,20 @@ FINANCIAL_AVAILABILITY_CONTRACT = "financial_first_available_v1"
 FINANCIAL_AVAILABILITY_RULE = (
     "publication_date_after_close_consumable_only_by_strictly_later_trade_date"
 )
+TUSHARE_FINA_INDICATOR_UNIT_CONTRACT = (
+    "tushare_fina_indicator_percent_points_to_ratio_v1"
+)
+TUSHARE_FINA_INDICATOR_PERCENT_POINT_FIELDS = frozenset({
+    "roe",
+    "roe_waa",
+    "roe_ttm",
+    "grossprofit_margin",
+    "debt_to_assets",
+    "q_gr_yoy",
+    "dt_netprofit_yoy",
+    "profit_to_gr",
+    "net_profit_margin",
+})
 STATEMENT_ENDPOINTS = frozenset({"income", "balancesheet", "cashflow"})
 STATEMENT_LOGICAL_KEY = (
     "ts_code", "end_date", "report_type", "comp_type", "end_type",
@@ -43,6 +57,25 @@ class FinancialAvailabilityError(RuntimeError):
     def __init__(self, message: str, **details: Any) -> None:
         super().__init__(f"{message}: {details}" if details else message)
         self.details = {"reason": message, **details}
+
+
+def convert_tushare_fina_indicator_units(frame: pd.DataFrame) -> pd.DataFrame:
+    """Convert Tushare ``fina_indicator`` percent points to ratios exactly once.
+
+    The supplier contract, not a value threshold, owns the unit.  Callers must
+    use this only on raw ``fina_indicator`` rows before they enter canonical
+    storage.  Canonical-to-Qlib adapters pass these fields through unchanged.
+    """
+
+    if frame is None or frame.empty:
+        return frame
+    converted = frame.copy()
+    for column in TUSHARE_FINA_INDICATOR_PERCENT_POINT_FIELDS:
+        if column in converted.columns:
+            converted[column] = pd.to_numeric(
+                converted[column], errors="coerce"
+            ) / 100.0
+    return converted
 
 
 def _diagnostic_json_value(value: Any) -> Any:

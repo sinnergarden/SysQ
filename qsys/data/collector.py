@@ -13,7 +13,9 @@ from qsys.data.storage import StockDataStore
 from qsys.data._collector_utils import _normalize_date, _dedupe_list
 from qsys.data._merge_helpers import (
     FINANCIAL_AVAILABILITY_CONTRACT,
+    TUSHARE_FINA_INDICATOR_UNIT_CONTRACT,
     FinancialAvailabilityError,
+    convert_tushare_fina_indicator_units,
     merge_trade_frames,
     prepare_financial_frame,
     select_first_available_financial_rows,
@@ -33,7 +35,10 @@ import numpy as np
 
 
 HISTORY_SCOPE_PROCESSING_CONTRACT = (
-    "csi_history_bundle_v1:" + FINANCIAL_AVAILABILITY_CONTRACT
+    "csi_history_bundle_v1:"
+    + FINANCIAL_AVAILABILITY_CONTRACT
+    + ":"
+    + TUSHARE_FINA_INDICATOR_UNIT_CONTRACT
 )
 
 
@@ -199,18 +204,6 @@ class TushareCollector:
             ],
         )
         self._signed_numeric_cols = {"pct_chg", "net_buy", "net_amount"}
-        self._percent_financial_cols = {
-            "roe",
-            "roe_waa",
-            "roe_ttm",
-            "grossprofit_margin",
-            "debt_to_assets",
-            "q_gr_yoy",
-            "dt_netprofit_yoy",
-            "profit_to_gr",
-            "net_profit_margin",
-        }
-        self._percent_like_threshold = 3.0
         self._sparse_event_cols = {
             'exalter', 'buy', 'sell', 'net_buy', 'name', 'buyer_sum', 'seller_sum', 'net_amount', 'reason'
         }
@@ -355,21 +348,6 @@ class TushareCollector:
             ts_codes=ts_codes,
             trade_cal_fn=self.pro.trade_cal,
         )
-
-    def _normalize_percent_financial_columns(self, df: pd.DataFrame, columns=None) -> pd.DataFrame:
-        if df is None or df.empty:
-            return df
-        df = df.copy()
-        target_cols = set(columns or self._percent_financial_cols)
-        threshold = float(getattr(self, "_percent_like_threshold", 3.0))
-        for col in target_cols:
-            if col not in df.columns:
-                continue
-            values = pd.to_numeric(df[col], errors="coerce")
-            mask = values.abs() > threshold
-            if mask.any():
-                df.loc[mask, col] = values.loc[mask] / 100.0
-        return df
 
     def _prepare_financial_frame(self, df: pd.DataFrame, value_cols):
         return prepare_financial_frame(df, value_cols)
@@ -649,7 +627,9 @@ class TushareCollector:
                 "net_profit_margin",
             ],
         )
-        fina_indicator = self._normalize_percent_financial_columns(fina_indicator)
+        # Sole raw-supplier -> canonical unit boundary.  Downstream canonical
+        # and Qlib layers must not reinterpret these values.
+        fina_indicator = convert_tushare_fina_indicator_units(fina_indicator)
 
         # Each endpoint is an independent publication stream.  Collapse
         # same-day reports to the latest report period (the legacy canonical
@@ -975,7 +955,7 @@ class TushareCollector:
                     daily_df[col] = np.nan
             return daily_df
         daily_df = daily_df.copy()
-        fin_df = self._normalize_percent_financial_columns(fin_df.copy())
+        fin_df = fin_df.copy()
         if "availability_date" not in fin_df.columns:
             raise RuntimeError(
                 "financial projection missing audited availability_date"
