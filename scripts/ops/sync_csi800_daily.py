@@ -776,6 +776,7 @@ def _refresh_and_verify_history_mutation_store(
     *,
     apply: bool,
     require_pit_industry: bool = False,
+    pit_industry_until_date: str | None = None,
     qlib_max_workers: int | None = None,
 ) -> dict:
     """Read and verify one symbol's historical mutations at a time."""
@@ -810,6 +811,8 @@ def _refresh_and_verify_history_mutation_store(
         refresh_kwargs["max_workers"] = qlib_max_workers
     if require_pit_industry:
         refresh_kwargs["require_pit_industry"] = True
+    if pit_industry_until_date is not None:
+        refresh_kwargs["pit_industry_until_date"] = pit_industry_until_date
     refresh = (
         adapter.convert_fix_symbols(revision_symbols, **refresh_kwargs)
         if revision_symbols
@@ -2166,6 +2169,7 @@ def _main_under_writer_lock(writer_lock: data_writer_lock) -> None:
             history_mutation_run_ids,
             apply=do_apply,
             require_pit_industry=(universe == "csi1800"),
+            pit_industry_until_date=target_dt,
             qlib_max_workers=args.qlib_max_workers,
         )
     else:

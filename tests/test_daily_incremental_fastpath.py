@@ -1758,8 +1758,8 @@ def test_historical_mutation_store_reads_one_symbol_at_a_time(tmp_path):
         def __init__(self):
             self.fix_calls = []
 
-        def convert_fix_symbols(self, symbols, refresh_universes=None):
-            self.fix_calls.append(list(symbols))
+        def convert_fix_symbols(self, symbols, **kwargs):
+            self.fix_calls.append((list(symbols), kwargs))
             return {"status": "success"}
 
         def get_features(self, symbols, fields, start_time=None, end_time=None):
@@ -1771,11 +1771,16 @@ def test_historical_mutation_store_reads_one_symbol_at_a_time(tmp_path):
 
     adapter = Adapter()
     result = _refresh_and_verify_history_mutation_store(
-        adapter, Store(), audit, [run_id], apply=True
+        adapter, Store(), audit, [run_id], apply=True,
+        require_pit_industry=True, pit_industry_until_date="20260821",
     )
 
     assert queried_symbols == ["000001.SZ", "000002.SZ"]
-    assert adapter.fix_calls == [["000002.SZ"]]
+    assert adapter.fix_calls == [(["000002.SZ"], {
+        "refresh_universes": [],
+        "require_pit_industry": True,
+        "pit_industry_until_date": "20260821",
+    })]
     assert result["changed_symbols"] == ["000001.SZ", "000002.SZ"]
     assert result["verified_value_count"] == 2
     assert result["mismatch_count"] == 0

@@ -320,6 +320,19 @@ class TestQlibSync(unittest.TestCase):
         self.assertEqual(count, 1)
         self.assertEqual(pd.read_csv(csv_dir / "000001.SZ.csv")["industry"].tolist(), [1, 2])
 
+        frame.loc[1, "industry"] = pd.NA
+        frame.to_feather(path)
+        with patch("qsys.data.adapter.StockDataStore.get_stock_list", return_value=stock), patch.object(
+            adapter, "_load_industry_map", return_value={"OldSector": 1, "NewSector": 2}
+        ):
+            csv_dir, count = adapter._prepare_csvs(
+                selected_symbols=["000001.SZ"], output_dir=self.root / "csv_pit_cutoff",
+                require_pit_industry=True, pit_industry_until_date="20260416",
+            )
+        self.assertEqual(count, 1)
+        self.assertEqual(pd.read_csv(csv_dir / "000001.SZ.csv")["industry"].tolist(), [1, 2])
+
+        frame.loc[1, "industry"] = "NewSector"
         frame.loc[0, "industry"] = pd.NA
         frame.to_feather(path)
         with patch("qsys.data.adapter.StockDataStore.get_stock_list", return_value=stock), patch.object(
