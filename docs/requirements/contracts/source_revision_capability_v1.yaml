@@ -1,0 +1,103 @@
+schema_version: source_revision_capability_contract_v1
+uc: UC_PIT_DATA_CERTIFICATION
+purpose: >-
+  Certify only what frozen source bytes prove about historical value revisions.
+  This contract does not authorize canonical data mutation, training, signal
+  generation, feature-cache materialization, backtesting, or accounting changes.
+
+scope:
+  requested_capabilities:
+    - shareholder_historical_vintage_revision
+    - financial_latest_known_actual_publication
+  observation_boundary: feature_date_end_from_the_bound_R3_certification
+  terminal_range_policy: >-
+    Report the source terminal range separately; never promote it to the R3
+    feature/prediction cutoff.
+
+financial_latest_known_actual_publication_v1:
+  endpoints:
+    balancesheet:
+      logical_key: [ts_code, end_date, report_type, comp_type, end_type]
+      consumed_value_tuple:
+        - total_assets
+        - total_hldr_eqy_exc_min_int
+        - total_cur_assets
+        - total_cur_liab
+    cashflow:
+      logical_key: [ts_code, end_date, report_type, comp_type, end_type]
+      consumed_value_tuple: [n_cashflow_act]
+    fina_indicator:
+      logical_key: [ts_code, end_date]
+      consumed_value_tuple: [roe, grossprofit_margin, debt_to_assets]
+    income:
+      logical_key: [ts_code, end_date, report_type, comp_type, end_type]
+      consumed_value_tuple: [n_income, revenue, oper_cost]
+  primary_statement_branch:
+    report_type: "1"
+    end_type_by_period: {"0331": "1", "0630": "2", "0930": "3", "1231": "4"}
+    missing_end_type: exclude_and_report_as_branch_metadata_gap
+  actual_publication_date:
+    statements: max_non_null_ann_date_and_f_ann_date
+    fina_indicator: ann_date
+  visibility_rule: actual_publication_date_strictly_less_than_trade_date
+  duplicate_rule: equal_value_tuple_on_same_date_collapses
+  equivalent_republication_rule: >-
+    The same value tuple on a later publication date remains an observable
+    publication event but is not counted as a value revision.
+  conflict_rule: differing_value_tuple_on_same_date_blocks_the_logical_key
+  update_flag_rule: >-
+    The earliest actual-publication date group must contain update_flag=0.
+    A flag=0 found only on a later date cannot order or restore an earlier
+    publication. update_flag never orders conflicting rows within one day.
+  completeness:
+    complete: earliest_date_has_flag_0_and_no_same_date_value_conflict
+    right_censored: earliest_observed_date_lacks_flag_0
+    blocked: right_censored_or_same_date_value_conflict
+  output_policy: >-
+    Only complete logical keys may be resolved as-of. Blocked candidate rows may
+    be retained as diagnostics but are never consumable values.
+
+shareholder_observed_vintage_revision_v1:
+  endpoints:
+    stk_holdernumber: holder_num
+    top10_holders: top10_holder_ratio
+  exact_fact_key: [kind, inst, ann_date, end_date]
+  vintage_key: [kind, inst, ann_date, end_date, vintage_id]
+  announcement_semantics: >-
+    ann_date is the declared announcement date and is not a revision timestamp.
+  observation_semantics: >-
+    A trusted terminal export is one source vintage. observed_at can only
+    upper-bound when a difference was first seen between independently receipted
+    vintages; it cannot be backdated to ann_date.
+  single_vintage_verdict: historical_revision_timeline_unproven
+  legacy_snapshot_rule: >-
+    Files without immutable raw bytes and trusted receipt backlinks are
+    diagnostic comparators only. Deltas between different projection contracts
+    cannot be labeled supplier revisions.
+
+evidence_requirements:
+  - immutable_payload_sha256
+  - trusted_terminal_receipt_sha256
+  - transform_manifest_backlinks
+  - explicit_feature_date_end
+  - immutable_trade_calendar_sha256
+  - implementation_sha256
+  - exclusive_new_output_identity
+  - audit_database_sha256_unchanged
+
+legal_supplementation_without_normal_data_sync:
+  - path: targeted_announcement_evidence_import
+    rule: >-
+      Fetch only blocker keys/dates through an evidence-only run, preserve the
+      anns_d listing, rec_time, URL, PDF bytes, and hashes under a new identity.
+    official_reference: https://tushare.pro/wctapi/documents/176.md
+  - path: deterministic_announcement_value_binding
+    rule: >-
+      Parse official announcement versions and bind the exact endpoint value
+      tuple before closing a same-day conflict or right-censored key.
+  - path: forward_terminal_vintages
+    rule: conservative_first_observed_upper_bound_only
+  - path: licensed_versioned_pit_feed
+    rule: preserve_supplier_revision_identity_and_effective_time
+  - rejected_as_proof: disclosure_date_schedule_metadata
+    official_reference: https://tushare.pro/wctapi/documents/162.md

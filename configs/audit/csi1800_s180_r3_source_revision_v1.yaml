@@ -1,0 +1,141 @@
+schema_version: source_revision_audit_request_v1
+audit_name: csi1800_s180_r3_source_revision_v1
+
+scope:
+  feature_date_end: "20260731"
+  source_terminal_range_end: "20260821"
+  certification_is_training_independent: true
+
+upstream_r3_certification:
+  audit_id: 15b89cdc875b9563502338a6b4f0b3038e414eded5eddca18ce070623114b84e
+  audit_receipt:
+    path: data/research/certifications/csi1800_s180_baseline_v1_r3/15b89cdc875b9563502338a6b4f0b3038e414eded5eddca18ce070623114b84e/audit_receipt.json
+    sha256: 298fdaa785d8de131601efba8d424cdccf693bd72fd7b4777551330fbdf55d51
+  exceptions:
+    path: data/research/certifications/csi1800_s180_baseline_v1_r3/15b89cdc875b9563502338a6b4f0b3038e414eded5eddca18ce070623114b84e/exceptions.parquet
+    sha256: 1a9942e4d223bc291a02b403da36dcfbbfed0531fdc0f5da0b31c0a202bbba76
+  expected:
+    exception_rows: 13
+    shareholder_unique_features: 10
+    financial_unique_features: 25
+
+current_r3_outputs:
+  signal_predictions:
+    path: data/research/signals/fwd_ret_180d_raw_pit_csi1800__daily_zscore/rolling__financial_rc_180d_rolling_5y_to_202607_v3_pit_csi1800_terminal_r3__v3a_growth_financial_180d_pit_csi1800_terminal_r3__fwd_ret_180d_raw_pit_csi1800__daily_zscore__2021-01-01_2026-07-31/predictions.parquet
+    sha256: 52f1a9bcc6980cfc804e69da9d7d2061df90f3706df2a1b2f12839472eb588ba
+  backtest_manifest:
+    path: data/research/backtests/CSI1800_S180_baseline_v1_r3/manifest.json
+    sha256: 6ad427f5794d8ea70054aad922fefcbd9e531b069d912a7fa3f64d0da420f6e7
+
+source_contract:
+  path: docs/requirements/contracts/source_revision_capability_v1.yaml
+  sha256: da02c5b2b177ebc338de5490641190ec8135abb5843d37eb15711ae9363bb263
+
+trade_calendar:
+  path: data/qlib_bin/calendars/day.txt
+  sha256: ca919efa60651d8a03227536ab084e2577565694d964a7671b5d9779ac0a57c8
+
+financial:
+  terminal:
+    run_id: financial_replay_20260829T194313978246Z_6eb96e56
+    sha256: 46a628b6cb2150cefa4b6a657b9efb715d7bdc9c610cb0b18ac822d3c2faa3ee
+  expected_r3_counts:
+    logical_keys: 552392
+    complete_keys: 413677
+    blocked_keys: 138715
+    right_censored_keys: 137101
+    same_publication_conflict_keys: 1614
+    orderable_events: 415032
+    value_revisions: 1070
+    excluded_missing_end_type_keys: 102
+    excluded_future_rows: 5226
+    by_endpoint:
+      balancesheet:
+        logical_keys: 137064
+        complete_keys: 123001
+        blocked_keys: 14063
+        right_censored_keys: 14055
+        same_publication_conflict_keys: 8
+        orderable_events: 123786
+        value_revisions: 695
+      cashflow:
+        logical_keys: 138998
+        complete_keys: 93602
+        blocked_keys: 45396
+        right_censored_keys: 45393
+        same_publication_conflict_keys: 3
+        orderable_events: 93821
+        value_revisions: 53
+      fina_indicator:
+        logical_keys: 136818
+        complete_keys: 104247
+        blocked_keys: 32571
+        right_censored_keys: 30970
+        same_publication_conflict_keys: 1601
+        orderable_events: 104280
+        value_revisions: 24
+      income:
+        logical_keys: 139512
+        complete_keys: 92827
+        blocked_keys: 46685
+        right_censored_keys: 46683
+        same_publication_conflict_keys: 2
+        orderable_events: 93145
+        value_revisions: 298
+
+shareholder:
+  expected_r3_counts:
+    source_vintages: 1
+    exact_event_keys: 247942
+    historical_revision_timeline_proven_keys: 0
+    asof_samples: 8
+  vintages:
+    - terminal:
+        run_id: data_sync_20260829T093857823106Z_5e7fc28f
+        sha256: 2e7aaad26fedd460b11bafdfc90db516f2e1be676606c5e54a7f7a3b81141147
+      manifest:
+        path: data/research/source_snapshots/shareholder/0baf4e0fc24e5f95f691fb3f332badb8e8d32ed708118c0f1e019a28ce049800/manifest.json
+        sha256: 87cdfe2e5300028206cacb2afca19c1985936d698818be53e614deeb38acce03
+      holder_num:
+        path: data/research/source_snapshots/shareholder/0baf4e0fc24e5f95f691fb3f332badb8e8d32ed708118c0f1e019a28ce049800/holder_num.parquet
+        sha256: 8bb111f2e9d979bb604c155e4a211dd7087949fa1ecabc317128621c92dc5eb3
+      top10_holder_ratio:
+        path: data/research/source_snapshots/shareholder/0baf4e0fc24e5f95f691fb3f332badb8e8d32ed708118c0f1e019a28ce049800/top10_holder_ratio.parquet
+        sha256: 8690a233c1bb5daeddd54ad88a7c8bdef68be3f1a9dde25e513a517935fc45fb
+  legacy_comparators:
+    - name: same_raw_announcement_projection
+      evidence_class: diagnostic_only
+      non_certifying_reason: same terminal bytes but a different projection contract
+      manifest:
+        path: data/research/source_snapshots/shareholder/ef35654cfc2ba1da62cafcfa5640eda3ebc6b38964182e3569109c7e91be2ea9/manifest.json
+        sha256: a1918dc2af67dbaea9c5032eea8a56ca02d821d615e855b9fd167c5ec522b336
+      holder_num:
+        path: data/research/source_snapshots/shareholder/ef35654cfc2ba1da62cafcfa5640eda3ebc6b38964182e3569109c7e91be2ea9/holder_num.parquet
+        sha256: 039d36c8f56415bdf8be3d166ade2c44b4701543c8a018244d69b0b108ebfadc
+      top10_holder_ratio:
+        path: data/research/source_snapshots/shareholder/ef35654cfc2ba1da62cafcfa5640eda3ebc6b38964182e3569109c7e91be2ea9/top10_holder_ratio.parquet
+        sha256: 69d7523f2ac43027d7a7a5ee3b0c7ff9d71030bf943458e46012ebac9f0e4c41
+    - name: legacy_full_history_projection
+      evidence_class: diagnostic_only
+      non_certifying_reason: no immutable raw payload and trusted terminal receipt backlink
+      manifest:
+        path: data/research/source_snapshots/shareholder/20260821_baseline_complete_v2/manifest.json
+        sha256: c99831f68e7643a6fb20635890c84242ed4c71f9314342297e91d8e55c7036bc
+      holder_num:
+        path: data/research/source_snapshots/shareholder/20260821_baseline_complete_v2/holder_num.parquet
+        sha256: 53e03fa87945a7602f64aa385d5b328d9d2b45375ccca193124c355658e704e1
+      top10_holder_ratio:
+        path: data/research/source_snapshots/shareholder/20260821_baseline_complete_v2/top10_holder_ratio.parquet
+        sha256: 8709f7509e46cd3b8c681099159f9890ee881ab1816ae467e20aa4ae06fe5b4f
+    - name: legacy_short_history_projection
+      evidence_class: diagnostic_only
+      non_certifying_reason: no immutable raw payload and trusted terminal receipt backlink; shorter coverage
+      manifest:
+        path: data/research/source_snapshots/shareholder/20260821_postbootstrap_v1/manifest.json
+        sha256: ca0e0db0790404af8fc0832306ead2fd635191d4122da28bdb34008485875b4b
+      holder_num:
+        path: data/research/source_snapshots/shareholder/20260821_postbootstrap_v1/holder_num.parquet
+        sha256: b43e2483adb19d02abc2602a9e0bc41a16ffe3246b34b3974847561e11f7eeab
+      top10_holder_ratio:
+        path: data/research/source_snapshots/shareholder/20260821_postbootstrap_v1/top10_holder_ratio.parquet
+        sha256: 82bff0a8dc8267280fce0522b2f6f193ada0f45dead58d80bbd1142be738415f

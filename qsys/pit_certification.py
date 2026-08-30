@@ -29,6 +29,11 @@ from qsys.feature.registry import FeatureListRegistry
 
 SCHEMA_VERSION = "pit_baseline_certification_v1"
 EVIDENCE_SNAPSHOT_SCHEMA_VERSION = "pit_evidence_snapshot_v1"
+SOURCE_REVISION_AUDIT_SCHEMA_VERSION = "source_revision_capability_audit_v1"
+FINANCIAL_LATEST_KNOWN_CONTRACT = (
+    "financial_latest_known_actual_publication_v1"
+)
+SHAREHOLDER_VINTAGE_CONTRACT = "shareholder_observed_vintage_revision_v1"
 COVERAGE_COLUMNS = [
     "source", "dataset", "endpoint", "field", "instrument", "date_start",
     "date_end", "scope_kind", "evidence_run_id", "receipt_id", "mutation_id",
@@ -54,6 +59,43 @@ REQUIRED_TERMINAL_GATES = frozenset(
     {"fetch", "raw_payloads", "canonical_commit", "qlib_readback", "readiness", "contiguous_range"}
 )
 MAX_MUTATION_DETAIL_ROWS = 1_000
+
+FINANCIAL_REVISION_VALUE_FIELDS = {
+    "income": ("n_income", "revenue", "oper_cost"),
+    "balancesheet": (
+        "total_assets", "total_hldr_eqy_exc_min_int", "total_cur_assets",
+        "total_cur_liab",
+    ),
+    "cashflow": ("n_cashflow_act",),
+    "fina_indicator": ("roe", "grossprofit_margin", "debt_to_assets"),
+}
+FINANCIAL_STATEMENT_ENDPOINTS = frozenset(
+    {"income", "balancesheet", "cashflow"}
+)
+FINANCIAL_STATEMENT_LOGICAL_KEY = (
+    "ts_code", "end_date", "report_type", "comp_type", "end_type",
+)
+FINANCIAL_INDICATOR_LOGICAL_KEY = ("ts_code", "end_date")
+FINANCIAL_EVENT_COLUMNS = [
+    "endpoint", "receipt_id", "observed_at", "ts_code", "end_date",
+    "logical_key_json", "logical_key_sha256", "publication_date",
+    "publication_evidence", "event_kind", "update_flag", "value_json",
+    "value_sha256", "capability_status",
+]
+SOURCE_REVISION_EXCEPTION_COLUMNS = [
+    "source", "dataset", "endpoint", "reason_code", "instrument",
+    "logical_key_sha256", "publication_date", "row_count", "details_json",
+]
+SHAREHOLDER_VINTAGE_COLUMNS = [
+    "kind", "inst", "ann_date", "end_date", "value", "value_sha256",
+    "vintage_id", "source_run_id", "terminal_receipt_sha256", "observed_at",
+    "vintage_count", "event_value_revision_count",
+    "revision_visibility_status",
+]
+ASOF_SAMPLE_COLUMNS = [
+    "sample_type", "endpoint", "logical_key_sha256", "publication_date",
+    "trade_date", "expected_value_sha256", "observed_value_sha256", "status",
+]
 
 
 class CertificationError(RuntimeError):
@@ -1915,6 +1957,1312 @@ def _reject_symlink_components(path: Path) -> None:
 
 def _write_json(path: Path, value: Any) -> None:
     path.write_text(json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
+def _portable_scalar(value: Any) -> Any:
+    if value is None or value is pd.NA:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+    if hasattr(value, "item"):
+        value = value.item()
+    if isinstance(value, (str, int, float, bool)):
+        return value
+    return str(value)
+
+
+def _normalized_revision_date(value: Any, *, field: str) -> str | None:
+    if value is None or value is pd.NA:
+        return None
+    text = str(value).strip().replace("-", "")
+    if not text or text.lower() == "nan":
+        return None
+    try:
+        return _normal_date(text)
+    except CertificationError as exc:
+        raise CertificationError(f"invalid {field}: {value!r}") from exc
+
+
+def _financial_key_json(row: Mapping[str, Any], fields: Sequence[str]) -> str:
+    return json.dumps(
+        {field: _portable_scalar(row.get(field)) for field in fields},
+        sort_keys=True, ensure_ascii=False, separators=(",", ":"),
+    )
+
+
+def _financial_value_json(row: Mapping[str, Any], fields: Sequence[str]) -> str:
+    return json.dumps(
+        {field: _portable_scalar(row.get(field)) for field in fields},
+        sort_keys=True, ensure_ascii=False, separators=(",", ":"),
+    )
+
+
+def classify_financial_revision_events(
+    frame: pd.DataFrame, *, endpoint: str, availability_cutoff: str | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, Any]]:
+    """Classify raw rows without guessing same-publication revision order.
+
+    A complete key's earliest actual-publication group contains an
+    ``update_flag=0`` row and every publication date has one consumed value
+    tuple. Later, differently dated values are publication events. Conflicting
+    values sharing one date, and right-censored keys whose earliest observed
+    publication is already ``update_flag=1``, stay fail-closed. The flag is not
+    treated as an intra-day or cross-day clock.
+    """
+
+    endpoint = str(endpoint)
+    if endpoint not in FINANCIAL_REVISION_VALUE_FIELDS:
+        raise CertificationError(f"unsupported financial endpoint: {endpoint}")
+    is_statement = endpoint in FINANCIAL_STATEMENT_ENDPOINTS
+    key_fields = (
+        FINANCIAL_STATEMENT_LOGICAL_KEY
+        if is_statement else FINANCIAL_INDICATOR_LOGICAL_KEY
+    )
+    value_fields = FINANCIAL_REVISION_VALUE_FIELDS[endpoint]
+    required = set(key_fields) | {"ann_date", "update_flag", *value_fields}
+    if is_statement:
+        required.add("f_ann_date")
+    missing = sorted(required - set(frame.columns))
+    if missing:
+        raise CertificationError(
+            f"{endpoint} raw payload missing revision fields: {missing}"
+        )
+    cutoff = (
+        _normal_date(availability_cutoff)
+        if availability_cutoff is not None else None
+    )
+    empty_stats = {
+        "raw_rows": 0, "eligible_primary_rows": 0,
+        "excluded_future_rows": 0, "logical_keys": 0,
+        "excluded_missing_end_type_keys": 0,
+        "excluded_missing_end_type_rows": 0,
+        "complete_keys": 0, "blocked_keys": 0, "proven_events": 0,
+        "proven_revision_events": 0, "equivalent_rows_collapsed": 0,
+        "same_publication_conflict_keys": 0,
+        "missing_initial_keys": 0,
+    }
+    if frame.empty:
+        return (
+            pd.DataFrame(columns=FINANCIAL_EVENT_COLUMNS),
+            pd.DataFrame(columns=SOURCE_REVISION_EXCEPTION_COLUMNS),
+            empty_stats,
+        )
+    work = frame.copy()
+    work["ts_code"] = work["ts_code"].astype(str).str.strip().str.upper()
+    if work["ts_code"].eq("").any():
+        raise CertificationError(f"{endpoint} payload contains empty ts_code")
+    work["ann_date"] = work["ann_date"].map(
+        lambda value: _normalized_revision_date(value, field="ann_date")
+    )
+    if work["ann_date"].isna().any():
+        raise CertificationError(f"{endpoint} payload contains null ann_date")
+    work["end_date"] = work["end_date"].map(
+        lambda value: _normalized_revision_date(value, field="end_date")
+    )
+    if work["end_date"].isna().any():
+        raise CertificationError(f"{endpoint} payload contains null end_date")
+    if is_statement:
+        work["f_ann_date"] = work["f_ann_date"].map(
+            lambda value: _normalized_revision_date(value, field="f_ann_date")
+        )
+        final_dates = work["f_ann_date"].fillna(work["ann_date"])
+        work["publication_date"] = work["ann_date"].where(
+            work["ann_date"].ge(final_dates), final_dates,
+        )
+        for field in ("report_type", "comp_type", "end_type"):
+            work[field] = (
+                work[field].astype("string").str.strip()
+                .str.replace(r"\.0$", "", regex=True)
+            )
+        if work["comp_type"].isna().any():
+            raise CertificationError(f"{endpoint} payload contains null comp_type")
+        work = work.loc[work["report_type"].eq("1")].copy()
+        expected_end_type = {
+            "0331": "1", "0630": "2", "0930": "3", "1231": "4",
+        }
+        kept: list[pd.DataFrame] = []
+        excluded_missing_end_type_keys = 0
+        excluded_missing_end_type_rows = 0
+        for (_symbol, end_date), group in work.groupby(
+            ["ts_code", "end_date"], dropna=False, sort=True,
+        ):
+            expected = expected_end_type.get(str(end_date)[-4:])
+            if expected is None:
+                continue
+            end_type = group["end_type"]
+            matched = group.loc[end_type.eq(expected)]
+            if not matched.empty:
+                kept.append(matched)
+            elif end_type.isna().all() or end_type.eq("").all():
+                excluded_missing_end_type_keys += 1
+                excluded_missing_end_type_rows += len(group)
+        work = pd.concat(kept, ignore_index=True) if kept else work.iloc[0:0]
+        publication_evidence = "max_ann_date_f_ann_date"
+    else:
+        excluded_missing_end_type_keys = 0
+        excluded_missing_end_type_rows = 0
+        work["publication_date"] = work["ann_date"]
+        publication_evidence = "ann_date"
+    eligible_primary_rows = int(len(work))
+    excluded_future_rows = int(
+        work["publication_date"].gt(cutoff).sum() if cutoff is not None else 0
+    )
+    if cutoff is not None:
+        work = work.loc[work["publication_date"].le(cutoff)].copy()
+    flags = work["update_flag"].astype("string").str.strip().str.replace(
+        r"\.0$", "", regex=True,
+    )
+    if not flags.isin(["0", "1"]).all():
+        raise CertificationError(f"{endpoint} payload contains invalid update_flag")
+    work["update_flag"] = flags
+    events: list[dict[str, Any]] = []
+    exceptions: list[dict[str, Any]] = []
+    stats = {
+        **empty_stats, "raw_rows": int(len(frame)),
+        "eligible_primary_rows": eligible_primary_rows,
+        "excluded_future_rows": excluded_future_rows,
+        "excluded_missing_end_type_keys": excluded_missing_end_type_keys,
+        "excluded_missing_end_type_rows": excluded_missing_end_type_rows,
+    }
+    for key, group in work.groupby(list(key_fields), dropna=False, sort=True):
+        stats["logical_keys"] += 1
+        key_values = key if isinstance(key, tuple) else (key,)
+        key_mapping = dict(zip(key_fields, key_values))
+        key_json = _financial_key_json(key_mapping, key_fields)
+        key_sha = _sha256_bytes(key_json.encode("utf-8"))
+        earliest_publication = str(group["publication_date"].min())
+        earliest_group = group.loc[
+            group["publication_date"].astype(str).eq(earliest_publication)
+        ]
+        has_initial = earliest_group["update_flag"].eq("0").any()
+        conflict_dates: list[str] = []
+        candidates: list[tuple[str, pd.Series, str, int]] = []
+        for publication_date, published in group.groupby(
+            "publication_date", dropna=False, sort=True,
+        ):
+            payloads: dict[str, tuple[pd.Series, str, int]] = {}
+            for _index, row in published.iterrows():
+                value_json = _financial_value_json(row, value_fields)
+                value_sha = _sha256_bytes(value_json.encode("utf-8"))
+                previous = payloads.get(value_sha)
+                if previous is None:
+                    payloads[value_sha] = (row, value_json, 1)
+                else:
+                    payloads[value_sha] = (previous[0], previous[1], previous[2] + 1)
+            if len(payloads) != 1:
+                conflict_dates.append(str(publication_date))
+                exceptions.append({
+                    "source": "tushare", "dataset": "canonical_daily",
+                    "endpoint": endpoint,
+                    "reason_code": "SAME_PUBLICATION_VALUE_CONFLICT",
+                    "instrument": str(key_mapping.get("ts_code") or ""),
+                    "logical_key_sha256": key_sha,
+                    "publication_date": str(publication_date),
+                    "row_count": int(len(published)),
+                    "details_json": json.dumps({
+                        "logical_key": json.loads(key_json),
+                        "distinct_value_count": len(payloads),
+                        "distinct_values": [
+                            json.loads(item[1])
+                            for _hash, item in sorted(payloads.items())
+                        ],
+                        "update_flags": sorted(published["update_flag"].unique()),
+                        "contract": FINANCIAL_LATEST_KNOWN_CONTRACT,
+                    }, sort_keys=True, ensure_ascii=False),
+                })
+                continue
+            value_sha, (row, value_json, duplicate_count) = next(iter(payloads.items()))
+            stats["equivalent_rows_collapsed"] += duplicate_count - 1
+            candidates.append((str(publication_date), row, value_json, duplicate_count))
+        blocked = bool(conflict_dates) or not has_initial
+        if not has_initial:
+            stats["missing_initial_keys"] += 1
+            exceptions.append({
+                "source": "tushare", "dataset": "canonical_daily",
+                "endpoint": endpoint,
+                "reason_code": "INITIAL_PUBLICATION_VALUE_MISSING",
+                "instrument": str(key_mapping.get("ts_code") or ""),
+                "logical_key_sha256": key_sha, "publication_date": None,
+                "row_count": int(len(group)),
+                "details_json": json.dumps({
+                    "logical_key": json.loads(key_json),
+                    "earliest_publication_date": earliest_publication,
+                    "earliest_update_flags": sorted(
+                        earliest_group["update_flag"].unique()
+                    ),
+                    "reason": (
+                        "earliest observed publication group lacks update_flag=0; "
+                        "a later flag=0 does not prove the missing initial timeline"
+                    ),
+                    "contract": FINANCIAL_LATEST_KNOWN_CONTRACT,
+                }, sort_keys=True, ensure_ascii=False),
+            })
+        if conflict_dates:
+            stats["same_publication_conflict_keys"] += 1
+        stats["blocked_keys" if blocked else "complete_keys"] += 1
+        previous_sha: str | None = None
+        for position, (publication_date, row, value_json, _duplicates) in enumerate(
+            sorted(candidates, key=lambda item: item[0])
+        ):
+            value_sha = _sha256_bytes(value_json.encode("utf-8"))
+            if position == 0:
+                event_kind = (
+                    "INITIAL_PUBLICATION" if has_initial
+                    else "RIGHT_CENSORED_FIRST_OBSERVED"
+                )
+            elif value_sha == previous_sha:
+                event_kind = "EQUIVALENT_REPUBLICATION"
+            else:
+                event_kind = (
+                    "REVISION_PUBLICATION" if has_initial
+                    else "UNORDERED_REVISION_CANDIDATE"
+                )
+            if event_kind == "REVISION_PUBLICATION":
+                stats["proven_revision_events"] += int(not blocked)
+            event = {
+                "endpoint": endpoint, "receipt_id": None, "observed_at": None,
+                "ts_code": str(key_mapping.get("ts_code") or ""),
+                "end_date": str(key_mapping.get("end_date") or ""),
+                "logical_key_json": key_json, "logical_key_sha256": key_sha,
+                "publication_date": publication_date,
+                "publication_evidence": publication_evidence,
+                "event_kind": event_kind,
+                "update_flag": str(row["update_flag"]),
+                "value_json": value_json, "value_sha256": value_sha,
+                "capability_status": (
+                    "PROVEN_COMPLETE_KEY" if not blocked else "BLOCKED_INCOMPLETE_KEY"
+                ),
+            }
+            events.append(event)
+            stats["proven_events"] += int(not blocked)
+            previous_sha = value_sha
+    return (
+        pd.DataFrame(events, columns=FINANCIAL_EVENT_COLUMNS),
+        pd.DataFrame(exceptions, columns=SOURCE_REVISION_EXCEPTION_COLUMNS),
+        stats,
+    )
+
+
+def resolve_financial_events_as_of(
+    events: pd.DataFrame, *, trade_date: str,
+) -> pd.DataFrame:
+    """Resolve only complete event keys with strict publication-before-trade visibility."""
+
+    cutoff = _normal_date(trade_date)
+    if events.empty:
+        return events.copy()
+    eligible = events.loc[
+        events["capability_status"].eq("PROVEN_COMPLETE_KEY")
+        & events["publication_date"].astype(str).lt(cutoff)
+    ].copy()
+    if eligible.empty:
+        return eligible
+    return eligible.sort_values(
+        ["logical_key_sha256", "publication_date"], kind="mergesort",
+    ).drop_duplicates("logical_key_sha256", keep="last").reset_index(drop=True)
+
+
+def _load_revision_terminal(
+    *, audit_db: Path, reference: Mapping[str, Any], require_trusted: bool = True,
+) -> tuple[dict[str, Any], str]:
+    run_id = str(reference.get("run_id") or "")
+    expected_sha = str(reference.get("sha256") or "").lower()
+    if (
+        not run_id or run_id in {".", ".."}
+        or not all(char.isalnum() or char in "_.-" for char in run_id)
+        or len(expected_sha) != 64
+    ):
+        raise CertificationError("invalid source revision terminal identity")
+    path = audit_db.resolve().parent / "source_runs" / run_id / "receipt.json"
+    _reject_symlink_components(path.absolute())
+    try:
+        path = path.resolve(strict=True)
+    except OSError as exc:
+        raise CertificationError(f"source revision terminal missing: {run_id}") from exc
+    if sha256_file(path) != expected_sha:
+        raise CertificationError(f"source revision terminal sha256 mismatch: {run_id}")
+    terminal = json.loads(path.read_text(encoding="utf-8"))
+    gates = terminal.get("terminal_gates")
+    if (
+        terminal.get("schema_version") != 1 or terminal.get("run_id") != run_id
+        or not isinstance(terminal.get("fetch_receipts"), list)
+        or not isinstance(gates, Mapping)
+        or set(gates) != REQUIRED_TERMINAL_GATES
+    ):
+        raise CertificationError(f"invalid source revision terminal: {run_id}")
+    if require_trusted and (
+        terminal.get("trust_state") not in {"trusted", "trusted_unchanged"}
+        or any(gates.get(name) is not True for name in REQUIRED_TERMINAL_GATES)
+    ):
+        raise CertificationError(f"source revision terminal is not trusted: {run_id}")
+    return terminal, expected_sha
+
+
+def _read_verified_revision_payload(
+    *, data_root: Path, fetch: Mapping[str, Any], endpoint: str,
+) -> pd.DataFrame:
+    if (
+        fetch.get("endpoint") != endpoint or fetch.get("status") != "success"
+        or fetch.get("payload_kind") != "raw_supplier"
+    ):
+        raise CertificationError(f"invalid {endpoint} revision payload receipt")
+    relative = Path(str(fetch.get("payload_path") or ""))
+    expected_sha = str(fetch.get("payload_sha256") or "").lower()
+    if relative.is_absolute() or ".." in relative.parts or len(expected_sha) != 64:
+        raise CertificationError(f"unsafe {endpoint} revision payload identity")
+    path = (data_root / relative).resolve()
+    if (data_root != path and data_root not in path.parents) or not path.is_file():
+        raise CertificationError(f"{endpoint} revision payload missing")
+    if sha256_file(path) != expected_sha:
+        raise CertificationError(f"{endpoint} revision payload sha256 mismatch")
+    frame = pd.read_parquet(path)
+    if int(fetch.get("returned_rows") or -1) != len(frame):
+        raise CertificationError(f"{endpoint} revision payload row count mismatch")
+    return frame
+
+
+def _audit_financial_revision_terminal(
+    *, terminal: Mapping[str, Any], data_root: Path,
+    availability_cutoff: str,
+) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, Any]]:
+    event_frames: list[pd.DataFrame] = []
+    exception_frames: list[pd.DataFrame] = []
+    endpoint_summaries: dict[str, dict[str, int]] = {}
+    fetches = terminal["fetch_receipts"]
+    for endpoint in FINANCIAL_REVISION_VALUE_FIELDS:
+        selected = [
+            row for row in fetches
+            if isinstance(row, Mapping) and row.get("endpoint") == endpoint
+        ]
+        if not selected:
+            raise CertificationError(f"financial terminal lacks endpoint: {endpoint}")
+        summary = {
+            "receipt_count": len(selected), "raw_rows": 0,
+            "eligible_primary_rows": 0, "excluded_future_rows": 0,
+            "excluded_missing_end_type_keys": 0,
+            "excluded_missing_end_type_rows": 0,
+            "logical_keys": 0,
+            "complete_keys": 0, "blocked_keys": 0, "proven_events": 0,
+            "proven_revision_events": 0, "equivalent_rows_collapsed": 0,
+            "same_publication_conflict_keys": 0, "missing_initial_keys": 0,
+            "published_at_nonnull_receipts": 0,
+        }
+        for fetch in selected:
+            status = str(fetch.get("status") or "")
+            if status == "empty":
+                if fetch.get("payload_path") is not None:
+                    raise CertificationError(
+                        f"empty {endpoint} receipt unexpectedly has a payload"
+                    )
+                continue
+            frame = _read_verified_revision_payload(
+                data_root=data_root, fetch=fetch, endpoint=endpoint,
+            )
+            events, exceptions, stats = classify_financial_revision_events(
+                frame, endpoint=endpoint,
+                availability_cutoff=availability_cutoff,
+            )
+            if not events.empty:
+                events["receipt_id"] = str(fetch.get("receipt_id") or "")
+                events["observed_at"] = str(fetch.get("observed_at") or "")
+                event_frames.append(events)
+            if not exceptions.empty:
+                exception_frames.append(exceptions)
+            for key, value in stats.items():
+                summary[key] += int(value)
+            summary["published_at_nonnull_receipts"] += int(
+                fetch.get("published_at") is not None
+            )
+        endpoint_summaries[endpoint] = summary
+    events = (
+        pd.concat(event_frames, ignore_index=True)
+        if event_frames else pd.DataFrame(columns=FINANCIAL_EVENT_COLUMNS)
+    )
+    exceptions = (
+        pd.concat(exception_frames, ignore_index=True)
+        if exception_frames
+        else pd.DataFrame(columns=SOURCE_REVISION_EXCEPTION_COLUMNS)
+    )
+    return events, exceptions, {
+        "contract": FINANCIAL_LATEST_KNOWN_CONTRACT,
+        "terminal_run_id": terminal["run_id"],
+        "terminal_range_end": terminal.get("range_end"),
+        "r3_feature_date_end": availability_cutoff,
+        "endpoint_summaries": endpoint_summaries,
+        "candidate_event_count": int(len(events)),
+        "proven_event_count": sum(
+            item["proven_events"] for item in endpoint_summaries.values()
+        ),
+        "proven_revision_event_count": sum(
+            item["proven_revision_events"] for item in endpoint_summaries.values()
+        ),
+        "exception_count": int(len(exceptions)),
+        "complete_key_count": sum(
+            item["complete_keys"] for item in endpoint_summaries.values()
+        ),
+        "blocked_key_count": sum(
+            item["blocked_keys"] for item in endpoint_summaries.values()
+        ),
+    }
+
+
+def _audit_shareholder_vintages(
+    *, project: Path, audit_db: Path, specs: Sequence[Mapping[str, Any]],
+    availability_cutoff: str,
+) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, Any]]:
+    cutoff = _normal_date(availability_cutoff)
+    frames: list[pd.DataFrame] = []
+    vintage_ids: set[str] = set()
+    for index, spec in enumerate(specs):
+        if not isinstance(spec, Mapping):
+            raise CertificationError("shareholder vintage spec must be a mapping")
+        terminal_ref = spec.get("terminal")
+        if not isinstance(terminal_ref, Mapping):
+            raise CertificationError("shareholder vintage terminal is missing")
+        terminal, terminal_sha = _load_revision_terminal(
+            audit_db=audit_db, reference=terminal_ref,
+        )
+        manifest_spec = spec.get("manifest")
+        holder_spec = spec.get("holder_num")
+        top10_spec = spec.get("top10_holder_ratio")
+        if not all(isinstance(item, Mapping) for item in (
+            manifest_spec, holder_spec, top10_spec,
+        )):
+            raise CertificationError("shareholder vintage artifact identities are missing")
+        manifest_path = _verify_identity(project, manifest_spec, "shareholder manifest")
+        holder_path = _verify_identity(project, holder_spec, "shareholder holder_num")
+        top10_path = _verify_identity(
+            project, top10_spec, "shareholder top10_holder_ratio",
+        )
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        identity = manifest.get("identity") or {}
+        artifacts = manifest.get("artifacts") or {}
+        if (
+            manifest.get("artifact_type") != "audited_shareholder_pit_sidecars_v2"
+            or identity.get("source_run_id") != terminal["run_id"]
+            or identity.get("terminal_receipt_sha256") != terminal_sha
+            or (artifacts.get("holder_num") or {}).get("sha256")
+            != sha256_file(holder_path)
+            or (artifacts.get("top10_holder_ratio") or {}).get("sha256")
+            != sha256_file(top10_path)
+        ):
+            raise CertificationError("shareholder vintage manifest backlink mismatch")
+        vintage_id = str(manifest.get("artifact_id") or f"vintage-{index}")
+        if vintage_id in vintage_ids:
+            raise CertificationError("duplicate shareholder vintage identity")
+        vintage_ids.add(vintage_id)
+        observed_at = str(terminal.get("exported_at") or "")
+        for kind, path, value_column in (
+            ("holder_num", holder_path, "holder_num"),
+            ("top10_holder_ratio", top10_path, "top10_ratio"),
+        ):
+            frame = pd.read_parquet(path)
+            required = {"inst", "ann_date", "end_date", value_column}
+            if not required.issubset(frame.columns):
+                raise CertificationError(
+                    f"shareholder {kind} vintage missing columns: {sorted(required - set(frame.columns))}"
+                )
+            part = frame[["inst", "ann_date", "end_date", value_column]].copy()
+            part = part.rename(columns={value_column: "value"})
+            part["kind"] = kind
+            part["inst"] = part["inst"].astype(str).str.strip().str.upper()
+            part["ann_date"] = part["ann_date"].map(
+                lambda value: _normal_date(str(value)[:10].replace("-", ""))
+            )
+            part["end_date"] = part["end_date"].map(
+                lambda value: _normal_date(str(value)[:10].replace("-", ""))
+            )
+            part = part.loc[part["ann_date"].le(cutoff)].copy()
+            part["value"] = pd.to_numeric(part["value"], errors="coerce")
+            if part["value"].isna().any():
+                raise CertificationError(f"shareholder {kind} vintage contains null values")
+            part["value_sha256"] = part["value"].map(
+                lambda value: _sha256_bytes(
+                    _canonical_bytes(_portable_scalar(value))
+                )
+            )
+            part["vintage_id"] = vintage_id
+            part["source_run_id"] = terminal["run_id"]
+            part["terminal_receipt_sha256"] = terminal_sha
+            part["observed_at"] = observed_at
+            frames.append(part)
+    vintages = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    if vintages.empty:
+        raise CertificationError("shareholder revision audit has no vintage rows")
+    vintages, distinct = classify_shareholder_vintage_events(vintages)
+    exception_rows = []
+    for kind, group in distinct.groupby("kind", sort=True):
+        exception_rows.append({
+            "source": "tushare", "dataset": f"shareholder_{kind}",
+            "endpoint": (
+                "stk_holdernumber" if kind == "holder_num" else "top10_holders"
+            ),
+            "reason_code": "SHAREHOLDER_HISTORICAL_REVISION_TIMELINE_UNPROVEN",
+            "instrument": None, "logical_key_sha256": None,
+            "publication_date": None, "row_count": int(len(group)),
+            "details_json": json.dumps({
+                "contract": SHAREHOLDER_VINTAGE_CONTRACT,
+                "source_vintage_count": len(vintage_ids),
+                "actual_publication_timestamp_available": False,
+                "reason": (
+                    "ann_date has no revision timestamp; observed_at is only a "
+                    "conservative upper bound for changes seen between vintages"
+                ),
+            }, sort_keys=True, ensure_ascii=False),
+        })
+    exceptions = pd.DataFrame(
+        exception_rows, columns=SOURCE_REVISION_EXCEPTION_COLUMNS,
+    )
+    return (
+        vintages[SHAREHOLDER_VINTAGE_COLUMNS].sort_values(
+            ["kind", "inst", "ann_date", "end_date", "observed_at"],
+            kind="mergesort",
+        ).reset_index(drop=True),
+        exceptions,
+        {
+            "contract": SHAREHOLDER_VINTAGE_CONTRACT,
+            "r3_feature_date_end": cutoff,
+            "source_vintage_count": len(vintage_ids),
+            "vintage_row_count": int(len(vintages)),
+            "unique_event_key_count": int(len(distinct)),
+            "single_vintage_event_key_count": int(
+                distinct["vintage_count"].eq(1).sum()
+            ),
+            "multi_vintage_event_key_count": int(
+                distinct["vintage_count"].gt(1).sum()
+            ),
+            "observed_changed_event_key_count": int(
+                distinct["event_value_revision_count"].gt(0).sum()
+            ),
+            "actual_publication_timestamp_event_key_count": 0,
+        },
+    )
+
+
+def classify_shareholder_vintage_events(
+    vintages: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Annotate exact shareholder facts without collapsing report periods."""
+
+    key_fields = ["kind", "inst", "ann_date", "end_date"]
+    required = {*key_fields, "value_sha256", "vintage_id"}
+    missing = sorted(required - set(vintages.columns))
+    if missing:
+        raise CertificationError(
+            f"shareholder vintage events missing fields: {missing}"
+        )
+    work = vintages.copy()
+    if work.duplicated([*key_fields, "vintage_id"]).any():
+        raise CertificationError(
+            "shareholder vintage contains duplicate exact fact/vintage keys"
+        )
+    key_fields = ["kind", "inst", "ann_date", "end_date"]
+    counts = work.groupby(key_fields, sort=False)["vintage_id"].transform("nunique")
+    revisions = work.groupby(key_fields, sort=False)["value_sha256"].transform(
+        "nunique"
+    ) - 1
+    work["vintage_count"] = counts.astype(int)
+    work["event_value_revision_count"] = revisions.astype(int)
+    work["revision_visibility_status"] = "SINGLE_VINTAGE_REVISION_UNVERIFIED"
+    work.loc[counts.gt(1) & revisions.eq(0), "revision_visibility_status"] = (
+        "MULTI_VINTAGE_NO_CHANGE_OBSERVED"
+    )
+    work.loc[counts.gt(1) & revisions.gt(0), "revision_visibility_status"] = (
+        "OBSERVED_REVISION_UPPER_BOUND_ONLY"
+    )
+    distinct = work.drop_duplicates(key_fields)
+    return work, distinct
+
+
+def _load_trade_calendar(
+    *, project: Path, spec: Mapping[str, Any], availability_cutoff: str,
+) -> tuple[list[str], dict[str, str]]:
+    path = _verify_identity(project, spec, "source revision trade calendar")
+    cutoff = _normal_date(availability_cutoff)
+    dates: list[str] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        text = line.strip()
+        if not text:
+            continue
+        date = _normal_date(text[:10].replace("-", ""))
+        if date <= cutoff:
+            dates.append(date)
+    dates = sorted(set(dates))
+    if not dates:
+        raise CertificationError("source revision trade calendar is empty")
+    return dates, {
+        "path": path.relative_to(project).as_posix(),
+        "sha256": sha256_file(path),
+    }
+
+
+def _financial_asof_samples(
+    events: pd.DataFrame, *, trade_dates: Sequence[str],
+) -> pd.DataFrame:
+    samples: list[dict[str, Any]] = []
+    complete = events.loc[
+        events["capability_status"].eq("PROVEN_COMPLETE_KEY")
+    ].copy()
+    for endpoint in FINANCIAL_REVISION_VALUE_FIELDS:
+        endpoint_frame = complete.loc[complete["endpoint"].eq(endpoint)]
+        sampled = 0
+        for key, group in endpoint_frame.groupby("logical_key_sha256", sort=True):
+            group = group.sort_values("publication_date", kind="mergesort")
+            revisions = group.loc[group["event_kind"].eq("REVISION_PUBLICATION")]
+            if revisions.empty:
+                continue
+            revision = revisions.iloc[0]
+            publication = str(revision["publication_date"])
+            previous = group.loc[
+                group["publication_date"].astype(str).lt(publication)
+            ].iloc[-1]
+            before_candidates = [date for date in trade_dates if date <= publication]
+            after_candidates = [date for date in trade_dates if date > publication]
+            if not before_candidates or not after_candidates:
+                continue
+            before_trade = before_candidates[-1]
+            after_trade = after_candidates[0]
+            before = resolve_financial_events_as_of(
+                group, trade_date=before_trade,
+            )
+            after = resolve_financial_events_as_of(
+                group, trade_date=after_trade,
+            )
+            for sample_type, trade_date, expected, resolved in (
+                (
+                    "REVISION_NOT_VISIBLE_THROUGH_PUBLICATION_DATE", before_trade,
+                    str(previous["value_sha256"]), before,
+                ),
+                (
+                    "REVISION_VISIBLE_ON_FIRST_LATER_TRADE", after_trade,
+                    str(revision["value_sha256"]), after,
+                ),
+            ):
+                observed = (
+                    str(resolved.iloc[-1]["value_sha256"])
+                    if not resolved.empty else None
+                )
+                samples.append({
+                    "sample_type": sample_type, "endpoint": endpoint,
+                    "logical_key_sha256": key,
+                    "publication_date": publication, "trade_date": trade_date,
+                    "expected_value_sha256": expected,
+                    "observed_value_sha256": observed,
+                    "status": "PASS" if observed == expected else "FAIL",
+                })
+            sampled += 1
+            if sampled >= 1:
+                break
+    return pd.DataFrame(samples, columns=ASOF_SAMPLE_COLUMNS)
+
+
+def _validate_r3_source_blockers(
+    *, project: Path, spec: Mapping[str, Any], feature_date_end: str,
+) -> dict[str, Any]:
+    audit_id = str(spec.get("audit_id") or "")
+    receipt_spec = spec.get("audit_receipt")
+    exceptions_spec = spec.get("exceptions")
+    if not audit_id or not all(
+        isinstance(item, Mapping) for item in (receipt_spec, exceptions_spec)
+    ):
+        raise CertificationError("R3 source blocker identity is incomplete")
+    receipt_path = _verify_identity(
+        project, receipt_spec, "R3 certification receipt",
+    )
+    exceptions_path = _verify_identity(
+        project, exceptions_spec, "R3 certification exceptions",
+    )
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    if (
+        receipt.get("audit_id") != audit_id
+        or receipt.get("baseline_status") != "BLOCKED"
+        or (receipt.get("artifacts") or {}).get("exceptions.parquet")
+        != sha256_file(exceptions_path)
+    ):
+        raise CertificationError("R3 source blocker backlink mismatch")
+    exceptions = pd.read_parquet(exceptions_path)
+    required = {"reason_code", "affected_features_json"}
+    if not required.issubset(exceptions.columns):
+        raise CertificationError("R3 exceptions lack source blocker fields")
+    feature_sets: dict[str, set[str]] = {
+        "shareholder": set(), "financial": set(),
+    }
+    reason_counts: dict[str, int] = {}
+    for _index, row in exceptions.iterrows():
+        reason = str(row["reason_code"])
+        reason_counts[reason] = reason_counts.get(reason, 0) + 1
+        if reason == "SHAREHOLDER_REVISION_CAPABILITY_UNVERIFIED":
+            target = feature_sets["shareholder"]
+        elif reason == "FINANCIAL_LATEST_KNOWN_REVISION_CAPABILITY_UNVERIFIED":
+            target = feature_sets["financial"]
+        else:
+            continue
+        values = json.loads(str(row["affected_features_json"]))
+        if not isinstance(values, list):
+            raise CertificationError("R3 affected_features_json is not a list")
+        target.update(str(value) for value in values)
+    expected = spec.get("expected") or {}
+    actual = {
+        "exception_rows": int(len(exceptions)),
+        "shareholder_unique_features": len(feature_sets["shareholder"]),
+        "financial_unique_features": len(feature_sets["financial"]),
+    }
+    for key, value in actual.items():
+        if int(expected.get(key, -1)) != value:
+            raise CertificationError(
+                f"R3 source blocker count mismatch for {key}: {value}"
+            )
+    return {
+        "audit_id": audit_id,
+        "feature_date_end": _normal_date(feature_date_end),
+        "audit_receipt": {
+            "path": receipt_path.relative_to(project).as_posix(),
+            "sha256": sha256_file(receipt_path),
+        },
+        "exceptions": {
+            "path": exceptions_path.relative_to(project).as_posix(),
+            "sha256": sha256_file(exceptions_path),
+        },
+        **actual,
+        "reason_counts": reason_counts,
+        "shareholder_features": sorted(feature_sets["shareholder"]),
+        "financial_features": sorted(feature_sets["financial"]),
+    }
+
+
+def _shareholder_legacy_comparator_deltas(
+    *, project: Path, current: pd.DataFrame,
+    specs: Sequence[Mapping[str, Any]], availability_cutoff: str,
+) -> list[dict[str, Any]]:
+    cutoff = _normal_date(availability_cutoff)
+    key_fields = ["kind", "inst", "ann_date", "end_date"]
+    current_keys = current[key_fields + ["value"]].copy()
+    if current_keys.duplicated(key_fields).any():
+        raise CertificationError(
+            "current shareholder vintage contains duplicate exact event keys"
+        )
+    results: list[dict[str, Any]] = []
+    for spec in specs:
+        if not isinstance(spec, Mapping):
+            raise CertificationError("legacy shareholder comparator must be a mapping")
+        name = str(spec.get("name") or "")
+        manifest_spec = spec.get("manifest")
+        if not name or not isinstance(manifest_spec, Mapping):
+            raise CertificationError("legacy shareholder comparator identity missing")
+        manifest_path = _verify_identity(
+            project, manifest_spec, f"legacy shareholder comparator {name}",
+        )
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        by_kind: dict[str, Any] = {}
+        for kind, value_column, request_key in (
+            ("holder_num", "holder_num", "holder_num"),
+            ("top10_holder_ratio", "top10_ratio", "top10_holder_ratio"),
+        ):
+            artifact_spec = spec.get(request_key)
+            if not isinstance(artifact_spec, Mapping):
+                raise CertificationError(
+                    f"legacy shareholder comparator {name} lacks {request_key}"
+                )
+            path = _verify_identity(
+                project, artifact_spec, f"legacy {name} {request_key}",
+            )
+            manifest_artifact = (manifest.get("artifacts") or {}).get(request_key) or {}
+            if manifest_artifact.get("sha256") != sha256_file(path):
+                raise CertificationError(
+                    f"legacy shareholder comparator {name} backlink mismatch"
+                )
+            frame = pd.read_parquet(path)
+            required = {"inst", "ann_date", "end_date", value_column}
+            if not required.issubset(frame.columns):
+                raise CertificationError(
+                    f"legacy shareholder comparator {name} lacks exact event fields"
+                )
+            candidate = frame[list(required)].copy().rename(
+                columns={value_column: "candidate_value"}
+            )
+            candidate["kind"] = kind
+            candidate["inst"] = candidate["inst"].astype(str).str.strip().str.upper()
+            candidate["ann_date"] = candidate["ann_date"].map(
+                lambda value: _normal_date(str(value)[:10].replace("-", ""))
+            )
+            candidate["end_date"] = candidate["end_date"].map(
+                lambda value: _normalized_revision_date(value, field="end_date")
+            )
+            candidate = candidate.loc[candidate["ann_date"].le(cutoff)].copy()
+            missing_end_date_rows = int(candidate["end_date"].isna().sum())
+            candidate = candidate.loc[candidate["end_date"].notna()].copy()
+            if candidate.duplicated(key_fields).any():
+                raise CertificationError(
+                    f"legacy shareholder comparator {name} has duplicate exact keys"
+                )
+            base = current_keys.loc[current_keys["kind"].eq(kind)].rename(
+                columns={"value": "current_value"}
+            )
+            merged = base.merge(candidate, on=key_fields, how="outer", indicator=True)
+            overlap = merged.loc[merged["_merge"].eq("both")].copy()
+            difference = (overlap["current_value"] - overlap["candidate_value"]).abs()
+            tolerance = 1e-9 + 1e-9 * overlap["candidate_value"].abs()
+            changed = overlap.loc[difference.gt(tolerance)]
+            examples = [
+                {
+                    **{field: _portable_scalar(row[field]) for field in key_fields},
+                    "current_value": _portable_scalar(row["current_value"]),
+                    "candidate_value": _portable_scalar(row["candidate_value"]),
+                }
+                for _index, row in changed.head(3).iterrows()
+            ]
+            by_kind[kind] = {
+                "current_rows": int(len(base)),
+                "candidate_rows": int(len(candidate)),
+                "excluded_missing_end_date_rows": missing_end_date_rows,
+                "overlap_rows": int(len(overlap)),
+                "equal_value_rows": int(len(overlap) - len(changed)),
+                "changed_value_rows": int(len(changed)),
+                "current_only_rows": int(merged["_merge"].eq("left_only").sum()),
+                "candidate_only_rows": int(merged["_merge"].eq("right_only").sum()),
+                "changed_examples": examples,
+            }
+        results.append({
+            "name": name,
+            "evidence_class": str(spec.get("evidence_class") or "diagnostic_only"),
+            "non_certifying_reason": str(spec.get("non_certifying_reason") or ""),
+            "manifest": {
+                "path": manifest_path.relative_to(project).as_posix(),
+                "sha256": sha256_file(manifest_path),
+            },
+            "manifest_contract": (
+                (manifest.get("identity") or {}).get("contract")
+                or (manifest.get("contracts") or {}).get("transform")
+                or manifest.get("snapshot_id")
+            ),
+            "by_kind": by_kind,
+        })
+    return results
+
+
+def _source_revision_report(
+    *, status: str, financial: Mapping[str, Any], shareholder: Mapping[str, Any],
+    r3: Mapping[str, Any], legacy_comparators: Sequence[Mapping[str, Any]],
+    exception_count: int, sample_count: int,
+) -> str:
+    lines = [
+        "# Source Revision Capability Audit", "", f"Status: **{status}**", "",
+        "This is a read-only data-certification artifact. It is not a training,",
+        "signal, feature-cache, backtest, model, strategy, or accounting input.", "",
+        "## Business contracts", "",
+        f"- Financial: `{FINANCIAL_LATEST_KNOWN_CONTRACT}`.",
+        "  Statements use `max(ann_date, f_ann_date)` and indicators use `ann_date`.",
+        "  A value is visible only to trade dates strictly after that actual",
+        "  publication date. The earliest date group must contain `update_flag=0`;",
+        "  a flag appearing later is not a clock. Same-date conflicting values",
+        "  remain blocked; equal duplicates collapse without creating an event.",
+        f"- Shareholder: `{SHAREHOLDER_VINTAGE_CONTRACT}`.",
+        "  The exact fact key is `(kind, inst, ann_date, end_date, vintage)`.",
+        "  `ann_date` proves only the declared date. A terminal snapshot is one",
+        "  vintage; `observed_at` can upper-bound a later observed change but cannot",
+        "  be promoted to its historical publication time.", "",
+        "## R3 scope", "",
+        f"- Upstream certification: `{r3['audit_id']}`",
+        f"- Feature/prediction date end: `{r3['feature_date_end']}`",
+        f"- Upstream blockers: {r3['exception_rows']:,} exception rows,",
+        f"  {r3['shareholder_unique_features']:,} unique shareholder features and",
+        f"  {r3['financial_unique_features']:,} unique financial features.", "",
+        "## Frozen evidence result", "",
+        f"- Financial candidate rows: {financial['candidate_event_count']:,}",
+        f"- Financial orderable events: {financial['proven_event_count']:,}",
+        f"- Financial value revisions: {financial['proven_revision_event_count']:,}",
+        f"- Financial complete logical keys: {financial['complete_key_count']:,}",
+        f"- Financial blocked logical keys: {financial['blocked_key_count']:,}",
+        f"- Shareholder source vintages: {shareholder['source_vintage_count']:,}",
+        f"- Shareholder exact event keys: {shareholder['unique_event_key_count']:,}",
+        f"- Blocking exception rows: {exception_count:,}",
+        f"- Trade-calendar event/as-of samples: {sample_count:,}", "",
+        "### Financial endpoint counts", "",
+        "| Endpoint | Complete keys | Right-censored keys | Same-date conflict keys | Orderable events | Value revisions |",
+        "| --- | ---: | ---: | ---: | ---: | ---: |",
+    ]
+    for endpoint, item in financial["endpoint_summaries"].items():
+        lines.append(
+            f"| {endpoint} | {item['complete_keys']:,} | "
+            f"{item['missing_initial_keys']:,} | "
+            f"{item['same_publication_conflict_keys']:,} | "
+            f"{item['proven_events']:,} | "
+            f"{item['proven_revision_events']:,} |"
+        )
+    lines.extend([
+        "", "### Legacy shareholder comparators", "",
+        "Legacy snapshots and alternate projections are diagnostic comparators,",
+        "not source vintages. Value deltas can be caused by coverage or transform",
+        "semantics and therefore are not supplier-revision evidence.", "",
+    ])
+    for comparator in legacy_comparators:
+        lines.append(f"- `{comparator['name']}`: {comparator['non_certifying_reason']}")
+        for kind, item in comparator["by_kind"].items():
+            lines.append(
+                f"  `{kind}` overlap {item['overlap_rows']:,}; changed values "
+                f"{item['changed_value_rows']:,}; current-only "
+                f"{item['current_only_rows']:,}; comparator-only "
+                f"{item['candidate_only_rows']:,}; excluded missing `end_date` "
+                f"{item['excluded_missing_end_date_rows']:,}."
+            )
+    lines.extend([
+        "",
+        "## Verdict", "",
+        "Frozen bytes support the emitted proven financial event subset and the",
+        "shareholder snapshot inventory. They do not prove a complete historical",
+        "latest-known revision timeline, so this audit does not close the R3 blocker.",
+        "", "## Legal supplementation paths", "",
+        "1. Import immutable historical supplier snapshots that pre-date each change",
+        "   and preserve their original receipt/observation identity.",
+        "2. Bind revision values to official announcement versions. Tushare `anns_d`",
+        "   exposes announcement `rec_time` and original PDF URLs; the PDF/version",
+        "   parser must prove the exact value tuple before it can close a key.",
+        "3. Capture new terminal vintages going forward. This can prove only the",
+        "   conservative first-observed bound, never backfill earlier publication time.",
+        "4. Otherwise obtain a licensed PIT/versioned financial and shareholder feed.",
+        "", "Normal `data_sync` is neither required nor permitted for these paths.", "",
+    ])
+    return "\n".join(lines)
+
+
+def _validate_source_revision_count_contract(
+    *, request: Mapping[str, Any], financial: Mapping[str, Any],
+    shareholder: Mapping[str, Any], sample_count: int,
+) -> dict[str, Any]:
+    endpoint_counts = {
+        endpoint: {
+            "logical_keys": item["logical_keys"],
+            "complete_keys": item["complete_keys"],
+            "blocked_keys": item["blocked_keys"],
+            "right_censored_keys": item["missing_initial_keys"],
+            "same_publication_conflict_keys": (
+                item["same_publication_conflict_keys"]
+            ),
+            "orderable_events": item["proven_events"],
+            "value_revisions": item["proven_revision_events"],
+        }
+        for endpoint, item in financial["endpoint_summaries"].items()
+    }
+    observed_financial = {
+        "logical_keys": sum(item["logical_keys"] for item in endpoint_counts.values()),
+        "complete_keys": financial["complete_key_count"],
+        "blocked_keys": financial["blocked_key_count"],
+        "right_censored_keys": sum(
+            item["right_censored_keys"] for item in endpoint_counts.values()
+        ),
+        "same_publication_conflict_keys": sum(
+            item["same_publication_conflict_keys"]
+            for item in endpoint_counts.values()
+        ),
+        "orderable_events": financial["proven_event_count"],
+        "value_revisions": financial["proven_revision_event_count"],
+        "excluded_missing_end_type_keys": sum(
+            item["excluded_missing_end_type_keys"]
+            for item in financial["endpoint_summaries"].values()
+        ),
+        "excluded_future_rows": sum(
+            item["excluded_future_rows"]
+            for item in financial["endpoint_summaries"].values()
+        ),
+    }
+    observed_shareholder = {
+        "source_vintages": shareholder["source_vintage_count"],
+        "exact_event_keys": shareholder["unique_event_key_count"],
+        "historical_revision_timeline_proven_keys": (
+            shareholder["actual_publication_timestamp_event_key_count"]
+        ),
+        "asof_samples": sample_count,
+    }
+    financial_request = request.get("financial") or {}
+    shareholder_request = request.get("shareholder") or {}
+    expected_financial = financial_request.get("expected_r3_counts")
+    expected_shareholder = shareholder_request.get("expected_r3_counts")
+    if not all(
+        isinstance(item, Mapping)
+        for item in (expected_financial, expected_shareholder)
+    ):
+        raise CertificationError("source revision expected count contract is missing")
+
+    def check(name: str, observed: Mapping[str, Any], expected: Mapping[str, Any]) -> None:
+        for key, expected_value in expected.items():
+            if key == "by_endpoint":
+                continue
+            if key not in observed or int(observed[key]) != int(expected_value):
+                raise CertificationError(
+                    f"source revision count mismatch for {name}.{key}: "
+                    f"observed={observed.get(key)!r} expected={expected_value!r}"
+                )
+
+    check("financial", observed_financial, expected_financial)
+    expected_endpoints = expected_financial.get("by_endpoint")
+    if not isinstance(expected_endpoints, Mapping):
+        raise CertificationError("financial endpoint count contract is missing")
+    if set(expected_endpoints) != set(endpoint_counts):
+        raise CertificationError("financial endpoint count contract scope mismatch")
+    for endpoint, expected in expected_endpoints.items():
+        if not isinstance(expected, Mapping):
+            raise CertificationError(f"invalid expected counts for {endpoint}")
+        check(f"financial.{endpoint}", endpoint_counts[endpoint], expected)
+    check("shareholder", observed_shareholder, expected_shareholder)
+    if observed_financial["complete_keys"] + observed_financial["blocked_keys"] != (
+        observed_financial["logical_keys"]
+    ):
+        raise CertificationError("financial logical-key conservation failed")
+    return {
+        "status": "PASS",
+        "financial": observed_financial,
+        "financial_by_endpoint": endpoint_counts,
+        "shareholder": observed_shareholder,
+    }
+
+
+def audit_source_revision_capabilities(
+    *, request_path: str | Path, audit_db: str | Path, output_root: str | Path,
+    project_root: str | Path | None = None,
+) -> dict[str, Any]:
+    """Audit frozen source bytes into a new immutable revision-capability artifact."""
+
+    project = Path(project_root or Path(__file__).resolve().parents[1]).resolve()
+    request_file = _safe_path(project, request_path)
+    request = _load_yaml(request_file)
+    if request.get("schema_version") != "source_revision_audit_request_v1":
+        raise CertificationError("unsupported source revision audit request schema")
+    audit_name = str(request.get("audit_name") or "")
+    if not audit_name or not all(char.isalnum() or char in "_.-" for char in audit_name):
+        raise CertificationError("unsafe source revision audit_name")
+    audit_db_path = Path(audit_db).resolve()
+    if not audit_db_path.is_file():
+        raise CertificationError("source revision audit database is missing")
+    db_before = sha256_file(audit_db_path)
+    scope_request = request.get("scope") or {}
+    feature_date_end = _normal_date(str(scope_request.get("feature_date_end") or ""))
+    r3_spec = request.get("upstream_r3_certification")
+    calendar_spec = request.get("trade_calendar")
+    source_contract_spec = request.get("source_contract")
+    if not all(
+        isinstance(item, Mapping)
+        for item in (r3_spec, calendar_spec, source_contract_spec)
+    ):
+        raise CertificationError("source revision scope identities are incomplete")
+    r3_context = _validate_r3_source_blockers(
+        project=project, spec=r3_spec, feature_date_end=feature_date_end,
+    )
+    current_r3_specs = request.get("current_r3_outputs")
+    if not isinstance(current_r3_specs, Mapping) or not current_r3_specs:
+        raise CertificationError("current R3 output identities are missing")
+    current_r3_outputs: dict[str, dict[str, str]] = {}
+    for name, spec in current_r3_specs.items():
+        if not isinstance(spec, Mapping):
+            raise CertificationError(f"invalid current R3 output identity: {name}")
+        path = _verify_identity(project, spec, f"current R3 output {name}")
+        current_r3_outputs[str(name)] = {
+            "path": path.relative_to(project).as_posix(),
+            "sha256": sha256_file(path),
+        }
+    trade_dates, trade_calendar_identity = _load_trade_calendar(
+        project=project, spec=calendar_spec,
+        availability_cutoff=feature_date_end,
+    )
+    source_contract = _verify_identity(
+        project, source_contract_spec, "source revision business contract",
+    )
+    financial_ref = (request.get("financial") or {}).get("terminal")
+    if not isinstance(financial_ref, Mapping):
+        raise CertificationError("financial terminal identity is missing")
+    financial_terminal, financial_terminal_sha = _load_revision_terminal(
+        audit_db=audit_db_path, reference=financial_ref,
+    )
+    data_root = audit_db_path.parent.parent
+    financial_events, financial_exceptions, financial_summary = (
+        _audit_financial_revision_terminal(
+            terminal=financial_terminal, data_root=data_root,
+            availability_cutoff=feature_date_end,
+        )
+    )
+    shareholder_specs = (request.get("shareholder") or {}).get("vintages")
+    if not isinstance(shareholder_specs, list) or not shareholder_specs:
+        raise CertificationError("shareholder vintages are missing")
+    shareholder_vintages, shareholder_exceptions, shareholder_summary = (
+        _audit_shareholder_vintages(
+            project=project, audit_db=audit_db_path, specs=shareholder_specs,
+            availability_cutoff=feature_date_end,
+        )
+    )
+    legacy_specs = (request.get("shareholder") or {}).get("legacy_comparators") or []
+    if not isinstance(legacy_specs, list):
+        raise CertificationError("legacy shareholder comparators must be a list")
+    legacy_deltas = _shareholder_legacy_comparator_deltas(
+        project=project, current=shareholder_vintages, specs=legacy_specs,
+        availability_cutoff=feature_date_end,
+    )
+    exceptions = pd.concat(
+        [financial_exceptions, shareholder_exceptions], ignore_index=True,
+    )
+    samples = _financial_asof_samples(
+        financial_events, trade_dates=trade_dates,
+    )
+    if samples.empty or not samples["status"].eq("PASS").all():
+        raise CertificationError("source revision as-of sample validation failed")
+    count_contract = _validate_source_revision_count_contract(
+        request=request, financial=financial_summary,
+        shareholder=shareholder_summary, sample_count=len(samples),
+    )
+    if sha256_file(audit_db_path) != db_before:
+        raise CertificationError("audit database changed during source revision audit")
+    request_relative = request_file.relative_to(project).as_posix()
+    source_contract_relative = source_contract.relative_to(project).as_posix()
+    implementation_paths = [
+        Path(__file__).resolve(),
+        project / "scripts/research/certify_pit_baseline.py",
+    ]
+    identity = {
+        "schema_version": SOURCE_REVISION_AUDIT_SCHEMA_VERSION,
+        "audit_name": audit_name,
+        "request": {"path": request_relative, "sha256": sha256_file(request_file)},
+        "audit_db_sha256": db_before,
+        "source_contract": {
+            "path": source_contract_relative, "sha256": sha256_file(source_contract),
+        },
+        "implementation": [
+            {
+                "path": path.relative_to(project).as_posix(),
+                "sha256": sha256_file(path),
+            }
+            for path in implementation_paths
+        ],
+        "upstream_r3_certification": r3_context,
+        "current_r3_outputs": current_r3_outputs,
+        "feature_date_end": feature_date_end,
+        "trade_calendar": trade_calendar_identity,
+        "financial_terminal": {
+            "run_id": financial_terminal["run_id"],
+            "sha256": financial_terminal_sha,
+        },
+        "shareholder_vintages": [
+            {
+                key: dict(value) if isinstance(value, Mapping) else value
+                for key, value in spec.items()
+            }
+            for spec in shareholder_specs
+        ],
+        "contracts": {
+            "financial": FINANCIAL_LATEST_KNOWN_CONTRACT,
+            "shareholder": SHAREHOLDER_VINTAGE_CONTRACT,
+        },
+    }
+    audit_id = _sha256_bytes(_canonical_bytes(identity))
+    status = "BLOCKED" if not exceptions.empty else "CERTIFIED"
+    scope = {
+        **identity, "audit_id": audit_id, "status": status,
+        "scope_contract": {
+            "feature_date_end": feature_date_end,
+            "source_terminal_range_end": financial_terminal.get("range_end"),
+            "rule": "audit_feature_scope_and_report_source_terminal_separately",
+        },
+        "financial_summary": financial_summary,
+        "shareholder_summary": shareholder_summary,
+        "legacy_comparator_deltas": legacy_deltas,
+        "count_contract": count_contract,
+        "exception_count": int(len(exceptions)),
+        "asof_sample_count": int(len(samples)),
+    }
+    root = Path(output_root).resolve()
+    _reject_symlink_components(root.absolute())
+    root.mkdir(parents=True, exist_ok=True)
+    audit_root = root / audit_name
+    audit_root.mkdir(exist_ok=True)
+    target = audit_root / audit_id
+    if target.exists() or target.is_symlink():
+        raise FileExistsError(f"source revision audit output already exists: {target}")
+    staging = Path(tempfile.mkdtemp(prefix=f".{audit_id}.", dir=audit_root))
+    try:
+        _write_json(staging / "audit_scope.json", scope)
+        financial_events.to_parquet(
+            staging / "financial_events.parquet", index=False, compression="zstd",
+        )
+        shareholder_vintages.to_parquet(
+            staging / "shareholder_vintages.parquet", index=False, compression="zstd",
+        )
+        exceptions.to_parquet(
+            staging / "exceptions.parquet", index=False, compression="zstd",
+        )
+        samples.to_parquet(
+            staging / "asof_samples.parquet", index=False, compression="zstd",
+        )
+        _write_json(
+            staging / "legacy_comparator_deltas.json", legacy_deltas,
+        )
+        (staging / "REPORT.md").write_text(
+            _source_revision_report(
+                status=status, financial=financial_summary,
+                shareholder=shareholder_summary,
+                r3=r3_context, legacy_comparators=legacy_deltas,
+                exception_count=len(exceptions), sample_count=len(samples),
+            ),
+            encoding="utf-8",
+        )
+        artifact_names = [
+            "audit_scope.json", "financial_events.parquet",
+            "shareholder_vintages.parquet", "exceptions.parquet",
+            "asof_samples.parquet", "legacy_comparator_deltas.json", "REPORT.md",
+        ]
+        artifact_hashes = {
+            name: sha256_file(staging / name) for name in artifact_names
+        }
+        _write_json(staging / "audit_receipt.json", {
+            "schema_version": SOURCE_REVISION_AUDIT_SCHEMA_VERSION,
+            "audit_name": audit_name, "audit_id": audit_id, "status": status,
+            "created_at": datetime.now(timezone.utc).isoformat().replace(
+                "+00:00", "Z"
+            ),
+            "input_identities": identity, "artifacts": artifact_hashes,
+        })
+        for path in staging.iterdir():
+            descriptor = os.open(path, os.O_RDONLY)
+            try:
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+        staging_descriptor = os.open(
+            staging, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
+        )
+        try:
+            os.fsync(staging_descriptor)
+        finally:
+            os.close(staging_descriptor)
+        directory_descriptor = os.open(
+            audit_root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
+        )
+        try:
+            fcntl.flock(directory_descriptor, fcntl.LOCK_EX)
+            if target.exists() or target.is_symlink():
+                raise FileExistsError(
+                    f"source revision audit output already exists: {target}"
+                )
+            os.rename(staging, target)
+            staging = None
+            os.fsync(directory_descriptor)
+        finally:
+            fcntl.flock(directory_descriptor, fcntl.LOCK_UN)
+            os.close(directory_descriptor)
+    finally:
+        if staging is not None and staging.exists():
+            shutil.rmtree(staging)
+    db_after = sha256_file(audit_db_path)
+    if db_after != db_before:
+        raise CertificationError("audit database changed during artifact finalization")
+    return {
+        "status": status, "audit_id": audit_id, "output_dir": str(target),
+        "receipt_path": str(target / "audit_receipt.json"),
+        "exception_count": int(len(exceptions)),
+        "financial_candidate_event_count": int(len(financial_events)),
+        "financial_proven_event_count": int(financial_summary["proven_event_count"]),
+        "shareholder_vintage_row_count": int(len(shareholder_vintages)),
+        "asof_sample_count": int(len(samples)),
+    }
 
 
 def certify_pit_baseline(
