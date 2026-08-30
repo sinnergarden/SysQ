@@ -18,6 +18,7 @@ Usage (not a script)::
 from __future__ import annotations
 
 import json
+import hashlib
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any
@@ -99,6 +100,18 @@ def _resolve_column(frame: pd.DataFrame, candidates: list[str]) -> str | None:
     return None
 
 
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, np.generic):
+        value = value.item()
+    if isinstance(value, float) and not np.isfinite(value):
+        return None
+    return value
+
+
 class ResearchDiagnostics:
     """Generic config-driven research diagnostics.
 
@@ -126,6 +139,7 @@ class ResearchDiagnostics:
         self._label_data: dict[str, pd.DataFrame] = {}
         self._resolved_ind_field: str | None = None
         self._resolved_size_field: str | None = None
+        self._lineage: dict[str, Any] = {}
 
     # ── Factory ─────────────────────────────────────────────────────────
 
@@ -151,6 +165,7 @@ class ResearchDiagnostics:
         top_cfg = self._cfg.get("top_candidates", {})
         output_dir = self._output_dir()
         output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / "size_exposure.csv").unlink(missing_ok=True)
 
         results: dict[str, Any] = {}
 
@@ -158,6 +173,9 @@ class ResearchDiagnostics:
         if enabled.get("coverage", True):
             cov_df = self._run_coverage()
             cov_df.to_csv(output_dir / "coverage.csv", index=False)
+            cov_daily_df, cov_yearly_df = self._run_coverage_by_time()
+            cov_daily_df.to_csv(output_dir / "coverage_daily.csv", index=False)
+            cov_yearly_df.to_csv(output_dir / "coverage_yearly.csv", index=False)
             results["coverage"] = cov_df.to_dict("records")
             log.info("Coverage: %d features", len(cov_df))
 
@@ -200,11 +218,71 @@ class ResearchDiagnostics:
             }
 
         # Summary
-        summary = self._build_summary(results)
+        summary = _json_safe(self._build_summary(results))
         with open(output_dir / "summary.json", "w", encoding="utf-8") as f:
-            json.dump(summary, f, indent=2, ensure_ascii=False)
+            json.dump(
+                summary, f, indent=2, ensure_ascii=False, allow_nan=False
+            )
+        config_bytes = json.dumps(
+            self._cfg,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
+        code_path = Path(__file__)
+        adapter_path = Path(__import__("qsys.data.adapter", fromlist=["x"]).__file__)
+        outputs = {}
+        for path in sorted(output_dir.iterdir()):
+            if not path.is_file() or path.name == "manifest.json":
+                continue
+            entry = {
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                "size": path.stat().st_size,
+            }
+            if path.suffix == ".csv":
+                entry["row_count"] = max(
+                    sum(1 for _ in path.open("r", encoding="utf-8")) - 1,
+                    0,
+                )
+            outputs[path.name] = entry
+        identity_payload = {
+            "config_sha256": hashlib.sha256(config_bytes).hexdigest(),
+            "lineage": self._lineage,
+            "diagnostics_code_sha256": hashlib.sha256(
+                code_path.read_bytes()
+            ).hexdigest(),
+            "adapter_code_sha256": hashlib.sha256(
+                adapter_path.read_bytes()
+            ).hexdigest(),
+        }
+        diagnostics_identity_sha256 = hashlib.sha256(
+            json.dumps(
+                identity_payload,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                allow_nan=False,
+            ).encode("utf-8")
+        ).hexdigest()
+        manifest = {
+            "artifact_type": "research_diagnostics",
+            "schema_version": 2,
+            "diagnostics_identity_sha256": diagnostics_identity_sha256,
+            **identity_payload,
+            "outputs": outputs,
+        }
+        (output_dir / "manifest.json").write_text(
+            json.dumps(
+                manifest, indent=2, sort_keys=True, ensure_ascii=False,
+                allow_nan=False,
+            ) + "\n",
+            encoding="utf-8",
+        )
         results["summary"] = summary
         results["output_dir"] = str(output_dir)
+        results["manifest"] = str(output_dir / "manifest.json")
+        results["diagnostics_identity_sha256"] = diagnostics_identity_sha256
 
         return results
 
@@ -220,6 +298,13 @@ class ResearchDiagnostics:
 
         if self._cfg.get("feature_list_id"):
             self._features = FeatureListRegistry.load(self._cfg["feature_list_id"])
+            self._lineage["feature_list"] = {
+                key: value
+                for key, value in FeatureListRegistry.contract(
+                    self._cfg["feature_list_id"]
+                ).items()
+                if key != "features"
+            }
         else:
             self._features = list(fids) if isinstance(fids, list) else []
 
@@ -242,16 +327,87 @@ class ResearchDiagnostics:
                     all_requested.append(qf)
                     extra_support.append(qf)
 
+        pit_artifact = str(self._cfg.get("pit_universe_artifact", "")).strip()
+        pit_mode = str(self._cfg.get("pit_filter_mode", "")).strip()
+        if self._cfg.get("require_pit_universe") and not pit_artifact:
+            raise ValueError("formal diagnostics require pit_universe_artifact")
+        semantic_spans = None
+        feature_universe: str | list[str] = universe
+        pit_store = None
+        if pit_artifact:
+            from qsys.research.pit_universe import PitUniverseStore
+
+            pit_store = PitUniverseStore(pit_artifact)
+            feature_universe = pit_store.instruments
+            semantic_spans = pit_store.spans
+            pit_mode = pit_mode or "member_as_of"
+            if pit_mode not in {"member_as_of", "ever_member_as_of"}:
+                raise ValueError(f"unsupported diagnostics pit_filter_mode: {pit_mode}")
+            manifest_path = pit_store.artifact_dir / "manifest.json"
+            self._lineage["pit_universe"] = {
+                "artifact": pit_artifact,
+                "filter_mode": pit_mode,
+                "manifest_path": str(manifest_path),
+                "manifest_sha256": hashlib.sha256(
+                    manifest_path.read_bytes()
+                ).hexdigest(),
+                "membership_sha256": pit_store.provenance.membership_sha256,
+                "raw_source_sha256": pit_store.provenance.raw_source_hash,
+            }
+
         raw = self._adapter.get_features(
-            universe,
+            feature_universe,
             all_requested + ["$factor"],
             start_time=start,
             end_time=end,
+            semantic_pit_membership_spans=semantic_spans,
+            semantic_pit_filter_mode=pit_mode,
         )
         frame = raw.reset_index().rename(columns={"datetime": "trade_date"})
         frame = frame.loc[:, ~frame.columns.duplicated()]
         frame["trade_date"] = frame["trade_date"].astype(str).str[:10]
+        if pit_store is not None:
+            spans = pit_store.spans[
+                ["instrument", "effective_from", "effective_to"]
+            ].copy()
+            spans["effective_from"] = (
+                spans["effective_from"].astype(str).str.replace("-", "", regex=False).astype(int)
+            )
+            spans["effective_to"] = (
+                spans["effective_to"].astype(str).str.replace("-", "", regex=False).astype(int)
+            )
+            merged = frame.merge(spans, on="instrument", how="inner")
+            dates = merged["trade_date"].str.replace("-", "", regex=False).astype(int)
+            if pit_mode == "ever_member_as_of":
+                keep = dates >= merged["effective_from"]
+            else:
+                keep = (
+                    (dates >= merged["effective_from"])
+                    & (dates <= merged["effective_to"])
+                )
+            frame = merged.loc[keep, frame.columns].drop_duplicates(
+                ["trade_date", "instrument"]
+            )
+            if frame.empty:
+                raise ValueError("PIT universe filtering removed all diagnostics rows")
         self._feature_frame = frame
+
+        from qsys.config import cfg
+
+        taxonomy_path = cfg.get_path("meta") / "industry_map.json"
+        if self._cfg.get("require_industry_taxonomy") and not taxonomy_path.is_file():
+            raise FileNotFoundError(
+                f"formal diagnostics require industry taxonomy: {taxonomy_path}"
+            )
+        self._lineage["industry_taxonomy"] = {
+            "contract": "historical_daily_industry_numeric_map_v1",
+            "path": str(taxonomy_path),
+            "sha256": (
+                hashlib.sha256(taxonomy_path.read_bytes()).hexdigest()
+                if taxonomy_path.is_file() else None
+            ),
+            "source_manifest_hash": self._cfg.get("source_manifest_hash"),
+        }
 
         for f in all_requested:
             self._feature_meta[f] = f in frame.columns
@@ -265,7 +421,19 @@ class ResearchDiagnostics:
                 self._label_data[lid] = self._label_store.load_labels(
                     lid, start_date=start, end_date=end,
                 )
+                manifest_path = self._label_store.paths.label_manifest(lid)
+                data_path = self._label_store._resolve_data_path(lid)
+                self._lineage.setdefault("labels", {})[lid] = {
+                    "manifest_path": str(manifest_path),
+                    "manifest_sha256": hashlib.sha256(
+                        manifest_path.read_bytes()
+                    ).hexdigest(),
+                    "data_path": str(data_path),
+                    "data_sha256": hashlib.sha256(data_path.read_bytes()).hexdigest(),
+                }
             except Exception as exc:
+                if self._cfg.get("require_all_labels", True):
+                    raise RuntimeError(f"Could not load required label {lid}: {exc}") from exc
                 log.warning("Could not load label %s: %s", lid, exc)
 
     # ── Coverage ────────────────────────────────────────────────────────
@@ -294,6 +462,45 @@ class ResearchDiagnostics:
                 )
             )
         return pd.DataFrame([asdict(r) for r in rows])
+
+    def _run_coverage_by_time(self) -> tuple[pd.DataFrame, pd.DataFrame]:
+        """Report PIT-filtered feature availability per day and calendar year."""
+        frame = self._feature_frame
+        columns = ["trade_date", "feature", "eligible_count", "available_count", "coverage"]
+        rows: list[dict[str, Any]] = []
+        for trade_date, day in frame.groupby("trade_date", sort=True):
+            eligible_count = int(day["instrument"].nunique())
+            for feature in self._features:
+                available_count = (
+                    int(pd.to_numeric(day[feature], errors="coerce").notna().sum())
+                    if feature in day.columns else 0
+                )
+                rows.append({
+                    "trade_date": trade_date,
+                    "feature": feature,
+                    "eligible_count": eligible_count,
+                    "available_count": available_count,
+                    "coverage": (
+                        available_count / eligible_count if eligible_count else None
+                    ),
+                })
+        daily = pd.DataFrame(rows, columns=columns)
+        if daily.empty:
+            yearly = pd.DataFrame(columns=[
+                "year", "feature", "eligible_count", "available_count", "coverage"
+            ])
+            return daily, yearly
+        daily["year"] = daily["trade_date"].astype(str).str[:4]
+        yearly = daily.groupby(["year", "feature"], as_index=False).agg(
+            eligible_count=("eligible_count", "sum"),
+            available_count=("available_count", "sum"),
+        )
+        yearly["coverage"] = np.where(
+            yearly["eligible_count"] > 0,
+            yearly["available_count"] / yearly["eligible_count"],
+            None,
+        )
+        return daily.drop(columns="year"), yearly
 
     # ── Feature IC ──────────────────────────────────────────────────────
 
@@ -408,9 +615,16 @@ class ResearchDiagnostics:
         if len(features) < 2:
             return pd.DataFrame(columns=["feature_a", "feature_b", "corr"])
 
-        # Sample 5000 rows for speed
-        sample = frame[features].sample(min(5000, len(frame)), random_state=42)
-        corr_mat = sample.corr(method="pearson")
+        # Average same-date cross-sectional correlations.  Pooling arbitrary
+        # rows across years would mix time-series drift into a feature synonym
+        # decision.
+        corr_mat = (
+            frame[["trade_date", *features]]
+            .groupby("trade_date")[features]
+            .corr(method="pearson")
+            .groupby(level=1)
+            .mean()
+        )
 
         pairs: list[CorrelationPair] = []
         seen: set[tuple[str, str]] = set()
@@ -539,13 +753,22 @@ class ResearchDiagnostics:
                         sub = merged[merged["_size_bucket"] == bucket]
                         if len(sub) < 5:
                             continue
-                        ic = sub[feat].corr(sub["label_value"], method="spearman")
+                        daily_ic = sub.groupby("trade_date").apply(
+                            lambda group: group[feat].corr(
+                                group["label_value"], method="spearman"
+                            ) if len(group) >= 5 else np.nan,
+                            include_groups=False,
+                        ).dropna()
                         size_rows.append(
                             {
                                 "label_id": lid,
                                 "feature": feat,
                                 "size_bucket": bucket,
-                                "rank_ic": float(ic) if pd.notna(ic) else None,
+                                "rank_ic": (
+                                    float(daily_ic.mean())
+                                    if not daily_ic.empty else None
+                                ),
+                                "n_dates": int(len(daily_ic)),
                             }
                         )
             if size_rows:
@@ -554,7 +777,10 @@ class ResearchDiagnostics:
                 with open(output_dir / "size_exposure.csv", "w", newline="") as f:
                     w = csv.DictWriter(
                         f,
-                        fieldnames=["label_id", "feature", "size_bucket", "rank_ic"],
+                        fieldnames=[
+                            "label_id", "feature", "size_bucket", "rank_ic",
+                            "n_dates",
+                        ],
                     )
                     w.writeheader()
                     w.writerows(size_rows)

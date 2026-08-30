@@ -240,6 +240,7 @@ def _create_generator_from_config(
     feature_list_id: str | None = None,
     *,
     use_feature_cache: bool = False,
+    materialize_on_miss: bool = False,
     write_through: bool = False,
     feature_cache_root: str = "data/feature_cache",
     source_manifest_hash: str = "",
@@ -385,6 +386,7 @@ def _create_generator_from_config(
                 "shareholder_freshness_contract"
             ),
             use_feature_cache=use_feature_cache,
+            materialize_on_miss=materialize_on_miss,
             write_through=write_through,
             feature_cache_root=feature_cache_root,
             source_manifest_hash=source_manifest_hash,

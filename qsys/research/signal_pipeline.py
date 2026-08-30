@@ -44,6 +44,13 @@ def _sha256_path(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else "missing"
 
 
+def _research_config_sha256(config: RollingResearchConfig) -> str:
+    payload = json.dumps(
+        asdict(config), sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
 def _generator_dependency_code_identity(
     generator: RollingSignalGenerator,
 ) -> list[dict[str, str]]:
@@ -394,6 +401,8 @@ class SignalResearchPipeline:
                 label_id=lcfg["label_id"],
                 score_column=config.signal.get("score_column", "score"),
                 overwrite=overwrite_eval,
+                require_pit_lineage=bool(lcfg.get("require_pit_lineage", False)),
+                research_config_sha256=_research_config_sha256(config),
             )
             eval_refs.append(SignalEvalRef(
                 signal_id=signal_id,
@@ -478,6 +487,7 @@ class SignalResearchPipeline:
             gen = signal_generator if explicit_generator else _create_generator_from_config(
                 gen_cfg, feature_list_id=config.feature_list_id,
                 use_feature_cache=config.use_feature_cache,
+                materialize_on_miss=config.materialize_on_miss,
                 write_through=config.write_through,
                 feature_cache_root=config.feature_cache_root,
                 source_manifest_hash=config.source_manifest_hash,
@@ -639,6 +649,10 @@ class SignalResearchPipeline:
                     label_id=lcfg["label_id"],
                     score_column=config.signal.get("score_column", "score"),
                     overwrite=overwrite_eval,
+                    require_pit_lineage=bool(
+                        lcfg.get("require_pit_lineage", False)
+                    ),
+                    research_config_sha256=_research_config_sha256(config),
                 )
                 eval_refs.append(SignalEvalRef(
                     signal_id=job.signal_id,
@@ -699,6 +713,10 @@ class SignalResearchPipeline:
                         label_id=lcfg["label_id"],
                         score_column=config.signal.get("score_column", "score"),
                         overwrite=overwrite_eval,
+                        require_pit_lineage=bool(
+                            lcfg.get("require_pit_lineage", False)
+                        ),
+                        research_config_sha256=_research_config_sha256(config),
                     )
                     combined_eval_refs.append(SignalEvalRef(
                         signal_id=out_sig_id,

@@ -43,7 +43,7 @@ _FRESHNESS_CONTRACT = {
 def _generator(tmp_path: Path, **kwargs) -> LightGBMSingleLabelGenerator:
     source_hash = kwargs.pop("source_manifest_hash", "source_v1")
     return LightGBMSingleLabelGenerator(
-        feature_list_id="features_v1",
+        feature_list_id="momentum_price_volume_v1",
         use_feature_cache=True,
         feature_cache_root=str(tmp_path),
         source_manifest_hash=source_hash,
@@ -192,7 +192,16 @@ def test_cache_identity_binds_financial_processing_contracts(tmp_path: Path) -> 
     generator = _generator(tmp_path)
     identity = generator._cache_identity("2020-01-01", "2021-01-01", ["f1"])
 
-    assert identity["schema_version"] == 6
+    assert identity["schema_version"] == 7
+    assert len(identity["builder_code_sha256"]) == 64
+    assert identity["builder_code_dependencies"]
+    assert identity["feature_list_contract"]["feature_list_id"] == (
+        "momentum_price_volume_v1"
+    )
+    assert identity["column_contract"] == {
+        "materialized_features": ["f1"],
+        "consumed_features": ["f1"],
+    }
     assert identity["feature_history_contract"] == (
         "continuous_listed_history_member_only_cross_section_v1"
     )
@@ -220,7 +229,7 @@ def test_cache_key_binds_opt_in_shareholder_freshness_contract(tmp_path: Path) -
 
 def test_cache_requires_explicit_source_identity(tmp_path: Path) -> None:
     generator = LightGBMSingleLabelGenerator(
-        feature_list_id="features_v1",
+        feature_list_id="momentum_price_volume_v1",
         use_feature_cache=True,
         feature_cache_root=str(tmp_path),
         source_manifest_hash="",
@@ -281,6 +290,60 @@ def test_cache_requires_explicit_feature_list(tmp_path: Path) -> None:
         "qsys.strategy.alpha_v1.spec.get_clean_features", return_value=["f1"]
     ), pytest.raises(ValueError, match="explicit feature_list_id"):
         generator._load_data("2020-01-01", "2021-01-01")
+
+
+def test_materialize_on_miss_writes_exact_window_cache(tmp_path: Path) -> None:
+    generator = _generator(tmp_path, materialize_on_miss=True)
+    index = pd.MultiIndex.from_tuples(
+        [(pd.Timestamp("2020-01-02"), "000001.SZ")],
+        names=["datetime", "instrument"],
+    )
+    raw = pd.DataFrame({"f1": [1.0], "$close": [10.0]}, index=index)
+
+    with patch(
+        "qsys.feature.registry.FeatureListRegistry.load", return_value=["f1"]
+    ), patch("qsys.data.adapter.QlibAdapter") as adapter_class:
+        adapter_class.return_value.get_features.return_value = raw
+        generator._load_data("2020-01-01", "2020-01-03")
+
+    assert generator._window_has_cache("2020-01-01", "2020-01-03", ["f1"])
+
+
+def test_fixed_window_repeat_is_identical_and_hits_materialized_cache(
+    tmp_path: Path,
+) -> None:
+    first_generator = _generator(tmp_path, materialize_on_miss=True)
+    second_generator = _generator(tmp_path, materialize_on_miss=True)
+    index = pd.MultiIndex.from_tuples(
+        [(pd.Timestamp("2020-01-02"), "000001.SZ")],
+        names=["datetime", "instrument"],
+    )
+    raw = pd.DataFrame({"f1": [1.0], "$close": [10.0]}, index=index)
+
+    with patch(
+        "qsys.feature.registry.FeatureListRegistry.load", return_value=["f1"]
+    ), patch("qsys.data.adapter.QlibAdapter") as adapter_class:
+        adapter_class.return_value.get_features.return_value = raw
+        first, first_features = first_generator._load_data(
+            "2020-01-01", "2020-01-03"
+        )
+        meta_path = first_generator._window_meta_path(
+            "2020-01-01", "2020-01-03", ["f1"]
+        )
+        first_meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        second, second_features = second_generator._load_data(
+            "2020-01-01", "2020-01-03"
+        )
+        second_meta = json.loads(meta_path.read_text(encoding="utf-8"))
+
+    assert adapter_class.return_value.get_features.call_count == 1
+    assert first_features == second_features == ["f1"]
+    pd.testing.assert_frame_equal(
+        first[["trade_date", "instrument", "f1"]],
+        second[["trade_date", "instrument", "f1"]],
+    )
+    assert first_meta == second_meta
+    assert first_meta["data_sha256"] == second_meta["data_sha256"]
 
 
 def test_shareholder_snapshot_requires_both_files_and_hashes(tmp_path: Path) -> None:
@@ -481,3 +544,22 @@ def test_matrix_factory_forwards_shareholder_manifest_identity(
     assert generator.feature_source_lineage["shareholder_sidecar"][
         "terminal_receipt_sha256"
     ] == "e" * 64
+
+
+def test_matrix_factory_forwards_materialize_on_miss(tmp_path: Path) -> None:
+    from qsys.research.matrix_job import _create_generator_from_config
+
+    generator = _create_generator_from_config(
+        {
+            "generator_id": "cached",
+            "type": "single_label_lightgbm",
+            "params": {"label_id": "fwd_ret_5d_raw"},
+        },
+        feature_list_id="momentum_price_volume_v1",
+        use_feature_cache=True,
+        materialize_on_miss=True,
+        feature_cache_root=str(tmp_path),
+        source_manifest_hash="source-v1",
+    )
+
+    assert generator.materialize_on_miss is True

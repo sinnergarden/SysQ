@@ -16,7 +16,7 @@ from scripts.research.preheat_feature_cache import _annual_ranges
 
 def _generator(tmp_path: Path, source: str = "source_v1") -> LightGBMSingleLabelGenerator:
     return LightGBMSingleLabelGenerator(
-        feature_list_id="features_v1",
+        feature_list_id="momentum_price_volume_v1",
         use_feature_cache=True,
         feature_cache_root=str(tmp_path),
         source_manifest_hash=source,

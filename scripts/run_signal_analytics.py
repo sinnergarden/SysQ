@@ -3,7 +3,8 @@
 
 Usage:
     python scripts/run_signal_analytics.py --experiment-id <id>
-    python scripts/run_signal_analytics.py --signal-id <id> --label-id <id>
+    python scripts/run_signal_analytics.py --diagnostics-config <path>
+    python scripts/run_signal_analytics.py --signal-id <id> --signal-run-id <run> --label-id <id>
 """
 import argparse, sys
 from pathlib import Path
@@ -25,12 +26,46 @@ def _resolve_manifest(experiment_id, research_root):
 def main():
     p = argparse.ArgumentParser(description="Signal Analytics — UC-5")
     p.add_argument("--experiment-id", default=None)
+    p.add_argument(
+        "--diagnostics-config",
+        default=None,
+        help="Run PIT-filtered ResearchDiagnostics from an explicit YAML config",
+    )
     p.add_argument("--signal-id", default=None); p.add_argument("--signal-run-id", default=None)
     p.add_argument("--label-id", default=None)
     p.add_argument("--start-date", default=None); p.add_argument("--end-date", default=None)
     p.add_argument("--min-count", type=int, default=5)
     p.add_argument("--output-dir", default=None); p.add_argument("--research-root", default="data/research")
     args = p.parse_args()
+    selected_modes = sum(bool(value) for value in (
+        args.experiment_id, args.diagnostics_config, args.signal_id,
+    ))
+    if selected_modes != 1:
+        p.error(
+            "select exactly one mode: --experiment-id, --diagnostics-config, "
+            "or direct --signal-id/--signal-run-id/--label-id"
+        )
+    if args.diagnostics_config and any(
+        (args.signal_run_id, args.label_id)
+    ):
+        p.error("--diagnostics-config cannot be combined with direct signal arguments")
+    if args.experiment_id and any((args.signal_run_id, args.label_id)):
+        p.error("--experiment-id cannot be combined with direct signal arguments")
+    if args.signal_id and not all(
+        (args.signal_run_id, args.label_id)
+    ):
+        p.error(
+            "direct analytics requires --signal-id, --signal-run-id, and --label-id"
+        )
+    if args.diagnostics_config:
+        from qsys.analysis.research_diagnostics import ResearchDiagnostics
+
+        result = ResearchDiagnostics.from_config(
+            args.diagnostics_config, root=args.research_root
+        ).run()
+        print(f"Diagnostics: {result['diagnostics_identity_sha256']}")
+        print(f"Manifest: {result['manifest']}")
+        return
     from qsys.research.signal_analytics import SignalAnalytics
     with SignalAnalytics(root=args.research_root) as sa:
         if args.experiment_id:
@@ -39,10 +74,10 @@ def main():
             if lids: print(f"  Labels: {lids}")
             for sid, srid in refs.items():
                 print(f"\n--- {sid} / {srid} vs {lids} ---")
-                ic = sa.compute_ic_matrix(signal_ids=[sid], signal_run_ids={sid: srid} if srid else None, label_ids=lids if lids else None, start_date=args.start_date, end_date=args.end_date, min_count=args.min_count)
+                ic = sa.compute_ic_matrix(signal_ids=[sid], signal_run_ids={sid: srid}, label_ids=lids if lids else None, start_date=args.start_date, end_date=args.end_date, min_count=args.min_count)
                 if ic is not None and not ic.empty: print(ic.to_string(index=False))
         elif args.signal_id and args.label_id:
-            signal_run_ids = {args.signal_id: args.signal_run_id} if args.signal_run_id else None
+            signal_run_ids = {args.signal_id: args.signal_run_id}
             print(f"\n--- IC: {args.signal_id} vs {args.label_id} ---")
             ic = sa.compute_ic_matrix(signal_ids=[args.signal_id], signal_run_ids=signal_run_ids, label_ids=[args.label_id], start_date=args.start_date, end_date=args.end_date, min_count=args.min_count)
             if ic is not None and not ic.empty: print(ic.to_string(index=False))

@@ -37,9 +37,9 @@ from qsys.research.generators.utils import (
 from qsys.utils.logger import log
 
 
-_WINDOW_CACHE_SCHEMA_VERSION = 6
+_WINDOW_CACHE_SCHEMA_VERSION = 7
 _WINDOW_CACHE_BUILDER_ID = (
-    "lightgbm_single_label_qlib_frame_v6_continuous_history_member_cs"
+    "lightgbm_single_label_qlib_frame_v7_hash_bound_builder_columns"
 )
 _ANNUAL_SHARD_SCHEMA_VERSION = 1
 FEATURE_VISIBILITY_CONTRACT = (
@@ -121,6 +121,7 @@ class LightGBMSingleLabelGenerator:
     feature_list_id: str | None = None
     # ── Feature cache options (opt-in) ──
     use_feature_cache: bool = False
+    materialize_on_miss: bool = False
     write_through: bool = False  # save per-window cache on first use
     cache_write_scope: str = "window"  # "window" or "annual_shard"
     feature_cache_root: str = "data/feature_cache"
@@ -190,6 +191,9 @@ class LightGBMSingleLabelGenerator:
     )
     _shareholder_freshness_profiles: dict[str, dict[str, object]] = field(
         default_factory=dict, repr=False, init=False
+    )
+    _feature_cache_code_identity: list[dict[str, str]] | None = field(
+        default=None, repr=False, init=False
     )
 
     def __post_init__(self) -> None:
@@ -566,6 +570,8 @@ class LightGBMSingleLabelGenerator:
             TUSHARE_FINA_INDICATOR_UNIT_CONTRACT,
         )
 
+        from qsys.feature.registry import FeatureListRegistry
+
         mode = self._effective_pit_filter_mode()
         membership_hash = ""
         if mode:
@@ -592,9 +598,44 @@ class LightGBMSingleLabelGenerator:
             prediction_path, prediction_hash, _ = _prediction_membership_identity(
                 self.prediction_membership_path
             )
+        if self._feature_cache_code_identity is None:
+            dependencies = {
+                "qsys.research.generators.lightgbm_single_label": Path(__file__),
+                **{
+                    name: path
+                    for name, path in self.checkpoint_code_dependencies.items()
+                    if name != "qsys.signal.alpha_v1.training"
+                },
+            }
+            self._feature_cache_code_identity = [
+                {"name": name, "sha256": _sha256_file(Path(path))}
+                for name, path in sorted(dependencies.items())
+            ]
+        code_payload = json.dumps(
+            self._feature_cache_code_identity,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        feature_list_contract = (
+            {
+                key: value
+                for key, value in FeatureListRegistry.contract(
+                    self.feature_list_id
+                ).items()
+                if key != "features"
+            }
+            if self.feature_list_id
+            else None
+        )
+        column_contract = {
+            "materialized_features": list(features),
+            "consumed_features": list(features),
+        }
         identity = {
             "schema_version": _WINDOW_CACHE_SCHEMA_VERSION,
             "builder_id": _WINDOW_CACHE_BUILDER_ID,
+            "builder_code_sha256": hashlib.sha256(code_payload).hexdigest(),
+            "builder_code_dependencies": self._feature_cache_code_identity,
             "canonical_financial_contracts": {
                 "availability": FINANCIAL_AVAILABILITY_CONTRACT,
                 "fina_indicator_units": TUSHARE_FINA_INDICATOR_UNIT_CONTRACT,
@@ -605,7 +646,9 @@ class LightGBMSingleLabelGenerator:
             "source_manifest_hash": self.source_manifest_hash,
             "universe": self.universe,
             "feature_list_id": self.feature_list_id,
+            "feature_list_contract": feature_list_contract,
             "features": features,
+            "column_contract": column_contract,
             "pit_membership": self.pit_membership,
             "pit_filter_mode": mode,
             "pit_universe_artifact": self.pit_universe_artifact if mode else "",
@@ -993,7 +1036,9 @@ class LightGBMSingleLabelGenerator:
             frame = frame.rename(columns={"ts_code": "instrument"})
 
         # ── Write-through: save this window's frame to per-window cache ──
-        if self.use_feature_cache and self.write_through:
+        if self.use_feature_cache and (
+            self.materialize_on_miss or self.write_through
+        ):
             path = self._write_cache_frame(frame, start, end, clean)
 
             log.info("Cache WRITTEN: {} ({} rows x {} cols, {:.1f} MB)",
