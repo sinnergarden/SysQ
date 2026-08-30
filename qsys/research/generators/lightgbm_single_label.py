@@ -1,15 +1,17 @@
 """LightGBMSingleLabelGenerator — one label_id -> one LightGBM -> one SignalRun.
 
-Feature cache — per-window write-through
-----------------------------------------
+Feature cache — reusable materialized frames
+--------------------------------------------
 First run (write_through=True):
   Window N: qlib adapter -> builder -> frame, clean -> LightGBM training
-    └── frame saved to cache/{feature_list_id}/{window_key}.parquet (side effect)
+    └── materialized frame saved to cache/{window_key}.parquet (side effect)
 
 Second run (use_feature_cache=True):
   Window N: read cache/{feature_list_id}/{window_key}.parquet -> LightGBM training
     Builder COMPLETELY skipped. The cache identity binds the source snapshot,
-    universe, ordered feature list, date window, schema and builder version.
+    universe, ordered materialized feature list, date window, schema and builder
+    version.  A model may consume an ordered subset without changing the
+    artifact key; both column contracts remain explicit in metadata.
 
 Guarantee: a cache hit is accepted only for the exact declared input identity.
 """
@@ -37,9 +39,9 @@ from qsys.research.generators.utils import (
 from qsys.utils.logger import log
 
 
-_WINDOW_CACHE_SCHEMA_VERSION = 7
+_WINDOW_CACHE_SCHEMA_VERSION = 8
 _WINDOW_CACHE_BUILDER_ID = (
-    "lightgbm_single_label_qlib_frame_v7_hash_bound_builder_columns"
+    "lightgbm_single_label_qlib_frame_v8_materialized_consumed_contracts"
 )
 _ANNUAL_SHARD_SCHEMA_VERSION = 1
 FEATURE_VISIBILITY_CONTRACT = (
@@ -118,7 +120,11 @@ class LightGBMSingleLabelGenerator:
     # Closed, explicit model-objective experiment policy.  It is deliberately
     # absent from feature-cache identity because feature frames are reusable.
     sample_weight_policy: str | None = None
+    # Ordered columns consumed by this model.
     feature_list_id: str | None = None
+    # Optional ordered superset physically materialized in the cache.  This is
+    # independent of label/model horizon so compatible consumers reuse bytes.
+    feature_cache_list_id: str | None = None
     # ── Feature cache options (opt-in) ──
     use_feature_cache: bool = False
     materialize_on_miss: bool = False
@@ -178,6 +184,7 @@ class LightGBMSingleLabelGenerator:
     _qlib_inited: bool = field(default=False, repr=False)
     _pit_store: object | None = field(default=None, repr=False, init=False)
     _clean_features: list[str] = field(default_factory=list, repr=False)
+    _materialized_features: list[str] = field(default_factory=list, repr=False)
     _call_count: int = field(default=0, repr=False)
     _prediction_membership_sha256: str = field(default="", repr=False, init=False)
     _shareholder_source_lineage: dict[str, dict[str, str]] = field(
@@ -459,6 +466,11 @@ class LightGBMSingleLabelGenerator:
         }
 
     @property
+    def materialized_features(self) -> list[str]:
+        """Ordered columns represented by the current cache artifact."""
+        return list(self._materialized_features)
+
+    @property
     def shareholder_freshness_lineage(self) -> dict[str, object] | None:
         """Return the opt-in contract and per-window preflight evidence."""
         if self.shareholder_freshness_contract is None:
@@ -564,6 +576,8 @@ class LightGBMSingleLabelGenerator:
         start: str,
         end: str,
         features: list[str],
+        *,
+        consumed_features: list[str] | None = None,
     ) -> dict[str, object]:
         from qsys.data._merge_helpers import (
             FINANCIAL_AVAILABILITY_CONTRACT,
@@ -616,6 +630,7 @@ class LightGBMSingleLabelGenerator:
             sort_keys=True,
             separators=(",", ":"),
         ).encode("utf-8")
+        consumed = list(features if consumed_features is None else consumed_features)
         feature_list_contract = (
             {
                 key: value
@@ -627,9 +642,23 @@ class LightGBMSingleLabelGenerator:
             if self.feature_list_id
             else None
         )
+        materialized_feature_list_id = (
+            self.feature_cache_list_id or self.feature_list_id
+        )
+        materialized_feature_list_contract = (
+            {
+                key: value
+                for key, value in FeatureListRegistry.contract(
+                    materialized_feature_list_id
+                ).items()
+                if key != "features"
+            }
+            if materialized_feature_list_id
+            else None
+        )
         column_contract = {
             "materialized_features": list(features),
-            "consumed_features": list(features),
+            "consumed_features": consumed,
         }
         identity = {
             "schema_version": _WINDOW_CACHE_SCHEMA_VERSION,
@@ -647,7 +676,11 @@ class LightGBMSingleLabelGenerator:
             "universe": self.universe,
             "feature_list_id": self.feature_list_id,
             "feature_list_contract": feature_list_contract,
-            "features": features,
+            "feature_cache_list_id": materialized_feature_list_id,
+            "materialized_feature_list_contract": (
+                materialized_feature_list_contract
+            ),
+            "features": list(features),
             "column_contract": column_contract,
             "pit_membership": self.pit_membership,
             "pit_filter_mode": mode,
@@ -684,9 +717,39 @@ class LightGBMSingleLabelGenerator:
         )
         return identity
 
-    def _window_key(self, start: str, end: str, features: list[str]) -> str:
+    @staticmethod
+    def _cache_artifact_identity(
+        identity: dict[str, object],
+    ) -> dict[str, object]:
+        """Return only fields that define the physically stored frame.
+
+        Consumer-specific identity remains auditable in metadata, but cannot
+        fork identical materialized bytes into one cache file per model.
+        """
+        artifact = dict(identity)
+        artifact.pop("feature_list_id", None)
+        artifact.pop("feature_list_contract", None)
+        column_contract = dict(artifact.get("column_contract", {}))
+        column_contract.pop("consumed_features", None)
+        artifact["column_contract"] = column_contract
+        return artifact
+
+    def _window_key(
+        self,
+        start: str,
+        end: str,
+        features: list[str],
+        *,
+        consumed_features: list[str] | None = None,
+    ) -> str:
+        identity = self._cache_identity(
+            start,
+            end,
+            features,
+            consumed_features=consumed_features,
+        )
         raw = json.dumps(
-            self._cache_identity(start, end, features),
+            self._cache_artifact_identity(identity),
             sort_keys=True,
             separators=(",", ":"),
             ensure_ascii=False,
@@ -728,7 +791,12 @@ class LightGBMSingleLabelGenerator:
 
     @staticmethod
     def _cache_identity_without_range(identity: dict[str, object]) -> dict[str, object]:
-        return {key: value for key, value in identity.items() if key not in {"start", "end"}}
+        artifact = LightGBMSingleLabelGenerator._cache_artifact_identity(identity)
+        return {
+            key: value
+            for key, value in artifact.items()
+            if key not in {"start", "end"}
+        }
 
     @staticmethod
     def _annual_ranges(start: str, end: str) -> list[tuple[str, str]]:
@@ -776,13 +844,22 @@ class LightGBMSingleLabelGenerator:
         start: str,
         end: str,
         features: list[str],
+        *,
+        consumed_features: list[str] | None = None,
     ) -> pd.DataFrame | None:
         """Compose complete calendar-year shards, or return None on any miss."""
+        consumed = list(features if consumed_features is None else consumed_features)
         ranges = self._annual_ranges(start, end)
         pieces: list[pd.DataFrame] = []
         expected_base: dict[str, object] | None = None
         for shard_start, shard_end in ranges:
-            identity = self._cache_identity(shard_start, shard_end, features)
+            identity = self._cache_identity(
+                shard_start,
+                shard_end,
+                features,
+                consumed_features=consumed,
+            )
+            artifact_identity = self._cache_artifact_identity(identity)
             if expected_base is None:
                 expected_base = self._cache_identity_without_range(identity)
             elif self._cache_identity_without_range(identity) != expected_base:
@@ -797,7 +874,13 @@ class LightGBMSingleLabelGenerator:
                 return None
             if meta.get("schema_version") != _ANNUAL_SHARD_SCHEMA_VERSION:
                 return None
-            if meta.get("identity") != identity:
+            stored_identity = meta.get("identity")
+            if (
+                meta.get("artifact_identity") != artifact_identity
+                or not isinstance(stored_identity, dict)
+                or self._cache_artifact_identity(stored_identity)
+                != artifact_identity
+            ):
                 return None
             coverage_start = str(meta.get("source_coverage_start", shard_start))
             coverage_end = str(meta.get("source_coverage_end", shard_end))
@@ -830,6 +913,7 @@ class LightGBMSingleLabelGenerator:
         ).reset_index(drop=True)
         if result.empty:
             return None
+        result = result[["trade_date", "instrument", *consumed]].copy()
         log.info(
             "Annual feature cache composed [{}, {}] from {} shards ({} rows)",
             start,
@@ -846,16 +930,31 @@ class LightGBMSingleLabelGenerator:
         end: str,
         features: list[str],
         *,
+        consumed_features: list[str] | None = None,
         source_coverage_start: str | None = None,
         source_coverage_end: str | None = None,
     ) -> Path:
+        consumed = list(features if consumed_features is None else consumed_features)
+        missing = [feature for feature in features if feature not in frame.columns]
+        if missing:
+            raise ValueError(
+                "feature cache frame is missing materialized columns: "
+                f"{missing}"
+            )
+        identity = self._cache_identity(
+            start,
+            end,
+            features,
+            consumed_features=consumed,
+        )
+        artifact_identity = self._cache_artifact_identity(identity)
         if self.cache_write_scope == "annual_shard":
             path = self._annual_shard_path(start, end, features)
             meta_path = self._annual_shard_meta_path(start, end, features)
-            identity = self._cache_identity(start, end, features)
             meta = {
                 "schema_version": _ANNUAL_SHARD_SCHEMA_VERSION,
                 "identity": identity,
+                "artifact_identity": artifact_identity,
                 "rows": len(frame),
                 "cols": len(frame.columns),
                 "source_coverage_start": source_coverage_start or start,
@@ -865,7 +964,8 @@ class LightGBMSingleLabelGenerator:
             path = self._window_cache_path(start, end, features)
             meta_path = self._window_meta_path(start, end, features)
             meta = {
-                **self._cache_identity(start, end, features),
+                **identity,
+                "artifact_identity": artifact_identity,
                 "window_key": self._window_key(start, end, features),
                 "rows": len(frame),
                 "cols": len(frame.columns),
@@ -931,13 +1031,34 @@ class LightGBMSingleLabelGenerator:
         from qsys.feature.registry import FeatureListRegistry
 
         if self.feature_list_id:
-            clean = FeatureListRegistry.load(self.feature_list_id)
+            consumed = FeatureListRegistry.load(self.feature_list_id)
         else:
             from qsys.feature.registry import get_feature_fields
             from qsys.strategy.alpha_v1.spec import get_clean_features
             all_feats = get_feature_fields("semantic_all_features")
-            clean = get_clean_features(all_feats)
-        self._clean_features = clean
+            consumed = get_clean_features(all_feats)
+        materialized_feature_list_id = (
+            self.feature_cache_list_id or self.feature_list_id
+        )
+        materialized = (
+            FeatureListRegistry.load(materialized_feature_list_id)
+            if materialized_feature_list_id
+            else list(consumed)
+        )
+        if len(set(materialized)) != len(materialized):
+            raise ValueError("Materialized feature list contains duplicate columns")
+        if len(set(consumed)) != len(consumed):
+            raise ValueError("Consumed feature list contains duplicate columns")
+        positions = {feature: index for index, feature in enumerate(materialized)}
+        missing = [feature for feature in consumed if feature not in positions]
+        indices = [positions[feature] for feature in consumed if feature in positions]
+        if missing or indices != sorted(indices):
+            raise ValueError(
+                "Consumed feature list must be an ordered subset of the "
+                f"materialized cache list; missing={missing}"
+            )
+        self._clean_features = consumed
+        self._materialized_features = materialized
 
         if self.use_feature_cache:
             if not self.feature_list_id:
@@ -949,23 +1070,37 @@ class LightGBMSingleLabelGenerator:
                 )
 
         # ── Cache hit: read per-window parquet → return directly ──
-        if self.use_feature_cache and self._window_has_cache(start, end, clean):
-            path = self._window_cache_path(start, end, clean)
-            meta_path = self._window_meta_path(start, end, clean)
+        if (
+            self.use_feature_cache
+            and self.cache_write_scope == "window"
+            and self._window_has_cache(start, end, materialized)
+        ):
+            path = self._window_cache_path(start, end, materialized)
+            meta_path = self._window_meta_path(start, end, materialized)
             meta = json.loads(meta_path.read_text(encoding="utf-8"))
-            expected_identity = self._cache_identity(start, end, clean)
-            identity_mismatches = [
-                key for key, value in expected_identity.items()
-                if meta.get(key) != value
-            ]
-            if identity_mismatches:
+            expected_identity = self._cache_identity(
+                start,
+                end,
+                materialized,
+                consumed_features=consumed,
+            )
+            expected_artifact_identity = self._cache_artifact_identity(
+                expected_identity
+            )
+            stored_identity = {
+                key: meta.get(key) for key in expected_identity
+            }
+            if (
+                meta.get("artifact_identity") != expected_artifact_identity
+                or self._cache_artifact_identity(stored_identity)
+                != expected_artifact_identity
+            ):
                 raise ValueError(
-                    "Window cache identity mismatch: "
-                    + ", ".join(identity_mismatches)
+                    "Window cache materialization identity mismatch"
                 )
             df = self._read_cache_frame(
                 path,
-                clean,
+                materialized,
                 expected_data_sha256=meta.get("data_sha256"),
                 expected_rows=meta.get("rows"),
                 expected_cols=meta.get("cols"),
@@ -976,14 +1111,20 @@ class LightGBMSingleLabelGenerator:
                     "Re-run with write_through=True for this exact feature list."
                 )
 
+            df = df[["trade_date", "instrument", *consumed]].copy()
             log.info("Cache HIT: {} ({} rows x {} cols, subset={} feats)",
-                     path.name, len(df), len(df.columns), len(clean))
-            return df, clean
+                     path.name, len(df), len(df.columns), len(consumed))
+            return df, consumed
 
         if self.use_feature_cache:
-            composed = self._load_annual_shard_cache(start, end, clean)
+            composed = self._load_annual_shard_cache(
+                start,
+                end,
+                materialized,
+                consumed_features=consumed,
+            )
             if composed is not None:
-                return composed, clean
+                return composed, consumed
 
         # ── Original qlib path (cache miss or disabled) ──
         self._call_count += 1
@@ -1023,7 +1164,7 @@ class LightGBMSingleLabelGenerator:
         # Build features via qlib + phase1 builder
         raw = adapter.get_features(
             feature_instruments,
-            clean + ["$close"],
+            list(dict.fromkeys([*materialized, "$close"])),
             start_time=start,
             end_time=end,
             semantic_pit_membership_spans=semantic_spans,
@@ -1039,12 +1180,18 @@ class LightGBMSingleLabelGenerator:
         if self.use_feature_cache and (
             self.materialize_on_miss or self.write_through
         ):
-            path = self._write_cache_frame(frame, start, end, clean)
+            path = self._write_cache_frame(
+                frame,
+                start,
+                end,
+                materialized,
+                consumed_features=consumed,
+            )
 
             log.info("Cache WRITTEN: {} ({} rows x {} cols, {:.1f} MB)",
                      path.name, len(frame), len(frame.columns), path.stat().st_size / 1024 / 1024)
 
-        return frame, clean
+        return frame, consumed
 
     def _effective_pit_filter_mode(self) -> str:
         """Resolve the active filter mode from the new + legacy fields.

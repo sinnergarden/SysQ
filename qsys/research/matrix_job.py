@@ -294,7 +294,8 @@ def _create_generator_from_config(
         _CONSUMED_PARAMS = {
             "label_id", "universe", "n_estimators", "lgb_params",
             "sample_weight_policy",
-            "feature_list_id", "pit_membership", "pit_filter_mode",
+            "feature_list_id", "feature_cache_list_id",
+            "pit_membership", "pit_filter_mode",
             "pit_universe_artifact", "liquidity_exclusion_path",
             "prediction_membership_path", "prediction_membership_sha256",
             "prediction_universe",
@@ -352,6 +353,7 @@ def _create_generator_from_config(
             universe=params.get("universe", "csi300"),
             n_estimators=params.get("n_estimators", 200),
             feature_list_id=feature_list_id or params.get("feature_list_id"),
+            feature_cache_list_id=params.get("feature_cache_list_id"),
             lgb_params=params.get("lgb_params"),
             sample_weight_policy=params.get("sample_weight_policy"),
             pit_membership=params.get("pit_membership", False),

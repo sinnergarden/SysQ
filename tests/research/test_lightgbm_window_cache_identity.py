@@ -192,7 +192,7 @@ def test_cache_identity_binds_financial_processing_contracts(tmp_path: Path) -> 
     generator = _generator(tmp_path)
     identity = generator._cache_identity("2020-01-01", "2021-01-01", ["f1"])
 
-    assert identity["schema_version"] == 7
+    assert identity["schema_version"] == 8
     assert len(identity["builder_code_sha256"]) == 64
     assert identity["builder_code_dependencies"]
     assert identity["feature_list_contract"]["feature_list_id"] == (
@@ -215,6 +215,68 @@ def test_cache_identity_binds_financial_processing_contracts(tmp_path: Path) -> 
     )
     assert "qsys.feature.transforms" in generator.checkpoint_code_dependencies
     assert "qsys.research.pit_universe" in generator.checkpoint_code_dependencies
+
+
+def test_cache_key_uses_materialized_contract_not_consumer_contract(
+    tmp_path: Path,
+) -> None:
+    def contract(feature_list_id: str) -> dict[str, object]:
+        return {
+            "feature_list_id": feature_list_id,
+            "feature_count": 2 if feature_list_id == "shared_frame" else 1,
+            "features_sha256": feature_list_id,
+            "features": ["f1", "f2"] if feature_list_id == "shared_frame" else ["f1"],
+        }
+
+    first = LightGBMSingleLabelGenerator(
+        feature_list_id="consumer_one",
+        feature_cache_list_id="shared_frame",
+        use_feature_cache=True,
+        feature_cache_root=str(tmp_path),
+        source_manifest_hash="source_v1",
+    )
+    second = LightGBMSingleLabelGenerator(
+        feature_list_id="consumer_two",
+        feature_cache_list_id="shared_frame",
+        use_feature_cache=True,
+        feature_cache_root=str(tmp_path),
+        source_manifest_hash="source_v1",
+    )
+    with patch(
+        "qsys.feature.registry.FeatureListRegistry.contract",
+        side_effect=contract,
+    ):
+        first_identity = first._cache_identity(
+            "2020-01-01",
+            "2020-12-31",
+            ["f1", "f2"],
+            consumed_features=["f1"],
+        )
+        second_identity = second._cache_identity(
+            "2020-01-01",
+            "2020-12-31",
+            ["f1", "f2"],
+            consumed_features=["f2"],
+        )
+        assert first._window_key(
+            "2020-01-01",
+            "2020-12-31",
+            ["f1", "f2"],
+            consumed_features=["f1"],
+        ) == second._window_key(
+            "2020-01-01",
+            "2020-12-31",
+            ["f1", "f2"],
+            consumed_features=["f2"],
+        )
+
+    assert first_identity["feature_list_id"] == "consumer_one"
+    assert second_identity["feature_list_id"] == "consumer_two"
+    assert first_identity["column_contract"] == {
+        "materialized_features": ["f1", "f2"],
+        "consumed_features": ["f1"],
+    }
+    assert second_identity["column_contract"]["consumed_features"] == ["f2"]
 
 
 def test_cache_key_binds_opt_in_shareholder_freshness_contract(tmp_path: Path) -> None:
@@ -563,3 +625,20 @@ def test_matrix_factory_forwards_materialize_on_miss(tmp_path: Path) -> None:
     )
 
     assert generator.materialize_on_miss is True
+
+
+def test_matrix_factory_forwards_materialized_feature_list() -> None:
+    from qsys.research.matrix_job import _create_generator_from_config
+
+    generator = _create_generator_from_config({
+        "generator_id": "cached",
+        "type": "single_label_lightgbm",
+        "params": {
+            "label_id": "fwd_ret_5d_raw",
+            "feature_list_id": "consumer_list",
+            "feature_cache_list_id": "shared_frame",
+        },
+    })
+
+    assert generator.feature_list_id == "consumer_list"
+    assert generator.feature_cache_list_id == "shared_frame"

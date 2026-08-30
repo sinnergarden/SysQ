@@ -121,25 +121,35 @@ def main() -> int:
                 f"(cache identity through {shard_end})",
                 flush=True,
             )
-            frame, features = generator._load_data(shard_start, source_end)
-            path = generator._annual_shard_path(shard_start, shard_end, features)
+            frame, consumed_features = generator._load_data(shard_start, source_end)
+            materialized_features = generator.materialized_features
+            path = generator._annual_shard_path(
+                shard_start, shard_end, materialized_features
+            )
             meta_path = generator._annual_shard_meta_path(
-                shard_start, shard_end, features
+                shard_start, shard_end, materialized_features
             )
             cached = generator._load_annual_shard_cache(
-                shard_start, source_end, features
+                shard_start,
+                source_end,
+                materialized_features,
+                consumed_features=consumed_features,
             )
             if cached is None:
                 path = generator._write_cache_frame(
                     frame,
                     shard_start,
                     shard_end,
-                    features,
+                    materialized_features,
+                    consumed_features=consumed_features,
                     source_coverage_start=shard_start,
                     source_coverage_end=source_end,
                 )
                 cached = generator._load_annual_shard_cache(
-                    shard_start, source_end, features
+                    shard_start,
+                    source_end,
+                    materialized_features,
+                    consumed_features=consumed_features,
                 )
                 if cached is None:
                     raise ValueError(
@@ -151,7 +161,12 @@ def main() -> int:
                     "annual shard validator returned data without durable files: "
                     f"{path}"
                 )
-            identity = generator._cache_identity(shard_start, shard_end, features)
+            identity = generator._cache_identity(
+                shard_start,
+                shard_end,
+                materialized_features,
+                consumed_features=consumed_features,
+            )
             key = (shard_start, shard_end, str(path))
             records[key] = {
                 "generator_id": generator_config["generator_id"],
