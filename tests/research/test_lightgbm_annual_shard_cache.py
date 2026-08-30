@@ -54,8 +54,8 @@ def test_annual_ranges_are_full_years_for_clipped_request() -> None:
     ]
 
 
-def test_preheat_span_years_include_training_history_and_extended_end() -> None:
-    ranges = _annual_ranges("2018-03-01", "2026-08-30")
+def test_preheat_span_years_include_training_history_and_prediction_end() -> None:
+    ranges = _annual_ranges("2018-03-01", "2026-07-31")
     assert ranges[0] == ("2018-01-01", "2018-12-31")
     assert ranges[-1] == ("2026-01-01", "2026-12-31")
 

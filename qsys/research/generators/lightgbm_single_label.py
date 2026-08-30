@@ -21,7 +21,7 @@ import json
 import os
 import tempfile
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -1209,10 +1209,11 @@ class LightGBMSingleLabelGenerator:
         window_cal = get_trading_calendar(predict_start, predict_end)
         prev_td = _build_prev_trading_date_lookup(predict_start, predict_end)
         feature_dates = sorted({prev_td.get(d, d) for d in window_cal})
-        extended_end = (
-            datetime.strptime(predict_end, "%Y-%m-%d") + timedelta(days=30)
-        ).strftime("%Y-%m-%d")
-        load_end = train_end if self.prediction_universe else extended_end
+        # The execution window consumes only ``prev_td(d)`` for dates
+        # ``d <= predict_end``.  Loading an extra future month cannot affect
+        # those past-only features, but it incorrectly expands frozen source
+        # coverage requirements beyond the experiment terminal.
+        load_end = train_end if self.prediction_universe else predict_end
 
         log.info("Loading data [{}, {}]", train_start, load_end)
         frame, clean_features = self._load_data(train_start, load_end)

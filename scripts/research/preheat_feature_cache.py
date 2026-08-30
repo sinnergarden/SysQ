@@ -12,7 +12,6 @@ import json
 import os
 import sys
 import tempfile
-from datetime import datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -108,10 +107,7 @@ def main() -> int:
             (
                 window.train_end
                 if generator.prediction_universe
-                else (
-                    datetime.strptime(window.predict_end, "%Y-%m-%d")
-                    + timedelta(days=30)
-                ).strftime("%Y-%m-%d")
+                else window.predict_end
             )
             for window in windows
         )
