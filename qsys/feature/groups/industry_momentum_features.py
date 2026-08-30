@@ -16,6 +16,8 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from qsys.feature.transforms import PIT_CROSS_SECTION_COLUMN
+
 
 def _safe_div(num, den):
     return num / den.replace(0, np.nan)
@@ -61,19 +63,29 @@ def build_industry_momentum_features(df: pd.DataFrame) -> pd.DataFrame:
     out["_vol_ratio"] = _clip_inf(_safe_div(_amt_ma, _amt_ma_past))
 
     # ── Step 3: construct (trade_date x industry) daily panel ─────────────
+    if PIT_CROSS_SECTION_COLUMN in out.columns:
+        eligible = out[PIT_CROSS_SECTION_COLUMN].fillna(False).astype(bool)
+    else:
+        eligible = pd.Series(True, index=out.index)
+    out["_industry_daily_ret"] = out["_daily_ret"].where(eligible)
+    out["_industry_near_high"] = out["_near_high"].where(eligible)
+    out["_industry_vol_ratio"] = out["_vol_ratio"].where(eligible)
     ind_panel = out.groupby(["trade_date", "industry"]).agg(
-        ind_ret=("_daily_ret", "mean"),
-        ind_breadth=("_daily_ret", lambda s: (s > 0).mean()),
-        ind_near_high=("_near_high", "mean"),
-        ind_vol_ratio=("_vol_ratio", "mean"),
+        ind_ret=("_industry_daily_ret", "mean"),
+        ind_breadth=(
+            "_industry_daily_ret",
+            lambda s: s.gt(0).where(s.notna()).mean(),
+        ),
+        ind_near_high=("_industry_near_high", "mean"),
+        ind_vol_ratio=("_industry_vol_ratio", "mean"),
     ).reset_index()
 
     if "ret_60d" in out.columns:
-        out["_r60"] = out["ret_60d"].fillna(0)
+        out["_r60"] = out["ret_60d"].where(eligible)
         top20 = out["_r60"].groupby(
             [out["trade_date"], out["industry"]]
-        ).transform(lambda s: (s >= s.quantile(0.8)).astype(float))
-        out["_top_ret"] = out["_r60"] * top20
+        ).transform(lambda s: (s >= s.quantile(0.8)).where(s.notna()))
+        out["_top_ret"] = out["_r60"].where(top20.fillna(False))
         top_panel = out.groupby(["trade_date", "industry"])["_top_ret"].mean().reset_index()
         ind_panel = ind_panel.merge(top_panel, on=["trade_date", "industry"], how="left")
 
@@ -109,8 +121,13 @@ def build_industry_momentum_features(df: pd.DataFrame) -> pd.DataFrame:
     for h in [(60, "60d"), (20, "20d")]:
         col = f"ret_{h[0]}d"
         if col in out.columns:
-            ind_mean = out[col].groupby([out["trade_date"], out["industry"]]).transform("mean")
-            out[f"stock_minus_industry_ret_{h[1]}"] = _clip_inf(out[col] - ind_mean)
+            eligible_return = out[col].where(eligible)
+            ind_mean = eligible_return.groupby(
+                [out["trade_date"], out["industry"]]
+            ).transform("mean")
+            out[f"stock_minus_industry_ret_{h[1]}"] = _clip_inf(
+                (out[col] - ind_mean).where(eligible)
+            )
 
     # ── Step 7: stock-industry return rolling correlation (per stock) ──
     # Use paired, centered moments.  The previous cosine-style ratio of raw
@@ -151,7 +168,7 @@ def build_industry_momentum_features(df: pd.DataFrame) -> pd.DataFrame:
 
     # Clean up intermediates
     for c in list(out.columns):
-        if c.startswith("_"):
+        if c.startswith("_") and c != PIT_CROSS_SECTION_COLUMN:
             out = out.drop(columns=[c], errors="ignore")
 
     return out
