@@ -1,0 +1,36 @@
+feature_list_id: structured_price_volume_60d_v1
+description: Formula-reviewed price-path, participation, liquidity and tradability hypotheses for 60-session returns.
+feature_count: 31
+contract: pit_adjusted_semantic_price_volume_60d_consumer_v1
+features:
+  - ret_5d
+  - ret_20d
+  - ret_60d
+  - rps_20d
+  - rps_60d
+  - rps_20d_minus_rps_60d
+  - up_day_ratio_60d
+  - trend_smoothness_60d
+  - volatility_adjusted_return_60d
+  - price_percentile_252d
+  - distance_to_120d_high
+  - distance_to_250d_high
+  - volume_ratio_20d
+  - volume_ratio_60d
+  - amount_ratio_20d
+  - amount_ratio_60d
+  - volume_up_down_ratio_60d
+  - above_avg_volume_ratio_60d
+  - volume_spike_20d
+  - volume_stability_60d
+  - trend_consistency_60d
+  - low_vol_uptrend_60d
+  - up_volume_down_volume_ratio_60d
+  - quiet_accumulation_60d
+  - amount_stability_60d
+  - breakout_volume_quality_120d
+  - tradability_score
+  - distance_to_limit_up
+  - distance_to_limit_down
+  - illiquidity
+  - turnover_acceleration
