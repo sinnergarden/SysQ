@@ -141,6 +141,8 @@ def _load_certification(certification_dir: Path) -> tuple[dict[str, Any], dict[s
             "full_mutation_ledger_sha256", "canonical_mutation_summary", "tables",
         )
     }
+    if snapshot.get("frozen_evidence") is not None:
+        query_payload["frozen_evidence"] = snapshot["frozen_evidence"]
     query_sha = hashlib.sha256(_canonical_bytes(query_payload)).hexdigest()
     if (
         snapshot.get("schema_version") != "pit_evidence_snapshot_v1"
@@ -149,6 +151,7 @@ def _load_certification(certification_dir: Path) -> tuple[dict[str, Any], dict[s
         or snapshot.get("selected_evidence_run_ids") != receipt.get("selected_evidence_run_ids")
         or snapshot.get("selected_mutation_run_ids") != receipt.get("selected_mutation_run_ids")
         or snapshot.get("full_mutation_ledger_sha256") != identities.get("full_mutation_ledger_sha256")
+        or snapshot.get("frozen_evidence") != identities.get("frozen_evidence")
     ):
         raise CertificationError("certification evidence snapshot binding mismatch")
     return receipt, scope

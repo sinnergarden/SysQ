@@ -13,6 +13,9 @@ import pandas as pd
 
 from qsys.data._merge_helpers import (
     FINANCIAL_AVAILABILITY_CONTRACT,
+    FINANCIAL_LATEST_KNOWN_CONTRACT,
+    FINANCIAL_OPERATIONAL_PIT_CONTRACT,
+    FINANCIAL_VERSIONED_EVENT_CONTRACT,
     TUSHARE_FINA_INDICATOR_UNIT_CONTRACT,
 )
 from qsys.data.adapter import QlibAdapter
@@ -34,6 +37,12 @@ from qsys.utils.logger import log
 FINANCIAL_REPLAY_CONTRACT = (
     "financial_canonical_offline_replay_v1:"
     + FINANCIAL_AVAILABILITY_CONTRACT
+    + ":"
+    + FINANCIAL_LATEST_KNOWN_CONTRACT
+    + ":"
+    + FINANCIAL_OPERATIONAL_PIT_CONTRACT
+    + ":"
+    + FINANCIAL_VERSIONED_EVENT_CONTRACT
     + ":"
     + TUSHARE_FINA_INDICATOR_UNIT_CONTRACT
 )

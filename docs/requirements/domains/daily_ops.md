@@ -27,6 +27,9 @@ stable
 - 从一个精确 receipt SHA 锚定的 trusted CSI1800 terminal 补充 audited shareholder
   history；该 supporting mode 只生产 holdernumber/top10 evidence、canonical sidecar 与新的
   terminal，不调用 market/Qlib child。
+- 从一个精确 trusted terminal 显式收集 `anns_d` source-revision metadata；该 supporting
+  mode 逐公告日/offset 写 immutable raw receipt，先做单日权限 probe，权限失败不得启动全历史
+  扫描，也不调用 market/Qlib child。
 - 盘前推理（signal → prediction → plan）
 - 盘后执行（simulated fills → ledger → MTM）
 - 通知（Telegram）
@@ -63,6 +66,9 @@ stable
 - `scripts/data_sync.py --repair-shareholder-history-from-trusted-run-id ... --apply` —
   certification 前的显式 shareholder history supporting mode；必须同时提供 trusted base
   receipt SHA、CSI1800 target date 与 history start。
+- `scripts/data_sync.py --collect-source-revision-announcements-from-trusted-run-id ... --apply` —
+  certification 的显式 `anns_d` evidence mode；必须提供 trusted base receipt SHA、target
+  date 与 announcement start，normal daily 不会隐式触发。
 
 对齐 `docs/USE_CASES.md` §7。
 

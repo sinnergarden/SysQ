@@ -150,29 +150,6 @@ endpoints:
     duplicate_holder_rule: equal_ratios_collapse_differing_ratios_fail_closed
     completeness_rule: exactly_10_normalized_holders
     aggregate_rule: complete_exact_event_sum_in_closed_interval_0_100
-  anns_d:
-    capability: market_wide_listed_company_announcement_metadata
-    normal_daily_required: false
-    source_revision_supporting_mode_only: true
-    query_axis: exact_announcement_date
-    supplier_row_limit: 2000
-    pagination: offset_until_short_page
-    raw_fields: [ann_date, ts_code, name, title, url, rec_time]
-    raw_payload: one_immutable_supplier_shard_per_date_and_offset
-    publication_time: rec_time_per_announcement_row
-    value_binding: pdf_bytes_and_deterministic_parser_required
-    preflight: one_exact_date_permission_probe_before_historical_scan
-    permission_failure: durable_untrusted_receipt_and_no_full_scan
-  financial_versioned_events:
-    endpoints: [income, balancesheet, cashflow, fina_indicator]
-    raw_request_contract: financial_first_available_v1
-    event_contract: financial_versioned_event_v1
-    projections:
-      strict_market_pit: source_dated_complete_timelines_only
-      operational_pit: unique_current_value_from_first_observed_session
-      best_effort_bootstrap: explicitly_downgraded_vendor_date_history
-    observation_rule: receipt_observed_at_is_preserved_across_frozen_raw_reuse
-    trust_rule: observed_only_never_upgrades_to_source_publication_evidence
   stock_basic:
     capability: current_classification_snapshot_only
     revision_capability: no_historical_industry_timeline

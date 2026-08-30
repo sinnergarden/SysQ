@@ -7,29 +7,21 @@ scope:
   certification_is_training_independent: true
 
 upstream_r3_certification:
-  audit_id: 15b89cdc875b9563502338a6b4f0b3038e414eded5eddca18ce070623114b84e
+  audit_id: 4a73b3c5c2bab4862efd8606ac11d07b56f8631006eac7f1ff949562ab8e6b98
   audit_receipt:
-    path: data/research/certifications/csi1800_s180_baseline_v1_r3/15b89cdc875b9563502338a6b4f0b3038e414eded5eddca18ce070623114b84e/audit_receipt.json
-    sha256: 298fdaa785d8de131601efba8d424cdccf693bd72fd7b4777551330fbdf55d51
+    path: data/research/certifications/csi1800_s180_baseline_v1_r3_frozen_v1/4a73b3c5c2bab4862efd8606ac11d07b56f8631006eac7f1ff949562ab8e6b98/audit_receipt.json
+    sha256: 969b005b51d7b37f4ecd98bd4bb13df7fb456660f5a8e56f68d7425217b5c985
   exceptions:
-    path: data/research/certifications/csi1800_s180_baseline_v1_r3/15b89cdc875b9563502338a6b4f0b3038e414eded5eddca18ce070623114b84e/exceptions.parquet
+    path: data/research/certifications/csi1800_s180_baseline_v1_r3_frozen_v1/4a73b3c5c2bab4862efd8606ac11d07b56f8631006eac7f1ff949562ab8e6b98/exceptions.parquet
     sha256: 1a9942e4d223bc291a02b403da36dcfbbfed0531fdc0f5da0b31c0a202bbba76
   expected:
     exception_rows: 13
     shareholder_unique_features: 10
     financial_unique_features: 25
 
-current_r3_outputs:
-  signal_predictions:
-    path: data/research/signals/fwd_ret_180d_raw_pit_csi1800__daily_zscore/rolling__financial_rc_180d_rolling_5y_to_202607_v3_pit_csi1800_terminal_r3__v3a_growth_financial_180d_pit_csi1800_terminal_r3__fwd_ret_180d_raw_pit_csi1800__daily_zscore__2021-01-01_2026-07-31/predictions.parquet
-    sha256: 52f1a9bcc6980cfc804e69da9d7d2061df90f3706df2a1b2f12839472eb588ba
-  backtest_manifest:
-    path: data/research/backtests/CSI1800_S180_baseline_v1_r3/manifest.json
-    sha256: 6ad427f5794d8ea70054aad922fefcbd9e531b069d912a7fa3f64d0da420f6e7
-
 source_contract:
   path: docs/requirements/contracts/source_revision_capability_v1.yaml
-  sha256: da02c5b2b177ebc338de5490641190ec8135abb5843d37eb15711ae9363bb263
+  sha256: 19555a653e7221615f3f543c6f75dfb90d47f8e63094ec9a49edefc1c56c884f
 
 trade_calendar:
   path: data/qlib_bin/calendars/day.txt
@@ -85,7 +77,7 @@ financial:
 
 shareholder:
   expected_r3_counts:
-    source_vintages: 1
+    source_vintages: 2
     exact_event_keys: 247942
     historical_revision_timeline_proven_keys: 0
     asof_samples: 8
@@ -101,6 +93,18 @@ shareholder:
         sha256: 8bb111f2e9d979bb604c155e4a211dd7087949fa1ecabc317128621c92dc5eb3
       top10_holder_ratio:
         path: data/research/source_snapshots/shareholder/0baf4e0fc24e5f95f691fb3f332badb8e8d32ed708118c0f1e019a28ce049800/top10_holder_ratio.parquet
+        sha256: 8690a233c1bb5daeddd54ad88a7c8bdef68be3f1a9dde25e513a517935fc45fb
+    - terminal:
+        run_id: data_sync_20260830T092226011729Z_2746dabe
+        sha256: 726af9f8c3c91432feb78f1df9520655f3e002c246521bd47245286637bc91ce
+      manifest:
+        path: data/research/source_snapshots/shareholder/8aa661b54dba4eb196b0caae174ca3abd44976b69ace65703a8bbd20dbf7c3a1/manifest.json
+        sha256: 4227098ba98baf6f5040f46842a0b2c30e23fbf14e022d3f2f39fe22fc93568a
+      holder_num:
+        path: data/research/source_snapshots/shareholder/8aa661b54dba4eb196b0caae174ca3abd44976b69ace65703a8bbd20dbf7c3a1/holder_num.parquet
+        sha256: 8bb111f2e9d979bb604c155e4a211dd7087949fa1ecabc317128621c92dc5eb3
+      top10_holder_ratio:
+        path: data/research/source_snapshots/shareholder/8aa661b54dba4eb196b0caae174ca3abd44976b69ace65703a8bbd20dbf7c3a1/top10_holder_ratio.parquet
         sha256: 8690a233c1bb5daeddd54ad88a7c8bdef68be3f1a9dde25e513a517935fc45fb
   legacy_comparators:
     - name: same_raw_announcement_projection

@@ -593,6 +593,154 @@ def _run_shareholder_only_repair(args, writer_lock) -> dict:
     }
 
 
+def _run_source_revision_announcement_evidence(args, writer_lock) -> dict:
+    """Collect exact-date ``anns_d`` raw evidence without a normal sync child."""
+
+    global _CRASH_EVIDENCE
+    if writer_lock is None:
+        raise RuntimeError(
+            "source-revision announcement evidence requires the data-root writer lock"
+        )
+    from qsys.config import cfg
+    from qsys.data.collector import TushareCollector
+    from qsys.data.health import inspect_qlib_data_health
+    from qsys.data.source_audit import SourceAuditStore, new_run_id
+
+    universe = str(args.universe)
+    target_compact = datetime.strptime(
+        str(args.target_date).replace("-", ""), "%Y%m%d"
+    ).strftime("%Y%m%d")
+    history_start = datetime.strptime(
+        str(args.source_revision_announcement_start_date).replace("-", ""),
+        "%Y%m%d",
+    ).strftime("%Y%m%d")
+    if history_start > target_compact:
+        raise ValueError("source-revision announcement start is after target date")
+    data_root = Path(cfg.get_path("root")).resolve()
+    base_store = SourceAuditStore(data_root / "audit" / "audit.db")
+    base_terminal, base_gate_payload, base_receipt_path = _load_trusted_base_terminal(
+        data_root=data_root,
+        audit_store=base_store,
+        run_id=args.collect_source_revision_announcements_from_trusted_run_id,
+        receipt_sha256=args.trusted_base_receipt_sha256,
+        universe=universe,
+        target_date=target_compact,
+    )
+    run_id = new_run_id("data_sync")
+    audit_store, receipt_root = _start_wrapper_evidence(
+        data_root=data_root,
+        run_id=run_id,
+        universe=universe,
+        target_date=target_compact,
+        range_start=history_start,
+    )
+    _CRASH_EVIDENCE = {
+        "store": audit_store,
+        "run_id": run_id,
+        "receipt_root": receipt_root,
+        "entrypoint": "scripts/data_sync.py",
+    }
+    audit_store.append_event(run_id, "trusted_base_terminal_inherited", {
+        "source_run_id": base_terminal["run_id"],
+        "source_receipt_path": base_receipt_path.relative_to(data_root).as_posix(),
+        "source_receipt_sha256": args.trusted_base_receipt_sha256,
+        "scope_key": universe,
+        "range_start": base_gate_payload["range_start"],
+        "range_end": base_gate_payload["range_end"],
+        "fields": base_gate_payload["fields"],
+        "gates": base_terminal["terminal_gates"],
+    })
+    resume_proof = None
+    if args.resume_from_run_id:
+        resume_proof = _attach_explicit_resume(
+            None,
+            audit_store=audit_store,
+            run_id=run_id,
+            resume_from_run_id=args.resume_from_run_id,
+            universe=universe,
+            target_date=target_compact,
+            range_start=history_start,
+        )
+    collection = TushareCollector().fetch_source_revision_announcements(
+        start_date=history_start,
+        end_date=target_compact,
+        run_id=run_id,
+        audit_store=audit_store,
+        resume_proof=resume_proof,
+        scope_key=universe,
+        universe=universe,
+    )
+    announcement_fields = ("ann_date", "ts_code", "title", "url", "rec_time")
+    source_evidence = audit_store.evaluate_history_field_receipts(
+        run_id=run_id,
+        dataset="source_revision_announcements",
+        field_endpoints={field: "anns_d" for field in announcement_fields},
+    )
+    source_ok = (
+        collection.get("status") == "success"
+        and int(collection.get("requested_date_count") or 0)
+        == (datetime.strptime(target_compact, "%Y%m%d")
+            - datetime.strptime(history_start, "%Y%m%d")).days + 1
+        and source_evidence.get("status") == "success"
+    )
+    audit_store.append_event(run_id, "source_revision_announcement_evidence", {
+        "status": "success" if source_ok else "failed",
+        "contract": "tushare_anns_d_rec_time_pdf_index_v1",
+        "collection": collection,
+        "field_evidence": source_evidence,
+        "value_binding_status": "not_attempted",
+        "pdf_bytes_status": "not_fetched",
+    })
+    readiness = inspect_qlib_data_health(
+        datetime.strptime(target_compact, "%Y%m%d").strftime("%Y-%m-%d"),
+        ["$open", "$high", "$low", "$close", "$volume", "$factor"],
+        universe=universe,
+        min_active_instruments=1750,
+    )
+    readiness_ok = not readiness.blocking_issues
+    inherited_gates = dict(base_terminal["terminal_gates"])
+    audit_store.append_event(run_id, "inner_terminal_gates", {
+        "source": str(base_gate_payload["source"]),
+        "scope_key": universe,
+        "range_start": str(base_gate_payload["range_start"]),
+        "range_end": str(base_gate_payload["range_end"]),
+        "fields": list(base_gate_payload["fields"]),
+        "mode": "unchanged",
+        "prior_trusted": True,
+        "gates": {
+            "fetch": source_ok and inherited_gates.get("fetch") is True,
+            "raw_payloads": source_ok and inherited_gates.get("raw_payloads") is True,
+            "canonical_commit": inherited_gates.get("canonical_commit") is True,
+            "qlib_readback": inherited_gates.get("qlib_readback") is True,
+            "readiness": readiness_ok and inherited_gates.get("readiness") is True,
+            "contiguous_range": source_ok,
+        },
+        "field_range_starts": dict(
+            base_gate_payload.get("field_range_starts") or {}
+        ),
+    })
+    evidence = _finalize_wrapper_evidence(
+        audit_store=audit_store,
+        run_id=run_id,
+        receipt_root=receipt_root,
+        final_readiness_ok=readiness_ok,
+    )
+    if evidence.get("trust_state") != "trusted_unchanged":
+        raise RuntimeError(
+            "source-revision announcement evidence terminal did not become trusted: "
+            f"{evidence}"
+        )
+    return {
+        "status": "success",
+        "run_id": run_id,
+        "trusted_base_run_id": base_terminal["run_id"],
+        "collection": collection,
+        "field_evidence": source_evidence,
+        "final_readiness": readiness.to_dict(),
+        "source_evidence": evidence,
+    }
+
+
 def _main_under_writer_lock(writer_lock=None):
     global _CRASH_EVIDENCE
     p = argparse.ArgumentParser(description="Data Sync — UC-1")
@@ -671,7 +819,24 @@ def _main_under_writer_lock(writer_lock=None):
     p.add_argument(
         "--trusted-base-receipt-sha256",
         default=None,
-        help="Exact SHA-256 for --repair-shareholder-history-from-trusted-run-id",
+        help=(
+            "Exact trusted terminal SHA-256 for shareholder-only or "
+            "source-revision announcement evidence mode"
+        ),
+    )
+    p.add_argument(
+        "--collect-source-revision-announcements-from-trusted-run-id",
+        default=None,
+        metavar="RUN_ID",
+        help=(
+            "Explicit anns_d source-evidence extension from one exact trusted "
+            "terminal; never runs the market/Qlib child"
+        ),
+    )
+    p.add_argument(
+        "--source-revision-announcement-start-date",
+        default=None,
+        help="Exact anns_d evidence range start (YYYYMMDD)",
     )
     p.add_argument(
         "--margin-lookback-days",
@@ -798,6 +963,7 @@ def _main_under_writer_lock(writer_lock=None):
         args.build_income_sidecar_from_run_id,
         args.build_shareholder_sidecar_from_run_id,
         args.repair_shareholder_history_from_trusted_run_id,
+        args.collect_source_revision_announcements_from_trusted_run_id,
         args.replay_financial_units_from_run_id,
     ]
     if sum(value is not None for value in explicit_modes) > 1:
@@ -883,6 +1049,38 @@ def _main_under_writer_lock(writer_lock=None):
             local_workers=args.history_local_workers or 8,
             qlib_workers=args.qlib_max_workers or 8,
         )
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return
+    if args.collect_source_revision_announcements_from_trusted_run_id:
+        required = {
+            "--apply": args.apply,
+            "--universe csi1800": args.universe == "csi1800",
+            "--target-date": args.target_date,
+            "--source-revision-announcement-start-date": (
+                args.source_revision_announcement_start_date
+            ),
+            "--trusted-base-receipt-sha256": args.trusted_base_receipt_sha256,
+        }
+        missing = [name for name, value in required.items() if not value]
+        if missing:
+            p.error(
+                "source-revision announcement evidence missing required arguments: "
+                + ", ".join(missing)
+            )
+        conflicting = {
+            "--config": args.config,
+            "--repair-start-date": args.repair_start_date,
+            "--shareholder-start-date": args.shareholder_start_date,
+            "--force-fetch": args.force_fetch,
+            "--skip-shareholder-repair": args.skip_shareholder_repair,
+        }
+        used_conflicts = [name for name, value in conflicting.items() if value]
+        if used_conflicts:
+            p.error(
+                "source-revision announcement evidence cannot run normal/repair options: "
+                + ", ".join(used_conflicts)
+            )
+        result = _run_source_revision_announcement_evidence(args, writer_lock)
         print(json.dumps(result, indent=2, sort_keys=True))
         return
     if args.repair_shareholder_history_from_trusted_run_id:

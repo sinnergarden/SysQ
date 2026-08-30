@@ -33,6 +33,9 @@ Qlib readback 和 terminal watermark 做交集验证，产出不可变 certifica
 - 区分 `published_at`、`observed_at`、`ingested_at`，未知发布时间保持 null；
 - 拒绝 gap、缺 endpoint capability、缺 terminal receipt 回链或 legacy/untrusted evidence；
 - 产出显式范围、exceptions、consumed evidence identity 的认证结果。
+- source-revision audit 的 signal/backtest 身份只从 upstream certification receipt
+  的 `input_identities.identities` 读取并复核；正式对象必须位于 manifest-SHA
+  命名的 frozen bundle，request 不得另设 `current_r3_outputs` 第二真相源。
 
 不包含：
 
@@ -50,6 +53,10 @@ Qlib readback 和 terminal watermark 做交集验证，产出不可变 certifica
 - 可选 mutation run IDs 只做存在性断言，实际交集始终覆盖完整 mutation ledger。
 - mutation 只有在每个相交 dependency scope 的 selected-evidence coverage、字段 watermark 日期范围
   和 aware UTC `updated_at >= ingested_at` 都成立时才为 `ACCOUNTED`；UNKNOWN 或任一字段未满足均重审。
+- 历史 baseline 可显式绑定旧 certification receipt 及其 `evidence_snapshot.json` 重放当时选中的
+  receipts/watermarks；receipt、snapshot、selectors、旧 audit identity 必须完整互链。重放时仍逐个
+  验证当前 raw payload 与 terminal receipt bytes，并从当前 `audit.db` 重扫完整 mutation ledger；
+  不得恢复、伪造或回写旧 trusted watermark。
 - terminal coverage 必须回链 receipt 中精确 normalized field link；声明 source manifest 时三处
   backlink 均须非空一致。formal income/shareholder dependency 还必须由 baseline request、research
   generator config 与 signal `feature_source_lineage` 三方绑定同一 immutable artifact/manifest。
@@ -154,11 +161,20 @@ reviewer_agent
 - `qsys/pit_datapack.py`
 - `qsys/ops/data_coverage.py`
 - `qsys/ops/shareholder_sync.py`（仅 terminal-backed offline snapshot materializer）
+- `qsys/data/_merge_helpers.py`（仅 financial source-event materializer）
+- `qsys/data/income_sidecar.py`（仅 immutable income event sidecar）
+- `qsys/data/collector.py`（仅 raw financial response projection）
+- `qsys/data/_fetch_strategies.py`（仅保留 supplier terminal failure detail）
+- `qsys/data/source_audit.py`（仅在 frozen raw reuse 中保留原始 observed_at）
+- `qsys/ops/financial_replay.py`（仅 frozen-raw offline replay）
 - `qsys/research/generators/lightgbm_single_label.py`
 - `qsys/research/matrix_job.py`
-- `scripts/data_sync.py`（仅显式 shareholder history supporting mode 与 offline snapshot
-  bootstrap mode）
+- `scripts/data_sync.py`（仅显式 shareholder/announcement evidence supporting mode 与
+  offline snapshot bootstrap mode）
 - `configs/audit/csi1800_s180_baseline_v1_r1.yaml`
+- `configs/audit/csi1800_s180_baseline_v1_r3.yaml`
+- `configs/audit/csi1800_s180_baseline_v1_r3_frozen_v1.yaml`
+- `configs/audit/csi1800_s180_r3_source_revision_v1.yaml`
 - `configs/audit/feature_dependencies/v3a_plus_liquidity_financial_rc_v1.yaml`
 - `docs/requirements/`
 - `docs/CONTRACTS.md`
@@ -168,6 +184,10 @@ reviewer_agent
 - `tests/ops/test_shareholder_sync.py`
 - `tests/research/test_lightgbm_window_cache_identity.py`
 - `tests/test_data_sync_csi1800.py`
+- `tests/test_financial_replay.py`
+- `tests/test_financial_pit.py`
+- `tests/test_income_sidecar.py`
+- `tests/test_source_revision_certification.py`
 - `.claude/skills/sysq-dev/SKILL.md`
 
 ### Forbidden Paths

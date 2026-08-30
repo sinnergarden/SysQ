@@ -183,7 +183,7 @@ def test_builder_projects_trusted_raw_and_publishes_immutable_identity(
     manifest = json.loads(Path(first["manifest_path"]).read_text(encoding="utf-8"))
     assert manifest["scope"]["symbols"] == ["000001.SZ", "000002.SZ"]
     assert manifest["projection"]["excluded_future_rows"] == 1
-    assert manifest["projection"]["revision_timeline_unproven_excluded_rows"] == 1
+    assert manifest["projection"]["right_censored_keys"] == 1
     assert manifest["source_evidence"]["terminal_receipt_sha256"]
 
     identity = validate_income_sidecar_identity(
@@ -197,6 +197,33 @@ def test_builder_projects_trusted_raw_and_publishes_immutable_identity(
         required_symbols={"000001.SZ", "000002.SZ"},
     )
     assert identity["manifest"]["artifact_id"] == first["artifact_id"]
+
+
+def test_builder_preserves_orderable_income_revision_events(tmp_path: Path) -> None:
+    _, receipt = _trusted_terminal(
+        tmp_path,
+        first_frame=pd.DataFrame([
+            _row(
+                ann_date="20260818", f_ann_date="20260818",
+                update_flag="0", revenue=10.0,
+            ),
+            _row(
+                ann_date="20260820", f_ann_date="20260820",
+                update_flag="1", revenue=11.0,
+            ),
+        ]),
+    )
+
+    result = _build(tmp_path, receipt)
+    sidecar = pd.read_parquet(result["artifact_path"])
+    manifest = json.loads(Path(result["manifest_path"]).read_text(encoding="utf-8"))
+
+    assert sidecar["availability_date"].tolist() == ["20260818", "20260820"]
+    assert sidecar["revenue"].tolist() == [10.0, 11.0]
+    assert sidecar["event_kind"].tolist() == [
+        "INITIAL_PUBLICATION", "REVISION_PUBLICATION",
+    ]
+    assert manifest["projection"]["proven_revision_events"] == 1
 
 
 def test_builder_projects_income_from_explicit_inherited_history_scope(
