@@ -38,6 +38,11 @@ def main():
         help="Review the current complete feature universe from an explicit YAML config",
     )
     p.add_argument(
+        "--alpha-map-config",
+        default=None,
+        help="Aggregate validated Stage-A artifacts into an Alpha Map",
+    )
+    p.add_argument(
         "--validate-only",
         action="store_true",
         help="Independently validate the selected feature-catalog artifact",
@@ -50,20 +55,21 @@ def main():
     args = p.parse_args()
     selected_modes = sum(bool(value) for value in (
         args.experiment_id, args.diagnostics_config, args.feature_catalog_config,
+        args.alpha_map_config,
         args.signal_id,
     ))
     if selected_modes != 1:
         p.error(
             "select exactly one mode: --experiment-id, --diagnostics-config, "
-            "--feature-catalog-config, or direct "
+            "--feature-catalog-config, --alpha-map-config, or direct "
             "--signal-id/--signal-run-id/--label-id"
         )
     if args.validate_only and not (
-        args.feature_catalog_config or args.diagnostics_config
+        args.feature_catalog_config or args.diagnostics_config or args.alpha_map_config
     ):
         p.error(
             "--validate-only requires --feature-catalog-config or "
-            "--diagnostics-config"
+            "--diagnostics-config or --alpha-map-config"
         )
     if args.diagnostics_config and any(
         (args.signal_run_id, args.label_id)
@@ -95,6 +101,29 @@ def main():
                 args.feature_catalog_config, root=args.research_root
             ).run()
             print(f"Feature catalog: {result['catalog_identity_sha256']}")
+            print(f"Manifest: {result['manifest']}")
+        return
+    if args.alpha_map_config:
+        if any((args.signal_run_id, args.label_id)):
+            p.error("--alpha-map-config cannot be combined with direct signal arguments")
+        if args.validate_only:
+            from qsys.research.alpha_map_validation import validate_alpha_map
+
+            result = validate_alpha_map(
+                args.alpha_map_config, root=args.research_root
+            )
+            print(f"Alpha Map validation: {result['alpha_map_identity_sha256']}")
+            print(
+                "Validation: "
+                f"{Path(args.research_root) / 'alpha_maps' / result['alpha_map_id'] / 'validation.json'}"
+            )
+        else:
+            from qsys.research.alpha_map import AlphaMap
+
+            result = AlphaMap.from_config(
+                args.alpha_map_config, root=args.research_root
+            ).run()
+            print(f"Alpha Map: {result['alpha_map_identity_sha256']}")
             print(f"Manifest: {result['manifest']}")
         return
     if args.diagnostics_config:
