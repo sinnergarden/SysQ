@@ -7,12 +7,12 @@ scope:
   certification_is_training_independent: true
 
 upstream_r3_certification:
-  audit_id: 15b89cdc875b9563502338a6b4f0b3038e414eded5eddca18ce070623114b84e
+  audit_id: 4a73b3c5c2bab4862efd8606ac11d07b56f8631006eac7f1ff949562ab8e6b98
   audit_receipt:
-    path: data/research/certifications/csi1800_s180_baseline_v1_r3/15b89cdc875b9563502338a6b4f0b3038e414eded5eddca18ce070623114b84e/audit_receipt.json
-    sha256: 298fdaa785d8de131601efba8d424cdccf693bd72fd7b4777551330fbdf55d51
+    path: data/research/certifications/csi1800_s180_baseline_v1_r3_frozen_v1/4a73b3c5c2bab4862efd8606ac11d07b56f8631006eac7f1ff949562ab8e6b98/audit_receipt.json
+    sha256: 969b005b51d7b37f4ecd98bd4bb13df7fb456660f5a8e56f68d7425217b5c985
   exceptions:
-    path: data/research/certifications/csi1800_s180_baseline_v1_r3/15b89cdc875b9563502338a6b4f0b3038e414eded5eddca18ce070623114b84e/exceptions.parquet
+    path: data/research/certifications/csi1800_s180_baseline_v1_r3_frozen_v1/4a73b3c5c2bab4862efd8606ac11d07b56f8631006eac7f1ff949562ab8e6b98/exceptions.parquet
     sha256: 1a9942e4d223bc291a02b403da36dcfbbfed0531fdc0f5da0b31c0a202bbba76
   expected:
     exception_rows: 13
