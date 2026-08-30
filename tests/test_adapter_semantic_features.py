@@ -123,6 +123,19 @@ class TestAdapterSemanticFeatures(unittest.TestCase):
         self.assertTrue(flags["enable_relative_strength_features"])
         self.assertTrue(flags["enable_v3a_margin_features"])
 
+    def test_path_scores_enable_price_context_dependencies(self):
+        flags = QlibAdapter._semantic_feature_flags(
+            [
+                "continuation_candidate_score",
+                "repair_candidate_score",
+                "overheat_risk_score",
+                "value_trap_risk_score",
+            ]
+        )
+
+        self.assertTrue(flags["enable_relative_strength_features"])
+        self.assertTrue(flags["enable_fundamental_context_features"])
+
     @patch("qsys.data.adapter.build_phase1_features")
     def test_growth_sidecar_identity_is_forwarded_with_requested_window(
         self, mock_build
