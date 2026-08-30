@@ -66,6 +66,14 @@ def validate_research_diagnostics(
         raise ValueError("diagnostics code hash mismatch")
     if manifest.get("adapter_code_sha256") != _sha256(Path(adapter.__file__).resolve()):
         raise ValueError("diagnostics adapter code hash mismatch")
+    stage_a_config = config.get("stage_a") or {}
+    if stage_a_config.get("enabled", False):
+        from qsys.research import stage_a
+
+        if manifest.get("stage_a_code_sha256") != _sha256(
+            Path(stage_a.__file__).resolve()
+        ):
+            raise ValueError("Stage-A code hash mismatch")
 
     outputs = manifest.get("outputs", {})
     for filename, artifact in outputs.items():
@@ -163,13 +171,72 @@ def validate_research_diagnostics(
         if filename in outputs and int(outputs[filename]["row_count"]) != count:
             raise ValueError(f"diagnostics expected row count mismatch: {filename}")
     for filename in ("coverage.csv", "feature_ic.csv", "bucket_return.csv"):
+        if filename not in outputs:
+            continue
         frame = pd.read_csv(output_dir / filename)
         numeric = frame.select_dtypes(include=[np.number])
         if not numeric.empty and np.isinf(numeric.to_numpy()).any():
             raise ValueError(f"diagnostics output contains infinity: {filename}")
-    ic = pd.read_csv(output_dir / "feature_ic.csv")
-    if ic.duplicated(["feature", "label_id"]).any():
-        raise ValueError("diagnostics feature-IC pairs are duplicated")
+    if "feature_ic.csv" in outputs:
+        ic = pd.read_csv(output_dir / "feature_ic.csv")
+        if ic.duplicated(["feature", "label_id"]).any():
+            raise ValueError("diagnostics feature-IC pairs are duplicated")
+
+    if stage_a_config.get("enabled", False):
+        required_stage_a = {
+            "stage_a_protocol.json", "stage_a_evidence.csv",
+            "stage_a_yearly.csv", "stage_a_topk.csv", "stage_a_decay.csv",
+            "stage_a_regime.csv", "stage_a_stability.csv", "stage_a_triage.csv",
+        }
+        missing = sorted(required_stage_a - set(outputs))
+        if missing:
+            raise ValueError(f"Stage-A outputs are incomplete: {missing}")
+        protocol = json.loads(
+            (output_dir / "stage_a_protocol.json").read_text(encoding="utf-8")
+        )
+        if protocol.get("schema_version") != "stage_a_protocol_v1":
+            raise ValueError("unexpected Stage-A protocol schema")
+        if protocol.get("holdout_consumed") is not False:
+            raise ValueError("Stage-A holdout must remain untouched")
+        if protocol.get("splits") != stage_a_config.get("splits"):
+            raise ValueError("Stage-A split contract mismatch")
+        if int(protocol.get("feature_trial_count", -1)) != feature_count:
+            raise ValueError("Stage-A feature trial count mismatch")
+        if str(protocol.get("loaded_data_end", "")) >= str(
+            stage_a_config["splits"]["holdout"]["start"]
+        ):
+            raise ValueError("Stage-A loaded data overlaps the holdout")
+
+        evidence = pd.read_csv(output_dir / "stage_a_evidence.csv")
+        triage = pd.read_csv(output_dir / "stage_a_triage.csv")
+        discovery = evidence[evidence["phase"].eq("discovery")]
+        confirmation = evidence[evidence["phase"].eq("confirmation")]
+        if len(discovery) != feature_count * label_count:
+            raise ValueError("Stage-A discovery pair count mismatch")
+        if len(triage) != feature_count or triage["feature"].duplicated().any():
+            raise ValueError("Stage-A triage feature count mismatch")
+        if not set(triage["locked_direction"].astype(int)).issubset({-1, 1}):
+            raise ValueError("Stage-A locked direction is invalid")
+        candidate_count = int(protocol.get("candidate_count", -1))
+        if len(confirmation) != candidate_count * label_count:
+            raise ValueError("Stage-A confirmation pair count mismatch")
+        if int(triage["confirmation_executed"].sum()) != candidate_count:
+            raise ValueError("Stage-A candidate/confirmation gate mismatch")
+        allowed = {"candidate", "confirmed", "rejected", "data-blocked"}
+        if not set(triage["research_status"]).issubset(allowed):
+            raise ValueError("Stage-A triage contains an invalid research status")
+        locked = triage.set_index("feature")["locked_direction"].astype(int)
+        if not confirmation.empty:
+            observed = confirmation.set_index("feature")["locked_direction"].astype(int)
+            if not observed.eq(locked.reindex(observed.index)).all():
+                raise ValueError("Stage-A confirmation changed a discovery direction")
+        confirmed = triage[triage["research_status"].eq("confirmed")]
+        if not confirmed.empty and not (
+            confirmed["discovery_pass"].astype(bool)
+            & confirmed["confirmation_pass"].astype(bool)
+            & confirmed["secondary_direction_consistent"].astype(bool)
+        ).all():
+            raise ValueError("Stage-A confirmed status bypassed the promotion gate")
 
     identity_payload = {
         "config_sha256": config_sha256,
@@ -177,6 +244,8 @@ def validate_research_diagnostics(
         "diagnostics_code_sha256": manifest["diagnostics_code_sha256"],
         "adapter_code_sha256": manifest["adapter_code_sha256"],
     }
+    if stage_a_config.get("enabled", False):
+        identity_payload["stage_a_code_sha256"] = manifest["stage_a_code_sha256"]
     identity = _canonical_sha256(identity_payload)
     if identity != manifest.get("diagnostics_identity_sha256"):
         raise ValueError("diagnostics identity mismatch")
@@ -195,6 +264,7 @@ def validate_research_diagnostics(
             lineage.get("feature_label_alignment", {}).get("strict_prior_date_check")
             == "pass"
         ),
+        "stage_a_validated": bool(stage_a_config.get("enabled", False)),
     }
     output_path = output_dir.parent / "diagnostics_validation.json"
     output_path.write_text(

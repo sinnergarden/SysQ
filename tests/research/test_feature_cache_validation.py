@@ -103,3 +103,34 @@ def test_independent_validator_checks_physical_and_declared_columns(
         "trade_date", "instrument", *materialized
     ]
     assert json.loads(validation_path.read_text())["status"] == "pass"
+
+    # A second consumer may bind a different ordered subset to the same
+    # immutable materialized bytes.  The shared sidecar describes the physical
+    # artifact; the consumer-specific identity belongs to its manifest.
+    alternate_consumed = FeatureListRegistry.load("market_core_10d_v1")
+    alternate_generator = LightGBMSingleLabelGenerator(
+        feature_list_id="market_core_10d_v1",
+        feature_cache_list_id="market_core_superset_v1",
+        use_feature_cache=True,
+        cache_write_scope="annual_shard",
+        feature_cache_root=str(tmp_path / "cache"),
+        source_manifest_hash="a" * 64,
+        universe="csi1800_pit_union",
+        pit_filter_mode="member_as_of",
+        pit_universe_artifact="csi1800_pit_v2",
+    )
+    manifest["shards"][0]["identity"] = alternate_generator._cache_identity(
+        "2020-01-01",
+        "2020-12-31",
+        materialized,
+        consumed_features=alternate_consumed,
+    )
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    alternate = validate_annual_feature_cache(
+        manifest_path,
+        project_root=tmp_path,
+        preheat_code_path=Path(preheat_module.__file__),
+        generator_code_path=Path(generator_module.__file__),
+        output_path=tmp_path / "alternate_validation.json",
+    )
+    assert alternate["status"] == "pass"

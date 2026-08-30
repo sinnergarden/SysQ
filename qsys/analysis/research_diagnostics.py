@@ -225,6 +225,33 @@ class ResearchDiagnostics:
                 else "",
             }
 
+        # 7. Time-split Stage-A evidence.  This remains feature-level research:
+        # no model fitting or portfolio result is allowed to affect promotion.
+        stage_a_cfg = self._cfg.get("stage_a") or {}
+        if stage_a_cfg.get("enabled", False):
+            from qsys.research.stage_a import StageAEvaluator
+
+            if self._feature_frame is None:
+                raise ValueError("Stage-A requires a loaded feature frame")
+            protocol = StageAEvaluator(
+                feature_frame=self._feature_frame,
+                features=self._features,
+                label_data=self._label_data,
+                label_configs=[
+                    dict(value) for value in self._cfg.get("labels", [])
+                    if isinstance(value, dict)
+                ],
+                config=stage_a_cfg,
+                output_dir=output_dir,
+            ).run()
+            results["stage_a"] = protocol
+            log.info(
+                "Stage-A: %d trials, %d candidates, %d confirmed",
+                protocol["feature_trial_count"],
+                protocol["candidate_count"],
+                protocol["confirmed_count"],
+            )
+
         # Summary
         summary = _json_safe(self._build_summary(results))
         with open(output_dir / "summary.json", "w", encoding="utf-8") as f:
@@ -260,6 +287,12 @@ class ResearchDiagnostics:
             "diagnostics_code_sha256": _sha256_file(code_path),
             "adapter_code_sha256": _sha256_file(adapter_path),
         }
+        if stage_a_cfg.get("enabled", False):
+            import qsys.research.stage_a as stage_a_module
+
+            identity_payload["stage_a_code_sha256"] = _sha256_file(
+                Path(stage_a_module.__file__).resolve()
+            )
         diagnostics_identity_sha256 = hashlib.sha256(
             json.dumps(
                 identity_payload,
@@ -334,6 +367,29 @@ class ResearchDiagnostics:
         universe = self._cfg.get("universe", "csi800")
         start = self._cfg.get("start_date", "2024-06-01")
         end = self._cfg.get("end_date", "2025-12-31")
+        alignment_cfg = self._cfg.get("feature_label_alignment") or {}
+        source_start = str(start)
+        if alignment_cfg:
+            calendar_path = Path(str(alignment_cfg.get("calendar_path", "")))
+            if not calendar_path.is_absolute():
+                calendar_path = settings.data_root / calendar_path
+            if calendar_path.is_symlink() or not calendar_path.is_file():
+                raise ValueError(
+                    f"alignment calendar must be a regular file: {calendar_path}"
+                )
+            if _sha256_file(calendar_path) != str(
+                alignment_cfg.get("calendar_sha256", "")
+            ):
+                raise ValueError("feature-label alignment calendar hash mismatch")
+            calendar = sorted({
+                line.strip()[:10]
+                for line in calendar_path.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            })
+            prior = [date for date in calendar if date < str(start)]
+            if not prior:
+                raise ValueError("alignment calendar has no session before diagnostics start")
+            source_start = prior[-1]
         fids = self._cfg.get("feature_list_id") or self._cfg.get("focus_features", [])
 
         if self._cfg.get("feature_list_id"):
@@ -401,14 +457,14 @@ class ResearchDiagnostics:
             frame = self._load_feature_cache(
                 cache_cfg,
                 requested_features=all_requested,
-                start=str(start),
+                start=source_start,
                 end=str(end),
             )
         else:
             raw = self._adapter.get_features(
                 feature_universe,
                 all_requested + ["$factor"],
-                start_time=start,
+                start_time=source_start,
                 end_time=end,
                 semantic_pit_membership_spans=semantic_spans,
                 semantic_pit_filter_mode=pit_mode,
@@ -421,7 +477,6 @@ class ResearchDiagnostics:
                 + ", ".join(duplicated)
             )
         frame["trade_date"] = frame["trade_date"].astype(str).str[:10]
-        alignment_cfg = self._cfg.get("feature_label_alignment") or {}
         if self._cfg.get("require_feature_label_alignment") and not alignment_cfg:
             raise ValueError("formal diagnostics require feature_label_alignment")
         if alignment_cfg:
@@ -1181,6 +1236,7 @@ class ResearchDiagnostics:
                 "size_field": self._resolved_size_field,
             },
             "top_candidates": results.get("top_candidates", {}),
+            "stage_a": results.get("stage_a", {}),
         }
         return summary
 

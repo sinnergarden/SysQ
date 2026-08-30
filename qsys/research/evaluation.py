@@ -84,11 +84,8 @@ def compute_daily_ic(
 
     Returns a DataFrame with columns ``date``, ``ic``, ``n``.
     """
-    dates = joined["trade_date"].unique()
-
     rows = []
-    for d in sorted(dates):
-        day = joined[joined["trade_date"] == d]
+    for d, day in joined.groupby("trade_date", sort=True):
         if len(day) < min_count:
             rows.append({"date": d, "ic": None, "n": len(day)})
             continue
@@ -108,11 +105,8 @@ def compute_daily_rank_ic(
     Uses pandas rank then Pearson correlation of ranks.
     Returns a DataFrame with columns ``date``, ``rank_ic``, ``n``.
     """
-    dates = joined["trade_date"].unique()
-
     rows = []
-    for d in sorted(dates):
-        day = joined[joined["trade_date"] == d]
+    for d, day in joined.groupby("trade_date", sort=True):
         if len(day) < min_count:
             rows.append({"date": d, "rank_ic": None, "n": len(day)})
             continue
@@ -416,8 +410,8 @@ def compute_group_returns(
     """
     groups: list[pd.DataFrame] = []
 
-    for d in sorted(joined["trade_date"].unique()):
-        day = joined[joined["trade_date"] == d].copy()
+    for d, day in joined.groupby("trade_date", sort=True):
+        day = day.copy()
         if day.empty:
             continue
 
@@ -867,10 +861,9 @@ def compute_daily_auc(
     """
     from sklearn.metrics import roc_auc_score
 
-    dates = joined["trade_date"].unique()
     rows = []
-    for d in sorted(dates):
-        day = joined[joined["trade_date"] == d].dropna(subset=[score_column, "label_value"])
+    for d, day in joined.groupby("trade_date", sort=True):
+        day = day.dropna(subset=[score_column, "label_value"])
         if len(day) < min_count:
             rows.append({"date": d, "auc": None, "n": len(day), "n_pos": 0, "n_neg": 0})
             continue

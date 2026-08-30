@@ -199,8 +199,12 @@ def validate_annual_feature_cache(
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
         if meta.get("schema_version") != 1:
             raise ValueError(f"cache metadata schema mismatch: {meta_path}")
-        if meta.get("identity") != identity:
-            raise ValueError(f"cache metadata identity mismatch: {meta_path}")
+        stored_identity = meta.get("identity")
+        if (
+            not isinstance(stored_identity, dict)
+            or _artifact_identity(stored_identity) != _artifact_identity(identity)
+        ):
+            raise ValueError(f"cache metadata materialization identity mismatch: {meta_path}")
         if meta.get("artifact_identity") != _artifact_identity(identity):
             raise ValueError(f"cache artifact identity mismatch: {meta_path}")
         if meta.get("data_sha256") != data_sha256:
