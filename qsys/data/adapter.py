@@ -552,6 +552,10 @@ class QlibAdapter:
             }
         ):
             flags["enable_relative_strength_features"] = True
+        if requested.intersection(
+            {"margin_trend_confirm_score", "margin_overheat_risk_score"}
+        ):
+            flags["enable_relative_strength_features"] = True
         if requested.intersection({"inventory_yoy", "ar_yoy"}):
             flags["enable_fundamental_context_features"] = True
         if any(f.startswith("industry_") or f.startswith("stock_minus_industry_") for f in requested):
