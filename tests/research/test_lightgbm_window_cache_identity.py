@@ -186,6 +186,9 @@ def test_cache_key_binds_source_universe_and_ordered_features(tmp_path: Path) ->
         tmp_path, universe="csi800"
     )._window_key("2020-01-01", "2021-01-01", ["f1", "f2"])
     assert key != base._window_key("2020-01-01", "2021-01-01", ["f2", "f1"])
+    assert key != _generator(
+        tmp_path, margin_lag_sessions=1
+    )._window_key("2020-01-01", "2021-01-01", ["f1", "f2"])
 
 
 def test_cache_identity_binds_financial_processing_contracts(tmp_path: Path) -> None:
@@ -210,6 +213,9 @@ def test_cache_identity_binds_financial_processing_contracts(tmp_path: Path) -> 
     assert identity["canonical_financial_contracts"] == {
         "availability": FINANCIAL_AVAILABILITY_CONTRACT,
         "fina_indicator_units": TUSHARE_FINA_INDICATOR_UNIT_CONTRACT,
+    }
+    assert identity["feature_availability_contracts"] == {
+        "margin": {"lag_sessions": 0},
     }
     assert "qsys.data._merge_helpers" in generator.checkpoint_code_dependencies
     assert "qsys.feature.groups.relative_strength" in (
@@ -339,8 +345,31 @@ def test_pit_feature_load_uses_static_union_plus_separate_membership_mask(
         call.kwargs["semantic_pit_membership_spans"], spans
     )
     assert call.kwargs["semantic_pit_filter_mode"] == "member_as_of"
+    assert call.kwargs["margin_lag_sessions"] == 0
     assert features == ["f1"]
     assert loaded["instrument"].tolist() == ["AAA"]
+
+
+def test_feature_load_forwards_margin_session_lag(tmp_path: Path) -> None:
+    generator = _generator(tmp_path, margin_lag_sessions=1)
+    index = pd.MultiIndex.from_tuples(
+        [(pd.Timestamp("2020-01-02"), "AAA")],
+        names=["datetime", "instrument"],
+    )
+    raw = pd.DataFrame({"f1": [1.0], "$close": [10.0]}, index=index)
+
+    with patch(
+        "qsys.feature.registry.FeatureListRegistry.load", return_value=["f1"]
+    ), patch("qsys.data.adapter.QlibAdapter") as adapter_class:
+        adapter_class.return_value.get_features.return_value = raw
+        generator._load_data("2020-01-01", "2020-01-03")
+
+    assert (
+        adapter_class.return_value.get_features.call_args.kwargs[
+            "margin_lag_sessions"
+        ]
+        == 1
+    )
 
 
 def test_cache_requires_explicit_feature_list(tmp_path: Path) -> None:

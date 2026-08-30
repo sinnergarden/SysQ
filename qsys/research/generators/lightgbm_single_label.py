@@ -132,6 +132,10 @@ class LightGBMSingleLabelGenerator:
     cache_write_scope: str = "window"  # "window" or "annual_shard"
     feature_cache_root: str = "data/feature_cache"
     source_manifest_hash: str = ""
+    # Exact open-session delay applied to daily margin source fields before
+    # semantic feature construction.  It is part of both cache and model
+    # checkpoint identity because changing it changes feature availability.
+    margin_lag_sessions: int = 0
     # ── Point-in-Time universe restriction (opt-in) ──
     # When True, rows are restricted to csi800_pit_v2 membership at the row's
     # feature date (trade_date), applied AFTER _load_data so train and predict
@@ -211,6 +215,8 @@ class LightGBMSingleLabelGenerator:
             raise ValueError(
                 "cache_write_scope must be 'window' or 'annual_shard'"
             )
+        if type(self.margin_lag_sessions) is not int or self.margin_lag_sessions < 0:
+            raise ValueError("margin_lag_sessions must be a non-negative integer")
         if self.prediction_universe and not self.prediction_membership_path:
             raise ValueError(
                 "prediction_universe requires prediction_membership_path"
@@ -485,6 +491,9 @@ class LightGBMSingleLabelGenerator:
         """Contracts that alter the generator's acceptance semantics."""
         contracts: dict[str, object] = {
             "income_feature_source": self._income_source_contract,
+            "margin_feature_availability": {
+                "lag_sessions": self.margin_lag_sessions,
+            },
         }
         if self.shareholder_freshness_contract is not None:
             contracts["shareholder_freshness_contract"] = (
@@ -670,6 +679,9 @@ class LightGBMSingleLabelGenerator:
             "canonical_financial_contracts": {
                 "availability": FINANCIAL_AVAILABILITY_CONTRACT,
                 "fina_indicator_units": TUSHARE_FINA_INDICATOR_UNIT_CONTRACT,
+            },
+            "feature_availability_contracts": {
+                "margin": {"lag_sessions": self.margin_lag_sessions},
             },
             "feature_history_contract": (
                 "continuous_listed_history_member_only_cross_section_v1"
@@ -1169,6 +1181,7 @@ class LightGBMSingleLabelGenerator:
             list(dict.fromkeys([*materialized, "$close"])),
             start_time=start,
             end_time=end,
+            margin_lag_sessions=self.margin_lag_sessions,
             semantic_pit_membership_spans=semantic_spans,
             semantic_pit_filter_mode=semantic_mode,
         )
@@ -1370,6 +1383,7 @@ class LightGBMSingleLabelGenerator:
             clean_features + ["$close"],
             start_time=start,
             end_time=end,
+            margin_lag_sessions=self.margin_lag_sessions,
         )
         frame = raw.reset_index().rename(columns={"datetime": "trade_date"})
         frame = frame.loc[:, ~frame.columns.duplicated()]
