@@ -1,0 +1,12 @@
+feature_list_id: financing_crowding_20d_v1
+description: One-session-lagged margin eligibility, intensity, balance change and crowding hypotheses for 20-session returns.
+feature_count: 7
+contract: pit_margin_previous_open_session_20d_consumer_v1
+features:
+  - margin_eligible
+  - margin_balance_to_float_mv
+  - margin_balance_chg_20d
+  - margin_balance_chg_60d
+  - margin_buy_intensity_20d
+  - margin_repay_to_buy_20d
+  - margin_crowding_score

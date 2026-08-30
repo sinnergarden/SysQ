@@ -1,0 +1,65 @@
+diagnostics_id: csi1800_pit_financing_crowding_60d_stage_a_v1
+experiment_id: csi1800_pit_financing_crowding_60d_stage_a_v1
+research_status: exploratory
+purpose: time_split_full_feature_universe_financing_crowding_review
+feature_list_id: financing_crowding_60d_v1
+universe: csi1800_pit_union
+pit_universe_artifact: csi1800_pit_v2
+pit_filter_mode: member_as_of
+require_pit_universe: true
+require_industry_taxonomy: true
+start_date: "2019-01-02"
+end_date: "2024-12-31"
+feature_cache:
+  manifest_path: data/feature_cache/annual_shards/financing_crowding_60d_cache_v1.manifest.json
+  manifest_sha256: f354645c9b69510dc7fc694a3b32026422532bf52e8fcf2abbe72bc0f1fcda75
+  validation_path: data/feature_cache/annual_shards/financing_crowding_60d_cache_v1.validation.json
+  validation_sha256: bcbad433514b80b4228a7198ada0faedc7a395508082d3fc17132f2b351041e8
+require_feature_cache: true
+feature_label_alignment:
+  contract: previous_open_session_to_execution_date_v1
+  calendar_path: qlib_bin/calendars/day.txt
+  calendar_sha256: ca919efa60651d8a03227536ab084e2577565694d964a7671b5d9779ac0a57c8
+require_feature_label_alignment: true
+labels:
+  - {label_id: fwd_ret_60d_open_open_raw_pit_csi1800_v1, role: primary, return_type: open_to_open}
+  - {label_id: fwd_ret_60d_close_close_raw_pit_csi1800_v1, role: secondary, return_type: close_to_close}
+require_all_labels: true
+require_executable_labels: true
+source_artifacts:
+  trusted_data_receipt: {path: audit/source_runs/data_sync_20260830T092226011729Z_2746dabe/receipt.json, sha256: 726af9f8c3c91432feb78f1df9520655f3e002c246521bd47245286637bc91ce}
+require_source_artifacts: true
+source_manifest_hash: 726af9f8c3c91432feb78f1df9520655f3e002c246521bd47245286637bc91ce
+diagnostics: {coverage: true, feature_ic: false, bucket_return: false, correlation: false, exposure_breakdown: false}
+exposure: {industry_field_candidates: [industry], size_field_candidates: [circ_mv], size_buckets: 5}
+top_candidates: {enabled: false}
+stage_a:
+  enabled: true
+  min_count: 30
+  quantile_groups: 10
+  top_ks: [5, 20, 50]
+  random_reps: 50
+  splits:
+    discovery: {start: "2019-01-02", end: "2022-12-30"}
+    confirmation: {start: "2023-01-03", end: "2024-12-31"}
+    holdout: {start: "2025-01-02", end: "2026-07-31"}
+  criteria:
+    minimum_evidence_classes: 2
+    minimum_hac_t: 1.96
+    minimum_nonoverlap_ratio: 0.60
+    minimum_year_direction_ratio: 0.75
+    minimum_discovery_years: 4
+    minimum_confirmation_years: 2
+  feature_families:
+    financing_eligibility_level:
+      - margin_eligible
+      - margin_balance_to_float_mv
+    financing_change_intensity:
+      - margin_balance_chg_20d
+      - margin_balance_chg_60d
+      - margin_buy_intensity_20d
+      - margin_repay_to_buy_20d
+    financing_crowding_composite:
+      - margin_crowding_score
+      - margin_trend_confirm_score
+      - margin_overheat_risk_score
