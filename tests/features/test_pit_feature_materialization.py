@@ -3,6 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from qsys.feature.groups.growth_confirmation_v0 import _required_income_symbols
 from qsys.feature.groups.relative_strength import build_relative_strength_features
 from qsys.feature.builder import build_phase1_features
 from qsys.feature.config import RESEARCH_FEATURE_FLAGS
@@ -87,3 +88,20 @@ def test_pit_mask_survives_phase1_until_final_standardization() -> None:
     assert "_pit_member" in built.columns
     assert pd.isna(built.loc[1, "amount_log"])
     assert built.loc[[0, 2], "amount_log"].notna().all()
+
+
+def test_income_scope_gate_requires_only_pit_consumed_symbols() -> None:
+    frame = pd.DataFrame(
+        {
+            "ts_code": ["MEMBER", "HISTORICAL", "MEMBER", "FUTURE"],
+            "_pit_member": [True, False, True, pd.NA],
+        }
+    )
+
+    assert _required_income_symbols(frame) == {"MEMBER"}
+
+
+def test_income_scope_gate_preserves_all_symbols_without_pit_mask() -> None:
+    frame = pd.DataFrame({"ts_code": ["AAA", "BBB", "AAA"]})
+
+    assert _required_income_symbols(frame) == {"AAA", "BBB"}

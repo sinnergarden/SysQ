@@ -130,6 +130,15 @@ def _load_income(
     return df.sort_values(["ts_code", "end_date"], kind="mergesort").reset_index(drop=True)
 
 
+def _required_income_symbols(frame: pd.DataFrame) -> set[str]:
+    """Return symbols whose rows can survive the final PIT consumer gate."""
+    symbols = frame["ts_code"].astype(str)
+    if "_pit_member" not in frame.columns:
+        return set(symbols.unique())
+    consumed = frame["_pit_member"].astype("boolean").fillna(False)
+    return set(symbols.loc[consumed].unique())
+
+
 def _load_legacy_unverified_income() -> pd.DataFrame:
     """Load the pre-audit mutable income table under an explicit legacy mode."""
 
@@ -508,7 +517,7 @@ def build_growth_confirmation_features(
             required_start=income_sidecar_required_start,
             required_end=income_sidecar_required_end,
             required_history_start=source["required_history_start"],
-            required_symbols=set(out["ts_code"].astype(str).unique()),
+            required_symbols=_required_income_symbols(out),
         )
     elif source["mode"] == INCOME_SOURCE_MODE_LEGACY:
         warnings.warn(
