@@ -2,11 +2,19 @@
 
 Date: 2026-08-30
 
-Branch revision: `0bab2f24416441a9a56a91b6eaa453a864de193d`
+Fix-forward request revision: `a763c3aa1dc64ceb0735a8e84936c3e43c56a81c`
 
-Baseline: `csi1800_s180_baseline_v1_r3`
+Baseline: `csi1800_s180_baseline_v1_r3_frozen_v1`
 
 Final certification status: **BLOCKED**
+
+Artifact freeze and mutual-binding gate: **PASS**
+
+This report was updated by PR306 after the PR304 re-review found that the old
+baseline receipt and the live signal/backtest paths named different bytes. The
+current identities below supersede the earlier mutable-path identities. The
+source data verdict remains `BLOCKED`; only the downstream artifact-freeze
+proof changed from unproven to verified.
 
 ## Executive conclusion
 
@@ -97,9 +105,9 @@ RankIC, feature absolute tolerance `1e-9`, prediction absolute tolerance
 
 All 68 rolling windows were committed and independently validated. The
 checkpoint-set SHA-256 is
-`416414a336f2abbe8ddc10d32cd3be2717bfaee0e9485536289a56c986d45cb7`;
+`69338082032ad195840dbaa2958bfc59730d5ef901f413e754ea8b57fd96b763`;
 the common base-identity SHA-256 is
-`83c033cb8391e5590c79888a864da83304a4999d949fb34277264fb30c9ab258`.
+`9ebe882b47b3d1e377d302c4d1a772e09f32e9d0488e1fc4ed3485314afe92db`.
 
 The frozen R3 predictions contain 2,431,524 rows across 1,351 trade dates from
 2021-01-04 through 2026-07-31 and 2,676 instruments. Independent checks found:
@@ -108,33 +116,34 @@ The frozen R3 predictions contain 2,431,524 rows across 1,351 trade dates from
 - null scores: 0;
 - rows violating `data_date < trade_date`: 0;
 - predictions SHA-256:
-  `8cd6a5f233dbc3729e771dc082420a85db7fccdf910e949a372c139149b125b9`;
+  `52f1a9bcc6980cfc804e69da9d7d2061df90f3706df2a1b2f12839472eb588ba`;
 - signal manifest SHA-256:
-  `d5696e19f86ffd9ffb94dcbab80b6f948ca588833bc0d8e10f4db2a5e0a9dc42`.
+  `fbeddce0ce1f9ca35309803ed6d7c7c8da86572ed33ddc224e6591dcab9b86ef`.
 
-On the 1,186 dates with matured 180-day labels, R3 produced IC `0.03794`,
-ICIR `0.5130`, RankIC `0.05333`, and RankICIR `0.6642`.
+The fix-forward certification is training-independent. It verifies these
+frozen bytes and their receipt lineage; prior IC figures are not used as a
+data-certification gate and were not reasserted by this audit.
 
 ## 4. CSI1800 PIT S180 backtest
 
-Backtest ID: `bt_2021-01-04_2026-07-31_4468d036`
+Backtest ID: `bt_2021-01-04_2026-07-31_987180b0`
 
 Backtest manifest SHA-256:
-`577720ca3ecc77797a1ba8cb90b20fdf38fde5b0a5fe662baacf2b8fc3e11c80`
+`6ad427f5794d8ea70054aad922fefcbd9e531b069d912a7fa3f64d0da420f6e7`
 
 | Metric | R1 | R2 | R3 |
 |---|---:|---:|---:|
 | Initial capital | 10,000,000 | 10,000,000 | 10,000,000 |
-| Final value | 48,257,002.62 | 6,112,942.32 | 5,555,953.54 |
-| Total return | 382.57% | -38.87% | -44.44% |
-| CAGR | 32.66% | -8.46% | -10.02% |
-| Sharpe | 1.1575 | -0.1164 | -0.1797 |
-| Max drawdown | -41.49% | -74.67% | -68.82% |
+| Final value | 48,257,002.62 | 6,112,942.32 | 7,502,608.87 |
+| Total return | 382.57% | -38.87% | -24.97% |
+| CAGR | 32.66% | -8.46% | -5.03% |
+| Sharpe | 1.1575 | -0.1164 | -0.0098 |
+| Max drawdown | -41.49% | -74.67% | -64.17% |
 
-R3 completed all 1,351 trading days with 522 orders: 521 fills and one reject.
+R3 completed all 1,351 trading days with 547 orders, all filled and none rejected.
 All six accounting artifacts matched the hashes and row counts declared by the
 manifest. The independently recomputed maximum absolute error in
-`cash + market_value = total_value` was `1.86265e-9`; final value agreed among
+the daily accounting identity was `1.11759e-8`; final value agreed among
 the daily ledger, metrics, and manifest.
 
 The economic semantics compared equal to R2 for every checked field: strategy
@@ -144,45 +153,28 @@ mark-to-market, T+1, commission, stamp duty, slippage, minimum commission,
 strict-prior 20-day ADV, 10% participation reject gate, corporate actions, and
 stale-price valuation.
 
-## 5. Why R2 and R3 differ
+## 5. Scope of the R2/R3 comparison
 
-R2 and R3 have exactly the same 2,431,524 prediction keys; neither side has a
-missing or extra stock-day. The score comparison is nevertheless materially
-different:
-
-- mean daily Pearson correlation: `0.8292`;
-- mean daily Spearman correlation: `0.8244`;
-- mean Top5 overlap: `1.41 / 5`;
-- median Top5 overlap: `1 / 5`;
-- zero-overlap days: 291;
-- days with identical Top5: 0 of 1,351.
-
-This locates the R2-to-R3 PnL change before accounting: the corrected financial
-units and rebuilt sidecar inputs materially changed cross-sectional ranking,
-which changed orders and holdings. It is not caused by different strategy or
-accounting parameters. R2 used known-invalid mixed financial units and cannot
-be treated as the correct reference merely because its return was higher.
-
-The available artifacts do not support a single-field causal attribution. R3
-changes both the financial-unit replay and the shareholder v2 sidecar, and R2
-does not retain a complete immutable 96-feature frame that would permit an
-exact one-change-at-a-time decomposition. The defensible conclusion is that R3
-has stronger data semantics than R2, not that every remaining source-history
-risk has been solved.
+The current frozen R3 predictions still contain 2,431,524 keys, but PR306 did
+not rerun training, evaluation, signal generation, or backtesting. Therefore
+the earlier score-correlation and Top5-overlap figures are not part of the
+current certification proof. The defensible data-layer conclusion remains that
+R3 uses corrected financial units and rebuilt sidecars, while the exact causal
+allocation between those changes requires a separate controlled ablation.
 
 ## 6. Formal certification and DataPack decision
 
 The formal request is
-`configs/audit/csi1800_s180_baseline_v1_r3.yaml`, request SHA-256
-`19e47eb06b6afc13a80482db5faf0668599235db414343659e0d0e6fb13f10ff`.
+`configs/audit/csi1800_s180_baseline_v1_r3_frozen_v1.yaml`, request SHA-256
+`d8fbb8bd0acb7bfbb05a0eec87b36d3ce1c5b1f693fa51fac3279c67b30c6157`.
 
 Certification output:
 
 - audit ID:
-  `15b89cdc875b9563502338a6b4f0b3038e414eded5eddca18ce070623114b84e`;
+  `4a73b3c5c2bab4862efd8606ac11d07b56f8631006eac7f1ff949562ab8e6b98`;
 - status: `BLOCKED`;
 - audit receipt SHA-256:
-  `298fdaa785d8de131601efba8d424cdccf693bd72fd7b4777551330fbdf55d51`;
+  `969b005b51d7b37f4ecd98bd4bb13df7fb456660f5a8e56f68d7425217b5c985`;
 - coverage rows: 93,249;
 - coverage result: 92,249 `COVERED`, 501 `ACCOUNTED`, 499 `DISJOINT`;
 - exceptions: 13, all `BLOCKING`.
@@ -200,10 +192,22 @@ lookahead-safe but permanently keeps the first published value. It does not
 switch to a later revision after that revision becomes public, and same-date
 `fina_indicator` revisions lack an independently proven effective timestamp.
 
-The exporter was invoked against the frozen certification directory and
-rejected it with `only a CERTIFIED baseline can be exported`. No DataPack
-directory was created. This is the required fail-closed outcome, not a missing
-packaging step.
+The source-revision request is
+`configs/audit/csi1800_s180_r3_source_revision_v1.yaml`, request SHA-256
+`20450b9a6e0b2f022fae0380813e56b60f08813098f76099923c425967548117`.
+It produced audit ID
+`ce8fe998235b7099b085e8fa26414fb5d4b7ab128ee8987073b3c14597976f58`,
+receipt SHA-256
+`cbc2098ec7e3cbbc85cface722c33504cd2526b08a42c15fbeabf8ff8a14b110`,
+and report SHA-256
+`7737b11d9b6cd9e84801daef9f5ffeed46ce9df57f5784539cf791da074bd0fe`.
+All eight event/as-of samples passed. Frozen bytes prove 415,032 financial
+events, but leave 137,101 right-censored financial keys, 1,614 same-publication
+conflicts, and two shareholder revision-timeline gaps: 138,717 blocking source
+cases in total.
+
+Because the baseline remains `BLOCKED`, it is ineligible for DataPack export.
+This is the required fail-closed outcome, not a missing packaging step.
 
 ## 7. What is required for a certified successor
 
@@ -228,12 +232,14 @@ silently introduced into this frozen R3 run.
 - Research config:
   `configs/research/60d/financial_rc_180d_rolling_5y_to_202607_v3_pit_csi1800_terminal_r3.yaml`
 - Certification request:
-  `configs/audit/csi1800_s180_baseline_v1_r3.yaml`
+  `configs/audit/csi1800_s180_baseline_v1_r3_frozen_v1.yaml`
 - Source manifest:
   `data/research/source_manifests/csi1800_s180_baseline_v1_r3.json`
-- Signal directory:
-  `data/research/signals/fwd_ret_180d_raw_pit_csi1800__daily_zscore/rolling__financial_rc_180d_rolling_5y_to_202607_v3_pit_csi1800_terminal_r3__v3a_growth_financial_180d_pit_csi1800_terminal_r3__fwd_ret_180d_raw_pit_csi1800__daily_zscore__2021-01-01_2026-07-31/`
-- Backtest directory:
-  `data/research/backtests/CSI1800_S180_baseline_v1_r3/`
+- Signal frozen bundle:
+  `data/research/frozen_outputs/signal_runs/fbeddce0ce1f9ca35309803ed6d7c7c8da86572ed33ddc224e6591dcab9b86ef/`
+- Backtest frozen bundle:
+  `data/research/frozen_outputs/backtest_runs/6ad427f5794d8ea70054aad922fefcbd9e531b069d912a7fa3f64d0da420f6e7/`
 - Certification directory:
-  `data/research/certifications/csi1800_s180_baseline_v1_r3/15b89cdc875b9563502338a6b4f0b3038e414eded5eddca18ce070623114b84e/`
+  `data/research/certifications/csi1800_s180_baseline_v1_r3_frozen_v1/4a73b3c5c2bab4862efd8606ac11d07b56f8631006eac7f1ff949562ab8e6b98/`
+- Source-revision certification directory:
+  `data/research/source_revision_certifications/csi1800_s180_r3_source_revision_v1/ce8fe998235b7099b085e8fa26414fb5d4b7ab128ee8987073b3c14597976f58/`

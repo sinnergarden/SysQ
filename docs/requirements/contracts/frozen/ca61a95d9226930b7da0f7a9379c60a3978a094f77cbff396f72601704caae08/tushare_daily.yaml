@@ -1,0 +1,207 @@
+schema_version: 1
+contract_id: tushare_daily_v1
+source: tushare
+dataset: canonical_daily
+timestamp_semantics:
+  published_at: null_when_source_does_not_expose_a_trustworthy_publication_time
+  observed_at: response_observation_time_utc
+  ingested_at: canonical_feather_commit_time_utc
+endpoints:
+  daily:
+    capability: trade_date_market_snapshot
+    required_for_trusted_daily: true
+    trusted_fields: [open, high, low, close, volume]
+    expected_scope: requested_symbols_must_be_present_or_have_suspend_d_evidence
+    key_fields: [ts_code, trade_date]
+  daily_basic:
+    capability: trade_date_market_snapshot
+    required_for_trusted_daily: false
+    expected_scope: sparse_or_empty_is_explicitly_receipted
+    key_fields: [ts_code, trade_date]
+  adj_factor:
+    capability: trade_date_market_snapshot
+    required_for_trusted_daily: true
+    trusted_fields: [factor]
+    expected_scope: requested_symbols_must_be_present_or_have_suspend_d_evidence
+    key_fields: [ts_code, trade_date]
+  stk_limit:
+    capability: trade_date_market_snapshot
+    required_for_trusted_daily: false
+    expected_scope: sparse_or_empty_is_explicitly_receipted
+    key_fields: [ts_code, trade_date]
+  moneyflow:
+    capability: trade_date_market_snapshot
+    required_for_trusted_daily: false
+    expected_scope: sparse_or_empty_is_explicitly_receipted
+    key_fields: [ts_code, trade_date]
+  margin:
+    capability: trade_date_market_snapshot_with_source_eligibility
+    required_for_trusted_daily: false
+    expected_scope: eligible_symbols_only_empty_is_explicitly_receipted
+    key_fields: [ts_code, trade_date]
+  daily_bundle:
+    capability: normalized_merged_canonical_candidate
+    required_for_trusted_daily: true
+    expected_scope: hashes_the_post_merge_pre_commit_candidate_frame
+    key_fields: [ts_code, trade_date]
+  suspend_d:
+    capability: per_symbol_suspension_exception_and_history_evidence
+    required_for_trusted_daily: single_day_gap_or_csi1800_history_repair
+    expected_scope: exact_symbol_and_requested_range_with_success_or_empty_receipt
+    history_request: one_full_repair_range_query_per_immutable_csi1800_union_symbol
+    supplier_filter: suspend_type_S_only
+    history_request_variant: history_suspend_s_v1
+    key_fields: [ts_code, trade_date, suspend_type]
+  bak_basic:
+    capability: historical_daily_stock_industry
+    required_for_trusted_daily: csi1800_only
+    fields: [trade_date, ts_code, industry]
+    key_fields: [ts_code, trade_date]
+    availability: after_trade_date_close_for_next_session_decision
+    source_history_start: "20160101"
+    supplier_row_limit: 7000
+    truncation_rule: row_count_greater_than_or_equal_to_limit_is_partial
+    history_request: one_all_history_query_per_immutable_csi1800_union_symbol
+    history_query_axis: ts_code_without_start_or_end_supplier_parameters
+    history_request_variant: history_bak_basic_industry_v1
+    projection: canonical_daily_rows_clamped_to_20160101_through_availability_cutoff
+    raw_payload: preserve_all_valid_supplier_rows_including_before_and_after_projection
+    daily_request: one_trade_date_market_snapshot_then_project_requested_canonical_rows
+    daily_request_variant: daily_bak_basic_industry_v1
+    taxonomy_gate: stage_level_recent_overlap_match_ratio_default_0_95
+  income:
+    capability: per_symbol_report_history_with_announcement_date
+    revision_capability: conservative_first_available_initial_value_only
+    raw_revision_fields: [f_ann_date, report_type, comp_type, end_type, update_flag]
+    logical_key_fields: [ts_code, end_date, report_type, comp_type, end_type]
+    history_query_axis: announcement_date_start_end
+    daily_query_axis: exact_ann_date
+    publication_date: max_ann_date_f_ann_date
+    availability_rule: publication_date_after_close_consumable_only_by_strictly_later_trade_date
+    request_variant: financial_first_available_v1
+    projection: availability_date_lte_cutoff_raw_future_rows_preserved
+    revision_selection: earliest_flag0_else_only_flag1_with_f_ann_after_ann
+    unproven_revision_rule: only_flag1_without_independent_later_f_ann_is_excluded
+  balancesheet:
+    capability: per_symbol_report_history_with_announcement_date
+    revision_capability: conservative_first_available_initial_value_only
+    raw_revision_fields: [f_ann_date, report_type, comp_type, end_type, update_flag]
+    logical_key_fields: [ts_code, end_date, report_type, comp_type, end_type]
+    history_query_axis: announcement_date_start_end
+    daily_query_axis: exact_ann_date
+    publication_date: max_ann_date_f_ann_date
+    availability_rule: publication_date_after_close_consumable_only_by_strictly_later_trade_date
+    request_variant: financial_first_available_v1
+    projection: availability_date_lte_cutoff_raw_future_rows_preserved
+    revision_selection: earliest_flag0_else_only_flag1_with_f_ann_after_ann
+    unproven_revision_rule: only_flag1_without_independent_later_f_ann_is_excluded
+  cashflow:
+    capability: per_symbol_report_history_with_announcement_date
+    revision_capability: conservative_first_available_initial_value_only
+    raw_revision_fields: [f_ann_date, report_type, comp_type, end_type, update_flag]
+    logical_key_fields: [ts_code, end_date, report_type, comp_type, end_type]
+    history_query_axis: announcement_date_start_end
+    daily_query_axis: exact_ann_date
+    publication_date: max_ann_date_f_ann_date
+    availability_rule: publication_date_after_close_consumable_only_by_strictly_later_trade_date
+    request_variant: financial_first_available_v1
+    projection: availability_date_lte_cutoff_raw_future_rows_preserved
+    revision_selection: earliest_flag0_else_only_flag1_with_f_ann_after_ann
+    unproven_revision_rule: only_flag1_without_independent_later_f_ann_is_excluded
+  fina_indicator:
+    capability: per_symbol_derived_report_history_with_announcement_date
+    revision_capability: conservative_first_available_initial_value_only
+    raw_revision_fields: [update_flag]
+    logical_key_fields: [ts_code, end_date]
+    history_query_axis: report_period_start_end
+    daily_query_axis: exact_ann_date
+    publication_date: ann_date
+    availability_rule: publication_date_after_close_consumable_only_by_strictly_later_trade_date
+    request_variant: financial_first_available_v1
+    supplier_row_limit: 100
+    truncation_rule: row_count_greater_than_or_equal_to_limit_is_partial
+    projection: availability_date_lte_cutoff_raw_future_rows_preserved
+    revision_selection: earliest_flag0_only
+    unproven_revision_rule: all_only_flag1_keys_are_excluded
+    source_units:
+      contract: tushare_fina_indicator_percent_points_to_ratio_v1
+      percent_point_fields:
+        [roe, roe_waa, roe_ttm, grossprofit_margin, debt_to_assets,
+         q_gr_yoy, dt_netprofit_yoy, profit_to_gr, net_profit_margin]
+      canonical_unit: ratio
+      conversion_owner: raw_fina_indicator_to_canonical_only
+      conversion: divide_by_100_unconditionally_for_named_fields
+      forbidden: numeric_magnitude_unit_inference_or_canonical_to_qlib_rescaling
+  stk_holdernumber:
+    capability: paged_announcement_date_history
+    revision_capability: historical_revision_timeline_unverified
+    key_fields: [ts_code, ann_date, end_date]
+    projection_contract: shareholder_exact_event_complete_top10_v2
+    same_announcement_rule: select_latest_end_date_before_value_filtering
+    null_latest_period_rule: no_new_fact_and_no_borrowed_announcement_freshness
+    exact_event_conflict_rule: differing_non_null_holder_num_fails_closed
+  top10_holders:
+    capability: paged_report_period_history_with_announcement_date
+    revision_capability: historical_revision_timeline_unverified
+    key_fields: [ts_code, ann_date, end_date]
+    projection_contract: shareholder_exact_event_complete_top10_v2
+    same_announcement_rule: select_latest_end_date_before_row_filtering
+    holder_identity: unicode_nfkc_whitespace_removed_dash_normalized_casefolded
+    duplicate_holder_rule: equal_ratios_collapse_differing_ratios_fail_closed
+    completeness_rule: exactly_10_normalized_holders
+    aggregate_rule: complete_exact_event_sum_in_closed_interval_0_100
+  stock_basic:
+    capability: current_classification_snapshot_only
+    revision_capability: no_historical_industry_timeline
+    key_fields: [ts_code]
+trust_rules:
+  sqlite_user_version: 1
+  sqlite_sot: data/audit/audit.db
+  immutable_run_receipt: data/audit/source_runs/{run_id}/receipt.json
+  raw_supplier_payload: data/raw/evidence/tushare/{endpoint}/{run_id}/{receipt_id}.parquet
+  required_terminal_gates:
+    - fetch
+    - raw_payloads
+    - canonical_commit
+    - qlib_readback
+    - readiness
+    - contiguous_range
+  watermark_key: [source, field_name, scope_key]
+  terminal_receipt_backlink: terminal_receipt_sha256
+  field_receipt_links:
+    open: daily
+    high: daily
+    low: daily
+    close: daily
+    volume: daily
+    factor: adj_factor
+    industry: bak_basic
+  optional_endpoint_failure_does_not_block_core: [daily_basic, stk_limit, moneyflow, margin]
+  certified_financial_revision_semantics:
+    contract: financial_latest_known_actual_publication_v1
+    rule: original_value_until_revision_publication_then_revision_value
+    publication_evidence_required: true
+    first_available_projection_is_not_sufficient: true
+    unknown_revision_effective_date: fail_closed
+  single_writer_scope: canonical_commit_through_qlib_readback_readiness_and_finalize
+  required_supplier_non_null:
+    daily: [open, high, low, close, volume]
+    adj_factor: [factor]
+  suspension_response_identity: exact_query_symbol_requested_date_range_and_suspend_type_S
+  history_suspension_terminal: all_union_symbol_shards_in_same_run_terminal_receipt_and_watermark_backlink
+  history_industry_terminal: all_union_symbol_shards_success_or_empty_with_projection_cutoff_in_same_terminal_receipt
+  history_industry_resume: exact_checkpoint_clone_chain_then_idempotent_canonical_projection
+  history_scope_checkpoint:
+    purpose: resume_optimization_not_certification
+    legacy_identity: exact_whole_file_sha256
+    current_identity: bounded_canonical_values_v1
+    bounded_through: explicit_history_target_date
+    fields: physical_columns_common_to_the_completed_scope
+    later_daily_rows: ignored
+    in_range_value_or_row_change: replay_affected_scope_only
+    legacy_hash_mismatch: local_scope_replay_with_verified_raw_shard_reuse
+  backward_watermark_expansion: forbidden_without_separate_certification
+  wrapper_finalize: outer_only_after_all_repairs_and_final_readiness
+  unreceipted_outer_core_history_mutation: untrusted_and_requires_new_run
+  unexpected_crash_receipt: immutable_untrusted_no_watermark
+  legacy_date_named_audit: legacy_untrusted

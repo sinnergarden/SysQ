@@ -31,6 +31,11 @@ from qsys.feature.registry import FeatureListRegistry
 SCHEMA_VERSION = "pit_baseline_certification_v1"
 EVIDENCE_SNAPSHOT_SCHEMA_VERSION = "pit_evidence_snapshot_v1"
 SOURCE_REVISION_AUDIT_SCHEMA_VERSION = "source_revision_capability_audit_v1"
+R3_FROZEN_OUTPUT_ROOTS = {
+    "signal_manifest": Path("data/research/frozen_outputs/signal_runs"),
+    "signal_predictions": Path("data/research/frozen_outputs/signal_runs"),
+    "backtest_manifest": Path("data/research/frozen_outputs/backtest_runs"),
+}
 FINANCIAL_LATEST_KNOWN_CONTRACT = (
     "financial_latest_known_actual_publication_v1"
 )
@@ -167,6 +172,23 @@ def _verify_identity(project_root: Path, spec: Mapping[str, Any], name: str) -> 
     if len(expected) != 64 or actual != expected:
         raise CertificationError(f"{name} sha256 mismatch: expected={expected}, actual={actual}")
     return path
+
+
+def _lineage_path_matches(
+    project_root: Path, declared: Any, verified_path: Path,
+) -> bool:
+    """Compare lineage paths without binding an artifact to one checkout prefix."""
+
+    try:
+        relative = verified_path.resolve().relative_to(project_root.resolve())
+    except (OSError, ValueError):
+        return False
+    candidate = Path(str(declared or ""))
+    if not candidate.parts or ".." in candidate.parts:
+        return False
+    if not candidate.is_absolute():
+        return candidate == relative
+    return candidate.parts[-len(relative.parts):] == relative.parts
 
 
 def _normalize_research_config(value: Mapping[str, Any]) -> dict[str, Any]:
@@ -528,6 +550,39 @@ def iter_canonical_mutations(audit_db: Path) -> Iterable[dict[str, Any]]:
         connection.close()
 
 
+def _verify_evidence_payloads(
+    audit_db: Path, tables: Mapping[str, list[dict[str, Any]]],
+) -> None:
+    """Recheck every selected supplier payload against the current data root."""
+
+    data_root = (
+        audit_db.resolve().parent.parent
+        if audit_db.parent.name == "audit" else audit_db.resolve().parent
+    )
+    for receipt in tables["fetch_receipts"]:
+        if receipt.get("status") not in {"success", "partial"}:
+            receipt["payload_verified"] = False
+            receipt["payload_verification_reason"] = "status_has_no_payload"
+            continue
+        raw_path = receipt.get("payload_path")
+        expected = receipt.get("payload_sha256")
+        try:
+            payload_path = (data_root / str(raw_path)).resolve()
+            if data_root != payload_path and data_root not in payload_path.parents:
+                raise ValueError("payload path escapes data root")
+            verified = (
+                bool(expected)
+                and payload_path.is_file()
+                and sha256_file(payload_path) == expected
+            )
+        except (OSError, ValueError):
+            verified = False
+        receipt["payload_verified"] = verified
+        receipt["payload_verification_reason"] = (
+            "ok" if verified else "payload_missing_or_hash_mismatch"
+        )
+
+
 def read_selected_evidence(
     audit_db: Path, evidence_run_ids: Sequence[str], mutation_run_ids: Sequence[str]
 ) -> dict[str, Any]:
@@ -565,23 +620,7 @@ def read_selected_evidence(
     after = sha256_file(audit_db)
     if after != before:
         raise CertificationError("read-only audit query changed database bytes")
-    data_root = audit_db.resolve().parent.parent if audit_db.parent.name == "audit" else audit_db.resolve().parent
-    for receipt in tables["fetch_receipts"]:
-        if receipt.get("status") not in {"success", "partial"}:
-            receipt["payload_verified"] = False
-            receipt["payload_verification_reason"] = "status_has_no_payload"
-            continue
-        raw_path = receipt.get("payload_path")
-        expected = receipt.get("payload_sha256")
-        try:
-            payload_path = (data_root / str(raw_path)).resolve()
-            if data_root != payload_path and data_root not in payload_path.parents:
-                raise ValueError("payload path escapes data root")
-            verified = bool(expected) and payload_path.is_file() and sha256_file(payload_path) == expected
-        except (OSError, ValueError):
-            verified = False
-        receipt["payload_verified"] = verified
-        receipt["payload_verification_reason"] = "ok" if verified else "payload_missing_or_hash_mismatch"
+    _verify_evidence_payloads(audit_db, tables)
     evidence_present = {
         str(row["run_id"])
         for name, rows in tables.items() if name != "canonical_mutations"
@@ -594,6 +633,141 @@ def read_selected_evidence(
         "tables": tables,
         "audit_db_sha256": before,
         "missing_evidence_run_ids": missing_evidence,
+    }
+
+
+def read_frozen_selected_evidence(
+    *, project: Path, audit_db: Path, spec: Mapping[str, Any],
+    evidence_run_ids: Sequence[str], mutation_run_ids: Sequence[str],
+) -> dict[str, Any]:
+    """Replay receipt-bound selected evidence while rescanning the live ledger."""
+
+    if not audit_db.is_file():
+        raise CertificationError(f"audit database missing: {audit_db}")
+    current_audit_db_sha256 = sha256_file(audit_db)
+    receipt_spec = spec.get("audit_receipt")
+    snapshot_spec = spec.get("evidence_snapshot")
+    if not all(isinstance(item, Mapping) for item in (receipt_spec, snapshot_spec)):
+        raise CertificationError(
+            "frozen evidence requires audit_receipt and evidence_snapshot identities"
+        )
+    for identity in (receipt_spec, snapshot_spec):
+        candidate = Path(str(identity.get("path") or ""))
+        if not candidate.is_absolute():
+            candidate = project / candidate
+        _reject_symlink_components(candidate.absolute())
+    receipt_path = _verify_identity(
+        project, receipt_spec, "frozen evidence audit receipt",
+    )
+    snapshot_path = _verify_identity(
+        project, snapshot_spec, "frozen evidence snapshot",
+    )
+    try:
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise CertificationError("frozen evidence artifacts are invalid JSON") from exc
+    if not isinstance(receipt, dict) or not isinstance(snapshot, dict):
+        raise CertificationError("frozen evidence artifacts must be JSON mappings")
+    audit_id = str(receipt.get("audit_id") or "")
+    baseline_id = str(receipt.get("baseline_id") or "")
+    receipt_inputs = receipt.get("input_identities")
+    if (
+        receipt.get("schema_version") != SCHEMA_VERSION
+        or receipt.get("baseline_status")
+        not in {"CERTIFIED", "BLOCKED", "REAUDIT_REQUIRED"}
+        or not isinstance(receipt_inputs, Mapping)
+        or audit_id != _sha256_bytes(_canonical_bytes(receipt_inputs))
+        or receipt_path.parent.name != audit_id
+        or receipt_path.parent.parent.name != baseline_id
+    ):
+        raise CertificationError("frozen evidence receipt identity is invalid")
+    snapshot_sha256 = sha256_file(snapshot_path)
+    artifacts = receipt.get("artifacts")
+    if (
+        not isinstance(artifacts, Mapping)
+        or artifacts.get("evidence_snapshot.json") != snapshot_sha256
+    ):
+        raise CertificationError("frozen evidence receipt does not bind snapshot")
+    selected_evidence = sorted(set(evidence_run_ids))
+    selected_mutations = sorted(set(mutation_run_ids))
+    if (
+        snapshot.get("schema_version") != EVIDENCE_SNAPSHOT_SCHEMA_VERSION
+        or snapshot.get("selected_evidence_run_ids") != selected_evidence
+        or receipt.get("selected_evidence_run_ids") != selected_evidence
+        or snapshot.get("selected_mutation_run_ids") != selected_mutations
+        or receipt.get("selected_mutation_run_ids") != selected_mutations
+    ):
+        raise CertificationError("frozen evidence selectors do not match request")
+    for field in ("evidence_query_sha256", "full_mutation_ledger_sha256"):
+        if (
+            snapshot.get(field) != receipt_inputs.get(field)
+            or (
+                field == "evidence_query_sha256"
+                and snapshot.get(field) != receipt.get(field)
+            )
+        ):
+            raise CertificationError(f"frozen evidence {field} backlink mismatch")
+    tables = snapshot.get("tables")
+    table_names = {
+        "fetch_receipts", "field_receipt_links", "canonical_mutations",
+        "trusted_watermarks", "audit_journal",
+    }
+    if (
+        not isinstance(tables, dict)
+        or set(tables) != table_names
+        or not all(isinstance(tables[name], list) for name in table_names)
+        or tables["canonical_mutations"]
+    ):
+        raise CertificationError("frozen evidence snapshot tables are invalid")
+    snapshot_query_payload = {
+        key: snapshot.get(key) for key in (
+            "selected_evidence_run_ids", "selected_mutation_run_ids",
+            "full_mutation_ledger_sha256", "canonical_mutation_summary", "tables",
+        )
+    }
+    if _sha256_bytes(_canonical_bytes(snapshot_query_payload)) != snapshot.get(
+        "evidence_query_sha256"
+    ):
+        raise CertificationError("frozen evidence snapshot query identity is invalid")
+    source_audit_db_sha256 = str(snapshot.get("audit_db_sha256_at_query") or "")
+    if len(source_audit_db_sha256) != 64:
+        raise CertificationError("frozen evidence source audit database identity is invalid")
+    tables = copy.deepcopy(tables)
+    _verify_evidence_payloads(audit_db, tables)
+    evidence_present = {
+        str(row["run_id"])
+        for name, rows in tables.items() if name != "canonical_mutations"
+        for row in rows if isinstance(row, Mapping) and row.get("run_id") is not None
+    }
+    if sha256_file(audit_db) != current_audit_db_sha256:
+        raise CertificationError("audit database changed during frozen evidence verification")
+    try:
+        receipt_relative = receipt_path.relative_to(project).as_posix()
+        snapshot_relative = snapshot_path.relative_to(project).as_posix()
+    except ValueError as exc:
+        raise CertificationError("frozen evidence must remain inside project root") from exc
+    frozen_identity = {
+        "source_baseline_id": baseline_id,
+        "source_audit_id": audit_id,
+        "source_audit_db_sha256": source_audit_db_sha256,
+        "audit_receipt": {
+            "path": receipt_relative, "sha256": sha256_file(receipt_path),
+        },
+        "evidence_snapshot": {
+            "path": snapshot_relative, "sha256": snapshot_sha256,
+        },
+    }
+    return {
+        "selected_evidence_run_ids": selected_evidence,
+        "selected_mutation_run_ids": selected_mutations,
+        "tables": tables,
+        "audit_db_sha256": current_audit_db_sha256,
+        "selected_evidence_audit_db_sha256": frozen_identity[
+            "source_audit_db_sha256"
+        ],
+        "frozen_evidence": frozen_identity,
+        "missing_evidence_run_ids": sorted(set(selected_evidence) - evidence_present),
     }
 
 
@@ -1561,8 +1735,13 @@ def _validate_cross_artifact_lineage(
             config_artifact = _verify_identity(
                 project, {"path": config_path, "sha256": config_sha}, f"{lineage_name} config sidecar",
             )
-            signal_artifact = _verify_identity(project, lineage, f"{lineage_name} signal sidecar")
-            if config_artifact != signal_artifact or config_sha != lineage.get("sha256"):
+            if config_sha != lineage.get("sha256"):
+                raise CertificationError(
+                    f"{lineage_name} signal sidecar sha256 mismatch"
+                )
+            if not _lineage_path_matches(
+                project, lineage.get("path"), config_artifact,
+            ):
                 raise CertificationError(f"shareholder sidecar lineage mismatch: {lineage_name}")
     return {
         "generator_params": dict(generator_params),
@@ -1702,13 +1881,18 @@ def _validate_income_consumed_sidecar(
     if not isinstance(lineage, Mapping):
         raise CertificationError("income signal feature_source_lineage missing")
     signal_expected = {
-        "path": str(artifact.resolve()),
         "sha256": normalized["artifact"]["sha256"],
-        "manifest_path": str(manifest_path.resolve()),
         "manifest_sha256": normalized["manifest"]["sha256"],
         **expected_semantics,
     }
-    if dict(lineage) != signal_expected:
+    signal_lineage = dict(lineage)
+    signal_artifact_path = signal_lineage.pop("path", None)
+    signal_manifest_path = signal_lineage.pop("manifest_path", None)
+    if (
+        signal_lineage != signal_expected
+        or not _lineage_path_matches(project, signal_artifact_path, artifact)
+        or not _lineage_path_matches(project, signal_manifest_path, manifest_path)
+    ):
         raise CertificationError("income signal sidecar lineage mismatch")
     if normalized["scope_key"] != request_scope_key:
         raise CertificationError("income sidecar scope_key mismatch")
@@ -1838,18 +2022,28 @@ def _validate_shareholder_consumed_sidecar(
         raise CertificationError("shareholder request/manifest semantic identity mismatch")
     for name in ("holder_num", "top10_holder_ratio"):
         lineage = feature_lineage.get(name)
-        if not isinstance(lineage, Mapping) or dict(lineage) != {
-            "path": str(paths[name].resolve()),
-            "sha256": normalized[name]["sha256"],
-        }:
+        if (
+            not isinstance(lineage, Mapping)
+            or lineage.get("sha256") != normalized[name]["sha256"]
+            or set(lineage) != {"path", "sha256"}
+            or not _lineage_path_matches(project, lineage.get("path"), paths[name])
+        ):
             raise CertificationError(f"shareholder signal sidecar lineage mismatch: {name}")
     manifest_lineage = feature_lineage.get("shareholder_sidecar")
     signal_manifest_expected = {
-        "path": str(paths["manifest"].resolve()),
         "sha256": normalized["manifest"]["sha256"],
         **expected_semantics,
     }
-    if not isinstance(manifest_lineage, Mapping) or dict(manifest_lineage) != signal_manifest_expected:
+    signal_manifest_lineage = (
+        dict(manifest_lineage) if isinstance(manifest_lineage, Mapping) else {}
+    )
+    signal_manifest_path = signal_manifest_lineage.pop("path", None)
+    if (
+        signal_manifest_lineage != signal_manifest_expected
+        or not _lineage_path_matches(
+            project, signal_manifest_path, paths["manifest"],
+        )
+    ):
         raise CertificationError("shareholder signal manifest lineage mismatch")
     if normalized["scope_key"] != request_scope_key:
         raise CertificationError("shareholder sidecar scope_key mismatch")
@@ -2691,6 +2885,45 @@ def _validate_r3_source_blockers(
         != sha256_file(exceptions_path)
     ):
         raise CertificationError("R3 source blocker backlink mismatch")
+    receipt_inputs = receipt.get("input_identities")
+    receipt_identities = (
+        receipt_inputs.get("identities")
+        if isinstance(receipt_inputs, Mapping) else None
+    )
+    if not isinstance(receipt_identities, Mapping):
+        raise CertificationError("R3 certification receipt lacks input identities")
+    output_identities: dict[str, dict[str, str]] = {}
+    output_paths: dict[str, Path] = {}
+    for name, frozen_root in R3_FROZEN_OUTPUT_ROOTS.items():
+        identity_spec = receipt_identities.get(name)
+        if not isinstance(identity_spec, Mapping):
+            raise CertificationError(
+                f"R3 certification receipt lacks output identity: {name}"
+            )
+        path = _verify_identity(
+            project, identity_spec, f"R3 certification output {name}",
+        )
+        _reject_symlink_components(path.absolute())
+        bundle_identity = (
+            receipt_identities.get("signal_manifest")
+            if name == "signal_predictions" else identity_spec
+        )
+        if not isinstance(bundle_identity, Mapping):
+            raise CertificationError("R3 signal bundle identity is incomplete")
+        expected_parent = (
+            project / frozen_root / str(bundle_identity.get("sha256") or "")
+        ).resolve()
+        if path.parent != expected_parent:
+            raise CertificationError(
+                f"R3 certification output is not content-addressed: {name}"
+            )
+        output_paths[name] = path
+        output_identities[name] = {
+            "path": path.relative_to(project).as_posix(),
+            "sha256": sha256_file(path),
+        }
+    if output_paths["signal_manifest"].parent != output_paths["signal_predictions"].parent:
+        raise CertificationError("R3 signal manifest/predictions frozen bundle mismatch")
     exceptions = pd.read_parquet(exceptions_path)
     required = {"reason_code", "affected_features_json"}
     if not required.issubset(exceptions.columns):
@@ -2734,6 +2967,7 @@ def _validate_r3_source_blockers(
             "path": exceptions_path.relative_to(project).as_posix(),
             "sha256": sha256_file(exceptions_path),
         },
+        "output_identities": output_identities,
         **actual,
         "reason_counts": reason_counts,
         "shareholder_features": sorted(feature_sets["shareholder"]),
@@ -3088,18 +3322,10 @@ def audit_source_revision_capabilities(
     r3_context = _validate_r3_source_blockers(
         project=project, spec=r3_spec, feature_date_end=feature_date_end,
     )
-    current_r3_specs = request.get("current_r3_outputs")
-    if not isinstance(current_r3_specs, Mapping) or not current_r3_specs:
-        raise CertificationError("current R3 output identities are missing")
-    current_r3_outputs: dict[str, dict[str, str]] = {}
-    for name, spec in current_r3_specs.items():
-        if not isinstance(spec, Mapping):
-            raise CertificationError(f"invalid current R3 output identity: {name}")
-        path = _verify_identity(project, spec, f"current R3 output {name}")
-        current_r3_outputs[str(name)] = {
-            "path": path.relative_to(project).as_posix(),
-            "sha256": sha256_file(path),
-        }
+    if "current_r3_outputs" in request:
+        raise CertificationError(
+            "current_r3_outputs is forbidden; source audit must use upstream receipt identities"
+        )
     trade_dates, trade_calendar_identity = _load_trade_calendar(
         project=project, spec=calendar_spec,
         availability_cutoff=feature_date_end,
@@ -3172,7 +3398,6 @@ def audit_source_revision_capabilities(
             for path in implementation_paths
         ],
         "upstream_r3_certification": r3_context,
-        "current_r3_outputs": current_r3_outputs,
         "feature_date_end": feature_date_end,
         "trade_calendar": trade_calendar_identity,
         "financial_terminal": {
@@ -3355,9 +3580,22 @@ def certify_pit_baseline(
         feature_end=feature_input["date_end"],
         max_lookback_days=max_lookback,
     )
-    evidence = read_selected_evidence(
-        Path(audit_db), sorted(set(evidence_run_ids)), sorted(set(mutation_run_ids))
-    )
+    audit_db_path = Path(audit_db)
+    frozen_evidence_spec = request.get("frozen_evidence")
+    if frozen_evidence_spec is None:
+        evidence = read_selected_evidence(
+            audit_db_path,
+            sorted(set(evidence_run_ids)), sorted(set(mutation_run_ids)),
+        )
+    elif isinstance(frozen_evidence_spec, Mapping):
+        evidence = read_frozen_selected_evidence(
+            project=project, audit_db=audit_db_path,
+            spec=frozen_evidence_spec,
+            evidence_run_ids=sorted(set(evidence_run_ids)),
+            mutation_run_ids=sorted(set(mutation_run_ids)),
+        )
+    else:
+        raise CertificationError("frozen_evidence must be an identity mapping")
     consumed_sidecars = _validate_consumed_sidecars(
         project=project,
         request=request,
@@ -3559,6 +3797,8 @@ def certify_pit_baseline(
         "canonical_mutation_summary": mutation_summary,
         "tables": evidence["tables"],
     }
+    if evidence.get("frozen_evidence") is not None:
+        evidence_query_payload["frozen_evidence"] = evidence["frozen_evidence"]
     evidence["evidence_query_sha256"] = _sha256_bytes(
         _canonical_bytes(evidence_query_payload)
     )
@@ -3624,6 +3864,8 @@ def certify_pit_baseline(
         "evidence_query_sha256": evidence["evidence_query_sha256"],
         "full_mutation_ledger_sha256": evidence["full_mutation_ledger_sha256"],
     }
+    if evidence.get("frozen_evidence") is not None:
+        identity_payload["frozen_evidence"] = evidence["frozen_evidence"]
     audit_id = _sha256_bytes(_canonical_bytes(identity_payload))
     interval_summaries = []
     max_semantic_sessions = int(
@@ -3681,16 +3923,24 @@ def certify_pit_baseline(
         _write_json(scope_path, audit_scope)
         pd.DataFrame(coverage, columns=COVERAGE_COLUMNS).to_parquet(coverage_path, index=False)
         pd.DataFrame(exceptions, columns=EXCEPTION_COLUMNS).to_parquet(exceptions_path, index=False)
-        _write_json(evidence_path, {
+        evidence_snapshot_payload = {
             "schema_version": EVIDENCE_SNAPSHOT_SCHEMA_VERSION,
-            "audit_db_sha256_at_query": evidence["audit_db_sha256"],
+            "audit_db_sha256_at_query": evidence.get(
+                "selected_evidence_audit_db_sha256", evidence["audit_db_sha256"],
+            ),
             "evidence_query_sha256": evidence["evidence_query_sha256"],
             "selected_evidence_run_ids": sorted(set(evidence_run_ids)),
             "selected_mutation_run_ids": sorted(set(mutation_run_ids)),
             "full_mutation_ledger_sha256": evidence["full_mutation_ledger_sha256"],
             "canonical_mutation_summary": mutation_summary,
             "tables": evidence["tables"],
-        })
+        }
+        if evidence.get("frozen_evidence") is not None:
+            evidence_snapshot_payload["frozen_evidence"] = evidence["frozen_evidence"]
+            evidence_snapshot_payload["certification_audit_db_sha256"] = evidence[
+                "audit_db_sha256"
+            ]
+        _write_json(evidence_path, evidence_snapshot_payload)
         try:
             git_revision = subprocess.run(
                 ["git", "rev-parse", "HEAD"], cwd=project, check=True,
