@@ -228,6 +228,7 @@ class TestLightGBMSingleLabelContract:
             captured["weight"] = kwargs["sample_weight"]
             captured["validation_size"] = kwargs["validation_size"]
             captured["y_index"] = y_train.index
+            captured["X_index"] = X_train.index
             return (
                 FakeModel(),
                 pd.Series([1.0] * X_train.shape[1]),
@@ -253,9 +254,10 @@ class TestLightGBMSingleLabelContract:
             )
         assert captured["weight"] is not None
         assert captured["weight"].index.equals(captured["y_index"])
-        assert captured["validation_size"] == max(
-            1, min(20000, int(len(captured["y_index"]) * 0.15))
-        )
+        assert captured["X_index"].equals(captured["y_index"])
+        # The raw 15% target is two rows, but the three instruments on the
+        # final label date must remain together in validation.
+        assert captured["validation_size"] == 3
         assert set(captured["weight"].unique()).issubset({1.0, 2.0, 3.0})
 
     @staticmethod

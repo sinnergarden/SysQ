@@ -1256,7 +1256,7 @@ class LightGBMSingleLabelGenerator:
         from qsys.signal.alpha_v1.training import (
             compute_train_partition_sample_weight,
             predict_model,
-            resolve_validation_size,
+            resolve_complete_date_validation_size,
             train_model,
         )
 
@@ -1285,23 +1285,37 @@ class LightGBMSingleLabelGenerator:
             on=["label_date", "instrument"], how="left",
         )
 
-        y_valid = train["label_value"].notna()
-        X_tr = train[clean_features].fillna(0.0).astype(np.float32)
-        y_tr = train.loc[y_valid, "label_value"].astype(float)
+        valid_train = train.loc[
+            train["label_value"].notna(),
+            ["label_date", "instrument", "label_value", *clean_features],
+        ].sort_values(["label_date", "instrument"], kind="mergesort")
+        X_tr = valid_train[clean_features].fillna(0.0).astype(np.float32)
+        y_tr = valid_train["label_value"].astype(float)
         if y_tr.empty:
             raise ValueError(f"No valid training samples for {self.label_id}")
-        # Keep this boundary identical to train_model: validation labels must
-        # not affect percentile ranks used for training weights.
-        validation_size = resolve_validation_size(len(y_tr))
+        # Annual feature caches are instrument-major.  Reorder matured samples
+        # chronologically and keep each label date wholly on one side of the
+        # model-selection boundary.
+        validation_size = resolve_complete_date_validation_size(
+            valid_train["label_date"]
+        )
+        log.info(
+            "Chronological validation: train through {}, validate {} -> {} "
+            "({} complete-date rows)",
+            valid_train["label_date"].iloc[-validation_size - 1],
+            valid_train["label_date"].iloc[-validation_size],
+            valid_train["label_date"].iloc[-1],
+            validation_size,
+        )
         sample_weight = compute_train_partition_sample_weight(
             y_tr,
-            train.loc[y_valid, "label_date"],
+            valid_train["label_date"],
             self.sample_weight_policy,
             validation_size=validation_size,
         )
 
         model, center, scale = train_model(
-            X_tr.loc[y_tr.index], y_tr, "window",
+            X_tr, y_tr, "window",
             n_estimators=self.n_estimators, lgb_params=self.lgb_params,
             validation_size=validation_size,
             sample_weight=sample_weight,

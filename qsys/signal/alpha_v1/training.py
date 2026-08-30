@@ -71,6 +71,41 @@ def resolve_validation_size(n_rows: int, validation_size: int | None = None) -> 
     return resolved
 
 
+def resolve_complete_date_validation_size(
+    label_dates: pd.Series,
+    validation_size: int | None = None,
+) -> int:
+    """Resolve a trailing validation partition made of complete dates.
+
+    Callers must first order samples by ``label_date``.  The returned row
+    count reaches the canonical validation target without splitting a date
+    between the training and validation partitions.
+    """
+    if not isinstance(label_dates, pd.Series):
+        raise TypeError("label_dates must be a pandas Series")
+    if label_dates.isna().any():
+        raise ValueError("label_dates must be non-null")
+    dates = pd.to_datetime(label_dates, errors="coerce")
+    if dates.isna().any():
+        raise ValueError("label_dates must contain valid dates")
+    if not dates.is_monotonic_increasing:
+        raise ValueError("label_dates must be sorted in nondecreasing order")
+    if dates.nunique() < 2:
+        raise ValueError("training and validation require at least two label dates")
+
+    target = resolve_validation_size(len(dates), validation_size)
+    trailing_rows = 0
+    for group_rows in reversed(dates.groupby(dates, sort=False).size().tolist()):
+        trailing_rows += int(group_rows)
+        if trailing_rows >= target:
+            break
+    if trailing_rows >= len(dates):
+        raise ValueError(
+            "complete-date validation target leaves no earlier training date"
+        )
+    return trailing_rows
+
+
 def compute_sample_weight(
     labels: pd.Series,
     label_dates: pd.Series,
