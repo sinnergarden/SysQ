@@ -174,6 +174,23 @@ def _verify_identity(project_root: Path, spec: Mapping[str, Any], name: str) -> 
     return path
 
 
+def _lineage_path_matches(
+    project_root: Path, declared: Any, verified_path: Path,
+) -> bool:
+    """Compare lineage paths without binding an artifact to one checkout prefix."""
+
+    try:
+        relative = verified_path.resolve().relative_to(project_root.resolve())
+    except (OSError, ValueError):
+        return False
+    candidate = Path(str(declared or ""))
+    if not candidate.parts or ".." in candidate.parts:
+        return False
+    if not candidate.is_absolute():
+        return candidate == relative
+    return candidate.parts[-len(relative.parts):] == relative.parts
+
+
 def _normalize_research_config(value: Mapping[str, Any]) -> dict[str, Any]:
     result = copy.deepcopy(dict(value))
     if "signal_transforms" in result and "transforms" not in result:
@@ -1566,8 +1583,13 @@ def _validate_cross_artifact_lineage(
             config_artifact = _verify_identity(
                 project, {"path": config_path, "sha256": config_sha}, f"{lineage_name} config sidecar",
             )
-            signal_artifact = _verify_identity(project, lineage, f"{lineage_name} signal sidecar")
-            if config_artifact != signal_artifact or config_sha != lineage.get("sha256"):
+            if config_sha != lineage.get("sha256"):
+                raise CertificationError(
+                    f"{lineage_name} signal sidecar sha256 mismatch"
+                )
+            if not _lineage_path_matches(
+                project, lineage.get("path"), config_artifact,
+            ):
                 raise CertificationError(f"shareholder sidecar lineage mismatch: {lineage_name}")
     return {
         "generator_params": dict(generator_params),
@@ -1707,13 +1729,18 @@ def _validate_income_consumed_sidecar(
     if not isinstance(lineage, Mapping):
         raise CertificationError("income signal feature_source_lineage missing")
     signal_expected = {
-        "path": str(artifact.resolve()),
         "sha256": normalized["artifact"]["sha256"],
-        "manifest_path": str(manifest_path.resolve()),
         "manifest_sha256": normalized["manifest"]["sha256"],
         **expected_semantics,
     }
-    if dict(lineage) != signal_expected:
+    signal_lineage = dict(lineage)
+    signal_artifact_path = signal_lineage.pop("path", None)
+    signal_manifest_path = signal_lineage.pop("manifest_path", None)
+    if (
+        signal_lineage != signal_expected
+        or not _lineage_path_matches(project, signal_artifact_path, artifact)
+        or not _lineage_path_matches(project, signal_manifest_path, manifest_path)
+    ):
         raise CertificationError("income signal sidecar lineage mismatch")
     if normalized["scope_key"] != request_scope_key:
         raise CertificationError("income sidecar scope_key mismatch")
@@ -1843,18 +1870,28 @@ def _validate_shareholder_consumed_sidecar(
         raise CertificationError("shareholder request/manifest semantic identity mismatch")
     for name in ("holder_num", "top10_holder_ratio"):
         lineage = feature_lineage.get(name)
-        if not isinstance(lineage, Mapping) or dict(lineage) != {
-            "path": str(paths[name].resolve()),
-            "sha256": normalized[name]["sha256"],
-        }:
+        if (
+            not isinstance(lineage, Mapping)
+            or lineage.get("sha256") != normalized[name]["sha256"]
+            or set(lineage) != {"path", "sha256"}
+            or not _lineage_path_matches(project, lineage.get("path"), paths[name])
+        ):
             raise CertificationError(f"shareholder signal sidecar lineage mismatch: {name}")
     manifest_lineage = feature_lineage.get("shareholder_sidecar")
     signal_manifest_expected = {
-        "path": str(paths["manifest"].resolve()),
         "sha256": normalized["manifest"]["sha256"],
         **expected_semantics,
     }
-    if not isinstance(manifest_lineage, Mapping) or dict(manifest_lineage) != signal_manifest_expected:
+    signal_manifest_lineage = (
+        dict(manifest_lineage) if isinstance(manifest_lineage, Mapping) else {}
+    )
+    signal_manifest_path = signal_manifest_lineage.pop("path", None)
+    if (
+        signal_manifest_lineage != signal_manifest_expected
+        or not _lineage_path_matches(
+            project, signal_manifest_path, paths["manifest"],
+        )
+    ):
         raise CertificationError("shareholder signal manifest lineage mismatch")
     if normalized["scope_key"] != request_scope_key:
         raise CertificationError("shareholder sidecar scope_key mismatch")

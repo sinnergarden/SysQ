@@ -13,6 +13,7 @@ from qsys.pit_certification import (
     _audit_financial_revision_terminal,
     _financial_asof_samples,
     _latest_shareholder_vintage_values,
+    _lineage_path_matches,
     _validate_r3_source_blockers,
     _validate_source_revision_count_contract,
     audit_source_revision_capabilities,
@@ -540,4 +541,22 @@ def test_historical_r3_request_uses_frozen_source_contract() -> None:
     assert sha256_file(ROOT / contract["path"]) == contract["sha256"]
     assert sha256_file(ROOT / "docs/requirements/contracts/tushare_daily.yaml") != (
         contract["sha256"]
+    )
+
+
+def test_lineage_path_is_portable_across_checkout_prefixes(tmp_path: Path) -> None:
+    project = tmp_path / "new-checkout"
+    artifact = project / "data/research/source_snapshots/value.parquet"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_bytes(b"value")
+
+    assert _lineage_path_matches(
+        project, "/old/checkout/data/research/source_snapshots/value.parquet", artifact,
+    )
+    assert _lineage_path_matches(
+        project, "data/research/source_snapshots/value.parquet", artifact,
+    )
+    assert not _lineage_path_matches(project, "../value.parquet", artifact)
+    assert not _lineage_path_matches(
+        project, "/old/checkout/data/research/source_snapshots/other.parquet", artifact,
     )
