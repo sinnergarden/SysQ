@@ -112,6 +112,14 @@ def _json_safe(value: Any) -> Any:
     return value
 
 
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 class ResearchDiagnostics:
     """Generic config-driven research diagnostics.
 
@@ -237,7 +245,7 @@ class ResearchDiagnostics:
             if not path.is_file() or path.name == "manifest.json":
                 continue
             entry = {
-                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                "sha256": _sha256_file(path),
                 "size": path.stat().st_size,
             }
             if path.suffix == ".csv":
@@ -249,12 +257,8 @@ class ResearchDiagnostics:
         identity_payload = {
             "config_sha256": hashlib.sha256(config_bytes).hexdigest(),
             "lineage": self._lineage,
-            "diagnostics_code_sha256": hashlib.sha256(
-                code_path.read_bytes()
-            ).hexdigest(),
-            "adapter_code_sha256": hashlib.sha256(
-                adapter_path.read_bytes()
-            ).hexdigest(),
+            "diagnostics_code_sha256": _sha256_file(code_path),
+            "adapter_code_sha256": _sha256_file(adapter_path),
         }
         diagnostics_identity_sha256 = hashlib.sha256(
             json.dumps(
@@ -290,6 +294,36 @@ class ResearchDiagnostics:
 
     def _load_data(self) -> None:
         self._adapter.init_qlib()
+
+        from qsys.config import cfg as settings
+
+        source_artifacts = self._cfg.get("source_artifacts", {})
+        if self._cfg.get("require_source_artifacts") and not source_artifacts:
+            raise ValueError("formal diagnostics require source_artifacts")
+        verified_sources: dict[str, Any] = {}
+        for name, artifact in sorted(source_artifacts.items()):
+            declared_path = str(artifact.get("path", "")).strip()
+            expected_sha256 = str(artifact.get("sha256", "")).strip().lower()
+            path = Path(declared_path).expanduser()
+            if not path.is_absolute():
+                path = settings.data_root / path
+            if not path.is_file():
+                raise FileNotFoundError(
+                    f"diagnostics source artifact missing: {path}"
+                )
+            actual_sha256 = _sha256_file(path)
+            if actual_sha256 != expected_sha256:
+                raise ValueError(
+                    f"diagnostics source artifact hash mismatch for {name}: "
+                    f"expected {expected_sha256}, got {actual_sha256}"
+                )
+            verified_sources[name] = {
+                "path": declared_path,
+                "sha256": actual_sha256,
+                "size": path.stat().st_size,
+            }
+        if verified_sources:
+            self._lineage["source_artifacts"] = verified_sources
 
         universe = self._cfg.get("universe", "csi800")
         start = self._cfg.get("start_date", "2024-06-01")
@@ -338,7 +372,11 @@ class ResearchDiagnostics:
             from qsys.research.pit_universe import PitUniverseStore
 
             pit_store = PitUniverseStore(pit_artifact)
-            feature_universe = pit_store.instruments
+            feature_universe = (
+                pit_store.membership_window(start, end)
+                if hasattr(pit_store, "membership_window")
+                else pit_store.instruments
+            )
             semantic_spans = pit_store.spans
             pit_mode = pit_mode or "member_as_of"
             if pit_mode not in {"member_as_of", "ever_member_as_of"}:
@@ -348,9 +386,7 @@ class ResearchDiagnostics:
                 "artifact": pit_artifact,
                 "filter_mode": pit_mode,
                 "manifest_path": str(manifest_path),
-                "manifest_sha256": hashlib.sha256(
-                    manifest_path.read_bytes()
-                ).hexdigest(),
+                "manifest_sha256": _sha256_file(manifest_path),
                 "membership_sha256": pit_store.provenance.membership_sha256,
                 "raw_source_sha256": pit_store.provenance.raw_source_hash,
             }
@@ -364,7 +400,12 @@ class ResearchDiagnostics:
             semantic_pit_filter_mode=pit_mode,
         )
         frame = raw.reset_index().rename(columns={"datetime": "trade_date"})
-        frame = frame.loc[:, ~frame.columns.duplicated()]
+        if frame.columns.duplicated().any():
+            duplicated = sorted(set(frame.columns[frame.columns.duplicated()]))
+            raise ValueError(
+                "diagnostics feature source has duplicate columns: "
+                + ", ".join(duplicated)
+            )
         frame["trade_date"] = frame["trade_date"].astype(str).str[:10]
         if pit_store is not None:
             spans = pit_store.spans[
@@ -392,9 +433,7 @@ class ResearchDiagnostics:
                 raise ValueError("PIT universe filtering removed all diagnostics rows")
         self._feature_frame = frame
 
-        from qsys.config import cfg
-
-        taxonomy_path = cfg.get_path("meta") / "industry_map.json"
+        taxonomy_path = settings.get_path("meta") / "industry_map.json"
         if self._cfg.get("require_industry_taxonomy") and not taxonomy_path.is_file():
             raise FileNotFoundError(
                 f"formal diagnostics require industry taxonomy: {taxonomy_path}"
@@ -403,7 +442,7 @@ class ResearchDiagnostics:
             "contract": "historical_daily_industry_numeric_map_v1",
             "path": str(taxonomy_path),
             "sha256": (
-                hashlib.sha256(taxonomy_path.read_bytes()).hexdigest()
+                _sha256_file(taxonomy_path)
                 if taxonomy_path.is_file() else None
             ),
             "source_manifest_hash": self._cfg.get("source_manifest_hash"),
@@ -418,18 +457,67 @@ class ResearchDiagnostics:
             if not lid:
                 continue
             try:
-                self._label_data[lid] = self._label_store.load_labels(
+                label_frame = self._label_store.load_labels(
                     lid, start_date=start, end_date=end,
                 )
+                raw_row_count = len(label_frame)
+                if self._cfg.get("require_executable_labels"):
+                    required = {
+                        "is_valid", "entry_eligible", "is_mature",
+                        "return_type", "label_value",
+                    }
+                    missing = sorted(required - set(label_frame.columns))
+                    if missing:
+                        raise ValueError(
+                            f"label {lid} lacks executable columns: {missing}"
+                        )
+                    if label_frame.duplicated(
+                        ["trade_date", "instrument"]
+                    ).any():
+                        raise ValueError(
+                            f"label {lid} has duplicate instrument/date rows"
+                        )
+                    expected_return_type = (
+                        str(lcfg.get("return_type", "")).strip()
+                        if isinstance(lcfg, dict) else ""
+                    )
+                    actual_return_types = sorted(
+                        label_frame["return_type"].dropna().astype(str).unique()
+                    )
+                    if expected_return_type and actual_return_types != [
+                        expected_return_type
+                    ]:
+                        raise ValueError(
+                            f"label {lid} return_type mismatch: "
+                            f"expected {expected_return_type}, "
+                            f"got {actual_return_types}"
+                        )
+                    # Entry eligibility and maturity are already encoded in
+                    # is_valid by the label contract.  Future exit status is
+                    # intentionally not consulted here.
+                    label_frame = label_frame[
+                        label_frame["is_valid"].eq(True)
+                        & label_frame["label_value"].notna()
+                    ].copy()
+                    if label_frame.empty:
+                        raise ValueError(
+                            f"label {lid} has no valid observed executable rows"
+                        )
+                self._label_data[lid] = label_frame
                 manifest_path = self._label_store.paths.label_manifest(lid)
                 data_path = self._label_store._resolve_data_path(lid)
                 self._lineage.setdefault("labels", {})[lid] = {
                     "manifest_path": str(manifest_path),
-                    "manifest_sha256": hashlib.sha256(
-                        manifest_path.read_bytes()
-                    ).hexdigest(),
+                    "manifest_sha256": _sha256_file(manifest_path),
                     "data_path": str(data_path),
-                    "data_sha256": hashlib.sha256(data_path.read_bytes()).hexdigest(),
+                    "data_sha256": _sha256_file(data_path),
+                    "raw_row_count": raw_row_count,
+                    "consumed_row_count": len(label_frame),
+                    "validity_filter_contract": (
+                        "label_is_valid_and_observed_v1"
+                        if self._cfg.get("require_executable_labels")
+                        else "none"
+                    ),
                 }
             except Exception as exc:
                 if self._cfg.get("require_all_labels", True):

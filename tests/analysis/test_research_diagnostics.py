@@ -71,10 +71,36 @@ def test_diagnostics_applies_daily_pit_membership_and_binds_lineage(
             "exposure_breakdown": False,
         },
         "top_candidates": {"enabled": False},
+        "labels": [
+            {
+                "label_id": "open_5",
+                "return_type": "open_to_open",
+            }
+        ],
+        "require_executable_labels": True,
     }
     diagnostics = ResearchDiagnostics(config, root=tmp_path / "research")
     diagnostics._adapter = MagicMock()
     diagnostics._adapter.get_features.return_value = _raw_frame()
+    label_manifest = tmp_path / "label-manifest.json"
+    label_manifest.write_text("{}", encoding="utf-8")
+    label_data = tmp_path / "labels.parquet"
+    label_data.write_bytes(b"fixture")
+    diagnostics._label_store = MagicMock()
+    diagnostics._label_store.load_labels.return_value = pd.DataFrame(
+        {
+            "trade_date": ["2020-01-01", "2020-01-03"],
+            "instrument": ["AAA", "BBB"],
+            "label_value": [0.1, 0.2],
+            "is_valid": [True, False],
+            "entry_eligible": [True, False],
+            "is_mature": [True, True],
+            "return_type": ["open_to_open", "open_to_open"],
+            "exit_execution_status": ["target_suspended", "executable"],
+        }
+    )
+    diagnostics._label_store.paths.label_manifest.return_value = label_manifest
+    diagnostics._label_store._resolve_data_path.return_value = label_data
 
     result = diagnostics.run()
 
@@ -98,6 +124,11 @@ def test_diagnostics_applies_daily_pit_membership_and_binds_lineage(
     daily = pd.read_csv(Path(result["output_dir"]) / "coverage_daily.csv")
     assert set(daily["trade_date"]) == {"2020-01-01", "2020-01-03"}
     assert set(daily["eligible_count"]) == {1}
+    consumed = diagnostics._label_data["open_5"]
+    assert list(consumed["instrument"]) == ["AAA"]
+    assert list(consumed["exit_execution_status"]) == ["target_suspended"]
+    assert manifest["lineage"]["labels"]["open_5"]["raw_row_count"] == 2
+    assert manifest["lineage"]["labels"]["open_5"]["consumed_row_count"] == 1
 
     repeated = diagnostics.run()
     assert repeated["diagnostics_identity_sha256"] == result[
