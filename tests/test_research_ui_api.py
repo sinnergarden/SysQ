@@ -178,8 +178,9 @@ class TestResearchUiApi(unittest.TestCase):
         self.assertEqual(call_kwargs.get('trade_date'), '2021-01-04')
 
     def test_positions_endpoint_404_when_run_unknown(self):
-        with patch.object(ResearchCockpitRepository, 'get_backtest_positions', side_effect=FileNotFoundError('Unknown backtest run_id: canonical__nope__nope')):
-            response = self.client.get('/api/backtest-runs/canonical__nope__nope/positions')
+        # Same contract as /orders: an unknown run_id must 404, not silently
+        # render an empty portfolio.
+        response = self.client.get('/api/backtest-runs/canonical__zzz_nonexistent__zzz/positions')
         self.assertEqual(response.status_code, 404)
         self.assertIn('Unknown backtest run_id', response.json()['detail'])
 

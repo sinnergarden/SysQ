@@ -327,6 +327,14 @@ def test_canonical_positions_empty_when_no_executions(tmp_path: Path) -> None:
     assert repo.get_backtest_positions(run_id) == []
 
 
+def test_canonical_positions_unknown_run_raises_like_orders(tmp_path: Path) -> None:
+    """Unknown run_ids must 404 (FileNotFoundError) consistently with /orders."""
+    _write_canonical_backtest_with_executions(tmp_path)
+    repo = ResearchCockpitRepository(project_root=tmp_path)
+    with pytest.raises(FileNotFoundError, match="Unknown backtest run_id"):
+        repo.get_backtest_positions("canonical__missing_strategy__missing_backtest")
+
+
 def test_canonical_positions_partial_sell_reduces_cost_basis(tmp_path: Path) -> None:
     """A partial sell keeps the remaining lot's average cost and books realized pnl."""
     strategy_run_id = "partial_sell_top5__stablehash"

@@ -849,6 +849,11 @@ class ResearchCockpitRepository:
         """
         source = self._get_canonical_backtest_source(run_id)
         if source is None:
+            # Unknown run_ids must 404 like every other backtest endpoint.
+            # _resolve_backtest_report raises FileNotFoundError for unknown
+            # runs; a legacy (non-canonical) run resolves a report but carries
+            # no executions artifact, so there is nothing to derive from.
+            self._resolve_backtest_report(run_id)
             return []
         rows = self._read_canonical_executions(source)
         if not rows:
