@@ -27,6 +27,11 @@ def main() -> None:
     p.add_argument("--start", default="2023-06-01", help="Start date (YYYY-MM-DD)")
     p.add_argument("--end", default="2026-06-01", help="End date (YYYY-MM-DD)")
     p.add_argument("--horizons", type=int, nargs="+", default=[5, 20], help="Forward return horizons")
+    p.add_argument(
+        "--research-root",
+        default="data/research",
+        help="Research artifact root",
+    )
     p.add_argument("--overwrite", action="store_true", help="Overwrite existing label data")
     args = p.parse_args()
 
@@ -34,11 +39,27 @@ def main() -> None:
         import yaml
         config = yaml.safe_load(Path(args.config).read_text())
         config.setdefault("date_range", {"start_date": args.start, "end_date": args.end})
-        LabelStore().compute_and_save_from_config(config, overwrite=args.overwrite)
-        print(f"Done: {config['label_id']}")
+        store = LabelStore(args.research_root)
+        if "label_suite" in config:
+            outputs = store.compute_and_save_suite_from_config(
+                config, overwrite=args.overwrite
+            )
+            suite_id = str(config["label_suite"]["suite_id"])
+            for label_id, path in sorted(outputs.items()):
+                print(f"Saved {label_id}: {path}")
+            print(
+                "Suite manifest: "
+                f"{store.paths.label_suite_manifest(suite_id)}"
+            )
+            print(f"Done: {suite_id} ({len(outputs)} labels)")
+        else:
+            store.compute_and_save_from_config(
+                config, overwrite=args.overwrite
+            )
+            print(f"Done: {config['label_id']}")
         return
 
-    store = LabelStore()
+    store = LabelStore(args.research_root)
     QlibAdapter().init_qlib()
     cal = get_trading_calendar(args.start, args.end)
     n_dates = len(cal) if cal else 0

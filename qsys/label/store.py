@@ -23,7 +23,10 @@ from qsys.research.manifest import read_manifest, write_manifest, with_standard_
 
 _REQUIRED_COLUMNS = {"trade_date", "instrument", "label_id", "horizon", "label_value"}
 _OPTIONAL_COLUMNS = {
-    "return_start_date", "return_end_date",
+    "label_date", "shift", "return_type", "price_basis",
+    "signal_data_cutoff", "return_start_date", "return_start_price",
+    "return_end_date", "return_end_price", "maturity_date", "is_mature",
+    "entry_eligible", "exit_execution_status", "label_missing_reason",
     "universe", "is_valid", "invalid_reason",
 }
 _PARQUET_AVAILABLE: bool | None = None
@@ -73,6 +76,41 @@ def _parquet_available() -> bool:
             except ImportError:
                 _PARQUET_AVAILABLE = False
     return _PARQUET_AVAILABLE
+
+
+def _verified_source_artifacts(config: dict[str, Any]) -> dict[str, Any]:
+    from qsys.config import cfg
+
+    artifacts = config.get("source_artifacts", {})
+    if not isinstance(artifacts, dict) or not artifacts:
+        raise ValueError("formal label config requires source_artifacts")
+    verified: dict[str, Any] = {}
+    for name, payload in sorted(artifacts.items()):
+        if not isinstance(payload, dict):
+            raise TypeError(f"source artifact {name!r} must be a mapping")
+        declared_path = str(payload.get("path", "")).strip()
+        expected_sha256 = str(payload.get("sha256", "")).strip().lower()
+        if not declared_path or len(expected_sha256) != 64:
+            raise ValueError(
+                f"source artifact {name!r} requires path and SHA-256"
+            )
+        path = Path(declared_path).expanduser()
+        if not path.is_absolute():
+            path = cfg.data_root / path
+        if not path.is_file():
+            raise FileNotFoundError(f"source artifact missing: {path}")
+        actual_sha256 = _sha256_file(path)
+        if actual_sha256 != expected_sha256:
+            raise ValueError(
+                f"source artifact hash mismatch for {name}: "
+                f"expected {expected_sha256}, got {actual_sha256}"
+            )
+        verified[name] = {
+            "path": declared_path,
+            "sha256": actual_sha256,
+            "size": path.stat().st_size,
+        }
+    return verified
 
 
 def _build_manifest(
@@ -364,6 +402,223 @@ class LabelStore:
             )
         mf.update(config.get("manifest", {}))
         return self.save_labels(label_id, result, manifest=mf, overwrite=overwrite)
+
+    def compute_and_save_suite_from_config(
+        self,
+        config: dict[str, Any],
+        *,
+        overwrite: bool = False,
+    ) -> dict[str, Path]:
+        """Build one lineage-bound executable PIT label suite from one panel."""
+        suite = config.get("label_suite", {})
+        horizons = [int(value) for value in suite.get("horizons", [])]
+        templates = {
+            "open_to_open": str(suite.get("primary_label_template", "")),
+            "close_to_close": str(suite.get("secondary_label_template", "")),
+        }
+        if not horizons or any(not value for value in templates.values()):
+            raise ValueError(
+                "label_suite requires horizons and primary/secondary templates"
+            )
+        label_ids = [
+            template.format(horizon=horizon)
+            for horizon in sorted(set(horizons))
+            for template in templates.values()
+        ]
+        if len(label_ids) != len(set(label_ids)):
+            raise ValueError("label suite templates produce duplicate label IDs")
+        suite_id = str(
+            suite.get("suite_id", "csi1800_executable_labels_v1")
+        )
+        suite_manifest_path = self.paths.label_suite_manifest(suite_id)
+        if not overwrite:
+            existing = [label_id for label_id in label_ids if self.label_exists(label_id)]
+            if suite_manifest_path.is_file():
+                existing.append(str(suite_manifest_path))
+            if existing:
+                raise FileExistsError(
+                    "label suite outputs already exist: " + ", ".join(existing)
+                )
+
+        universe = str(config.get("universe", ""))
+        pit_universe_artifact = str(config.get("pit_universe_artifact", ""))
+        date_range = config.get("date_range", {})
+        start = str(date_range.get("start_date", ""))
+        end = str(date_range.get("data_cutoff", date_range.get("end_date", "")))
+        if not all((universe, pit_universe_artifact, start, end)):
+            raise ValueError(
+                "executable label suite requires universe, PIT artifact, and date range"
+            )
+
+        canonical_config = json.dumps(
+            config, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        ).encode("utf-8")
+        config_sha256 = hashlib.sha256(canonical_config).hexdigest()
+        source_artifacts = _verified_source_artifacts(config)
+
+        import qsys.label.compute as compute_module
+        from qsys.research.pit_universe import PitUniverseStore, _git_provenance
+
+        project_root = Path(__file__).resolve().parents[2]
+        git_metadata = _git_provenance(project_root)
+        if config.get("require_clean_provenance") and git_metadata[
+            "git_scoped_dirty"
+        ]:
+            raise ValueError(
+                "Label build code/config scope is dirty; commit it before rebuild"
+            )
+        compute_code_sha256 = _sha256_file(Path(compute_module.__file__))
+        store_code_sha256 = _sha256_file(Path(__file__))
+        entrypoint_path = (
+            Path(__file__).resolve().parents[2]
+            / "scripts"
+            / "research"
+            / "compute_labels.py"
+        )
+        entrypoint_code_sha256 = _sha256_file(entrypoint_path)
+
+        pit_store = PitUniverseStore(pit_universe_artifact)
+        pit_manifest_path = pit_store.artifact_dir / "manifest.json"
+        pit_manifest = json.loads(pit_manifest_path.read_text(encoding="utf-8"))
+        from qsys.data.adapter import QlibAdapter
+
+        registry_path = (
+            QlibAdapter().qlib_dir / "instruments" / f"{universe.lower()}.txt"
+        )
+        if not registry_path.is_file():
+            raise FileNotFoundError(f"PIT universe registry missing: {registry_path}")
+        registry_sha256 = _sha256_file(registry_path)
+        expected_registry_sha256 = pit_manifest.get("registry_sha256")
+        if (
+            expected_registry_sha256
+            and registry_sha256 != expected_registry_sha256
+        ):
+            raise ValueError(
+                "PIT registry hash mismatch: "
+                f"expected {expected_registry_sha256}, got {registry_sha256}"
+            )
+        pit_lineage = {
+            "pit_universe_artifact": pit_universe_artifact,
+            "universe_membership_sha256": pit_store.provenance.membership_sha256,
+            "universe_snapshot_hash": pit_store.provenance.raw_source_hash,
+            "universe_raw_source_sha256": pit_store.provenance.raw_source_hash,
+            "universe_manifest_sha256": _sha256_file(pit_manifest_path),
+            "universe_registry_sha256": registry_sha256,
+        }
+
+        base_identity = {
+            "suite_id": suite_id,
+            "config_sha256": config_sha256,
+            "source_artifacts": source_artifacts,
+            **pit_lineage,
+            "label_compute_code_sha256": compute_code_sha256,
+            "label_store_code_sha256": store_code_sha256,
+            "producer_entrypoint_code_sha256": entrypoint_code_sha256,
+            "git_commit_full": git_metadata["git_commit_full"],
+        }
+        suite_identity_sha256 = hashlib.sha256(
+            json.dumps(
+                {**base_identity, "label_ids": sorted(label_ids)},
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode("utf-8")
+        ).hexdigest()
+
+        from qsys.label.compute import iter_executable_forward_returns
+
+        outputs: dict[str, Path] = {}
+        for label_id, result, semantic_metadata in iter_executable_forward_returns(
+            universe=universe,
+            horizons=horizons,
+            start=start,
+            end=end,
+            pit_universe_artifact=pit_universe_artifact,
+            label_templates=templates,
+        ):
+            identity_payload = {
+                **base_identity,
+                "label_id": label_id,
+                "semantics": semantic_metadata,
+            }
+            label_identity_sha256 = hashlib.sha256(
+                json.dumps(
+                    identity_payload,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                ).encode("utf-8")
+            ).hexdigest()
+            eligible_mature = result["entry_eligible"] & result["is_mature"]
+            observed = eligible_mature & result["label_value"].notna()
+            if result.empty or not observed.any():
+                raise ValueError(
+                    f"formal label output has no valid observed rows: {label_id}"
+                )
+            manifest = {
+                **base_identity,
+                **semantic_metadata,
+                "label_suite_identity_sha256": suite_identity_sha256,
+                "label_identity_sha256": label_identity_sha256,
+                "universe": universe,
+                "requested_start_date": start,
+                "requested_end_date": end,
+                "normalization": {"type": "none"},
+                "n_dates": int(result["trade_date"].nunique()),
+                "n_instruments": int(result["instrument"].nunique()),
+                "coverage": round(
+                    int(observed.sum()) / max(int(eligible_mature.sum()), 1), 6
+                ),
+                "entry_eligibility_rate": round(
+                    float(result["entry_eligible"].mean()), 6
+                ),
+                **git_metadata,
+            }
+            outputs[label_id] = self.save_labels(
+                label_id,
+                result,
+                manifest=manifest,
+                overwrite=overwrite,
+            )
+        if set(outputs) != set(label_ids):
+            raise RuntimeError("label suite did not produce every configured label")
+        output_records = []
+        for label_id, data_path in sorted(outputs.items()):
+            manifest_path = self.paths.label_manifest(label_id)
+            manifest = read_manifest(manifest_path)
+            output_records.append(
+                {
+                    "label_id": label_id,
+                    "data_path": str(data_path.relative_to(self.paths.root)),
+                    "labels_sha256": manifest["labels_sha256"],
+                    "manifest_path": str(
+                        manifest_path.relative_to(self.paths.root)
+                    ),
+                    "manifest_sha256": _sha256_file(manifest_path),
+                    "row_count": int(manifest["row_count"]),
+                    "label_identity_sha256": manifest[
+                        "label_identity_sha256"
+                    ],
+                }
+            )
+        suite_manifest = with_standard_metadata(
+            {
+                "artifact_type": "label_suite",
+                **base_identity,
+                "label_suite_identity_sha256": suite_identity_sha256,
+                "label_ids": sorted(label_ids),
+                "output_count": len(output_records),
+                "outputs": output_records,
+                "requested_start_date": start,
+                "data_cutoff": end,
+                "primary_return_type": "open_to_open",
+                "secondary_return_type": "close_to_close",
+                **git_metadata,
+            }
+        )
+        suite_manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        _atomic_write_manifest(suite_manifest_path, suite_manifest)
+        return outputs
 
     # ── Validation ──────────────────────────────────────────────────────
 

@@ -1,0 +1,18 @@
+label_suite:
+  suite_id: csi1800_pit_executable_label_suite_v1
+  horizons: [5, 10, 20, 60, 120, 180]
+  primary_label_template: fwd_ret_{horizon}d_open_open_raw_pit_csi1800_v1
+  secondary_label_template: fwd_ret_{horizon}d_close_close_raw_pit_csi1800_v1
+
+universe: csi1800_pit_union
+pit_universe_artifact: csi1800_pit_v2
+require_clean_provenance: true
+
+date_range:
+  start_date: "2018-01-02"
+  data_cutoff: "2026-07-31"
+
+source_artifacts:
+  trusted_data_receipt:
+    path: audit/source_runs/data_sync_20260830T092226011729Z_2746dabe/receipt.json
+    sha256: 726af9f8c3c91432feb78f1df9520655f3e002c246521bd47245286637bc91ce
