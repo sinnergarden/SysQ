@@ -11,6 +11,9 @@ opt-in flags to enable.
 
 from __future__ import annotations
 
+import multiprocessing
+multiprocessing.set_start_method("fork", force=True)
+
 import json
 from pathlib import Path
 from datetime import datetime, timezone
@@ -33,6 +36,7 @@ from qsys.feature.resolver_v2 import resolve_feature_set, discover_feature_sets
 from qsys.feature.build_plan import build_plan_from_resolved
 from qsys.feature.transform_registry import get_transform, is_registered, list_unresolved
 from qsys.feature.manifest import build_feature_manifest, write_feature_manifest
+from qsys.utils.logger import log
 
 
 def materialize_feature_set_cache(
@@ -160,18 +164,41 @@ def materialize_feature_set_cache(
             continue
 
         # Cache miss: compute and write
+        # Transform expects columns without $ prefix (e.g. "close" not "$close")
+        transform_input = raw_panel.copy()
+        if any(c.startswith("$") for c in transform_input.columns):
+            transform_input.columns = [c.lstrip("$") if c.startswith("$") else c for c in transform_input.columns]
+
         try:
-            result = tspec.compute_fn(raw_panel)
+            result = tspec.compute_fn(transform_input)
         except Exception as e:
             raise ValueError(
                 f"Transform '{tid}' failed for '{feature_set_id}': {e}"
             ) from e
 
+        # Filter output_features to only those actually produced
+        actual_outputs = [f for f in tspec.output_features if f in result.columns]
+        if not actual_outputs:
+            raise ValueError(
+                f"Transform '{tid}' produced none of its declared output features "
+                f"({list(tspec.output_features)}). "
+                f"Available columns: {list(result.columns)}"
+            )
+        if len(actual_outputs) < len(tspec.output_features):
+            log.warning(
+                "Transform '%s' missing %d/%d declared outputs. "
+                "Missing: %s",
+                tid,
+                len(tspec.output_features) - len(actual_outputs),
+                len(tspec.output_features),
+                [f for f in tspec.output_features if f not in result.columns],
+            )
+
         write_transform_cache(
             result,
             transform_id=tid,
             cache_key=transform_ck,
-            output_features=list(tspec.output_features),
+            output_features=actual_outputs,
             path=t_path,
             context=context,
         )

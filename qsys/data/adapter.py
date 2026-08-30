@@ -288,12 +288,14 @@ class QlibAdapter:
                 self.qlib_dir / "instruments" / f"{low}.txt"
             ).exists():
                 inst_path = self.qlib_dir / "instruments" / f"{low}.txt"
-                if low != "all" and not inst_path.exists():
-                    low = "all"
-                try:
-                    return D.instruments(low)
-                except Exception:
-                    return D.instruments("all")
+                if inst_path.exists():
+                    codes = []
+                    with open(inst_path) as f:
+                        for line in f:
+                            code = line.strip().split("\t")[0]
+                            codes.append(code)
+                    return codes
+                return D.instruments("all")
             if "," in instruments:
                 return instruments.split(",")
             return [instruments]
