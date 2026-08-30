@@ -156,6 +156,22 @@ upstream_r3_output_binding:
     - reject_legacy_mutable_output_paths
   publication: create_only_new_audit_id_directory
 
+historical_selected_evidence_replay:
+  source: prior_certification_receipt_bound_evidence_snapshot
+  required_backlinks:
+    - receipt_content_identity_matches_source_audit_id
+    - receipt_artifact_sha256_matches_evidence_snapshot_bytes
+    - receipt_and_snapshot_selectors_match_current_request
+    - receipt_input_evidence_query_and_mutation_digest_match_snapshot
+  revalidation:
+    - rehash_every_selected_supplier_payload_in_current_data_root
+    - rehash_every_terminal_receipt_used_by_coverage
+    - rescan_current_full_canonical_mutation_ledger
+  forbidden:
+    - restoring_or_forging_historical_trusted_watermarks
+    - reusing_the_historical_full_mutation_digest_as_current_state
+    - accepting_an_unbacklinked_snapshot
+
 legal_supplementation_without_normal_data_sync:
   - path: targeted_announcement_evidence_import
     rule: >-

@@ -21,7 +21,7 @@ upstream_r3_certification:
 
 source_contract:
   path: docs/requirements/contracts/source_revision_capability_v1.yaml
-  sha256: f9f3435e94b97ddb58756fe73144862a274eb00ba080faa55dc6d820d65c0bc0
+  sha256: 19555a653e7221615f3f543c6f75dfb90d47f8e63094ec9a49edefc1c56c884f
 
 trade_calendar:
   path: data/qlib_bin/calendars/day.txt
