@@ -675,3 +675,18 @@ def test_matrix_factory_forwards_materialized_feature_list() -> None:
 
     assert generator.feature_list_id == "consumer_list"
     assert generator.feature_cache_list_id == "shared_frame"
+
+
+def test_matrix_factory_forwards_margin_session_lag() -> None:
+    from qsys.research.matrix_job import _create_generator_from_config
+
+    generator = _create_generator_from_config({
+        "generator_id": "margin",
+        "type": "single_label_lightgbm",
+        "params": {
+            "label_id": "fwd_ret_20d_raw",
+            "margin_lag_sessions": 1,
+        },
+    })
+
+    assert generator.margin_lag_sessions == 1
