@@ -1,0 +1,8 @@
+feature_list_id: valuation_size_120d_v1
+description: PE, PB and size hypotheses for 120-session returns.
+feature_count: 3
+contract: pit_daily_valuation_size_120d_consumer_v1
+features:
+  - $pe
+  - $pb
+  - Log($circ_mv+1)
