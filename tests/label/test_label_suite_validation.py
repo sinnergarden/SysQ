@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sys
 
 import pytest
 
@@ -42,3 +43,55 @@ def test_resolve_under_rejects_path_escape(tmp_path: Path) -> None:
     )
     with pytest.raises(ValueError, match="escapes research root"):
         _resolve_under(tmp_path, "../outside.parquet")
+
+
+def test_canonical_label_cli_routes_suite_validation(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    import qsys.label.validation as validation_module
+    import scripts.research.compute_labels as cli
+
+    config_path = tmp_path / "suite.yaml"
+    config_path.write_text(
+        "label_suite:\n  suite_id: fixture_suite\n",
+        encoding="utf-8",
+    )
+    observed = {}
+
+    class FakePaths:
+        def label_suite_manifest(self, suite_id: str) -> Path:
+            return tmp_path / "research" / "label_suites" / suite_id / "manifest.json"
+
+    class FakeStore:
+        def __init__(self, root: str) -> None:
+            self.paths = FakePaths()
+
+    def fake_validate(**kwargs):
+        observed.update(kwargs)
+        return {"outputs": [{"label_id": "a"}], "status": "passed"}
+
+    monkeypatch.setattr(cli, "LabelStore", FakeStore)
+    monkeypatch.setattr(
+        validation_module, "validate_executable_label_suite", fake_validate
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "compute_labels.py",
+            "--config", str(config_path),
+            "--research-root", str(tmp_path / "research"),
+            "--validate-suite",
+            "--data-root", str(tmp_path / "data"),
+        ],
+    )
+    cli.main()
+    assert observed["suite_manifest_path"] == (
+        tmp_path
+        / "research"
+        / "label_suites"
+        / "fixture_suite"
+        / "manifest.json"
+    )
+    assert observed["output_path"].name == "validation.json"
+    assert "Validated 1 labels: passed" in capsys.readouterr().out
