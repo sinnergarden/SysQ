@@ -58,7 +58,7 @@ REAL_REQUEST = yaml.safe_load(
 
 def test_current_tushare_source_contract_digest_is_frozen() -> None:
     assert sha256_file(REAL_SOURCE_CONTRACT_PATH) == (
-        "ca61a95d9226930b7da0f7a9379c60a3978a094f77cbff396f72601704caae08"
+        "afea082e35568323907f0f161b6c90ea9ab5636c2bbb6366e0cad54db27b1c7e"
     )
 
 

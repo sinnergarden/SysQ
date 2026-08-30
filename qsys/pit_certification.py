@@ -8,6 +8,7 @@ exclusive certification directory.
 from __future__ import annotations
 
 import copy
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 import fcntl
 import hashlib
@@ -2083,23 +2084,21 @@ def classify_financial_revision_events(
         expected_end_type = {
             "0331": "1", "0630": "2", "0930": "3", "1231": "4",
         }
-        kept: list[pd.DataFrame] = []
-        excluded_missing_end_type_keys = 0
-        excluded_missing_end_type_rows = 0
-        for (_symbol, end_date), group in work.groupby(
-            ["ts_code", "end_date"], dropna=False, sort=True,
-        ):
-            expected = expected_end_type.get(str(end_date)[-4:])
-            if expected is None:
-                continue
-            end_type = group["end_type"]
-            matched = group.loc[end_type.eq(expected)]
-            if not matched.empty:
-                kept.append(matched)
-            elif end_type.isna().all() or end_type.eq("").all():
-                excluded_missing_end_type_keys += 1
-                excluded_missing_end_type_rows += len(group)
-        work = pd.concat(kept, ignore_index=True) if kept else work.iloc[0:0]
+        expected = work["end_date"].astype(str).str[-4:].map(expected_end_type)
+        matched = work["end_type"].eq(expected)
+        group_fields = [work["ts_code"], work["end_date"]]
+        group_has_match = matched.groupby(group_fields, dropna=False).transform("any")
+        missing_end_type = work["end_type"].isna() | work["end_type"].eq("")
+        group_all_missing = missing_end_type.groupby(
+            group_fields, dropna=False,
+        ).transform("all")
+        missing_group_rows = expected.notna() & ~group_has_match & group_all_missing
+        excluded_missing_end_type_rows = int(missing_group_rows.sum())
+        excluded_missing_end_type_keys = int(
+            work.loc[missing_group_rows, ["ts_code", "end_date"]]
+            .drop_duplicates().shape[0]
+        )
+        work = work.loc[expected.notna() & matched].copy()
         publication_evidence = "max_ann_date_f_ann_date"
     else:
         excluded_missing_end_type_keys = 0
@@ -2350,6 +2349,7 @@ def _audit_financial_revision_terminal(
             "same_publication_conflict_keys": 0, "missing_initial_keys": 0,
             "published_at_nonnull_receipts": 0,
         }
+        payload_fetches = []
         for fetch in selected:
             status = str(fetch.get("status") or "")
             if status == "empty":
@@ -2358,24 +2358,32 @@ def _audit_financial_revision_terminal(
                         f"empty {endpoint} receipt unexpectedly has a payload"
                     )
                 continue
-            frame = _read_verified_revision_payload(
+            payload_fetches.append(fetch)
+
+        def read_payload(fetch: Mapping[str, Any]) -> pd.DataFrame:
+            return _read_verified_revision_payload(
                 data_root=data_root, fetch=fetch, endpoint=endpoint,
             )
-            events, exceptions, stats = classify_financial_revision_events(
-                frame, endpoint=endpoint,
-                availability_cutoff=availability_cutoff,
-            )
-            if not events.empty:
-                events["receipt_id"] = str(fetch.get("receipt_id") or "")
-                events["observed_at"] = str(fetch.get("observed_at") or "")
-                event_frames.append(events)
-            if not exceptions.empty:
-                exception_frames.append(exceptions)
-            for key, value in stats.items():
-                summary[key] += int(value)
-            summary["published_at_nonnull_receipts"] += int(
-                fetch.get("published_at") is not None
-            )
+
+        workers = max(1, min(8, len(payload_fetches)))
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            verified_frames = executor.map(read_payload, payload_fetches)
+            for fetch, frame in zip(payload_fetches, verified_frames):
+                events, exceptions, stats = classify_financial_revision_events(
+                    frame, endpoint=endpoint,
+                    availability_cutoff=availability_cutoff,
+                )
+                if not events.empty:
+                    events["receipt_id"] = str(fetch.get("receipt_id") or "")
+                    events["observed_at"] = str(fetch.get("observed_at") or "")
+                    event_frames.append(events)
+                if not exceptions.empty:
+                    exception_frames.append(exceptions)
+                for key, value in stats.items():
+                    summary[key] += int(value)
+                summary["published_at_nonnull_receipts"] += int(
+                    fetch.get("published_at") is not None
+                )
         endpoint_summaries[endpoint] = summary
     events = (
         pd.concat(event_frames, ignore_index=True)
@@ -2733,17 +2741,47 @@ def _validate_r3_source_blockers(
     }
 
 
+def _latest_shareholder_vintage_values(current: pd.DataFrame) -> pd.DataFrame:
+    """Return the latest observed snapshot for diagnostic legacy comparison."""
+
+    key_fields = ["kind", "inst", "ann_date", "end_date"]
+    required = {*key_fields, "value", "value_sha256", "vintage_id", "observed_at"}
+    missing = sorted(required - set(current.columns))
+    if missing:
+        raise CertificationError(
+            f"current shareholder vintages lack diagnostic fields: {missing}"
+        )
+    work = current[list(required)].copy()
+    if not work.duplicated(key_fields).any():
+        return work[key_fields + ["value"]]
+    observed = work["observed_at"].fillna("").astype(str).str.strip()
+    if observed.eq("").any():
+        raise CertificationError(
+            "multi-vintage diagnostic comparison requires observed_at"
+        )
+    work["observed_at"] = observed
+    latest_observed = work.groupby(key_fields, sort=False)["observed_at"].transform(
+        "max"
+    )
+    latest = work.loc[work["observed_at"].eq(latest_observed)].copy()
+    conflicting = latest.groupby(key_fields, sort=False)["value_sha256"].nunique()
+    if conflicting.gt(1).any():
+        raise CertificationError(
+            "latest shareholder vintages conflict at one observation time"
+        )
+    latest = latest.sort_values(
+        [*key_fields, "observed_at", "vintage_id"], kind="mergesort"
+    ).drop_duplicates(key_fields, keep="last")
+    return latest[key_fields + ["value"]].reset_index(drop=True)
+
+
 def _shareholder_legacy_comparator_deltas(
     *, project: Path, current: pd.DataFrame,
     specs: Sequence[Mapping[str, Any]], availability_cutoff: str,
 ) -> list[dict[str, Any]]:
     cutoff = _normal_date(availability_cutoff)
     key_fields = ["kind", "inst", "ann_date", "end_date"]
-    current_keys = current[key_fields + ["value"]].copy()
-    if current_keys.duplicated(key_fields).any():
-        raise CertificationError(
-            "current shareholder vintage contains duplicate exact event keys"
-        )
+    current_keys = _latest_shareholder_vintage_values(current)
     results: list[dict[str, Any]] = []
     for spec in specs:
         if not isinstance(spec, Mapping):

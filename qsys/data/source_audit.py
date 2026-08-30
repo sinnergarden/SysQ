@@ -2041,6 +2041,7 @@ class SourceAuditStore:
             or metadata["response_date_max"] != row["response_date_max"]
         ):
             return None
+        frame.attrs["source_observed_at"] = str(row["observed_at"])
         return frame
 
     def record_fetch(

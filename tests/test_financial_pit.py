@@ -9,19 +9,130 @@ import pytest
 
 from qsys.data._merge_helpers import (
     FINANCIAL_AVAILABILITY_CONTRACT,
+    FINANCIAL_BEST_EFFORT_BOOTSTRAP_CONTRACT,
+    FINANCIAL_LATEST_KNOWN_CONTRACT,
+    FINANCIAL_OPERATIONAL_PIT_CONTRACT,
     TUSHARE_FINA_INDICATOR_UNIT_CONTRACT,
     FinancialAvailabilityError,
     convert_tushare_fina_indicator_units,
+    select_latest_known_financial_rows,
+    select_operational_financial_rows,
     select_first_available_financial_rows,
+    select_best_effort_bootstrap_financial_rows,
 )
 from qsys.data.collector import TushareCollector
-from qsys.data.source_audit import SourceAuditStore, stable_scope_hash
+from qsys.data._fetch_strategies import fetch_with_retry
+from qsys.data.source_audit import (
+    SourceAuditStore,
+    normalized_response_metadata,
+    stable_scope_hash,
+)
 from qsys.data.storage import StockDataStore
 
 
 TARGET = "20260821"
 START = "20180313"
 CODE = "000001.SZ"
+
+
+def test_supplier_retry_preserves_terminal_error_detail(monkeypatch) -> None:
+    monkeypatch.setattr("qsys.data._fetch_strategies.time.sleep", lambda _value: None)
+
+    def denied(**_kwargs):
+        raise RuntimeError("anns_d permission denied")
+
+    with pytest.raises(RuntimeError, match="anns_d permission denied"):
+        fetch_with_retry(denied, 2, lambda _message: None)
+
+
+def test_anns_d_source_evidence_uses_exact_date_receipts() -> None:
+    collector = TushareCollector.__new__(TushareCollector)
+    calls: list[dict[str, object]] = []
+
+    def fetch(endpoint: str, **kwargs):
+        calls.append({"endpoint": endpoint, **kwargs})
+        api_date = str(kwargs["ann_date"])
+        frame = pd.DataFrame([{
+            "ann_date": api_date,
+            "ts_code": CODE,
+            "name": "fixture",
+            "title": "2025年年度报告",
+            "url": f"https://example.test/{api_date}.pdf",
+            "rec_time": f"{api_date[:4]}-{api_date[4:6]}-{api_date[6:]} 18:30:00",
+        }])
+        return frame, f"receipt-{api_date}"
+
+    class Audit:
+        def __init__(self):
+            self.links = []
+
+        def record_field_receipt_links(self, **kwargs):
+            self.links.append(kwargs)
+
+    audit = Audit()
+    collector._fetch_daily_endpoint_with_receipt = fetch
+    result = collector.fetch_source_revision_announcements(
+        start_date="20260820",
+        end_date="20260821",
+        run_id="announcement-evidence",
+        audit_store=audit,
+    )
+
+    assert [item["ann_date"] for item in calls] == ["20260820", "20260821"]
+    assert all(item["endpoint"] == "anns_d" for item in calls)
+    assert all(item["limit"] == 2000 and item["offset"] == 0 for item in calls)
+    assert all(
+        item["requested_scope"]["query_axis"]
+        == "exact_announcement_date_query_axis"
+        for item in calls
+    )
+    assert len(audit.links) == 2
+    assert all(
+        item["dataset"] == "source_revision_announcements"
+        for item in audit.links
+    )
+    assert result == {
+        "status": "success",
+        "start_date": "20260820",
+        "end_date": "20260821",
+        "requested_date_count": 2,
+        "receipt_count": 2,
+        "empty_date_count": 0,
+        "returned_rows": 2,
+        "rec_time_nonnull_rows": 2,
+        "rec_time_parseable_rows": 2,
+        "pdf_url_rows": 2,
+        "title_rows": 2,
+        "payload_policy": "immutable_raw_supplier_shards_only",
+        "value_binding_status": "not_attempted",
+    }
+
+
+def test_anns_d_source_evidence_rejects_response_outside_requested_date() -> None:
+    collector = TushareCollector.__new__(TushareCollector)
+
+    def fetch(_endpoint: str, **_kwargs):
+        return pd.DataFrame([{
+            "ann_date": "20260819",
+            "ts_code": CODE,
+            "name": "fixture",
+            "title": "公告",
+            "url": "https://example.test/a.pdf",
+            "rec_time": "2026-08-19 18:30:00",
+        }]), "receipt-wrong-date"
+
+    class Audit:
+        def record_field_receipt_links(self, **_kwargs):
+            pass
+
+    collector._fetch_daily_endpoint_with_receipt = fetch
+    with pytest.raises(RuntimeError, match="escaped requested announcement date"):
+        collector.fetch_source_revision_announcements(
+            start_date="20260820",
+            end_date="20260820",
+            run_id="announcement-evidence",
+            audit_store=Audit(),
+        )
 
 
 def test_fina_indicator_units_are_field_contract_driven_not_value_driven() -> None:
@@ -62,6 +173,130 @@ def _income_row(**overrides) -> dict:
     return row
 
 
+def test_latest_known_projection_preserves_cross_date_revision_events() -> None:
+    raw = pd.DataFrame([
+        _income_row(
+            ann_date="20260818", f_ann_date="20260818",
+            update_flag="0", revenue=10.0,
+        ),
+        _income_row(
+            ann_date="20260820", f_ann_date="20260820",
+            update_flag="1", revenue=11.0,
+        ),
+    ])
+
+    projected, stats = select_latest_known_financial_rows(
+        raw, endpoint="income", availability_cutoff=TARGET,
+    )
+
+    assert stats["contract"] == FINANCIAL_LATEST_KNOWN_CONTRACT
+    assert projected["availability_date"].tolist() == ["20260818", "20260820"]
+    assert projected["revenue"].tolist() == [10.0, 11.0]
+    assert projected["event_kind"].tolist() == [
+        "INITIAL_PUBLICATION", "REVISION_PUBLICATION",
+    ]
+    assert stats["proven_revision_events"] == 1
+
+
+def test_latest_known_projection_blocks_right_censored_and_same_day_conflict() -> None:
+    right_censored, right_stats = select_latest_known_financial_rows(
+        pd.DataFrame([_income_row(
+            ann_date="20260818", f_ann_date="20260820",
+            update_flag="1", revenue=11.0,
+        )]),
+        endpoint="income", availability_cutoff=TARGET,
+    )
+    same_day, same_day_stats = select_latest_known_financial_rows(
+        pd.DataFrame([
+            _income_row(update_flag="0", revenue=10.0),
+            _income_row(update_flag="1", revenue=11.0),
+        ]),
+        endpoint="income", availability_cutoff=TARGET,
+    )
+
+    assert right_censored.empty
+    assert right_stats["right_censored_keys"] == 1
+    assert same_day.empty
+    assert same_day_stats["same_publication_conflict_keys"] == 1
+
+
+def test_operational_projection_delays_unproven_version_until_observation() -> None:
+    raw = pd.DataFrame([_income_row(
+        ann_date="20260818", f_ann_date="20260818",
+        update_flag="1", revenue=11.0,
+    )])
+
+    before, before_stats = select_operational_financial_rows(
+        raw, endpoint="income", availability_cutoff="20260819",
+        first_observed_at="2026-08-20T09:30:00Z",
+    )
+    observed, stats = select_operational_financial_rows(
+        raw, endpoint="income", availability_cutoff=TARGET,
+        first_observed_at="2026-08-20T09:30:00Z",
+    )
+
+    assert before.empty
+    assert before_stats["excluded_observed_after_cutoff"] == 1
+    assert stats["contract"] == FINANCIAL_OPERATIONAL_PIT_CONTRACT
+    assert observed["availability_date"].tolist() == ["20260820"]
+    assert observed["publication_date"].tolist() == ["20260818"]
+    assert observed["first_observed_session"].tolist() == ["20260820"]
+    assert observed["availability_evidence"].tolist() == ["observed_only"]
+    assert observed["pit_tier"].tolist() == ["operational_pit"]
+    assert observed["capability_status"].tolist() == ["OBSERVED_ONLY"]
+    assert observed["row_fingerprint"].str.fullmatch(r"[0-9a-f]{64}").all()
+
+
+def test_operational_projection_uses_unique_supplier_current_conflict_row() -> None:
+    raw = pd.DataFrame([
+        _income_row(update_flag="0", revenue=10.0),
+        _income_row(update_flag="1", revenue=11.0),
+    ])
+
+    observed, stats = select_operational_financial_rows(
+        raw, endpoint="income", availability_cutoff=TARGET,
+        first_observed_at="2026-08-20T09:30:00Z",
+    )
+
+    assert observed["revenue"].tolist() == [11.0]
+    assert observed["event_kind"].tolist() == [
+        "UNTIMED_REVISION_FIRST_OBSERVED"
+    ]
+    assert stats["same_publication_conflict_keys"] == 1
+    assert stats["observed_only_events"] == 1
+
+
+def test_verified_raw_reuse_preserves_original_observation_bound(
+    tmp_path: Path,
+) -> None:
+    raw = pd.DataFrame([_income_row(update_flag="1")])
+    audit = SourceAuditStore(tmp_path / "audit" / "audit.db")
+    receipt_id = audit.record_fetch(
+        run_id="observation-bound-source",
+        source="tushare",
+        endpoint="income",
+        status="success",
+        requested_scope={"date_start": START, "date_end": TARGET},
+        returned_rows=len(raw),
+        attempt_count=1,
+        observed_at="2026-08-20T09:30:00Z",
+        payload_frame=raw,
+        **normalized_response_metadata(raw),
+    )
+    with audit._connect() as connection:
+        row = dict(connection.execute(
+            "SELECT * FROM fetch_receipts WHERE receipt_id=?", (receipt_id,),
+        ).fetchone())
+    row["requested_scope"] = json.loads(row.pop("requested_scope_json"))
+    row["response_columns"] = json.loads(row.pop("response_columns_json"))
+    row["error"] = None
+
+    reused = audit._verified_reusable_frame(row)
+
+    assert reused is not None
+    assert reused.attrs["source_observed_at"] == "2026-08-20T09:30:00Z"
+
+
 def test_statement_visibility_uses_max_ann_and_f_ann_cutoff() -> None:
     raw = pd.DataFrame([_income_row(f_ann_date="20260822")])
     before, before_stats = select_first_available_financial_rows(
@@ -74,6 +309,22 @@ def test_statement_visibility_uses_max_ann_and_f_ann_cutoff() -> None:
     assert before_stats["excluded_future_rows"] == 1
     assert publication_day["publication_date"].tolist() == ["20260822"]
     assert publication_day["availability_date"].tolist() == ["20260822"]
+
+
+def test_first_available_history_is_explicitly_downgraded_for_bootstrap() -> None:
+    projected, stats = select_best_effort_bootstrap_financial_rows(
+        pd.DataFrame([_income_row()]),
+        endpoint="income",
+        availability_cutoff=TARGET,
+    )
+
+    assert stats["contract"] == FINANCIAL_BEST_EFFORT_BOOTSTRAP_CONTRACT
+    assert stats["source_projection_contract"] == FINANCIAL_AVAILABILITY_CONTRACT
+    assert projected["availability_evidence"].tolist() == ["vendor_date"]
+    assert projected["pit_tier"].tolist() == ["best_effort_pit"]
+    assert projected["capability_status"].tolist() == [
+        "BEST_EFFORT_BOOTSTRAP"
+    ]
 
 
 def test_indicator_future_ann_is_excluded() -> None:
@@ -305,7 +556,11 @@ def _collector(responses: dict[str, pd.DataFrame], calls: list[tuple[str, dict]]
     def endpoint_api(name):
         def fetch(**kwargs):
             calls.append((name, dict(kwargs)))
-            return responses[name].copy()
+            frame = responses[name].copy()
+            for field in collector._get_interface_field_list(name):
+                if field not in frame.columns:
+                    frame[field] = pd.NA
+            return frame
         return fetch
 
     collector._get_interface_api = endpoint_api
@@ -375,6 +630,35 @@ def test_independent_endpoint_events_carry_earlier_balance_into_later_income(
     assert events["total_assets"].tolist() == [20.0, 20.0]
     assert pd.isna(events.iloc[0]["net_income"])
     assert events.iloc[1]["net_income"] == 2.0
+
+
+def test_collector_canonical_projection_keeps_same_period_revision_event(
+    tmp_path: Path,
+) -> None:
+    responses = {
+        "income": pd.DataFrame([
+            _income_row(
+                ann_date="20260818", f_ann_date="20260818",
+                update_flag="0", revenue=10.0,
+            ),
+            _income_row(
+                ann_date="20260820", f_ann_date="20260820",
+                update_flag="1", revenue=11.0,
+            ),
+        ]),
+        "balancesheet": pd.DataFrame(), "cashflow": pd.DataFrame(),
+        "fina_indicator": pd.DataFrame(),
+    }
+    collector = _collector(responses, [])
+    audit = SourceAuditStore(tmp_path / "audit" / "audit.db")
+
+    events = collector._fetch_financials(
+        START, TARGET, ts_code=CODE, run_id="same-period-revision",
+        audit_store=audit, scope_key="csi1800", universe="csi1800",
+    )
+
+    assert events["availability_date"].tolist() == ["20260818", "20260820"]
+    assert events["revenue"].tolist() == [10.0, 11.0]
 
 
 def test_financial_endpoint_events_do_not_regress_to_late_old_report(
@@ -803,7 +1087,9 @@ def test_financial_resume_workers_one_and_eight_are_pit_equivalent(
                                       "revenue": 10.0, "oper_cost": 6.0}])
             if name == "balancesheet":
                 return pd.DataFrame([{**common, "total_assets": 20.0,
-                                      "total_hldr_eqy_exc_min_int": 8.0}])
+                                      "total_hldr_eqy_exc_min_int": 8.0,
+                                      "total_cur_assets": pd.NA,
+                                      "total_cur_liab": pd.NA}])
             if name == "cashflow":
                 return pd.DataFrame([{**common, "n_cashflow_act": 4.0}])
             return pd.DataFrame([{

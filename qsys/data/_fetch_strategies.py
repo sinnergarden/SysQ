@@ -25,13 +25,15 @@ def fetch_with_retry(
     Each retry waits ``1 * attempt`` seconds.  Raises on final failure.
     ``log_warning`` is a callable such as ``logger.warning``.
     """
+    last_error: Exception | None = None
     for i in range(max_retries):
         try:
             return api_func(**kwargs)
         except Exception as e:
+            last_error = e
             log_warning(f"API call failed (attempt {i+1}/{max_retries}): {e}")
             time.sleep(1 * (i + 1))
-    raise Exception("Max retries exceeded")
+    raise RuntimeError(f"Max retries exceeded: {last_error}") from last_error
 
 
 def fetch_by_stock_loop(

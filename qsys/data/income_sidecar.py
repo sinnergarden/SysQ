@@ -22,13 +22,17 @@ import pandas as pd
 from qsys.data._merge_helpers import (
     FINANCIAL_AVAILABILITY_CONTRACT,
     FINANCIAL_AVAILABILITY_RULE,
-    select_first_available_financial_rows,
+    FINANCIAL_LATEST_KNOWN_CONTRACT,
+    FINANCIAL_OPERATIONAL_PIT_CONTRACT,
+    select_operational_financial_rows,
 )
 from qsys.data.source_audit import REQUIRED_TERMINAL_GATES, stable_scope_hash
 
 
 INCOME_SIDECAR_SCHEMA = "audited_income_pit_sidecar_v1"
 INCOME_SIDECAR_TRANSFORM = "income_first_available_projection_v1"
+INCOME_LATEST_KNOWN_SIDECAR_TRANSFORM = "income_latest_known_events_v1"
+INCOME_OPERATIONAL_SIDECAR_TRANSFORM = "income_versioned_operational_events_v1"
 INCOME_SOURCE_MODE_AUDITED = "audited_sidecar_v1"
 INCOME_SOURCE_MODE_LEGACY = "legacy_unverified_global_v0"
 INCOME_SIDECAR_FILENAME = "income.parquet"
@@ -314,16 +318,23 @@ def _income_evidence_receipt(
 def _projection_totals(stats_rows: list[dict[str, Any]]) -> dict[str, int]:
     fields = (
         "raw_rows",
-        "selected_first_available_rows",
         "projected_rows",
+        "complete_logical_keys",
+        "blocked_logical_keys",
+        "right_censored_keys",
+        "same_publication_conflict_keys",
+        "proven_events",
+        "proven_revision_events",
+        "equivalent_republication_events",
+        "collapsed_equal_same_date_rows",
         "excluded_future_rows",
-        "excluded_later_revision_rows",
         "excluded_non_primary_report_type_rows",
-        "collapsed_equivalent_branch_rows",
-        "missing_end_type_fallback_keys",
-        "non_consumed_branch_exception_count",
-        "revision_timeline_unproven_excluded_keys",
-        "revision_timeline_unproven_excluded_rows",
+        "excluded_unsupported_statement_period_rows",
+        "excluded_missing_end_type_keys",
+        "canonical_branch_conflict_keys",
+        "observed_only_events",
+        "operational_unresolved_keys",
+        "excluded_observed_after_cutoff",
     )
     return {
         field: sum(int(row.get(field) or 0) for row in stats_rows)
@@ -565,20 +576,18 @@ def materialize_audited_income_sidecar(
                     f"income terminal receipt does not match audit.db: {receipt_id}"
                 )
             raw = _load_income_payload(fetch, data_root=data_root, symbol=symbol)
-            projected, stats = select_first_available_financial_rows(
+            projected, stats = select_operational_financial_rows(
                 raw,
                 endpoint="income",
                 availability_cutoff=availability_cutoff,
+                first_observed_at=str(fetch.get("observed_at") or ""),
             )
             stats_record = {
                 "symbol": symbol,
                 "receipt_id": receipt_id,
                 **{
                     key: value for key, value in stats.items()
-                    if key not in {
-                        "non_consumed_branch_exceptions",
-                        "revision_timeline_unproven_exceptions",
-                    }
+                    if key != "exceptions"
                 },
             }
             projection_rows.append(stats_record)
@@ -592,8 +601,8 @@ def materialize_audited_income_sidecar(
                 "response_hash": fetch.get("response_hash"),
                 "payload_sha256": fetch.get("payload_sha256"),
                 "projected_rows": int(stats.get("projected_rows") or 0),
-                "revision_timeline_unproven_excluded_rows": int(
-                    stats.get("revision_timeline_unproven_excluded_rows") or 0
+                "blocked_logical_keys": int(
+                    stats.get("blocked_logical_keys") or 0
                 ),
             })
             if not projected.empty:
@@ -627,20 +636,20 @@ def materialize_audited_income_sidecar(
         if column in sidecar.columns
     ]
     sidecar = sidecar.sort_values(sort_columns, kind="mergesort").reset_index(drop=True)
-    if sidecar.duplicated(["ts_code", "end_date"]).any():
-        raise IncomeSidecarError("income sidecar has duplicate ts_code/end_date rows")
+    if sidecar.duplicated(["ts_code", "end_date", "availability_date"]).any():
+        raise IncomeSidecarError("income sidecar has duplicate publication events")
     if (sidecar["availability_date"].astype(str) > availability_cutoff).any():
         raise IncomeSidecarError("income sidecar projection escaped availability cutoff")
 
     projection_totals = _projection_totals(projection_rows)
     unproven_symbols = sorted({
         row["symbol"] for row in projection_rows
-        if int(row.get("revision_timeline_unproven_excluded_rows") or 0) > 0
+        if int(row.get("blocked_logical_keys") or 0) > 0
     })
     identity = {
         "schema": INCOME_SIDECAR_SCHEMA,
-        "transform_contract": INCOME_SIDECAR_TRANSFORM,
-        "financial_availability_contract": FINANCIAL_AVAILABILITY_CONTRACT,
+        "transform_contract": INCOME_OPERATIONAL_SIDECAR_TRANSFORM,
+        "financial_availability_contract": FINANCIAL_OPERATIONAL_PIT_CONTRACT,
         "financial_availability_rule": FINANCIAL_AVAILABILITY_RULE,
         "source": "tushare",
         "endpoint": "income",
@@ -691,8 +700,8 @@ def materialize_audited_income_sidecar(
                     "symbols": symbols,
                 },
                 "contracts": {
-                    "transform": INCOME_SIDECAR_TRANSFORM,
-                    "financial_availability": FINANCIAL_AVAILABILITY_CONTRACT,
+                    "transform": INCOME_OPERATIONAL_SIDECAR_TRANSFORM,
+                    "financial_availability": FINANCIAL_OPERATIONAL_PIT_CONTRACT,
                     "availability_rule": FINANCIAL_AVAILABILITY_RULE,
                     "logical_key": [
                         "ts_code", "end_date", "report_type", "comp_type", "end_type",
@@ -808,6 +817,21 @@ def validate_income_sidecar_identity(
     source_evidence = (
         manifest.get("source_evidence") if isinstance(manifest, dict) else None
     )
+    identity_contracts = (
+        immutable_identity.get("transform_contract"),
+        immutable_identity.get("financial_availability_contract"),
+    ) if isinstance(immutable_identity, dict) else (None, None)
+    allowed_contracts = {
+        (INCOME_SIDECAR_TRANSFORM, FINANCIAL_AVAILABILITY_CONTRACT),
+        (
+            INCOME_LATEST_KNOWN_SIDECAR_TRANSFORM,
+            FINANCIAL_LATEST_KNOWN_CONTRACT,
+        ),
+        (
+            INCOME_OPERATIONAL_SIDECAR_TRANSFORM,
+            FINANCIAL_OPERATIONAL_PIT_CONTRACT,
+        ),
+    }
     if (
         manifest.get("schema_version") != 1
         or manifest.get("artifact_type") != INCOME_SIDECAR_SCHEMA
@@ -817,16 +841,15 @@ def validate_income_sidecar_identity(
             _json_bytes(immutable_identity)
         )
         or immutable_identity.get("schema") != INCOME_SIDECAR_SCHEMA
-        or immutable_identity.get("transform_contract") != INCOME_SIDECAR_TRANSFORM
-        or immutable_identity.get("financial_availability_contract")
-        != FINANCIAL_AVAILABILITY_CONTRACT
+        or identity_contracts not in allowed_contracts
         or immutable_identity.get("financial_availability_rule")
         != FINANCIAL_AVAILABILITY_RULE
         or immutable_identity.get("source") != "tushare"
         or immutable_identity.get("endpoint") != "income"
         or not isinstance(contracts, dict)
-        or contracts.get("transform") != INCOME_SIDECAR_TRANSFORM
-        or contracts.get("financial_availability") != FINANCIAL_AVAILABILITY_CONTRACT
+        or (
+            contracts.get("transform"), contracts.get("financial_availability")
+        ) != identity_contracts
         or contracts.get("availability_rule") != FINANCIAL_AVAILABILITY_RULE
         or not isinstance(scope, dict)
         or not isinstance(artifact_identity, dict)

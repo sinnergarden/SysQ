@@ -29,7 +29,7 @@ current_r3_outputs:
 
 source_contract:
   path: docs/requirements/contracts/source_revision_capability_v1.yaml
-  sha256: da02c5b2b177ebc338de5490641190ec8135abb5843d37eb15711ae9363bb263
+  sha256: f9f3435e94b97ddb58756fe73144862a274eb00ba080faa55dc6d820d65c0bc0
 
 trade_calendar:
   path: data/qlib_bin/calendars/day.txt
@@ -85,7 +85,7 @@ financial:
 
 shareholder:
   expected_r3_counts:
-    source_vintages: 1
+    source_vintages: 2
     exact_event_keys: 247942
     historical_revision_timeline_proven_keys: 0
     asof_samples: 8
@@ -101,6 +101,18 @@ shareholder:
         sha256: 8bb111f2e9d979bb604c155e4a211dd7087949fa1ecabc317128621c92dc5eb3
       top10_holder_ratio:
         path: data/research/source_snapshots/shareholder/0baf4e0fc24e5f95f691fb3f332badb8e8d32ed708118c0f1e019a28ce049800/top10_holder_ratio.parquet
+        sha256: 8690a233c1bb5daeddd54ad88a7c8bdef68be3f1a9dde25e513a517935fc45fb
+    - terminal:
+        run_id: data_sync_20260830T092226011729Z_2746dabe
+        sha256: 726af9f8c3c91432feb78f1df9520655f3e002c246521bd47245286637bc91ce
+      manifest:
+        path: data/research/source_snapshots/shareholder/8aa661b54dba4eb196b0caae174ca3abd44976b69ace65703a8bbd20dbf7c3a1/manifest.json
+        sha256: 4227098ba98baf6f5040f46842a0b2c30e23fbf14e022d3f2f39fe22fc93568a
+      holder_num:
+        path: data/research/source_snapshots/shareholder/8aa661b54dba4eb196b0caae174ca3abd44976b69ace65703a8bbd20dbf7c3a1/holder_num.parquet
+        sha256: 8bb111f2e9d979bb604c155e4a211dd7087949fa1ecabc317128621c92dc5eb3
+      top10_holder_ratio:
+        path: data/research/source_snapshots/shareholder/8aa661b54dba4eb196b0caae174ca3abd44976b69ace65703a8bbd20dbf7c3a1/top10_holder_ratio.parquet
         sha256: 8690a233c1bb5daeddd54ad88a7c8bdef68be3f1a9dde25e513a517935fc45fb
   legacy_comparators:
     - name: same_raw_announcement_projection
