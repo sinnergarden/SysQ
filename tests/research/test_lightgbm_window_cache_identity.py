@@ -199,7 +199,9 @@ def test_cache_identity_binds_financial_processing_contracts(tmp_path: Path) -> 
         "momentum_price_volume_v1"
     )
     assert identity["column_contract"] == {
+        "key_columns": ["trade_date", "instrument"],
         "materialized_features": ["f1"],
+        "stored_columns": ["trade_date", "instrument", "f1"],
         "consumed_features": ["f1"],
     }
     assert identity["feature_history_contract"] == (
@@ -273,7 +275,9 @@ def test_cache_key_uses_materialized_contract_not_consumer_contract(
     assert first_identity["feature_list_id"] == "consumer_one"
     assert second_identity["feature_list_id"] == "consumer_two"
     assert first_identity["column_contract"] == {
+        "key_columns": ["trade_date", "instrument"],
         "materialized_features": ["f1", "f2"],
+        "stored_columns": ["trade_date", "instrument", "f1", "f2"],
         "consumed_features": ["f1"],
     }
     assert second_identity["column_contract"]["consumed_features"] == ["f2"]

@@ -65,9 +65,40 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", required=True, type=Path)
     parser.add_argument("--feature-cache-root", default="data/feature_cache", type=Path)
+    parser.add_argument(
+        "--validate-only",
+        action="store_true",
+        help="independently validate an existing preheat manifest and shards",
+    )
     args = parser.parse_args()
 
     config = RollingResearchConfig.from_file(args.config)
+    manifest_path = args.feature_cache_root / "annual_shards" / (
+        f"{config.experiment_id}.manifest.json"
+    )
+    if args.validate_only:
+        from qsys.research.feature_cache_validation import (
+            validate_annual_feature_cache,
+        )
+
+        validation_path = args.feature_cache_root / "annual_shards" / (
+            f"{config.experiment_id}.validation.json"
+        )
+        result = validate_annual_feature_cache(
+            manifest_path,
+            project_root=Path(__file__).resolve().parents[2],
+            preheat_code_path=Path(__file__).resolve(),
+            generator_code_path=Path(
+                sys.modules[LightGBMSingleLabelGenerator.__module__].__file__
+            ),
+            output_path=validation_path,
+        )
+        print(
+            f"validated {result['summary']['shard_count']} annual shards: "
+            f"{validation_path}",
+            flush=True,
+        )
+        return 0
     if not config.generators:
         raise ValueError("preheat requires a matrix config with generators")
     generators = expand_multi_label_generators(config.generators)
@@ -172,6 +203,7 @@ def main() -> int:
                 "generator_id": generator_config["generator_id"],
                 "start": shard_start,
                 "end": shard_end,
+                "source_coverage_start": shard_start,
                 "source_coverage_end": source_end,
                 "path": str(path),
                 "rows": len(cached),
@@ -185,18 +217,24 @@ def main() -> int:
                 flush=True,
             )
 
-    manifest_path = args.feature_cache_root / "annual_shards" / (
-        f"{config.experiment_id}.manifest.json"
-    )
     _write_json_atomic(
         manifest_path,
         {
-            "schema_version": 1,
+            "schema_version": 2,
             "experiment_id": config.experiment_id,
+            "config_path": str(args.config),
+            "config_sha256": _sha256_file(args.config),
             "prediction_start": start,
             "prediction_end": end,
-            "cache_coverage_start": min(record["start"] for record in records.values()),
-            "cache_coverage_end": max(record["end"] for record in records.values()),
+            "cache_coverage_start": min(
+                record["source_coverage_start"] for record in records.values()
+            ),
+            "cache_coverage_end": max(
+                record["source_coverage_end"] for record in records.values()
+            ),
+            "cache_shard_identity_end": max(
+                record["end"] for record in records.values()
+            ),
             "source_manifest_hash": config.source_manifest_hash,
             "preheat_code_sha256": _sha256_file(Path(__file__)),
             "generator_code_sha256": _sha256_file(

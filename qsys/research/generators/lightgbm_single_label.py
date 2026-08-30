@@ -657,7 +657,9 @@ class LightGBMSingleLabelGenerator:
             else None
         )
         column_contract = {
+            "key_columns": ["trade_date", "instrument"],
             "materialized_features": list(features),
+            "stored_columns": ["trade_date", "instrument", *features],
             "consumed_features": consumed,
         }
         identity = {
@@ -948,6 +950,7 @@ class LightGBMSingleLabelGenerator:
             consumed_features=consumed,
         )
         artifact_identity = self._cache_artifact_identity(identity)
+        out = frame[["trade_date", "instrument", *features]].copy()
         if self.cache_write_scope == "annual_shard":
             path = self._annual_shard_path(start, end, features)
             meta_path = self._annual_shard_meta_path(start, end, features)
@@ -955,8 +958,8 @@ class LightGBMSingleLabelGenerator:
                 "schema_version": _ANNUAL_SHARD_SCHEMA_VERSION,
                 "identity": identity,
                 "artifact_identity": artifact_identity,
-                "rows": len(frame),
-                "cols": len(frame.columns),
+                "rows": len(out),
+                "cols": len(out.columns),
                 "source_coverage_start": source_coverage_start or start,
                 "source_coverage_end": source_coverage_end or end,
             }
@@ -967,12 +970,11 @@ class LightGBMSingleLabelGenerator:
                 **identity,
                 "artifact_identity": artifact_identity,
                 "window_key": self._window_key(start, end, features),
-                "rows": len(frame),
-                "cols": len(frame.columns),
+                "rows": len(out),
+                "cols": len(out.columns),
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
         path.parent.mkdir(parents=True, exist_ok=True)
-        out = frame.copy()
         data_fd, data_tmp_name = tempfile.mkstemp(
             prefix=f".{path.name}.", suffix=".parquet.tmp", dir=str(path.parent)
         )
