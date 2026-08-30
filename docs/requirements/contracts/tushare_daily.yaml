@@ -123,14 +123,56 @@ endpoints:
     projection: availability_date_lte_cutoff_raw_future_rows_preserved
     revision_selection: earliest_flag0_only
     unproven_revision_rule: all_only_flag1_keys_are_excluded
+    source_units:
+      contract: tushare_fina_indicator_percent_points_to_ratio_v1
+      percent_point_fields:
+        [roe, roe_waa, roe_ttm, grossprofit_margin, debt_to_assets,
+         q_gr_yoy, dt_netprofit_yoy, profit_to_gr, net_profit_margin]
+      canonical_unit: ratio
+      conversion_owner: raw_fina_indicator_to_canonical_only
+      conversion: divide_by_100_unconditionally_for_named_fields
+      forbidden: numeric_magnitude_unit_inference_or_canonical_to_qlib_rescaling
   stk_holdernumber:
     capability: paged_announcement_date_history
     revision_capability: historical_revision_timeline_unverified
-    key_fields: [ts_code, ann_date]
+    key_fields: [ts_code, ann_date, end_date]
+    projection_contract: shareholder_exact_event_complete_top10_v2
+    same_announcement_rule: select_latest_end_date_before_value_filtering
+    null_latest_period_rule: no_new_fact_and_no_borrowed_announcement_freshness
+    exact_event_conflict_rule: differing_non_null_holder_num_fails_closed
   top10_holders:
     capability: paged_report_period_history_with_announcement_date
     revision_capability: historical_revision_timeline_unverified
     key_fields: [ts_code, ann_date, end_date]
+    projection_contract: shareholder_exact_event_complete_top10_v2
+    same_announcement_rule: select_latest_end_date_before_row_filtering
+    holder_identity: unicode_nfkc_whitespace_removed_dash_normalized_casefolded
+    duplicate_holder_rule: equal_ratios_collapse_differing_ratios_fail_closed
+    completeness_rule: exactly_10_normalized_holders
+    aggregate_rule: complete_exact_event_sum_in_closed_interval_0_100
+  anns_d:
+    capability: market_wide_listed_company_announcement_metadata
+    normal_daily_required: false
+    source_revision_supporting_mode_only: true
+    query_axis: exact_announcement_date
+    supplier_row_limit: 2000
+    pagination: offset_until_short_page
+    raw_fields: [ann_date, ts_code, name, title, url, rec_time]
+    raw_payload: one_immutable_supplier_shard_per_date_and_offset
+    publication_time: rec_time_per_announcement_row
+    value_binding: pdf_bytes_and_deterministic_parser_required
+    preflight: one_exact_date_permission_probe_before_historical_scan
+    permission_failure: durable_untrusted_receipt_and_no_full_scan
+  financial_versioned_events:
+    endpoints: [income, balancesheet, cashflow, fina_indicator]
+    raw_request_contract: financial_first_available_v1
+    event_contract: financial_versioned_event_v1
+    projections:
+      strict_market_pit: source_dated_complete_timelines_only
+      operational_pit: unique_current_value_from_first_observed_session
+      best_effort_bootstrap: explicitly_downgraded_vendor_date_history
+    observation_rule: receipt_observed_at_is_preserved_across_frozen_raw_reuse
+    trust_rule: observed_only_never_upgrades_to_source_publication_evidence
   stock_basic:
     capability: current_classification_snapshot_only
     revision_capability: no_historical_industry_timeline
@@ -158,6 +200,12 @@ trust_rules:
     factor: adj_factor
     industry: bak_basic
   optional_endpoint_failure_does_not_block_core: [daily_basic, stk_limit, moneyflow, margin]
+  certified_financial_revision_semantics:
+    contract: financial_latest_known_actual_publication_v1
+    rule: original_value_until_revision_publication_then_revision_value
+    publication_evidence_required: true
+    first_available_projection_is_not_sufficient: true
+    unknown_revision_effective_date: fail_closed
   single_writer_scope: canonical_commit_through_qlib_readback_readiness_and_finalize
   required_supplier_non_null:
     daily: [open, high, low, close, volume]

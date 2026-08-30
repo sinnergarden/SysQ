@@ -44,18 +44,6 @@ class InstrumentCoverageReport:
 
 
 class QlibAdapter:
-    _PERCENT_FINANCIAL_COLS = {
-        "roe",
-        "roe_waa",
-        "roe_ttm",
-        "grossprofit_margin",
-        "debt_to_assets",
-        "q_gr_yoy",
-        "dt_netprofit_yoy",
-        "profit_to_gr",
-        "net_profit_margin",
-    }
-    _PERCENT_LIKE_THRESHOLD = 3.0
     # The longest semantic transform currently uses a 756-session shift.
     # 820 calendar days only contains roughly 585 A-share sessions and made
     # the 3-year fundamental deltas entirely NaN at inference time.  Four
@@ -446,6 +434,84 @@ class QlibAdapter:
         return out
 
     @staticmethod
+    def _attach_semantic_pit_membership(
+        frame: pd.DataFrame,
+        spans: pd.DataFrame | None,
+        mode: str,
+    ) -> pd.DataFrame:
+        """Mark rows eligible for same-date cross-sectional features.
+
+        The input frame deliberately contains continuous listed history for
+        every instrument in the immutable PIT union.  Rolling computations use
+        all of that per-instrument history, while this mask prevents rows
+        outside the active membership span from influencing cross-sectional
+        ranks and z-scores.
+        """
+
+        if spans is None or not mode:
+            return frame
+        if mode not in {"member_as_of", "ever_member_as_of"}:
+            raise ValueError(f"unsupported semantic PIT filter mode: {mode}")
+        required = {"instrument", "effective_from", "effective_to"}
+        missing = required - set(spans.columns)
+        if missing:
+            raise ValueError(
+                f"semantic PIT membership spans missing columns: {sorted(missing)}"
+            )
+        if not {"ts_code", "trade_date"}.issubset(frame.columns):
+            raise ValueError(
+                "semantic PIT membership requires ts_code and trade_date"
+            )
+
+        out = frame.copy()
+        instruments = out["ts_code"].astype(str).str.strip().str.upper()
+        dates = pd.to_numeric(
+            pd.to_datetime(out["trade_date"], errors="coerce").dt.strftime(
+                "%Y%m%d"
+            ),
+            errors="coerce",
+        ).fillna(-1).astype("int64")
+        normalized = spans[
+            ["instrument", "effective_from", "effective_to"]
+        ].copy()
+        normalized["instrument"] = (
+            normalized["instrument"].astype(str).str.strip().str.upper()
+        )
+        normalized["effective_from"] = pd.to_numeric(
+            normalized["effective_from"].astype(str).str.replace("-", "", regex=False),
+            errors="raise",
+        ).astype("int64")
+        normalized["effective_to"] = pd.to_numeric(
+            normalized["effective_to"].astype(str).str.replace("-", "", regex=False),
+            errors="raise",
+        ).astype("int64")
+
+        eligible = np.zeros(len(out), dtype=bool)
+        span_groups = {
+            instrument: group
+            for instrument, group in normalized.groupby("instrument", sort=False)
+        }
+        for instrument, positions in instruments.groupby(
+            instruments, sort=False
+        ).indices.items():
+            group = span_groups.get(str(instrument))
+            if group is None:
+                continue
+            pos = np.asarray(positions, dtype=int)
+            row_dates = dates.iloc[pos].to_numpy(dtype="int64")
+            starts = group["effective_from"].to_numpy(dtype="int64")
+            if mode == "ever_member_as_of":
+                eligible[pos] = row_dates >= starts.min()
+                continue
+            ends = group["effective_to"].to_numpy(dtype="int64")
+            member = np.zeros(len(pos), dtype=bool)
+            for start, end in zip(starts, ends, strict=True):
+                member |= (row_dates >= start) & (row_dates <= end)
+            eligible[pos] = member
+        out["_pit_member"] = eligible
+        return out
+
+    @staticmethod
     def _semantic_feature_flags(derived_fields):
         flags = {key: False for key in RESEARCH_FEATURE_FLAGS}
         groups = list_feature_groups()
@@ -471,6 +537,8 @@ class QlibAdapter:
         end_time=None,
         *,
         margin_lag_sessions: int = 0,
+        semantic_pit_membership_spans: pd.DataFrame | None = None,
+        semantic_pit_filter_mode: str = "",
     ) -> pd.DataFrame:
         semantic_input = self._to_semantic_builder_frame(base_df)
         if semantic_input.empty:
@@ -486,6 +554,30 @@ class QlibAdapter:
             lag_sessions=margin_lag_sessions,
             open_dates=open_dates,
         )
+        semantic_input = self._attach_semantic_pit_membership(
+            semantic_input,
+            semantic_pit_membership_spans,
+            semantic_pit_filter_mode,
+        )
+
+        # The caller may intentionally request calendar padding beyond the
+        # frozen market-data terminal (for example predict_end + 30 days to
+        # resolve the next trading session).  Income is consumed only for rows
+        # that actually exist in the Qlib frame, so bind the sidecar coverage
+        # gate to that consumed terminal instead of an empty padded interval.
+        consumed_income_end = None
+        if "trade_date" in semantic_input.columns:
+            observed_end = pd.to_datetime(
+                semantic_input["trade_date"], errors="coerce"
+            ).max()
+            if pd.notna(observed_end):
+                consumed_income_end = observed_end.strftime("%Y-%m-%d")
+        if end_time is not None:
+            requested_end = str(end_time)[:10]
+            consumed_income_end = min(
+                requested_end,
+                consumed_income_end or requested_end,
+            )
 
         try:
             flags = self._semantic_feature_flags(derived_fields)
@@ -512,7 +604,7 @@ class QlibAdapter:
                         str(start_time)[:10] if start_time is not None else None
                     ),
                     "income_sidecar_required_end": (
-                        str(end_time)[:10] if end_time is not None else None
+                        consumed_income_end
                     ),
                     "income_sidecar_required_history_start": (
                         self.income_sidecar_required_history_start
@@ -549,6 +641,8 @@ class QlibAdapter:
         inst_processors=None,
         *,
         margin_lag_sessions: int = 0,
+        semantic_pit_membership_spans: pd.DataFrame | None = None,
+        semantic_pit_filter_mode: str = "",
     ):
         inst = self.normalize_instruments(instruments)
         field_list = self._normalize_field_list(fields)
@@ -580,6 +674,8 @@ class QlibAdapter:
             start_time=start_time,
             end_time=end_time,
             margin_lag_sessions=margin_lag_sessions,
+            semantic_pit_membership_spans=semantic_pit_membership_spans,
+            semantic_pit_filter_mode=semantic_pit_filter_mode,
         )
 
         native_current = native_df
@@ -745,14 +841,6 @@ class QlibAdapter:
                         deduped[col_name] = collapsed
                 df = pd.DataFrame(deduped)
                 
-                for col in self._PERCENT_FINANCIAL_COLS:
-                    if col not in df.columns:
-                        continue
-                    values = pd.to_numeric(df[col], errors="coerce")
-                    mask = values.abs() > self._PERCENT_LIKE_THRESHOLD
-                    if mask.any():
-                        df.loc[mask, col] = values.loc[mask] / 100.0
-
                 # Unit Conversion (Tushare -> Qlib Standard)
                 # Tushare vol is in lots (100 shares), Qlib expects shares
                 if 'volume' in df.columns:

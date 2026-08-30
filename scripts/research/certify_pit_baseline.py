@@ -12,7 +12,11 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from qsys.pit_certification import CertificationError, certify_pit_baseline
+from qsys.pit_certification import (
+    CertificationError,
+    audit_source_revision_capabilities,
+    certify_pit_baseline,
+)
 from qsys.pit_datapack import export_certified_datapack, verify_datapack
 
 
@@ -26,6 +30,7 @@ def build_parser() -> argparse.ArgumentParser:
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument("--export-datapack-from", metavar="CERTIFICATION_DIR")
     modes.add_argument("--verify-datapack", metavar="DATAPACK_DIR")
+    modes.add_argument("--source-revision-audit", action="store_true")
     parser.add_argument("--datapack-output", metavar="DATAPACK_DIR")
     return parser
 
@@ -59,14 +64,27 @@ def main(argv: list[str] | None = None) -> int:
             raise CertificationError(f"certification mode requires {', '.join(missing)}")
         if args.datapack_output:
             raise CertificationError("--datapack-output requires --export-datapack-from")
-        result = certify_pit_baseline(
-            request_path=args.request,
-            audit_db=args.audit_db,
-            evidence_run_ids=args.evidence_run_id,
-            mutation_run_ids=args.mutation_run_id,
-            output_root=args.output_root,
-            project_root=PROJECT_ROOT,
-        )
+        if args.source_revision_audit:
+            if args.evidence_run_id or args.mutation_run_id:
+                raise CertificationError(
+                    "source revision audit binds evidence in its request; "
+                    "run-id selectors are invalid"
+                )
+            result = audit_source_revision_capabilities(
+                request_path=args.request,
+                audit_db=args.audit_db,
+                output_root=args.output_root,
+                project_root=PROJECT_ROOT,
+            )
+        else:
+            result = certify_pit_baseline(
+                request_path=args.request,
+                audit_db=args.audit_db,
+                evidence_run_ids=args.evidence_run_id,
+                mutation_run_ids=args.mutation_run_id,
+                output_root=args.output_root,
+                project_root=PROJECT_ROOT,
+            )
     except (CertificationError, OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"PIT baseline certification input/runtime error: {exc}", file=sys.stderr)
         return 1

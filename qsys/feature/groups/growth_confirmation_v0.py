@@ -35,6 +35,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from qsys.feature.transforms import PIT_CROSS_SECTION_COLUMN
+
 from qsys.config import cfg
 
 warnings.filterwarnings("ignore")
@@ -126,6 +128,15 @@ def _load_income(
     if df["availability_date"].gt(cutoff).any():
         raise ValueError("audited income sidecar contains rows after its cutoff")
     return df.sort_values(["ts_code", "end_date"], kind="mergesort").reset_index(drop=True)
+
+
+def _required_income_symbols(frame: pd.DataFrame) -> set[str]:
+    """Return symbols whose rows can survive the final PIT consumer gate."""
+    symbols = frame["ts_code"].astype(str)
+    if "_pit_member" not in frame.columns:
+        return set(symbols.unique())
+    consumed = frame["_pit_member"].astype("boolean").fillna(False)
+    return set(symbols.loc[consumed].unique())
 
 
 def _load_legacy_unverified_income() -> pd.DataFrame:
@@ -506,7 +517,7 @@ def build_growth_confirmation_features(
             required_start=income_sidecar_required_start,
             required_end=income_sidecar_required_end,
             required_history_start=source["required_history_start"],
-            required_symbols=set(out["ts_code"].astype(str).unique()),
+            required_symbols=_required_income_symbols(out),
         )
     elif source["mode"] == INCOME_SOURCE_MODE_LEGACY:
         warnings.warn(
@@ -559,7 +570,11 @@ def build_growth_confirmation_features(
         out["days_since_252d_high"] = np.nan
 
     # ── Clean up ──
-    prefix_cols = [c for c in list(out.columns) if c.startswith("_")]
+    prefix_cols = [
+        c
+        for c in list(out.columns)
+        if c.startswith("_") and c != PIT_CROSS_SECTION_COLUMN
+    ]
     for c in prefix_cols:
         if c not in ("_dt",):
             out = out.drop(columns=[c], errors="ignore")

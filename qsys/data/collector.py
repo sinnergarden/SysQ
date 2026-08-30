@@ -13,10 +13,16 @@ from qsys.data.storage import StockDataStore
 from qsys.data._collector_utils import _normalize_date, _dedupe_list
 from qsys.data._merge_helpers import (
     FINANCIAL_AVAILABILITY_CONTRACT,
+    FINANCIAL_LATEST_KNOWN_CONTRACT,
+    FINANCIAL_OPERATIONAL_PIT_CONTRACT,
+    FINANCIAL_VERSIONED_EVENT_CONTRACT,
+    TUSHARE_FINA_INDICATOR_UNIT_CONTRACT,
     FinancialAvailabilityError,
+    convert_tushare_fina_indicator_units,
     merge_trade_frames,
     prepare_financial_frame,
-    select_first_available_financial_rows,
+    select_latest_known_financial_rows,
+    select_operational_financial_rows,
 )
 from qsys.data._fetch_strategies import fetch_with_retry, fetch_by_stock_loop, fetch_by_date_loop
 from qsys.data.source_audit import (
@@ -33,7 +39,16 @@ import numpy as np
 
 
 HISTORY_SCOPE_PROCESSING_CONTRACT = (
-    "csi_history_bundle_v1:" + FINANCIAL_AVAILABILITY_CONTRACT
+    "csi_history_bundle_v1:"
+    + FINANCIAL_AVAILABILITY_CONTRACT
+    + ":"
+    + FINANCIAL_LATEST_KNOWN_CONTRACT
+    + ":"
+    + FINANCIAL_OPERATIONAL_PIT_CONTRACT
+    + ":"
+    + FINANCIAL_VERSIONED_EVENT_CONTRACT
+    + ":"
+    + TUSHARE_FINA_INDICATOR_UNIT_CONTRACT
 )
 
 
@@ -199,18 +214,6 @@ class TushareCollector:
             ],
         )
         self._signed_numeric_cols = {"pct_chg", "net_buy", "net_amount"}
-        self._percent_financial_cols = {
-            "roe",
-            "roe_waa",
-            "roe_ttm",
-            "grossprofit_margin",
-            "debt_to_assets",
-            "q_gr_yoy",
-            "dt_netprofit_yoy",
-            "profit_to_gr",
-            "net_profit_margin",
-        }
-        self._percent_like_threshold = 3.0
         self._sparse_event_cols = {
             'exalter', 'buy', 'sell', 'net_buy', 'name', 'buyer_sum', 'seller_sum', 'net_amount', 'reason'
         }
@@ -356,21 +359,6 @@ class TushareCollector:
             trade_cal_fn=self.pro.trade_cal,
         )
 
-    def _normalize_percent_financial_columns(self, df: pd.DataFrame, columns=None) -> pd.DataFrame:
-        if df is None or df.empty:
-            return df
-        df = df.copy()
-        target_cols = set(columns or self._percent_financial_cols)
-        threshold = float(getattr(self, "_percent_like_threshold", 3.0))
-        for col in target_cols:
-            if col not in df.columns:
-                continue
-            values = pd.to_numeric(df[col], errors="coerce")
-            mask = values.abs() > threshold
-            if mask.any():
-                df.loc[mask, col] = values.loc[mask] / 100.0
-        return df
-
     def _prepare_financial_frame(self, df: pd.DataFrame, value_cols):
         return prepare_financial_frame(df, value_cols)
 
@@ -421,7 +409,7 @@ class TushareCollector:
                     "values": sorted(axis_values.loc[~in_scope].unique().tolist())[:10],
                 }
         try:
-            select_first_available_financial_rows(
+            select_latest_known_financial_rows(
                 raw,
                 endpoint=endpoint_name,
                 availability_cutoff=availability_cutoff,
@@ -554,10 +542,13 @@ class TushareCollector:
                     "financial response failed requested-scope/PIT validation: "
                     f"{semantic_error}"
                 )
-            selected, projection = select_first_available_financial_rows(
+            selected, projection = select_operational_financial_rows(
                 frame,
                 endpoint=endpoint_name,
                 availability_cutoff=availability_cutoff,
+                first_observed_at=str(
+                    frame.attrs.get("source_observed_at") or ""
+                ),
             )
             if audit_store is not None and run_id is not None:
                 audit_store.append_event(
@@ -649,7 +640,9 @@ class TushareCollector:
                 "net_profit_margin",
             ],
         )
-        fina_indicator = self._normalize_percent_financial_columns(fina_indicator)
+        # Sole raw-supplier -> canonical unit boundary.  Downstream canonical
+        # and Qlib layers must not reinterpret these values.
+        fina_indicator = convert_tushare_fina_indicator_units(fina_indicator)
 
         # Each endpoint is an independent publication stream.  Collapse
         # same-day reports to the latest report period (the legacy canonical
@@ -670,7 +663,7 @@ class TushareCollector:
                 report_period = pd.to_datetime(group["end_date"], errors="coerce")
                 latest_before = report_period.cummax().shift(1)
                 retained.append(
-                    group.loc[latest_before.isna() | report_period.gt(latest_before)]
+                    group.loc[latest_before.isna() | report_period.ge(latest_before)]
                 )
             result = pd.concat(retained, ignore_index=True)
             return result.rename(columns={"end_date": f"_{endpoint_name}_end_date"})
@@ -975,7 +968,7 @@ class TushareCollector:
                     daily_df[col] = np.nan
             return daily_df
         daily_df = daily_df.copy()
-        fin_df = self._normalize_percent_financial_columns(fin_df.copy())
+        fin_df = fin_df.copy()
         if "availability_date" not in fin_df.columns:
             raise RuntimeError(
                 "financial projection missing audited availability_date"
@@ -1324,6 +1317,7 @@ class TushareCollector:
                     "details": dict(validation_result),
                 }
         receipt_id = None
+        observed_at = utc_now()
         if audit_store is not None and run_id is not None:
             receipt_id = audit_store.record_fetch(
                 run_id=run_id,
@@ -1336,7 +1330,7 @@ class TushareCollector:
                 # Tushare does not expose a trustworthy publication timestamp
                 # for these responses.  Do not infer one from trade_date.
                 published_at=None,
-                observed_at=utc_now(),
+                observed_at=observed_at,
                 payload_frame=frame if status in {"success", "partial"} else None,
                 error=validation_error,
                 **normalized_response_metadata(frame),
@@ -1345,7 +1339,151 @@ class TushareCollector:
                 audit_store.record_field_receipt_links(
                     run_id=run_id, receipt_id=receipt_id, fields=evidence_fields
                 )
+        frame.attrs["source_observed_at"] = observed_at
         return frame, receipt_id
+
+    def fetch_source_revision_announcements(
+        self,
+        *,
+        start_date: str,
+        end_date: str,
+        run_id: str,
+        audit_store,
+        resume_proof: Mapping[str, object] | None = None,
+        scope_key: str = "csi1800",
+        universe: str = "csi1800",
+    ) -> dict[str, object]:
+        """Fetch market-wide ``anns_d`` metadata as exact-date raw shards.
+
+        This is a source-evidence collector, not a financial-value parser.  It
+        preserves Tushare's per-row ``rec_time`` and PDF URL under the normal
+        immutable raw/receipt path.  Exact daily shards make interrupted runs
+        resumable without repeating already verified supplier calls.
+        """
+
+        start = _normalize_date(start_date)
+        end = _normalize_date(end_date)
+        if (
+            start is None
+            or end is None
+            or not str(start).isdigit()
+            or not str(end).isdigit()
+            or len(str(start)) != 8
+            or len(str(end)) != 8
+            or str(start) > str(end)
+        ):
+            raise ValueError("announcement evidence requires a valid date range")
+        response_fields = "ann_date,ts_code,name,title,url,rec_time"
+        linked_fields = ("ann_date", "ts_code", "title", "url", "rec_time")
+        total_rows = 0
+        receipt_count = 0
+        empty_date_count = 0
+        rec_time_nonnull_rows = 0
+        rec_time_parseable_rows = 0
+        pdf_url_rows = 0
+        title_rows = 0
+        requested_dates = pd.date_range(str(start), str(end), freq="D")
+        for announcement in requested_dates:
+            api_date = announcement.strftime("%Y%m%d")
+            date_rows = 0
+            offset = 0
+            previous_response_hash: str | None = None
+            for _ in range(100):
+                frame, receipt_id = self._fetch_daily_endpoint_with_receipt(
+                    "anns_d",
+                    run_id=run_id,
+                    audit_store=audit_store,
+                    requested_scope={
+                        "date_start": api_date,
+                        "date_end": api_date,
+                        "query_axis": "exact_announcement_date_query_axis",
+                        "query_scope": "all_listed_companies",
+                        "symbol_count": 0,
+                        "symbols_sha256": stable_scope_hash(
+                            ["__ALL_LISTED_COMPANIES__"]
+                        ),
+                    },
+                    resume_proof=resume_proof,
+                    scope_key=scope_key,
+                    universe=universe,
+                    request_variant=f"announcement_date:{api_date}:offset={offset}",
+                    identity_columns=("ts_code", "ann_date", "title", "url"),
+                    required_column_groups=(("rec_time",),),
+                    ann_date=api_date,
+                    fields=response_fields,
+                    limit=2000,
+                    offset=offset,
+                )
+                if receipt_id is None:
+                    raise RuntimeError("anns_d did not emit a source receipt")
+                audit_store.record_field_receipt_links(
+                    run_id=run_id,
+                    receipt_id=receipt_id,
+                    dataset="source_revision_announcements",
+                    fields=linked_fields,
+                )
+                receipt_count += 1
+                frame = frame if frame is not None else pd.DataFrame()
+                if frame.empty:
+                    break
+                required = set(linked_fields)
+                missing = required - set(frame.columns)
+                if missing:
+                    raise RuntimeError(
+                        f"anns_d response missing fields: {sorted(missing)}"
+                    )
+                response_dates = (
+                    frame["ann_date"].astype(str).str.strip()
+                    .str.replace("-", "", regex=False).str.slice(0, 8)
+                )
+                if not response_dates.eq(api_date).all():
+                    escaped = sorted(response_dates.loc[~response_dates.eq(api_date)].unique())
+                    raise RuntimeError(
+                        "anns_d response escaped requested announcement date: "
+                        f"requested={api_date}, returned={escaped[:10]}"
+                    )
+                metadata = normalized_response_metadata(frame)
+                response_hash = str(metadata["response_hash"])
+                if response_hash == previous_response_hash:
+                    raise RuntimeError(
+                        f"anns_d pagination repeated offset={offset}; aborting"
+                    )
+                previous_response_hash = response_hash
+                total_rows += len(frame)
+                date_rows += len(frame)
+                rec_time = frame["rec_time"]
+                rec_time_nonnull_rows += int(rec_time.notna().sum())
+                rec_time_parseable_rows += int(
+                    pd.to_datetime(rec_time, errors="coerce").notna().sum()
+                )
+                pdf_url_rows += int(
+                    frame["url"].fillna("").astype(str).str.strip().ne("").sum()
+                )
+                title_rows += int(
+                    frame["title"].fillna("").astype(str).str.strip().ne("").sum()
+                )
+                if len(frame) < 2000:
+                    break
+                offset += 2000
+            else:
+                raise RuntimeError("anns_d pagination exceeded 100 pages")
+            if date_rows == 0:
+                empty_date_count += 1
+        return {
+            "status": "success",
+            "start_date": str(start),
+            "end_date": str(end),
+            "requested_date_count": int(len(requested_dates)),
+            "receipt_count": receipt_count,
+            "empty_date_count": empty_date_count,
+            "returned_rows": total_rows,
+            "rec_time_nonnull_rows": rec_time_nonnull_rows,
+            "rec_time_parseable_rows": rec_time_parseable_rows,
+            "pdf_url_rows": pdf_url_rows,
+            "title_rows": title_rows,
+            "payload_policy": "immutable_raw_supplier_shards_only",
+            "value_binding_status": "not_attempted",
+        }
 
     def update_daily(
         self,
@@ -2216,7 +2354,7 @@ class TushareCollector:
     def _fetch_financials_batch(
         self, code_str, start_date, end_date, *, run_id=None, audit_store=None,
         resume_proof=None, scope_key="ad_hoc", universe="ad_hoc",
-        local_max_workers=1,
+        local_max_workers=1, local_reuse_only=False,
     ):
         start_date = _normalize_date(start_date)
         end_date = _normalize_date(end_date)
@@ -2271,6 +2409,7 @@ class TushareCollector:
                 resume_proof=resume_proof,
                 scope_key=scope_key,
                 universe=universe,
+                local_reuse_only=local_reuse_only,
                 prepared_reuse=plan,
             )
             if frame is not None and not frame.empty:

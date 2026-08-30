@@ -43,9 +43,9 @@ def test_qlib_readback_compares_the_float32_storage_value():
     assert not _qlib_values_equal(expected, np.float32(expected) + np.float32(256.0))
 
 
-def test_qlib_readback_applies_the_existing_percent_transform():
-    assert _expected_qlib_value("roe", 8.06185509) == pytest.approx(0.0806185509)
-    assert _expected_qlib_value("roe", 2.5) == 2.5
+def test_qlib_readback_passes_canonical_financial_ratios_through():
+    assert _expected_qlib_value("roe", 0.0806185509) == pytest.approx(0.0806185509)
+    assert _expected_qlib_value("roe", 0.025) == pytest.approx(0.025)
 
 
 def _seed_target_watermarks(
@@ -841,8 +841,6 @@ def _build_daily_collector(store, calls):
     collector._expected_extra_cols = []
     collector._numeric_extra_cols = []
     collector._non_numeric_cols = []
-    collector._percent_financial_cols = {"roe", "grossprofit_margin", "debt_to_assets", "current_ratio"}
-    collector._percent_like_threshold = 3.0
     collector._get_interface_api = lambda name: calls[
         collector._collector_interfaces.get(name, {}).get("interface", name)
     ]
@@ -873,12 +871,12 @@ def _financial_supplier_calls(*, include_revision_evidence: bool):
         },
         "cashflow": {"n_cashflow_act": [4.0]},
         "fina_indicator": {
-            "roe": [0.25],
-            "grossprofit_margin": [0.4],
-            "debt_to_assets": [0.6],
+            "roe": [25.0],
+            "grossprofit_margin": [40.0],
+            "debt_to_assets": [60.0],
             "current_ratio": [2.0],
             "q_dtprofit": [2.0],
-            "q_gr_yoy": [0.1],
+            "q_gr_yoy": [10.0],
         },
     }
     calls = {}
@@ -1733,6 +1731,42 @@ def test_historical_mutation_readback_uses_mutation_date_not_target_date():
     assert result["status"] == "success"
     assert result["mode"] == "historical_mutation_fix"
     assert result["verified_value_count"] == 1
+
+
+def test_historical_mutation_readback_verifies_bounded_multi_day_scope():
+    dates = pd.date_range("2020-01-02", periods=3, freq="D")
+    canonical_dates = dates.strftime("%Y%m%d").tolist()
+    mutation = [{
+        "symbol": "000001.SZ",
+        "date_start": canonical_dates[0],
+        "date_end": canonical_dates[-1],
+        "fields": ["close"],
+        "mutation_type": "update",
+    }]
+
+    class Store:
+        def load_daily_window(self, symbol, *, start_date, end_date, columns):
+            assert (start_date, end_date, columns) == (
+                canonical_dates[0], canonical_dates[-1], ["close"]
+            )
+            return pd.DataFrame({
+                "trade_date": canonical_dates,
+                "close": [11.0, 12.0, 13.0],
+            })
+
+    class Adapter:
+        def get_features(self, symbols, fields, start_time=None, end_time=None):
+            index = pd.MultiIndex.from_arrays(
+                [dates, ["000001.SZ"] * len(dates)],
+                names=["datetime", "instrument"],
+            )
+            return pd.DataFrame({"$close": [11.0, 12.0, 13.0]}, index=index)
+
+    result = _historical_mutation_readback(Adapter(), Store(), mutation)
+
+    assert result["status"] == "success"
+    assert result["verified_value_count"] == 3
+    assert result["mismatch_count"] == 0
 
 
 def test_historical_mutation_readback_indexes_dates_and_loads_industry_map_once(monkeypatch):

@@ -642,8 +642,12 @@ class SourceAuditStore:
         self._init_schema()
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
+        # The production audit store can be tens of gigabytes.  A bounded
+        # read-only certification query may briefly overlap the single data
+        # writer, so wait for that lock instead of failing a durable replay.
+        conn = sqlite3.connect(self.db_path, timeout=60.0)
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA busy_timeout = 60000")
         conn.execute("PRAGMA foreign_keys = ON")
         return conn
 
@@ -2037,6 +2041,7 @@ class SourceAuditStore:
             or metadata["response_date_max"] != row["response_date_max"]
         ):
             return None
+        frame.attrs["source_observed_at"] = str(row["observed_at"])
         return frame
 
     def record_fetch(

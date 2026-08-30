@@ -21,7 +21,7 @@ import json
 import os
 import tempfile
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -37,8 +37,10 @@ from qsys.research.generators.utils import (
 from qsys.utils.logger import log
 
 
-_WINDOW_CACHE_SCHEMA_VERSION = 4
-_WINDOW_CACHE_BUILDER_ID = "lightgbm_single_label_qlib_frame_v4_pit_content_bound"
+_WINDOW_CACHE_SCHEMA_VERSION = 6
+_WINDOW_CACHE_BUILDER_ID = (
+    "lightgbm_single_label_qlib_frame_v6_continuous_history_member_cs"
+)
 _ANNUAL_SHARD_SCHEMA_VERSION = 1
 FEATURE_VISIBILITY_CONTRACT = (
     "actual_feature_date_strictly_before_trade_date_v1"
@@ -433,6 +435,8 @@ class LightGBMSingleLabelGenerator:
                 "required_history_start": manifest["scope"][
                     "required_history_start"
                 ],
+                "symbol_count": int(manifest["scope"]["symbol_count"]),
+                "symbols_sha256": str(manifest["scope"]["symbols_sha256"]),
                 "transform_contract": manifest["contracts"]["transform"],
                 "financial_availability_contract": manifest["contracts"][
                     "financial_availability"
@@ -507,19 +511,35 @@ class LightGBMSingleLabelGenerator:
         predictions.  Paths are resolved by the pipeline and only the stable
         dependency name plus content hash enter checkpoint identity.
         """
-        from qsys.data import adapter
-        from qsys.feature import builder
-        from qsys.feature.groups import growth_confirmation_v0
-        from qsys.feature.groups import value_growth_v3a
+        from qsys.data import _merge_helpers, adapter
+        from qsys.feature import builder, transforms
+        from qsys.feature.groups import (
+            fundamental_context,
+            growth_confirmation_v0,
+            liquidity,
+            relative_strength,
+            value_growth_v3a,
+        )
         from qsys.data import income_sidecar
+        from qsys.research import pit_universe
         from qsys.signal.alpha_v1 import training
 
         dependencies = {
+            "qsys.data._merge_helpers": Path(_merge_helpers.__file__).resolve(),
             "qsys.data.adapter": Path(adapter.__file__).resolve(),
             "qsys.feature.builder": Path(builder.__file__).resolve(),
+            "qsys.feature.transforms": Path(transforms.__file__).resolve(),
+            "qsys.feature.groups.fundamental_context": Path(
+                fundamental_context.__file__
+            ).resolve(),
+            "qsys.feature.groups.liquidity": Path(liquidity.__file__).resolve(),
+            "qsys.feature.groups.relative_strength": Path(
+                relative_strength.__file__
+            ).resolve(),
             "qsys.feature.groups.value_growth_v3a": Path(
                 value_growth_v3a.__file__
             ).resolve(),
+            "qsys.research.pit_universe": Path(pit_universe.__file__).resolve(),
             "qsys.signal.alpha_v1.training": Path(training.__file__).resolve(),
         }
         if self._income_source_lineage:
@@ -541,6 +561,11 @@ class LightGBMSingleLabelGenerator:
         end: str,
         features: list[str],
     ) -> dict[str, object]:
+        from qsys.data._merge_helpers import (
+            FINANCIAL_AVAILABILITY_CONTRACT,
+            TUSHARE_FINA_INDICATOR_UNIT_CONTRACT,
+        )
+
         mode = self._effective_pit_filter_mode()
         membership_hash = ""
         if mode:
@@ -570,6 +595,13 @@ class LightGBMSingleLabelGenerator:
         identity = {
             "schema_version": _WINDOW_CACHE_SCHEMA_VERSION,
             "builder_id": _WINDOW_CACHE_BUILDER_ID,
+            "canonical_financial_contracts": {
+                "availability": FINANCIAL_AVAILABILITY_CONTRACT,
+                "fina_indicator_units": TUSHARE_FINA_INDICATOR_UNIT_CONTRACT,
+            },
+            "feature_history_contract": (
+                "continuous_listed_history_member_only_cross_section_v1"
+            ),
             "source_manifest_hash": self.source_manifest_hash,
             "universe": self.universe,
             "feature_list_id": self.feature_list_id,
@@ -724,6 +756,12 @@ class LightGBMSingleLabelGenerator:
                 return None
             if meta.get("identity") != identity:
                 return None
+            coverage_start = str(meta.get("source_coverage_start", shard_start))
+            coverage_end = str(meta.get("source_coverage_end", shard_end))
+            required_start = max(start, shard_start)
+            required_end = min(end, shard_end)
+            if coverage_start > required_start or coverage_end < required_end:
+                return None
             piece = self._read_cache_frame(
                 path,
                 features,
@@ -764,6 +802,9 @@ class LightGBMSingleLabelGenerator:
         start: str,
         end: str,
         features: list[str],
+        *,
+        source_coverage_start: str | None = None,
+        source_coverage_end: str | None = None,
     ) -> Path:
         if self.cache_write_scope == "annual_shard":
             path = self._annual_shard_path(start, end, features)
@@ -774,6 +815,8 @@ class LightGBMSingleLabelGenerator:
                 "identity": identity,
                 "rows": len(frame),
                 "cols": len(frame.columns),
+                "source_coverage_start": source_coverage_start or start,
+                "source_coverage_end": source_coverage_end or end,
             }
         else:
             path = self._window_cache_path(start, end, features)
@@ -919,8 +962,30 @@ class LightGBMSingleLabelGenerator:
             ),
         )
 
+        feature_instruments: str | list[str] = self.universe
+        semantic_spans: pd.DataFrame | None = None
+        semantic_mode = self._effective_pit_filter_mode()
+        if semantic_mode:
+            if self._pit_store is None:
+                from qsys.research.pit_universe import PitUniverseStore
+
+                self._pit_store = PitUniverseStore(self.pit_universe_artifact)
+            # Materialize time-series features from continuous listed history
+            # for every symbol that ever appears in the frozen PIT artifact.
+            # The adapter carries the spans as a separate mask so same-date
+            # ranks/z-scores still use only the eligible PIT cross-section.
+            feature_instruments = self._pit_store.instruments
+            semantic_spans = self._pit_store.spans
+
         # Build features via qlib + phase1 builder
-        raw = adapter.get_features(self.universe, clean + ["$close"], start_time=start, end_time=end)
+        raw = adapter.get_features(
+            feature_instruments,
+            clean + ["$close"],
+            start_time=start,
+            end_time=end,
+            semantic_pit_membership_spans=semantic_spans,
+            semantic_pit_filter_mode=semantic_mode,
+        )
         frame = raw.reset_index().rename(columns={"datetime": "trade_date"})
         frame = frame.loc[:, ~frame.columns.duplicated()]
         frame["trade_date"] = frame["trade_date"].astype(str).str[:10]
@@ -1144,10 +1209,11 @@ class LightGBMSingleLabelGenerator:
         window_cal = get_trading_calendar(predict_start, predict_end)
         prev_td = _build_prev_trading_date_lookup(predict_start, predict_end)
         feature_dates = sorted({prev_td.get(d, d) for d in window_cal})
-        extended_end = (
-            datetime.strptime(predict_end, "%Y-%m-%d") + timedelta(days=30)
-        ).strftime("%Y-%m-%d")
-        load_end = train_end if self.prediction_universe else extended_end
+        # The execution window consumes only ``prev_td(d)`` for dates
+        # ``d <= predict_end``.  Loading an extra future month cannot affect
+        # those past-only features, but it incorrectly expands frozen source
+        # coverage requirements beyond the experiment terminal.
+        load_end = train_end if self.prediction_universe else predict_end
 
         log.info("Loading data [{}, {}]", train_start, load_end)
         frame, clean_features = self._load_data(train_start, load_end)

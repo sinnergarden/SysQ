@@ -7,8 +7,10 @@ Usage:
     python scripts/data_sync.py --universe csi1800 --target-date 2026-08-21 --apply
 """
 import argparse
+import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 from datetime import datetime, timedelta
@@ -98,7 +100,7 @@ def _prepare_applied_market_child(
 
 
 def _attach_explicit_resume(
-    cmd: list[str],
+    cmd: list[str] | None,
     *,
     audit_store,
     run_id: str,
@@ -135,14 +137,15 @@ def _attach_explicit_resume(
             **({"range_start": proof["range_start"]} if "range_start" in proof else {}),
         },
     )
-    cmd.extend(
-        [
-            "--resume-from-run-id",
-            proof["resume_from_run_id"],
-            "--resume-from-receipt-sha256",
-            proof["receipt_sha256"],
-        ]
-    )
+    if cmd is not None:
+        cmd.extend(
+            [
+                "--resume-from-run-id",
+                proof["resume_from_run_id"],
+                "--resume-from-receipt-sha256",
+                proof["receipt_sha256"],
+            ]
+        )
     return proof
 
 
@@ -280,6 +283,464 @@ def _shareholder_required_history_start_date(
     return (target - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
 
 
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _load_trusted_base_terminal(
+    *, data_root: Path, audit_store, run_id: str, receipt_sha256: str,
+    universe: str, target_date: str,
+) -> tuple[dict, dict, Path]:
+    """Bind a shareholder-only extension to one exact trusted market terminal."""
+
+    from qsys.data.source_audit import (
+        REQUIRED_TERMINAL_GATES,
+        resolve_under,
+        validate_run_id,
+    )
+
+    base_run_id = validate_run_id(run_id)
+    expected_sha = str(receipt_sha256 or "").strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", expected_sha):
+        raise ValueError("trusted base receipt SHA-256 is invalid")
+    receipt_path = resolve_under(
+        data_root,
+        data_root / "audit" / "source_runs" / base_run_id / "receipt.json",
+    )
+    if not receipt_path.is_file() or _sha256_file(receipt_path) != expected_sha:
+        raise ValueError("trusted base receipt SHA-256 mismatch")
+    try:
+        terminal = json.loads(receipt_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError("trusted base receipt is invalid JSON") from exc
+    gates = terminal.get("terminal_gates") if isinstance(terminal, dict) else None
+    if (
+        not isinstance(terminal, dict)
+        or terminal.get("schema_version") != 1
+        or terminal.get("run_id") != base_run_id
+        or terminal.get("trust_state") not in {"trusted", "trusted_unchanged"}
+        or not isinstance(gates, dict)
+        or set(gates) != REQUIRED_TERMINAL_GATES
+        or any(gates[name] is not True for name in REQUIRED_TERMINAL_GATES)
+    ):
+        raise ValueError("trusted base receipt does not have all terminal gates")
+    inner = [
+        event["payload"] for event in terminal.get("audit_journal") or []
+        if (
+            isinstance(event, dict)
+            and event.get("event_type") == "inner_terminal_gates"
+            and isinstance(event.get("payload"), dict)
+        )
+    ]
+    if not inner:
+        raise ValueError("trusted base receipt lacks inner terminal evidence")
+    payload = dict(inner[-1])
+    target = datetime.strptime(
+        str(target_date).replace("-", ""), "%Y%m%d"
+    ).strftime("%Y%m%d")
+    fields = [str(field) for field in payload.get("fields") or []]
+    if (
+        payload.get("source") != "tushare"
+        or payload.get("scope_key") != universe
+        or str(payload.get("range_end")) != target
+        or not fields
+    ):
+        raise ValueError("trusted base terminal scope does not match shareholder extension")
+    watermarks = json.loads(audit_store.watermark_snapshot_bytes())
+    field_starts = dict(payload.get("field_range_starts") or {})
+    backlink_fields = {
+        str(row.get("field_name"))
+        for row in watermarks
+        if (
+            row.get("source") == "tushare"
+            and row.get("scope_key") == universe
+            and row.get("run_id") == base_run_id
+            and row.get("terminal_receipt_sha256") == expected_sha
+            and str(row.get("range_start")) <= str(
+                field_starts.get(
+                    str(row.get("field_name")), payload.get("range_start")
+                )
+            )
+            and str(row.get("range_end")) >= target
+            and str(row.get("trusted_through")) >= target
+        )
+    }
+    if not set(fields).issubset(backlink_fields):
+        raise ValueError("trusted base terminal watermark backlink is incomplete")
+    return terminal, payload, receipt_path
+
+
+def _run_shareholder_only_repair(args, writer_lock) -> dict:
+    """Extend one trusted market terminal with audited shareholder history only."""
+
+    global _CRASH_EVIDENCE
+    if writer_lock is None:
+        raise RuntimeError("shareholder-only repair requires the data-root writer lock")
+    from qsys.config import cfg
+    from qsys.data.adapter import QlibAdapter
+    from qsys.data.health import inspect_qlib_data_health
+    from qsys.data.source_audit import SourceAuditStore, new_run_id, stable_scope_hash
+    from qsys.ops.instrument_coverage import read_instrument_file
+    from qsys.ops.trade_date import resolve_daily_trade_date
+
+    universe = str(args.universe)
+    target_compact = datetime.strptime(
+        str(args.target_date).replace("-", ""), "%Y%m%d"
+    ).strftime("%Y%m%d")
+    history_start = datetime.strptime(
+        str(args.shareholder_start_date).replace("-", ""), "%Y%m%d"
+    ).strftime("%Y%m%d")
+    if history_start > target_compact:
+        raise ValueError("shareholder history start is after target date")
+    data_root = Path(cfg.get_path("root")).resolve()
+    base_store = SourceAuditStore(data_root / "audit" / "audit.db")
+    base_terminal, base_gate_payload, base_receipt_path = _load_trusted_base_terminal(
+        data_root=data_root,
+        audit_store=base_store,
+        run_id=args.repair_shareholder_history_from_trusted_run_id,
+        receipt_sha256=args.trusted_base_receipt_sha256,
+        universe=universe,
+        target_date=target_compact,
+    )
+
+    run_id = new_run_id("data_sync")
+    audit_store, receipt_root = _start_wrapper_evidence(
+        data_root=data_root,
+        run_id=run_id,
+        universe=universe,
+        target_date=target_compact,
+        range_start=history_start,
+    )
+    _CRASH_EVIDENCE = {
+        "store": audit_store,
+        "run_id": run_id,
+        "receipt_root": receipt_root,
+        "entrypoint": "scripts/data_sync.py",
+    }
+    audit_store.append_event(run_id, "trusted_base_terminal_inherited", {
+        "source_run_id": base_terminal["run_id"],
+        "source_receipt_path": base_receipt_path.relative_to(data_root).as_posix(),
+        "source_receipt_sha256": args.trusted_base_receipt_sha256,
+        "scope_key": universe,
+        "range_start": base_gate_payload["range_start"],
+        "range_end": base_gate_payload["range_end"],
+        "fields": base_gate_payload["fields"],
+        "gates": base_terminal["terminal_gates"],
+    })
+    resume_proof = None
+    if args.resume_from_run_id:
+        resume_proof = _attach_explicit_resume(
+            None,
+            audit_store=audit_store,
+            run_id=run_id,
+            resume_from_run_id=args.resume_from_run_id,
+            universe=universe,
+            target_date=target_compact,
+            range_start=history_start,
+        )
+
+    resolved = resolve_daily_trade_date(
+        target_compact, universe=universe, allow_fallback_to_latest=False,
+    )
+    resolved_target = _require_exact_sync_target(
+        resolved, requested_target=target_compact, universe=universe,
+    )
+    adapter = QlibAdapter()
+    instruments = read_instrument_file(
+        adapter.qlib_dir / "instruments" / f"{universe}.txt"
+    )
+    target_ts = datetime.strptime(resolved_target, "%Y-%m-%d")
+    active = instruments[
+        (instruments["start_date"] <= target_ts)
+        & (instruments["end_date"] >= target_ts)
+    ]
+    symbols = sorted(active["instrument"].astype(str).unique().tolist())
+    from scripts.ops.sync_csi800_daily import _load_csi1800_research_union
+
+    evidence_symbols, evidence_registry = _load_csi1800_research_union(data_root)
+    from qsys.common.config import load_strategy_config
+    from qsys.feature.freshness import normalise_shareholder_freshness
+    from qsys.ops.shareholder_sync import run_shareholder_history_repair
+
+    freshness = normalise_shareholder_freshness(
+        load_strategy_config("financial_rc", PROJ)
+        .get("feature_freshness", {}).get("shareholder")
+    )
+    repair = run_shareholder_history_repair(
+        data_root=data_root,
+        symbols=symbols,
+        end_date=resolved_target,
+        contract=freshness,
+        apply=True,
+        output_dir=_data_sync_run_root(data_root, run_id) / "shareholder_repair",
+        start_date=datetime.strptime(history_start, "%Y%m%d").strftime("%Y-%m-%d"),
+        required_history_start_date=(
+            datetime.strptime(history_start, "%Y%m%d").strftime("%Y-%m-%d")
+        ),
+        run_id=run_id,
+        audit_store=audit_store,
+        resume_proof=resume_proof,
+        scope_key=universe,
+        evidence_universe=universe,
+        evidence_symbols=evidence_symbols,
+    )
+    if repair["status"] not in {"healthy", "success"}:
+        raise RuntimeError(
+            f"{universe} shareholder-only history repair failed: {repair['summary_path']}"
+        )
+    holder_evidence = audit_store.evaluate_history_field_receipts(
+        run_id=run_id,
+        dataset="shareholder_holdernumber",
+        field_endpoints={"ann_date": "stk_holdernumber", "holder_num": "stk_holdernumber"},
+    )
+    top10_evidence = audit_store.evaluate_history_field_receipts(
+        run_id=run_id,
+        dataset="shareholder_top10",
+        field_endpoints={"ann_date": "top10_holders", "hold_ratio": "top10_holders"},
+    )
+    source_ok = (
+        holder_evidence.get("status") == "success"
+        and top10_evidence.get("status") == "success"
+    )
+    state = repair.get("state_after") or {}
+    canonical = data_root / "canonical"
+    persisted = {
+        "holder_num": _sha256_file(canonical / "holder_num.parquet"),
+        "top10_holder_ratio": _sha256_file(canonical / "top10_holder_ratio.parquet"),
+    }
+    canonical_ok = (
+        persisted["holder_num"] == state.get("holder_num_sha256")
+        and persisted["top10_holder_ratio"] == state.get("top10_holder_ratio_sha256")
+    )
+    if not source_ok or not canonical_ok:
+        raise RuntimeError("shareholder-only source or canonical commit evidence failed")
+
+    readiness = inspect_qlib_data_health(
+        resolved_target,
+        ["$open", "$high", "$low", "$close", "$volume", "$factor"],
+        universe=universe,
+        min_active_instruments=1750,
+    )
+    readiness_ok = not readiness.blocking_issues
+    audit_store.append_event(run_id, "shareholder_source_evidence", {
+        "holdernumber": holder_evidence,
+        "top10": top10_evidence,
+        "history_start": history_start,
+        "history_end": target_compact,
+        "symbol_count": len(evidence_symbols),
+        "symbols_sha256": stable_scope_hash(evidence_symbols),
+        "registry": evidence_registry,
+    })
+    audit_store.append_event(run_id, "shareholder_canonical_commit", {
+        "status": "success" if canonical_ok else "failed",
+        "artifacts": persisted,
+        "rows_after": repair.get("rows_after"),
+    })
+    inherited_qlib = [
+        event["payload"] for event in base_terminal["audit_journal"]
+        if isinstance(event, dict) and event.get("event_type") == "qlib_readback"
+    ]
+    audit_store.append_event(run_id, "trusted_base_qlib_readback_inherited", {
+        "source_run_id": base_terminal["run_id"],
+        "source_receipt_sha256": args.trusted_base_receipt_sha256,
+        "qlib_readback": inherited_qlib[-1] if inherited_qlib else None,
+    })
+    shareholder_fields = ("ann_date", "holder_num", "hold_ratio")
+    audit_store.append_event(run_id, "inner_terminal_gates", {
+        "source": str(base_gate_payload["source"]),
+        "scope_key": universe,
+        "range_start": history_start,
+        "range_end": target_compact,
+        "fields": list(shareholder_fields),
+        "mode": "advance",
+        "prior_trusted": False,
+        "allow_initial_history": True,
+        "gates": {
+            "fetch": source_ok,
+            "raw_payloads": source_ok,
+            "canonical_commit": canonical_ok,
+            "qlib_readback": base_terminal["terminal_gates"]["qlib_readback"] is True,
+            "readiness": readiness_ok,
+            "contiguous_range": source_ok,
+        },
+        "field_range_starts": {
+            field: history_start for field in shareholder_fields
+        },
+    })
+    evidence = _finalize_wrapper_evidence(
+        audit_store=audit_store,
+        run_id=run_id,
+        receipt_root=receipt_root,
+        final_readiness_ok=readiness_ok,
+        verified_outer_fields=("ann_date", "holder_num", "hold_ratio"),
+    )
+    if evidence.get("trust_state") != "trusted":
+        raise RuntimeError(f"shareholder-only terminal did not become trusted: {evidence}")
+    return {
+        "status": "success",
+        "run_id": run_id,
+        "trusted_base_run_id": base_terminal["run_id"],
+        "shareholder_repair": repair,
+        "shareholder_source_evidence": {
+            "holdernumber": holder_evidence, "top10": top10_evidence,
+        },
+        "final_readiness": readiness.to_dict(),
+        "source_evidence": evidence,
+    }
+
+
+def _run_source_revision_announcement_evidence(args, writer_lock) -> dict:
+    """Collect exact-date ``anns_d`` raw evidence without a normal sync child."""
+
+    global _CRASH_EVIDENCE
+    if writer_lock is None:
+        raise RuntimeError(
+            "source-revision announcement evidence requires the data-root writer lock"
+        )
+    from qsys.config import cfg
+    from qsys.data.collector import TushareCollector
+    from qsys.data.health import inspect_qlib_data_health
+    from qsys.data.source_audit import SourceAuditStore, new_run_id
+
+    universe = str(args.universe)
+    target_compact = datetime.strptime(
+        str(args.target_date).replace("-", ""), "%Y%m%d"
+    ).strftime("%Y%m%d")
+    history_start = datetime.strptime(
+        str(args.source_revision_announcement_start_date).replace("-", ""),
+        "%Y%m%d",
+    ).strftime("%Y%m%d")
+    if history_start > target_compact:
+        raise ValueError("source-revision announcement start is after target date")
+    data_root = Path(cfg.get_path("root")).resolve()
+    base_store = SourceAuditStore(data_root / "audit" / "audit.db")
+    base_terminal, base_gate_payload, base_receipt_path = _load_trusted_base_terminal(
+        data_root=data_root,
+        audit_store=base_store,
+        run_id=args.collect_source_revision_announcements_from_trusted_run_id,
+        receipt_sha256=args.trusted_base_receipt_sha256,
+        universe=universe,
+        target_date=target_compact,
+    )
+    run_id = new_run_id("data_sync")
+    audit_store, receipt_root = _start_wrapper_evidence(
+        data_root=data_root,
+        run_id=run_id,
+        universe=universe,
+        target_date=target_compact,
+        range_start=history_start,
+    )
+    _CRASH_EVIDENCE = {
+        "store": audit_store,
+        "run_id": run_id,
+        "receipt_root": receipt_root,
+        "entrypoint": "scripts/data_sync.py",
+    }
+    audit_store.append_event(run_id, "trusted_base_terminal_inherited", {
+        "source_run_id": base_terminal["run_id"],
+        "source_receipt_path": base_receipt_path.relative_to(data_root).as_posix(),
+        "source_receipt_sha256": args.trusted_base_receipt_sha256,
+        "scope_key": universe,
+        "range_start": base_gate_payload["range_start"],
+        "range_end": base_gate_payload["range_end"],
+        "fields": base_gate_payload["fields"],
+        "gates": base_terminal["terminal_gates"],
+    })
+    resume_proof = None
+    if args.resume_from_run_id:
+        resume_proof = _attach_explicit_resume(
+            None,
+            audit_store=audit_store,
+            run_id=run_id,
+            resume_from_run_id=args.resume_from_run_id,
+            universe=universe,
+            target_date=target_compact,
+            range_start=history_start,
+        )
+    collection = TushareCollector().fetch_source_revision_announcements(
+        start_date=history_start,
+        end_date=target_compact,
+        run_id=run_id,
+        audit_store=audit_store,
+        resume_proof=resume_proof,
+        scope_key=universe,
+        universe=universe,
+    )
+    announcement_fields = ("ann_date", "ts_code", "title", "url", "rec_time")
+    source_evidence = audit_store.evaluate_history_field_receipts(
+        run_id=run_id,
+        dataset="source_revision_announcements",
+        field_endpoints={field: "anns_d" for field in announcement_fields},
+    )
+    source_ok = (
+        collection.get("status") == "success"
+        and int(collection.get("requested_date_count") or 0)
+        == (datetime.strptime(target_compact, "%Y%m%d")
+            - datetime.strptime(history_start, "%Y%m%d")).days + 1
+        and source_evidence.get("status") == "success"
+    )
+    audit_store.append_event(run_id, "source_revision_announcement_evidence", {
+        "status": "success" if source_ok else "failed",
+        "contract": "tushare_anns_d_rec_time_pdf_index_v1",
+        "collection": collection,
+        "field_evidence": source_evidence,
+        "value_binding_status": "not_attempted",
+        "pdf_bytes_status": "not_fetched",
+    })
+    readiness = inspect_qlib_data_health(
+        datetime.strptime(target_compact, "%Y%m%d").strftime("%Y-%m-%d"),
+        ["$open", "$high", "$low", "$close", "$volume", "$factor"],
+        universe=universe,
+        min_active_instruments=1750,
+    )
+    readiness_ok = not readiness.blocking_issues
+    inherited_gates = dict(base_terminal["terminal_gates"])
+    audit_store.append_event(run_id, "inner_terminal_gates", {
+        "source": str(base_gate_payload["source"]),
+        "scope_key": universe,
+        "range_start": str(base_gate_payload["range_start"]),
+        "range_end": str(base_gate_payload["range_end"]),
+        "fields": list(base_gate_payload["fields"]),
+        "mode": "unchanged",
+        "prior_trusted": True,
+        "gates": {
+            "fetch": source_ok and inherited_gates.get("fetch") is True,
+            "raw_payloads": source_ok and inherited_gates.get("raw_payloads") is True,
+            "canonical_commit": inherited_gates.get("canonical_commit") is True,
+            "qlib_readback": inherited_gates.get("qlib_readback") is True,
+            "readiness": readiness_ok and inherited_gates.get("readiness") is True,
+            "contiguous_range": source_ok,
+        },
+        "field_range_starts": dict(
+            base_gate_payload.get("field_range_starts") or {}
+        ),
+    })
+    evidence = _finalize_wrapper_evidence(
+        audit_store=audit_store,
+        run_id=run_id,
+        receipt_root=receipt_root,
+        final_readiness_ok=readiness_ok,
+    )
+    if evidence.get("trust_state") != "trusted_unchanged":
+        raise RuntimeError(
+            "source-revision announcement evidence terminal did not become trusted: "
+            f"{evidence}"
+        )
+    return {
+        "status": "success",
+        "run_id": run_id,
+        "trusted_base_run_id": base_terminal["run_id"],
+        "collection": collection,
+        "field_evidence": source_evidence,
+        "final_readiness": readiness.to_dict(),
+        "source_evidence": evidence,
+    }
+
+
 def _main_under_writer_lock(writer_lock=None):
     global _CRASH_EVIDENCE
     p = argparse.ArgumentParser(description="Data Sync — UC-1")
@@ -345,6 +806,37 @@ def _main_under_writer_lock(writer_lock=None):
         type=int,
         default=1461,
         help="Calendar-day PIT shareholder history required from target date",
+    )
+    p.add_argument(
+        "--repair-shareholder-history-from-trusted-run-id",
+        default=None,
+        metavar="RUN_ID",
+        help=(
+            "Explicit shareholder-only history extension from one exact trusted "
+            "market terminal; never runs the market/Qlib child"
+        ),
+    )
+    p.add_argument(
+        "--trusted-base-receipt-sha256",
+        default=None,
+        help=(
+            "Exact trusted terminal SHA-256 for shareholder-only or "
+            "source-revision announcement evidence mode"
+        ),
+    )
+    p.add_argument(
+        "--collect-source-revision-announcements-from-trusted-run-id",
+        default=None,
+        metavar="RUN_ID",
+        help=(
+            "Explicit anns_d source-evidence extension from one exact trusted "
+            "terminal; never runs the market/Qlib child"
+        ),
+    )
+    p.add_argument(
+        "--source-revision-announcement-start-date",
+        default=None,
+        help="Exact anns_d evidence range start (YYYYMMDD)",
     )
     p.add_argument(
         "--margin-lookback-days",
@@ -447,9 +939,179 @@ def _main_under_writer_lock(writer_lock=None):
         default=None,
         help="Exact shareholder announcement-date history end (YYYYMMDD)",
     )
+    p.add_argument(
+        "--replay-financial-units-from-run-id",
+        default=None,
+        metavar="RUN_ID",
+        help=(
+            "Explicit offline canonical replay from one immutable failed source "
+            "run; supplier access is forbidden"
+        ),
+    )
+    p.add_argument("--financial-replay-source-receipt-sha256", default=None)
+    p.add_argument("--financial-replay-trusted-base-run-id", default=None)
+    p.add_argument("--financial-replay-registry-path", default=None)
+    p.add_argument("--financial-replay-range-start", default=None)
+    p.add_argument("--financial-replay-range-end", default=None)
+    p.add_argument("--financial-replay-output-root", default=None)
+    p.add_argument("--financial-replay-readback-mutation-run-id", default=None)
+    p.add_argument(
+        "--financial-replay-readback-mutation-receipt-sha256", default=None
+    )
     args = p.parse_args()
-    if args.build_income_sidecar_from_run_id and args.build_shareholder_sidecar_from_run_id:
-        p.error("income and shareholder sidecar bootstrap modes are mutually exclusive")
+    explicit_modes = [
+        args.build_income_sidecar_from_run_id,
+        args.build_shareholder_sidecar_from_run_id,
+        args.repair_shareholder_history_from_trusted_run_id,
+        args.collect_source_revision_announcements_from_trusted_run_id,
+        args.replay_financial_units_from_run_id,
+    ]
+    if sum(value is not None for value in explicit_modes) > 1:
+        p.error("offline bootstrap/repair modes are mutually exclusive")
+    if args.replay_financial_units_from_run_id:
+        required = {
+            "--apply": args.apply,
+            "--financial-replay-source-receipt-sha256": (
+                args.financial_replay_source_receipt_sha256
+            ),
+            "--financial-replay-trusted-base-run-id": (
+                args.financial_replay_trusted_base_run_id
+            ),
+            "--trusted-base-receipt-sha256": args.trusted_base_receipt_sha256,
+            "--financial-replay-registry-path": args.financial_replay_registry_path,
+            "--financial-replay-range-start": args.financial_replay_range_start,
+            "--financial-replay-range-end": args.financial_replay_range_end,
+            "--financial-replay-output-root": args.financial_replay_output_root,
+        }
+        missing = [name for name, value in required.items() if not value]
+        if missing:
+            p.error("financial replay missing required arguments: " + ", ".join(missing))
+        conflicting = {
+            "--config": args.config,
+            "--universe": args.universe,
+            "--target-date": args.target_date,
+            "--repair-start-date": args.repair_start_date,
+            "--resume-from-run-id": args.resume_from_run_id,
+            "--force-fetch": args.force_fetch,
+        }
+        used_conflicts = [name for name, value in conflicting.items() if value]
+        if used_conflicts:
+            p.error(
+                "financial replay cannot run normal sync options: "
+                + ", ".join(used_conflicts)
+            )
+        if writer_lock is None:
+            raise RuntimeError("financial replay requires the data-root writer lock")
+        readback_mutation_values = (
+            args.financial_replay_readback_mutation_run_id,
+            args.financial_replay_readback_mutation_receipt_sha256,
+        )
+        if any(readback_mutation_values) and not all(readback_mutation_values):
+            p.error(
+                "financial replay readback mutation run id and receipt SHA-256 "
+                "must be provided together"
+            )
+        from qsys.config import cfg
+        from qsys.data.source_audit import resolve_under, validate_run_id
+        from qsys.ops.financial_replay import replay_audited_financial_canonical
+
+        data_root = Path(cfg.get_path("root")).resolve()
+        registry_path = Path(args.financial_replay_registry_path).expanduser()
+        if not registry_path.is_absolute():
+            registry_path = PROJ / registry_path
+        registry_path = registry_path.resolve()
+        if registry_path != PROJ and PROJ not in registry_path.parents:
+            p.error("financial replay registry must remain under the project root")
+        output_root = Path(args.financial_replay_output_root).expanduser()
+        if not output_root.is_absolute():
+            output_root = data_root / output_root
+        output_root = resolve_under(data_root, output_root)
+        result = replay_audited_financial_canonical(
+            data_root=data_root,
+            source_run_id=validate_run_id(args.replay_financial_units_from_run_id),
+            source_receipt_sha256=args.financial_replay_source_receipt_sha256,
+            trusted_base_run_id=validate_run_id(
+                args.financial_replay_trusted_base_run_id
+            ),
+            trusted_base_receipt_sha256=args.trusted_base_receipt_sha256,
+            registry_path=registry_path,
+            range_start=args.financial_replay_range_start,
+            range_end=args.financial_replay_range_end,
+            output_root=output_root,
+            readback_mutation_run_id=(
+                validate_run_id(args.financial_replay_readback_mutation_run_id)
+                if args.financial_replay_readback_mutation_run_id
+                else None
+            ),
+            readback_mutation_receipt_sha256=(
+                args.financial_replay_readback_mutation_receipt_sha256
+            ),
+            local_workers=args.history_local_workers or 8,
+            qlib_workers=args.qlib_max_workers or 8,
+        )
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return
+    if args.collect_source_revision_announcements_from_trusted_run_id:
+        required = {
+            "--apply": args.apply,
+            "--universe csi1800": args.universe == "csi1800",
+            "--target-date": args.target_date,
+            "--source-revision-announcement-start-date": (
+                args.source_revision_announcement_start_date
+            ),
+            "--trusted-base-receipt-sha256": args.trusted_base_receipt_sha256,
+        }
+        missing = [name for name, value in required.items() if not value]
+        if missing:
+            p.error(
+                "source-revision announcement evidence missing required arguments: "
+                + ", ".join(missing)
+            )
+        conflicting = {
+            "--config": args.config,
+            "--repair-start-date": args.repair_start_date,
+            "--shareholder-start-date": args.shareholder_start_date,
+            "--force-fetch": args.force_fetch,
+            "--skip-shareholder-repair": args.skip_shareholder_repair,
+        }
+        used_conflicts = [name for name, value in conflicting.items() if value]
+        if used_conflicts:
+            p.error(
+                "source-revision announcement evidence cannot run normal/repair options: "
+                + ", ".join(used_conflicts)
+            )
+        result = _run_source_revision_announcement_evidence(args, writer_lock)
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return
+    if args.repair_shareholder_history_from_trusted_run_id:
+        required = {
+            "--apply": args.apply,
+            "--universe csi1800": args.universe == "csi1800",
+            "--target-date": args.target_date,
+            "--shareholder-start-date": args.shareholder_start_date,
+            "--trusted-base-receipt-sha256": args.trusted_base_receipt_sha256,
+        }
+        missing = [name for name, value in required.items() if not value]
+        if missing:
+            p.error(
+                "shareholder-only repair missing required arguments: "
+                + ", ".join(missing)
+            )
+        conflicting = {
+            "--config": args.config,
+            "--repair-start-date": args.repair_start_date,
+            "--force-fetch": args.force_fetch,
+            "--skip-shareholder-repair": args.skip_shareholder_repair,
+        }
+        used_conflicts = [name for name, value in conflicting.items() if value]
+        if used_conflicts:
+            p.error(
+                "shareholder-only repair cannot run market/skip options: "
+                + ", ".join(used_conflicts)
+            )
+        result = _run_shareholder_only_repair(args, writer_lock)
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return
     if args.build_shareholder_sidecar_from_run_id:
         if not args.apply:
             p.error("--build-shareholder-sidecar-from-run-id requires --apply")

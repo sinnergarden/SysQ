@@ -1,8 +1,12 @@
+import hashlib
+import json
+
+import numpy as np
 import pandas as pd
 import sqlite3
 import os
 import tempfile
-from typing import Any, Optional, cast
+from typing import Any, Callable, Optional, cast
 from pathlib import Path
 from qsys.config import cfg
 from qsys.utils.logger import log
@@ -120,6 +124,156 @@ class StockDataStore:
         if latest_date:
             self.update_latest_date(code, latest_date)
         return mutations
+
+    @staticmethod
+    def _projection_window_hash(
+        frame: pd.DataFrame,
+        *,
+        symbol: str,
+        date_start: str,
+        date_end: str,
+        fields: list[str],
+    ) -> str:
+        """Hash one bounded canonical value window without serialising payload values."""
+
+        dates = (
+            frame["trade_date"].astype("string").str.replace("-", "", regex=False).str[:8]
+        )
+        bounded = frame.loc[dates.between(date_start, date_end), fields].copy()
+        bounded.insert(0, "_date", dates.loc[bounded.index].to_numpy())
+        bounded = bounded.sort_values("_date", kind="mergesort")
+        digest = hashlib.sha256()
+        digest.update(json.dumps({
+            "contract": "canonical_projection_window_v1",
+            "symbol": symbol,
+            "date_start": date_start,
+            "date_end": date_end,
+            "fields": fields,
+            "dates": bounded["_date"].tolist(),
+        }, sort_keys=True, separators=(",", ":")).encode("utf-8"))
+        for field in fields:
+            values = bounded[field]
+            non_null = values.notna()
+            numeric = pd.to_numeric(values, errors="coerce")
+            digest.update(field.encode("utf-8"))
+            if numeric.notna().equals(non_null):
+                array = numeric.to_numpy(dtype=np.float64, na_value=np.nan)
+                if np.isinf(array).any():
+                    raise ValueError(f"canonical projection contains infinity: {symbol}/{field}")
+                missing = np.isnan(array)
+                array[missing] = 0.0
+                array[array == 0.0] = 0.0
+                digest.update(b"N")
+                digest.update(missing.astype(np.uint8).tobytes())
+                digest.update(array.astype("<f8", copy=False).tobytes())
+                continue
+            digest.update(b"S")
+            for value in values:
+                if pd.isna(value):
+                    digest.update((-1).to_bytes(8, "little", signed=True))
+                    continue
+                encoded = str(value).encode("utf-8")
+                digest.update(len(encoded).to_bytes(8, "little", signed=True))
+                digest.update(encoded)
+        return digest.hexdigest()
+
+    def replace_daily_projection(
+        self,
+        projected: pd.DataFrame,
+        code: str,
+        *,
+        fields: list[str],
+        date_start: str,
+        date_end: str,
+        fetch_receipt_id: str | None = None,
+        before_commit: Callable[[dict[str, Any]], None] | None = None,
+    ) -> dict[str, Any] | None:
+        """Atomically replace only declared fields over an exact existing date range."""
+
+        if projected is None or projected.empty:
+            raise ValueError(f"canonical projection is empty for {code}")
+        normalized_fields = sorted({str(field) for field in fields if str(field)})
+        if not normalized_fields:
+            raise ValueError("canonical projection requires fields")
+        file_path = self.canonical_dir / f"{code}.feather"
+        if not file_path.is_file():
+            raise ValueError(f"canonical daily frame missing for {code}")
+        existing = pd.read_feather(file_path)
+        required = {"trade_date", *normalized_fields}
+        if not required.issubset(projected.columns):
+            raise ValueError(
+                f"canonical projection missing fields for {code}: {sorted(required - set(projected.columns))}"
+            )
+        if "ts_code" in projected.columns and not projected["ts_code"].astype(str).eq(code).all():
+            raise ValueError(f"canonical projection symbol mismatch for {code}")
+        existing_dates = (
+            existing["trade_date"].astype("string").str.replace("-", "", regex=False).str[:8]
+        )
+        projected_dates = (
+            projected["trade_date"].astype("string").str.replace("-", "", regex=False).str[:8]
+        )
+        expected_dates = existing_dates.loc[existing_dates.between(date_start, date_end)]
+        if (
+            expected_dates.empty
+            or projected_dates.duplicated().any()
+            or set(projected_dates) != set(expected_dates)
+        ):
+            raise ValueError(f"canonical projection date coverage mismatch for {code}")
+        result = existing.copy()
+        projected_values = projected.assign(_projection_date=projected_dates).set_index(
+            "_projection_date"
+        )
+        scope_indices = expected_dates.index
+        scope_dates = existing_dates.loc[scope_indices]
+        changed_fields: list[str] = []
+        changed_dates = pd.Series(False, index=scope_indices)
+        for field in normalized_fields:
+            if field not in result.columns:
+                result[field] = pd.NA
+            current = result.loc[scope_indices, field]
+            replacement = projected_values.loc[scope_dates, field]
+            replacement.index = scope_indices
+            same = current.eq(replacement) | (current.isna() & replacement.isna())
+            if not bool(same.all()):
+                changed_fields.append(field)
+                changed_dates |= ~same
+            result.loc[scope_indices, field] = replacement.to_numpy()
+        if not changed_fields:
+            return None
+        affected = scope_dates.loc[changed_dates]
+        mutation_start = str(affected.min())
+        mutation_end = str(affected.max())
+        before_hash = self._projection_window_hash(
+            existing,
+            symbol=code,
+            date_start=mutation_start,
+            date_end=mutation_end,
+            fields=changed_fields,
+        )
+        after_hash = self._projection_window_hash(
+            result,
+            symbol=code,
+            date_start=mutation_start,
+            date_end=mutation_end,
+            fields=changed_fields,
+        )
+        mutation = {
+            "symbol": code,
+            "dataset": "canonical_daily",
+            "source": "tushare",
+            "endpoint": "financial_replay_bundle",
+            "fetch_receipt_id": fetch_receipt_id,
+            "date_start": mutation_start,
+            "date_end": mutation_end,
+            "fields": changed_fields,
+            "mutation_type": "update",
+            "before_hash": before_hash,
+            "after_hash": after_hash,
+        }
+        if before_commit is not None:
+            before_commit(dict(mutation))
+        self._atomic_write(result, file_path)
+        return mutation
 
     def load_daily(self, code: str) -> Optional[pd.DataFrame]:
         file_path = self.canonical_dir / f"{code}.feather"

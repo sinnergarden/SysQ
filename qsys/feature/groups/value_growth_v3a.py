@@ -18,6 +18,8 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from qsys.feature.transforms import PIT_CROSS_SECTION_COLUMN, cross_section_transform
+
 
 # ── Shared helpers ──────────────────────────────────────────────────────
 
@@ -33,6 +35,13 @@ def _zscore(s: pd.Series) -> pd.Series:
     if pd.isna(std) or std < 1e-12:
         return pd.Series(0.0, index=s.index)
     return (s - s.mean()) / std
+
+
+def _cs_zscore(frame: pd.DataFrame, column: str, *, negate: bool = False) -> pd.Series:
+    values = cross_section_transform(
+        frame, column, "trade_date", lambda s: _zscore(s.fillna(0))
+    )
+    return -values if negate else values
 
 
 def _clip_inf(s: pd.Series) -> pd.Series:
@@ -110,37 +119,25 @@ def build_margin_features(df: pd.DataFrame) -> pd.DataFrame:
     # ── Composite: crowding ─────────────────────────────────────────
     # BUGFIX: use string column names, not Series from out.get()
     if {"margin_balance_to_float_mv", "margin_balance_chg_60d", "trade_date"}.issubset(out.columns):
-        _za = out.groupby("trade_date")["margin_balance_to_float_mv"].transform(
-            lambda s: _zscore(s.fillna(0))
-        )
-        _zb = out.groupby("trade_date")["margin_balance_chg_60d"].transform(
-            lambda s: _zscore(s.fillna(0))
-        )
+        _za = _cs_zscore(out, "margin_balance_to_float_mv")
+        _zb = _cs_zscore(out, "margin_balance_chg_60d")
         out["margin_crowding_score"] = _za + _zb
 
     # ── Composite: trend confirm ────────────────────────────────────
     if {"margin_balance_chg_60d", "ret_60d", "trade_date"}.issubset(out.columns):
-        _zbc = out.groupby("trade_date")["margin_balance_chg_60d"].transform(
-            lambda s: _zscore(s.fillna(0))
-        )
-        _zr60 = out.groupby("trade_date")["ret_60d"].transform(
-            lambda s: _zscore(s.fillna(0))
-        )
+        _zbc = _cs_zscore(out, "margin_balance_chg_60d")
+        _zr60 = _cs_zscore(out, "ret_60d")
         out["margin_trend_confirm_score"] = _zbc * _zr60.clip(lower=0)
 
     # ── Composite: overheat ─────────────────────────────────────────
     if {"margin_crowding_score", "ret_120d", "trade_date"}.issubset(out.columns):
-        _zmc = out.groupby("trade_date")["margin_crowding_score"].transform(
-            lambda s: _zscore(s.fillna(0))
-        )
-        _zr120 = out.groupby("trade_date")["ret_120d"].transform(
-            lambda s: _zscore(s.fillna(0))
-        )
+        _zmc = _cs_zscore(out, "margin_crowding_score")
+        _zr120 = _cs_zscore(out, "ret_120d")
         out["margin_overheat_risk_score"] = _zmc * _zr120.clip(lower=0)
 
     # Clean up intermediates
     for c in list(out.columns):
-        if c.startswith("_"):
+        if c.startswith("_") and c != PIT_CROSS_SECTION_COLUMN:
             out = out.drop(columns=[c])
 
     return out
@@ -316,44 +313,30 @@ def build_shareholder_features(df: pd.DataFrame) -> pd.DataFrame:
     # ── Composite: concentration score ─────────────────────────────
     _parts = []
     if "holder_num_chg_qoq" in out.columns:
-        _parts.append(out.groupby("trade_date")["holder_num_chg_qoq"].transform(
-            lambda s: -_zscore(s.fillna(0))
-        ))
+        _parts.append(_cs_zscore(out, "holder_num_chg_qoq", negate=True))
     if "avg_shares_per_holder_chg_qoq" in out.columns:
-        _parts.append(out.groupby("trade_date")["avg_shares_per_holder_chg_qoq"].transform(
-            lambda s: _zscore(s.fillna(0))
-        ))
+        _parts.append(_cs_zscore(out, "avg_shares_per_holder_chg_qoq"))
     if "top10_holder_ratio_chg_qoq" in out.columns:
-        _parts.append(out.groupby("trade_date")["top10_holder_ratio_chg_qoq"].transform(
-            lambda s: _zscore(s.fillna(0))
-        ))
+        _parts.append(_cs_zscore(out, "top10_holder_ratio_chg_qoq"))
     if _parts and len(_parts) >= 2:
         out["holder_concentration_score"] = sum(_parts) / len(_parts)
 
     # ── Composite: squeeze score ───────────────────────────────────
     # BUGFIX: use string column names
     if {"holder_num_chg_qoq", "ret_60d", "trade_date"}.issubset(out.columns):
-        _zhn = out.groupby("trade_date")["holder_num_chg_qoq"].transform(
-            lambda s: -_zscore(s.fillna(0))
-        )
-        _zr60 = out.groupby("trade_date")["ret_60d"].transform(
-            lambda s: _zscore(s.fillna(0))
-        )
+        _zhn = _cs_zscore(out, "holder_num_chg_qoq", negate=True)
+        _zr60 = _cs_zscore(out, "ret_60d")
         out["holder_squeeze_score"] = _zhn * _zr60.clip(lower=0)
 
     # ── Composite: price confirm ───────────────────────────────────
     # BUGFIX: use string column names
     if {"holder_concentration_score", "ret_120d", "trade_date"}.issubset(out.columns):
-        _zhc = out.groupby("trade_date")["holder_concentration_score"].transform(
-            lambda s: _zscore(s.fillna(0))
-        )
-        _zr120 = out.groupby("trade_date")["ret_120d"].transform(
-            lambda s: _zscore(s.fillna(0))
-        )
+        _zhc = _cs_zscore(out, "holder_concentration_score")
+        _zr120 = _cs_zscore(out, "ret_120d")
         out["holder_price_confirm_score"] = _zhc * _zr120.clip(lower=0)
 
     for c in list(out.columns):
-        if c.startswith("_"):
+        if c.startswith("_") and c != PIT_CROSS_SECTION_COLUMN:
             out = out.drop(columns=[c])
 
     return out

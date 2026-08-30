@@ -370,7 +370,9 @@ def test_inner_resume_argument_contract(
     assert match in capsys.readouterr().err
 
 
-def test_inner_historical_resume_reaches_receipt_validation_before_supplier_work() -> None:
+def test_inner_historical_resume_reaches_receipt_validation_before_supplier_work(
+    tmp_path: Path,
+) -> None:
     inherited = SimpleNamespace(inherited=True)
     with patch.object(
         sys,
@@ -384,6 +386,8 @@ def test_inner_historical_resume_reaches_receipt_validation_before_supplier_work
         ],
     ), patch.object(
         daily_sync, "_resolve_target_date", return_value="20260821"
+    ), patch.object(
+        daily_sync.cfg, "get_path", return_value=str(tmp_path)
     ), patch.object(
         daily_sync, "QlibAdapter"
     ) as adapter, patch.object(
@@ -757,6 +761,70 @@ def test_data_sync_shareholder_snapshot_bootstrap_is_explicit_offline_only(
         range_end="20260821",
         output_root=data_root / "research/source_snapshots/shareholder",
     )
+
+
+def test_data_sync_shareholder_history_extension_bypasses_market_child() -> None:
+    writer_lock = object()
+    expected = {"status": "success", "run_id": "shareholder-run"}
+    with patch.object(
+        sys,
+        "argv",
+        [
+            "scripts/data_sync.py",
+            "--apply",
+            "--universe", "csi1800",
+            "--target-date", "2026-08-21",
+            "--shareholder-start-date", "2017-01-01",
+            "--repair-shareholder-history-from-trusted-run-id", "source-run",
+            "--trusted-base-receipt-sha256", DUMMY_RECEIPT_SHA,
+        ],
+    ), patch.object(
+        data_sync,
+        "_run_shareholder_only_repair",
+        return_value=expected,
+    ) as repair, patch.object(data_sync.subprocess, "run") as market_child:
+        data_sync._main_under_writer_lock(writer_lock)
+
+    repair.assert_called_once()
+    parsed_args, parsed_lock = repair.call_args.args
+    assert parsed_lock is writer_lock
+    assert parsed_args.repair_shareholder_history_from_trusted_run_id == "source-run"
+    assert parsed_args.trusted_base_receipt_sha256 == DUMMY_RECEIPT_SHA
+    market_child.assert_not_called()
+
+
+def test_data_sync_announcement_evidence_bypasses_market_child() -> None:
+    writer_lock = object()
+    expected = {"status": "success", "run_id": "announcement-run"}
+    with patch.object(
+        sys,
+        "argv",
+        [
+            "scripts/data_sync.py",
+            "--apply",
+            "--universe", "csi1800",
+            "--target-date", "2026-08-21",
+            "--source-revision-announcement-start-date", "2017-01-01",
+            "--collect-source-revision-announcements-from-trusted-run-id",
+            "source-run",
+            "--trusted-base-receipt-sha256", DUMMY_RECEIPT_SHA,
+        ],
+    ), patch.object(
+        data_sync,
+        "_run_source_revision_announcement_evidence",
+        return_value=expected,
+    ) as collect, patch.object(data_sync.subprocess, "run") as market_child:
+        data_sync._main_under_writer_lock(writer_lock)
+
+    collect.assert_called_once()
+    parsed_args, parsed_lock = collect.call_args.args
+    assert parsed_lock is writer_lock
+    assert (
+        parsed_args.collect_source_revision_announcements_from_trusted_run_id
+        == "source-run"
+    )
+    assert parsed_args.source_revision_announcement_start_date == "2017-01-01"
+    market_child.assert_not_called()
 
 
 def test_csi1800_audit_uses_distinct_target_date_path(tmp_path: Path):

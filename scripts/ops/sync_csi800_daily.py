@@ -511,11 +511,6 @@ def _expected_qlib_value(raw_field: str, value):
         return float(expected) * 100.0
     if raw_field in {"total_mv", "circ_mv"}:
         return float(expected) * 10000.0
-    if (
-        raw_field in QlibAdapter._PERCENT_FINANCIAL_COLS
-        and abs(expected) > QlibAdapter._PERCENT_LIKE_THRESHOLD
-    ):
-        return expected / 100.0
     return expected
 
 
@@ -543,11 +538,28 @@ def _historical_mutation_readback(
     *,
     industry_map: dict[str, int] | None = None,
 ) -> dict:
-    """Verify each exact historical mutation at its own date."""
+    """Verify every canonical/Qlib value inside each bounded mutation scope."""
 
     mismatches: list[dict[str, object]] = []
+    mismatch_count = 0
     verified = 0
     verified_fields: set[str] = set()
+
+    def record_mismatch(
+        *, symbol: str, reason: str, count: int = 1,
+        date: str | None = None, field: str = "*",
+    ) -> None:
+        nonlocal mismatch_count
+        mismatch_count += max(int(count), 1)
+        if len(mismatches) >= _MAX_MUTATION_MISMATCH_SAMPLES:
+            return
+        payload: dict[str, object] = {
+            "symbol": symbol, "field": field, "reason": reason,
+        }
+        if date is not None:
+            payload["date"] = date
+        mismatches.append(payload)
+
     if industry_map is None and any(
         "industry" in item.get("fields", []) for item in changed
     ):
@@ -559,9 +571,6 @@ def _historical_mutation_readback(
             if field in _CANONICAL_TO_QLIB_READBACK
         })
         if not raw_fields:
-            continue
-        if any(str(item.get("date_start")) != str(item.get("date_end")) for item in items):
-            mismatches.append({"symbol": symbol, "field": "*", "reason": "mutation_scope_not_exact"})
             continue
         start = min(str(item["date_start"]) for item in items)
         end = max(str(item["date_end"]) for item in items)
@@ -576,13 +585,13 @@ def _historical_mutation_readback(
             symbol, start_date=start, end_date=end, columns=raw_fields,
         )
         if qlib_frame is None or qlib_frame.empty or canonical is None or canonical.empty:
-            mismatches.append({"symbol": symbol, "field": "*", "reason": "readback_row_missing"})
+            record_mismatch(symbol=symbol, reason="readback_row_missing")
             continue
         qlib_rows = qlib_frame.reset_index() if isinstance(qlib_frame.index, pd.MultiIndex) else qlib_frame.copy()
         date_column = next((name for name in ("datetime", "date", "trade_date") if name in qlib_rows), None)
         symbol_column = "instrument" if "instrument" in qlib_rows else "ts_code"
         if date_column is None or symbol_column not in qlib_rows:
-            mismatches.append({"symbol": symbol, "field": "*", "reason": "readback_identity_missing"})
+            record_mismatch(symbol=symbol, reason="readback_identity_missing")
             continue
         qlib_dates = _target_date_values(qlib_rows[date_column])
         canonical_dates = _target_date_values(canonical["trade_date"])
@@ -602,46 +611,99 @@ def _historical_mutation_readback(
             .set_index("_qsys_readback_date")
         )
         for item in items:
-            mutation_date = str(item["date_start"])
-            if mutation_date not in canonical_by_date.index or mutation_date not in qlib_by_date.index:
-                mismatches.append({"symbol": symbol, "date": mutation_date, "field": "*", "reason": "readback_row_missing"})
+            item_start = str(item["date_start"])
+            item_end = str(item["date_end"])
+            canonical_item = canonical_by_date.loc[
+                canonical_by_date.index.to_series().between(item_start, item_end)
+            ]
+            qlib_item = qlib_by_date.loc[
+                qlib_by_date.index.to_series().between(item_start, item_end)
+            ]
+            missing_dates = canonical_item.index.difference(qlib_item.index)
+            mismatch_count += len(missing_dates)
+            for missing_date in missing_dates[: max(
+                0, _MAX_MUTATION_MISMATCH_SAMPLES - len(mismatches)
+            )]:
+                mismatches.append({
+                    "symbol": symbol, "date": str(missing_date),
+                    "field": "*", "reason": "readback_row_missing",
+                })
+            common_dates = canonical_item.index.intersection(qlib_item.index)
+            if not len(common_dates):
                 continue
-            raw_row = canonical_by_date.loc[mutation_date]
-            qlib_row = qlib_by_date.loc[mutation_date]
             by_qlib: dict[str, str] = {}
             for raw_field in item.get("fields", []):
                 qlib_field = _CANONICAL_TO_QLIB_READBACK.get(raw_field)
-                if qlib_field is None or raw_field not in raw_row:
+                if qlib_field is None or raw_field not in canonical_item:
                     continue
                 previous = by_qlib.get(qlib_field)
-                if previous is None or (pd.isna(raw_row[previous]) and pd.notna(raw_row[raw_field])):
+                if previous is None or (
+                    canonical_item[raw_field].notna().sum()
+                    > canonical_item[previous].notna().sum()
+                ):
                     by_qlib[qlib_field] = raw_field
             for qlib_field, raw_field in by_qlib.items():
-                if qlib_field not in qlib_row:
-                    mismatches.append({"symbol": symbol, "date": mutation_date, "field": qlib_field, "reason": "readback_field_missing"})
+                verified_fields.add(qlib_field)
+                if qlib_field not in qlib_item:
+                    record_mismatch(
+                        symbol=symbol, field=qlib_field,
+                        reason="readback_field_missing", count=len(common_dates),
+                    )
                     continue
                 if raw_field == "industry":
-                    expected = (industry_map or {}).get(str(raw_row[raw_field]).strip())
-                    if expected is None:
-                        mismatches.append({"symbol": symbol, "date": mutation_date, "field": qlib_field, "reason": "industry_mapping_missing"})
-                        continue
+                    expected_values = (
+                        canonical_item.loc[common_dates, raw_field]
+                        .astype("string").str.strip().map(industry_map or {})
+                    )
                 else:
-                    expected = _expected_qlib_value(raw_field, raw_row[raw_field])
-                try:
-                    actual = float(qlib_row[qlib_field])
-                except (TypeError, ValueError):
-                    actual = np.nan
-                same = _qlib_values_equal(expected, actual)
-                if same:
-                    verified += 1
-                else:
-                    mismatches.append({"symbol": symbol, "date": mutation_date, "field": qlib_field, "reason": "value_mismatch"})
+                    expected_values = pd.to_numeric(
+                        canonical_item.loc[common_dates, raw_field],
+                        errors="coerce",
+                    )
+                    if raw_field in {"volume", "vol"}:
+                        expected_values = expected_values * 100.0
+                    elif raw_field in {"total_mv", "circ_mv"}:
+                        expected_values = expected_values * 10000.0
+                actual_values = pd.to_numeric(
+                    qlib_item.loc[common_dates, qlib_field], errors="coerce"
+                )
+                expected_array = expected_values.to_numpy(dtype=float)
+                actual_array = actual_values.to_numpy(dtype=float)
+                same = (
+                    np.isnan(expected_array) & np.isnan(actual_array)
+                ) | np.isclose(
+                    expected_array,
+                    actual_array,
+                    rtol=np.finfo(np.float32).eps,
+                    atol=np.finfo(np.float32).tiny,
+                    equal_nan=False,
+                )
+                verified += int(same.sum())
+                bad_positions = np.flatnonzero(~same)
+                mismatch_count += len(bad_positions)
+                remaining = _MAX_MUTATION_MISMATCH_SAMPLES - len(mismatches)
+                for position in bad_positions[:remaining]:
+                    mismatches.append({
+                        "symbol": symbol,
+                        "date": str(common_dates[position]),
+                        "field": qlib_field,
+                        "reason": (
+                            "industry_mapping_missing"
+                            if raw_field == "industry"
+                            and pd.isna(expected_array[position])
+                            else "value_mismatch"
+                        ),
+                    })
     return {
-        "status": "failed" if mismatches else "success",
+        "status": "failed" if mismatch_count else "success",
         "verified_fields": sorted(verified_fields),
         "verified_value_count": verified,
+        "mismatch_count": mismatch_count,
         "mismatches": mismatches,
-        **({"error": "historical Qlib value readback mismatch"} if mismatches else {}),
+        **(
+            {"error": "historical Qlib value readback mismatch"}
+            if mismatch_count else {}
+        ),
     }
 
 
@@ -910,7 +972,9 @@ def _refresh_and_verify_history_mutation_store(
         verified_fields.update(verification.get("verified_fields", []))
         verified_value_count += int(verification.get("verified_value_count", 0))
         current_mismatches = list(verification.get("mismatches", []))
-        mismatch_count += len(current_mismatches)
+        mismatch_count += int(
+            verification.get("mismatch_count", len(current_mismatches))
+        )
         remaining = _MAX_MUTATION_MISMATCH_SAMPLES - len(mismatch_samples)
         if remaining > 0:
             mismatch_samples.extend(current_mismatches[:remaining])

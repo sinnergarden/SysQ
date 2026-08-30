@@ -153,6 +153,7 @@ class TestLightGBMSingleLabelContract:
                     signal_id="lgbm_test",
                     signal_run_id="run1",
                 )
+        mock_load.assert_called_once_with("2026-01-02", "2026-01-22")
         assert isinstance(result, pd.DataFrame)
         required = {"trade_date", "data_date", "instrument", "signal_id", "signal_run_id", "score"}
         assert required.issubset(set(result.columns)), f"Missing columns: {required - set(result.columns)}"

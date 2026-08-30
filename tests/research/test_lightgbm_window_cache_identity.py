@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 import hashlib
 import json
 
+import pandas as pd
 import pytest
 
 from qsys.research.generators.lightgbm_single_label import (
@@ -13,6 +15,7 @@ from qsys.research.generators.lightgbm_single_label import (
 from qsys.data._merge_helpers import (
     FINANCIAL_AVAILABILITY_CONTRACT,
     FINANCIAL_AVAILABILITY_RULE,
+    TUSHARE_FINA_INDICATOR_UNIT_CONTRACT,
 )
 from qsys.data.income_sidecar import (
     INCOME_SOURCE_MODE_AUDITED,
@@ -185,6 +188,26 @@ def test_cache_key_binds_source_universe_and_ordered_features(tmp_path: Path) ->
     assert key != base._window_key("2020-01-01", "2021-01-01", ["f2", "f1"])
 
 
+def test_cache_identity_binds_financial_processing_contracts(tmp_path: Path) -> None:
+    generator = _generator(tmp_path)
+    identity = generator._cache_identity("2020-01-01", "2021-01-01", ["f1"])
+
+    assert identity["schema_version"] == 6
+    assert identity["feature_history_contract"] == (
+        "continuous_listed_history_member_only_cross_section_v1"
+    )
+    assert identity["canonical_financial_contracts"] == {
+        "availability": FINANCIAL_AVAILABILITY_CONTRACT,
+        "fina_indicator_units": TUSHARE_FINA_INDICATOR_UNIT_CONTRACT,
+    }
+    assert "qsys.data._merge_helpers" in generator.checkpoint_code_dependencies
+    assert "qsys.feature.groups.relative_strength" in (
+        generator.checkpoint_code_dependencies
+    )
+    assert "qsys.feature.transforms" in generator.checkpoint_code_dependencies
+    assert "qsys.research.pit_universe" in generator.checkpoint_code_dependencies
+
+
 def test_cache_key_binds_opt_in_shareholder_freshness_contract(tmp_path: Path) -> None:
     base = _generator(tmp_path)
     gated = _generator(
@@ -206,6 +229,43 @@ def test_cache_requires_explicit_source_identity(tmp_path: Path) -> None:
         "qsys.feature.registry.FeatureListRegistry.load", return_value=["f1"]
     ), pytest.raises(ValueError, match="source_manifest_hash"):
         generator._load_data("2020-01-01", "2021-01-01")
+
+
+def test_pit_feature_load_uses_static_union_plus_separate_membership_mask(
+    tmp_path: Path,
+) -> None:
+    generator = _generator(tmp_path, pit_membership=True)
+    spans = pd.DataFrame(
+        {
+            "instrument": ["AAA", "BBB"],
+            "effective_from": ["20200101", "20200102"],
+            "effective_to": ["20201231", "20201231"],
+        }
+    )
+    generator._pit_store = SimpleNamespace(
+        instruments=["AAA", "BBB"],
+        spans=spans,
+    )
+    index = pd.MultiIndex.from_tuples(
+        [(pd.Timestamp("2020-01-02"), "AAA")],
+        names=["datetime", "instrument"],
+    )
+    raw = pd.DataFrame({"f1": [1.0], "$close": [10.0]}, index=index)
+
+    with patch(
+        "qsys.feature.registry.FeatureListRegistry.load", return_value=["f1"]
+    ), patch("qsys.data.adapter.QlibAdapter") as adapter_class:
+        adapter_class.return_value.get_features.return_value = raw
+        loaded, features = generator._load_data("2020-01-01", "2020-01-03")
+
+    call = adapter_class.return_value.get_features.call_args
+    assert call.args[0] == ["AAA", "BBB"]
+    pd.testing.assert_frame_equal(
+        call.kwargs["semantic_pit_membership_spans"], spans
+    )
+    assert call.kwargs["semantic_pit_filter_mode"] == "member_as_of"
+    assert features == ["f1"]
+    assert loaded["instrument"].tolist() == ["AAA"]
 
 
 def test_cache_requires_explicit_feature_list(tmp_path: Path) -> None:
@@ -333,6 +393,8 @@ def test_income_sidecar_manifest_identity_enters_lineage_cache_and_checkpoint(
         "income_sidecar_manifest_sha256"
     ]
     assert lineage["source_run_id"] == "run-income"
+    assert lineage["symbol_count"] == 1
+    assert lineage["symbols_sha256"]
     assert generator.checkpoint_input_artifacts == [
         {"name": "income_sidecar", "sha256": identity["income_sidecar_sha256"]},
         {

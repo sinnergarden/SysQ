@@ -10,6 +10,7 @@ import re
 import shutil
 import sqlite3
 import tempfile
+import unicodedata
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -21,7 +22,7 @@ HOLDER_FILENAME = "holder_num.parquet"
 TOP10_FILENAME = "top10_holder_ratio.parquet"
 STATE_FILENAME = "shareholder_sync_state.json"
 AUDITED_SNAPSHOT_SCHEMA = "audited_shareholder_pit_sidecars_v2"
-AUDITED_SNAPSHOT_CONTRACT = "shareholder_announcement_asof_from_terminal_raw_v1"
+AUDITED_SNAPSHOT_CONTRACT = "shareholder_exact_event_complete_top10_v2"
 AUDITED_SNAPSHOT_MANIFEST = "manifest.json"
 _TERMINAL_GATES = frozenset({
     "fetch", "raw_payloads", "canonical_commit", "qlib_readback", "readiness",
@@ -39,6 +40,33 @@ SHAREHOLDER_FEATURES = {
     "top10_holder_stale_days",
     "top10_holder_ratio",
 }
+
+
+class ShareholderProjectionError(RuntimeError):
+    """Raw shareholder events cannot be projected without guessing."""
+
+
+def _normalise_holder_identity(value: Any) -> str | None:
+    if value is None or pd.isna(value):
+        return None
+    text = unicodedata.normalize("NFKC", str(value)).strip()
+    text = re.sub(r"[‐‑‒–—―﹘﹣－]", "-", text)
+    text = re.sub(r"\s+", "", text)
+    return text.casefold() or None
+
+
+def _latest_report_period_rows(frame: pd.DataFrame) -> pd.DataFrame:
+    """Select latest report period before filtering its value rows."""
+
+    if frame.empty:
+        return frame
+    ordered = frame.sort_values(
+        ["inst", "ann_date", "end_date"], kind="mergesort", na_position="first"
+    )
+    latest = ordered.groupby(
+        ["inst", "ann_date"], dropna=False, sort=False
+    )["end_date"].transform("max")
+    return ordered.loc[ordered["end_date"].eq(latest)].copy()
 
 
 def _resolve_data_root(
@@ -106,8 +134,15 @@ def _canonical_frame_hash(frame: pd.DataFrame, columns: list[str]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def normalise_holder_rows(frame: pd.DataFrame | None) -> pd.DataFrame:
-    """Return one canonical holder-count row per instrument/announcement."""
+def normalise_holder_rows(
+    frame: pd.DataFrame | None, *, strict_raw: bool = False,
+) -> pd.DataFrame:
+    """Return one holder-count fact per instrument/announcement.
+
+    The latest report period is selected before null/value filtering.  An
+    unavailable latest-period value therefore cannot lend its announcement
+    date to an older report period.
+    """
 
     columns = ["inst", "ann_date", "end_date", "holder_num"]
     if frame is None or frame.empty:
@@ -120,17 +155,36 @@ def normalise_holder_rows(frame: pd.DataFrame | None) -> pd.DataFrame:
     out["ann_date"] = out["ann_date"].map(_normalise_date)
     out["end_date"] = out["end_date"].map(_normalise_date)
     out["holder_num"] = pd.to_numeric(out["holder_num"], errors="coerce")
-    out = out.dropna(subset=["inst", "ann_date", "holder_num"])
-    out = out[(out["inst"] != "") & (out["holder_num"] > 0)]
-    out = out.sort_values(
-        ["inst", "ann_date", "end_date"], kind="mergesort", na_position="first"
-    )
-    out = out.drop_duplicates(["inst", "ann_date"], keep="last")
-    return out[columns].reset_index(drop=True)
+    out = out.dropna(subset=["inst", "ann_date", "end_date"])
+    out = out[out["inst"] != ""]
+    exact_rows: list[dict[str, Any]] = []
+    for key, group in out.groupby(
+        ["inst", "ann_date", "end_date"], dropna=False, sort=True,
+    ):
+        positive = group.loc[group["holder_num"].gt(0), "holder_num"]
+        values = positive.dropna().unique().tolist()
+        if len(values) > 1:
+            raise ShareholderProjectionError(
+                f"conflicting holder_num values for exact event {key}: {values[:5]}"
+            )
+        invalid_non_null = group["holder_num"].notna() & ~group["holder_num"].gt(0)
+        if strict_raw and invalid_non_null.any():
+            raise ShareholderProjectionError(
+                f"non-positive holder_num for exact event {key}"
+            )
+        exact_rows.append({
+            "inst": key[0], "ann_date": key[1], "end_date": key[2],
+            "holder_num": values[0] if values else pd.NA,
+        })
+    latest = _latest_report_period_rows(pd.DataFrame(exact_rows, columns=columns))
+    latest = latest.dropna(subset=["holder_num"])
+    return latest[columns].reset_index(drop=True)
 
 
-def normalise_top10_rows(frame: pd.DataFrame | None) -> pd.DataFrame:
-    """Aggregate raw Tushare top-ten holders into one PIT ratio per announcement."""
+def normalise_top10_rows(
+    frame: pd.DataFrame | None, *, require_complete_raw: bool = False,
+) -> pd.DataFrame:
+    """Aggregate raw top-ten holders without treating partial rows as Top10."""
 
     columns = ["inst", "ann_date", "end_date", "top10_ratio"]
     if frame is None or frame.empty:
@@ -144,14 +198,13 @@ def normalise_top10_rows(frame: pd.DataFrame | None) -> pd.DataFrame:
         out["ann_date"] = out["ann_date"].map(_normalise_date)
         out["end_date"] = out["end_date"].map(_normalise_date)
         out["top10_ratio"] = pd.to_numeric(out["top10_ratio"], errors="coerce")
-        out = out.dropna(subset=["inst", "ann_date", "top10_ratio"])
-        out = out[(out["inst"] != "") & out["top10_ratio"].between(0, 100)]
-        out = out.sort_values(
-            ["inst", "ann_date", "end_date"],
-            kind="mergesort",
-            na_position="first",
-        ).drop_duplicates(["inst", "ann_date"], keep="last")
-        return out[columns].reset_index(drop=True)
+        out = out.dropna(subset=["inst", "ann_date", "end_date"])
+        out = _latest_report_period_rows(out.loc[out["inst"] != ""])
+        out = out.dropna(subset=["top10_ratio"])
+        out = out[out["top10_ratio"].between(0, 100)]
+        return out[columns].drop_duplicates(
+            ["inst", "ann_date"], keep="last"
+        ).reset_index(drop=True)
 
     required = {"inst", "ann_date", "end_date", "hold_ratio"}
     if not required.issubset(out.columns):
@@ -160,23 +213,77 @@ def normalise_top10_rows(frame: pd.DataFrame | None) -> pd.DataFrame:
     out["ann_date"] = out["ann_date"].map(_normalise_date)
     out["end_date"] = out["end_date"].map(_normalise_date)
     out["hold_ratio"] = pd.to_numeric(out["hold_ratio"], errors="coerce")
-    out = out.dropna(subset=["inst", "ann_date", "end_date", "hold_ratio"])
-    if "holder_name" in out.columns:
-        out["holder_name"] = out["holder_name"].astype(str)
-        out = out.drop_duplicates(
-            ["inst", "ann_date", "end_date", "holder_name"], keep="last"
-        )
-    grouped = (
-        out.groupby(["inst", "ann_date", "end_date"], as_index=False)["hold_ratio"]
-        .sum(min_count=1)
-        .rename(columns={"hold_ratio": "top10_ratio"})
+    out = out.dropna(subset=["inst", "ann_date", "end_date"])
+    out = _latest_report_period_rows(out.loc[out["inst"] != ""])
+    if "holder_name" not in out.columns:
+        if require_complete_raw:
+            raise ShareholderProjectionError("raw top10 event lacks holder_name")
+        return pd.DataFrame(columns=columns)
+    out["_holder_identity"] = out["holder_name"].map(_normalise_holder_identity)
+    invalid = (
+        out["_holder_identity"].isna()
+        | out["hold_ratio"].isna()
+        | ~out["hold_ratio"].between(0, 100)
     )
-    grouped = grouped[grouped["top10_ratio"].between(0, 100.0001)].copy()
-    grouped["top10_ratio"] = grouped["top10_ratio"].clip(upper=100.0)
-    grouped = grouped.sort_values(
-        ["inst", "ann_date", "end_date"], kind="mergesort"
-    ).drop_duplicates(["inst", "ann_date"], keep="last")
-    return grouped[columns].reset_index(drop=True)
+    exact_rows: list[dict[str, Any]] = []
+    event_key = ["inst", "ann_date", "end_date"]
+    stats = {
+        "exact_event_count": 0,
+        "accepted_exact_event_count": 0,
+        "accepted_cutoff_tie_event_count": 0,
+        "excluded_invalid_event_count": 0,
+        "excluded_conflicting_ratio_event_count": 0,
+        "excluded_incomplete_event_count": 0,
+        "excluded_ambiguous_overfull_event_count": 0,
+    }
+    for key, event in out.groupby(event_key, dropna=False, sort=True):
+        stats["exact_event_count"] += 1
+        event_invalid = invalid.loc[event.index]
+        if require_complete_raw and event_invalid.any():
+            stats["excluded_invalid_event_count"] += 1
+            continue
+        event = event.loc[~event_invalid]
+        ratios: list[float] = []
+        conflicting = False
+        for identity, holder_rows in event.groupby("_holder_identity", sort=True):
+            values = holder_rows["hold_ratio"].dropna().unique().tolist()
+            if len(values) != 1:
+                if require_complete_raw:
+                    conflicting = True
+                    break
+                raise ShareholderProjectionError(
+                    f"conflicting ratio for holder {identity!r} in exact event {key}"
+                )
+            ratios.append(float(values[0]))
+        if conflicting:
+            stats["excluded_conflicting_ratio_event_count"] += 1
+            continue
+        if require_complete_raw:
+            ratios.sort(reverse=True)
+            if len(ratios) < 10:
+                stats["excluded_incomplete_event_count"] += 1
+                continue
+            if len(ratios) > 10:
+                cutoff = ratios[9]
+                if any(abs(value - cutoff) > 1e-12 for value in ratios[10:]):
+                    stats["excluded_ambiguous_overfull_event_count"] += 1
+                    continue
+                ratios = ratios[:10]
+                stats["accepted_cutoff_tie_event_count"] += 1
+        total = float(sum(ratios)) if ratios else float("nan")
+        if not 0 <= total <= 100.0001:
+            if require_complete_raw:
+                stats["excluded_invalid_event_count"] += 1
+                continue
+            continue
+        exact_rows.append({
+            "inst": key[0], "ann_date": key[1], "end_date": key[2],
+            "top10_ratio": min(total, 100.0),
+        })
+        stats["accepted_exact_event_count"] += 1
+    result = pd.DataFrame(exact_rows, columns=columns).reset_index(drop=True)
+    result.attrs["projection_stats"] = stats
+    return result
 
 
 def merge_shareholder_rows(
@@ -186,7 +293,30 @@ def merge_shareholder_rows(
     kind: str,
 ) -> pd.DataFrame:
     normaliser = normalise_holder_rows if kind == "holder_num" else normalise_top10_rows
-    return normaliser(pd.concat([normaliser(existing), normaliser(incoming)], ignore_index=True))
+    current = normaliser(existing)
+    if incoming is None or incoming.empty:
+        return current
+    raw = incoming.copy()
+    if "inst" not in raw.columns and "ts_code" in raw.columns:
+        raw = raw.rename(columns={"ts_code": "inst"})
+    if not {"inst", "ann_date"}.issubset(raw.columns):
+        return current
+    replacement_keys = pd.DataFrame({
+        "inst": raw["inst"].astype(str).str.strip().str.upper(),
+        "ann_date": raw["ann_date"].map(_normalise_date),
+    }).dropna().drop_duplicates()
+    if not replacement_keys.empty and not current.empty:
+        current = current.merge(
+            replacement_keys.assign(_replace=True),
+            on=["inst", "ann_date"], how="left",
+        )
+        current = current.loc[current["_replace"].isna()].drop(columns="_replace")
+    projected = (
+        normalise_holder_rows(raw, strict_raw=True)
+        if kind == "holder_num"
+        else normalise_top10_rows(raw, require_complete_raw=True)
+    )
+    return normaliser(pd.concat([current, projected], ignore_index=True))
 
 
 def _atomic_write_parquet(frame: pd.DataFrame, path: Path) -> None:
@@ -291,11 +421,13 @@ def _load_audited_shareholder_payload(
         raise RuntimeError("success shareholder receipt has an empty payload")
     raw_symbols = frame["ts_code"].astype(str)
     normalized_symbols = raw_symbols.str.strip().str.upper()
-    if (
-        normalized_symbols.empty
-        or not raw_symbols.eq(normalized_symbols).all()
-        or not normalized_symbols.str.fullmatch(r"\d{6}\.(?:SH|SZ|BJ)").all()
-    ):
+    canonical_equity = raw_symbols.eq(normalized_symbols) & (
+        normalized_symbols.str.fullmatch(r"\d{6}\.(?:SH|SZ|BJ)")
+    )
+    supplier_non_equity = raw_symbols.eq(normalized_symbols) & (
+        normalized_symbols.str.fullmatch(r"C\d{5}")
+    )
+    if normalized_symbols.empty or not (canonical_equity | supplier_non_equity).all():
         raise RuntimeError(f"{endpoint} payload has invalid ts_code values")
     dates = frame["ann_date"].map(_normalise_date)
     if dates.isna().any() or not dates.between(
@@ -310,11 +442,14 @@ def _load_audited_shareholder_payload(
         scope_start, scope_end,
     ).all():
         raise RuntimeError(f"{endpoint} payload escaped its receipt scope")
-    projected = frame.loc[normalized_symbols.isin(expected_symbols)].copy()
+    projected = frame.loc[
+        canonical_equity & normalized_symbols.isin(expected_symbols)
+    ].copy()
     return projected, {
         "source_rows": int(len(frame)),
         "projected_rows": int(len(projected)),
         "excluded_outside_union_rows": int(len(frame) - len(projected)),
+        "excluded_non_equity_identifier_rows": int(supplier_non_equity.sum()),
     }
 
 
@@ -441,6 +576,7 @@ def materialize_audited_shareholder_snapshot(
                 "source_rows": 0,
                 "projected_rows": 0,
                 "excluded_outside_union_rows": 0,
+                "excluded_non_equity_identifier_rows": 0,
             }
             for endpoint in endpoint_specs
         }
@@ -571,10 +707,15 @@ def materialize_audited_shareholder_snapshot(
         if not _scope_covers_range(intervals[endpoint], start, end):
             raise RuntimeError(f"shareholder receipt coverage has a gap: {endpoint}")
     holder = normalise_holder_rows(
-        pd.concat(holder_frames, ignore_index=True) if holder_frames else None
+        pd.concat(holder_frames, ignore_index=True) if holder_frames else None,
+        strict_raw=True,
     )
     top10 = normalise_top10_rows(
-        pd.concat(top10_frames, ignore_index=True) if top10_frames else None
+        pd.concat(top10_frames, ignore_index=True) if top10_frames else None,
+        require_complete_raw=True,
+    )
+    projection_stats["top10_holders"].update(
+        top10.attrs.get("projection_stats", {})
     )
     if holder.empty or top10.empty:
         raise RuntimeError(
@@ -651,6 +792,9 @@ def materialize_audited_shareholder_snapshot(
                     "availability_rule": "announcement_date_asof",
                     "holder_key": ["inst", "ann_date"],
                     "top10_key": ["inst", "ann_date"],
+                    "top10_exact_event_policy": (
+                        "accept_exactly_ten_or_cutoff_ties_exclude_ambiguous_v1"
+                    ),
                 },
                 "projection": {
                     "by_endpoint": projection_stats,
@@ -662,6 +806,10 @@ def materialize_audited_shareholder_snapshot(
                     ),
                     "excluded_outside_union_rows": sum(
                         row["excluded_outside_union_rows"]
+                        for row in projection_stats.values()
+                    ),
+                    "excluded_non_equity_identifier_rows": sum(
+                        row["excluded_non_equity_identifier_rows"]
                         for row in projection_stats.values()
                     ),
                 },

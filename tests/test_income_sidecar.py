@@ -82,13 +82,15 @@ def _scope(symbol: str, *, variant: str | None = FINANCIAL_AVAILABILITY_CONTRACT
 def _trusted_terminal(
     tmp_path: Path,
     *,
+    run_id: str = RUN_ID,
     first_frame: pd.DataFrame | None = None,
     variant: str | None = FINANCIAL_AVAILABILITY_CONTRACT,
     linked_fields: tuple[str, ...] = FIELDS,
+    history_checkpoint: dict | None = None,
 ) -> tuple[SourceAuditStore, Path]:
     data_root = tmp_path / "data"
     audit = SourceAuditStore(data_root / "audit" / "audit.db")
-    audit.append_event(RUN_ID, "run_started", {
+    audit.append_event(run_id, "run_started", {
         "entrypoint": "scripts/data_sync.py",
         "universe": SCOPE_KEY,
         "target_date": CUTOFF,
@@ -112,7 +114,7 @@ def _trusted_terminal(
         metadata = normalized_response_metadata(frame)
         status = "empty" if frame.empty else "success"
         receipt_id = audit.record_fetch(
-            run_id=RUN_ID,
+            run_id=run_id,
             source="tushare",
             endpoint="income",
             contract_version="1",
@@ -124,13 +126,18 @@ def _trusted_terminal(
             **metadata,
         )
         audit.record_field_receipt_links(
-            run_id=RUN_ID,
+            run_id=run_id,
             receipt_id=receipt_id,
             dataset="income_sidecar",
             fields=linked_fields,
         )
+    if history_checkpoint is not None:
+        audit.append_event(run_id, "history_scope_completed", {
+            **history_checkpoint,
+            "receipt_ids": audit.fetch_receipt_ids(run_id),
+        })
     result = audit.finalize_run(
-        run_id=RUN_ID,
+        run_id=run_id,
         source="tushare",
         scope_key=SCOPE_KEY,
         range_start=START,
@@ -144,10 +151,10 @@ def _trusted_terminal(
     return audit, Path(result["receipt_path"])
 
 
-def _build(tmp_path: Path, receipt: Path) -> dict:
+def _build(tmp_path: Path, receipt: Path, *, source_run_id: str = RUN_ID) -> dict:
     return materialize_audited_income_sidecar(
         terminal_receipt_path=receipt,
-        source_run_id=RUN_ID,
+        source_run_id=source_run_id,
         scope_key=SCOPE_KEY,
         range_start=START,
         range_end=CUTOFF,
@@ -176,7 +183,7 @@ def test_builder_projects_trusted_raw_and_publishes_immutable_identity(
     manifest = json.loads(Path(first["manifest_path"]).read_text(encoding="utf-8"))
     assert manifest["scope"]["symbols"] == ["000001.SZ", "000002.SZ"]
     assert manifest["projection"]["excluded_future_rows"] == 1
-    assert manifest["projection"]["revision_timeline_unproven_excluded_rows"] == 1
+    assert manifest["projection"]["right_censored_keys"] == 1
     assert manifest["source_evidence"]["terminal_receipt_sha256"]
 
     identity = validate_income_sidecar_identity(
@@ -190,6 +197,106 @@ def test_builder_projects_trusted_raw_and_publishes_immutable_identity(
         required_symbols={"000001.SZ", "000002.SZ"},
     )
     assert identity["manifest"]["artifact_id"] == first["artifact_id"]
+
+
+def test_builder_preserves_orderable_income_revision_events(tmp_path: Path) -> None:
+    _, receipt = _trusted_terminal(
+        tmp_path,
+        first_frame=pd.DataFrame([
+            _row(
+                ann_date="20260818", f_ann_date="20260818",
+                update_flag="0", revenue=10.0,
+            ),
+            _row(
+                ann_date="20260820", f_ann_date="20260820",
+                update_flag="1", revenue=11.0,
+            ),
+        ]),
+    )
+
+    result = _build(tmp_path, receipt)
+    sidecar = pd.read_parquet(result["artifact_path"])
+    manifest = json.loads(Path(result["manifest_path"]).read_text(encoding="utf-8"))
+
+    assert sidecar["availability_date"].tolist() == ["20260818", "20260820"]
+    assert sidecar["revenue"].tolist() == [10.0, 11.0]
+    assert sidecar["event_kind"].tolist() == [
+        "INITIAL_PUBLICATION", "REVISION_PUBLICATION",
+    ]
+    assert manifest["projection"]["proven_revision_events"] == 1
+
+
+def test_builder_projects_income_from_explicit_inherited_history_scope(
+    tmp_path: Path,
+) -> None:
+    checkpoint = {
+        "scope_id": "scope-1",
+        "canonical_scope_sha256": "b" * 64,
+        "receipt_ids": [],
+    }
+    audit, source_receipt = _trusted_terminal(
+        tmp_path,
+        run_id="income-history-source",
+        history_checkpoint=checkpoint,
+    )
+    source = json.loads(source_receipt.read_text(encoding="utf-8"))
+    checkpoint = next(
+        event["payload"] for event in source["audit_journal"]
+        if event["event_type"] == "history_scope_completed"
+    )
+    source_sha = hashlib.sha256(source_receipt.read_bytes()).hexdigest()
+
+    certifying_run = "income-history-certifier"
+    audit.append_event(certifying_run, "run_started", {
+        "entrypoint": "scripts/data_sync.py",
+        "universe": SCOPE_KEY,
+        "target_date": CUTOFF,
+        "range_start": START,
+    })
+    audit.record_history_scope_inherited(
+        run_id=certifying_run,
+        checkpoint={
+            **checkpoint,
+            "source_run_id": "income-history-source",
+            "source_receipt_sha256": source_sha,
+        },
+    )
+    certified = audit.finalize_run(
+        run_id=certifying_run,
+        source="tushare",
+        scope_key=SCOPE_KEY,
+        range_start=START,
+        range_end=CUTOFF,
+        fields=TRUSTED_FIELDS,
+        gates={name: True for name in REQUIRED_TERMINAL_GATES},
+        receipt_root=tmp_path / "data" / "audit" / "source_runs",
+        allow_initial_history=True,
+    )
+
+    result = _build(
+        tmp_path, Path(certified["receipt_path"]), source_run_id=certifying_run,
+    )
+    sidecar = pd.read_parquet(result["artifact_path"])
+    assert sidecar["source_run_id"].unique().tolist() == ["income-history-source"]
+    assert sidecar["certifying_run_id"].unique().tolist() == [certifying_run]
+    manifest = json.loads(Path(result["manifest_path"]).read_text(encoding="utf-8"))
+    assert manifest["source_evidence"]["run_id"] == certifying_run
+    assert {
+        row["evidence_run_id"] for row in manifest["source_evidence"]["receipts"]
+    } == {"income-history-source"}
+
+
+def test_builder_uses_scope_bound_symbol_without_ts_code_field_link(
+    tmp_path: Path,
+) -> None:
+    _, receipt = _trusted_terminal(
+        tmp_path,
+        linked_fields=tuple(field for field in FIELDS if field != "ts_code"),
+    )
+
+    result = _build(tmp_path, receipt)
+
+    assert result["status"] == "published"
 
 
 def test_builder_rejects_untrusted_terminal(tmp_path: Path) -> None:

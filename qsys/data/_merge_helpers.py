@@ -5,15 +5,37 @@ These are pure functions with no dependency on ``self`` or instance state.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any
 
 import pandas as pd
 
 
 FINANCIAL_AVAILABILITY_CONTRACT = "financial_first_available_v1"
+FINANCIAL_LATEST_KNOWN_CONTRACT = (
+    "financial_latest_known_actual_publication_v1"
+)
+FINANCIAL_OPERATIONAL_PIT_CONTRACT = "financial_operational_observed_v1"
+FINANCIAL_BEST_EFFORT_BOOTSTRAP_CONTRACT = "financial_best_effort_bootstrap_v1"
+FINANCIAL_VERSIONED_EVENT_CONTRACT = "financial_versioned_event_v1"
 FINANCIAL_AVAILABILITY_RULE = (
     "publication_date_after_close_consumable_only_by_strictly_later_trade_date"
 )
+TUSHARE_FINA_INDICATOR_UNIT_CONTRACT = (
+    "tushare_fina_indicator_percent_points_to_ratio_v1"
+)
+TUSHARE_FINA_INDICATOR_PERCENT_POINT_FIELDS = frozenset({
+    "roe",
+    "roe_waa",
+    "roe_ttm",
+    "grossprofit_margin",
+    "debt_to_assets",
+    "q_gr_yoy",
+    "dt_netprofit_yoy",
+    "profit_to_gr",
+    "net_profit_margin",
+})
 STATEMENT_ENDPOINTS = frozenset({"income", "balancesheet", "cashflow"})
 STATEMENT_LOGICAL_KEY = (
     "ts_code", "end_date", "report_type", "comp_type", "end_type",
@@ -35,6 +57,13 @@ _CONSUMED_PAYLOAD_FIELDS = {
     "cashflow": frozenset({"n_cashflow_act"}),
     "fina_indicator": frozenset({"roe", "grossprofit_margin", "debt_to_assets"}),
 }
+_LATEST_KNOWN_CONSUMED_PAYLOAD_FIELDS = {
+    **_CONSUMED_PAYLOAD_FIELDS,
+    "balancesheet": frozenset({
+        "total_assets", "total_hldr_eqy_exc_min_int",
+        "total_cur_assets", "total_cur_liab",
+    }),
+}
 
 
 class FinancialAvailabilityError(RuntimeError):
@@ -43,6 +72,25 @@ class FinancialAvailabilityError(RuntimeError):
     def __init__(self, message: str, **details: Any) -> None:
         super().__init__(f"{message}: {details}" if details else message)
         self.details = {"reason": message, **details}
+
+
+def convert_tushare_fina_indicator_units(frame: pd.DataFrame) -> pd.DataFrame:
+    """Convert Tushare ``fina_indicator`` percent points to ratios exactly once.
+
+    The supplier contract, not a value threshold, owns the unit.  Callers must
+    use this only on raw ``fina_indicator`` rows before they enter canonical
+    storage.  Canonical-to-Qlib adapters pass these fields through unchanged.
+    """
+
+    if frame is None or frame.empty:
+        return frame
+    converted = frame.copy()
+    for column in TUSHARE_FINA_INDICATOR_PERCENT_POINT_FIELDS:
+        if column in converted.columns:
+            converted[column] = pd.to_numeric(
+                converted[column], errors="coerce"
+            ) / 100.0
+    return converted
 
 
 def _diagnostic_json_value(value: Any) -> Any:
@@ -114,13 +162,358 @@ def _deterministic_first(frame: pd.DataFrame) -> pd.Series:
     return frame.sort_values(order, kind="mergesort", na_position="last").iloc[0]
 
 
+def _consumed_value_tuple(row: pd.Series, fields: list[str]) -> tuple[Any, ...]:
+    return tuple(_diagnostic_json_value(row[field]) for field in fields)
+
+
+def _value_fingerprint(value: tuple[Any, ...]) -> str:
+    payload = json.dumps(
+        value, sort_keys=True, ensure_ascii=False, separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _observed_session(value: str | None) -> str | None:
+    if value is None or not str(value).strip():
+        return None
+    text = str(value).strip()
+    compact = text.replace("-", "")
+    if len(compact) == 8 and compact.isdigit():
+        return _normalized_date_column(
+            pd.DataFrame({"observed": [compact]}),
+            "observed", allow_missing=False,
+        ).iloc[0]
+    parsed = pd.to_datetime(text, errors="coerce", utc=True)
+    if pd.isna(parsed):
+        raise FinancialAvailabilityError(
+            "invalid_first_observed_at", first_observed_at=text,
+        )
+    return parsed.strftime("%Y%m%d")
+
+
+def _select_financial_versioned_rows(
+    frame: pd.DataFrame,
+    *,
+    endpoint: str,
+    availability_cutoff: str | None,
+    projection: str,
+    first_observed_at: str | None,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Build versioned financial events, then apply one explicit PIT projection.
+
+    ``strict_market`` keeps only source-dated complete timelines. ``operational``
+    adds one supplier-current row for an incomplete timeline, visible no earlier
+    than the immutable receipt's observation date. The certification oracle is
+    intentionally separate from this materializer.
+    """
+
+    endpoint = str(endpoint)
+    if endpoint not in {*STATEMENT_ENDPOINTS, "fina_indicator"}:
+        raise ValueError(f"unsupported financial endpoint: {endpoint}")
+    if projection not in {"strict_market", "operational"}:
+        raise ValueError(f"unsupported financial projection: {projection}")
+    observed_session = _observed_session(first_observed_at)
+    if projection == "operational" and observed_session is None:
+        raise FinancialAvailabilityError(
+            "operational_projection_requires_first_observed_at",
+            endpoint=endpoint,
+        )
+    cutoff = None
+    if availability_cutoff is not None:
+        cutoff = _normalized_date_column(
+            pd.DataFrame({"cutoff": [availability_cutoff]}),
+            "cutoff", allow_missing=False,
+        ).iloc[0]
+    stats: dict[str, Any] = {
+        "contract": (
+            FINANCIAL_LATEST_KNOWN_CONTRACT
+            if projection == "strict_market"
+            else FINANCIAL_OPERATIONAL_PIT_CONTRACT
+        ),
+        "source_event_contract": FINANCIAL_VERSIONED_EVENT_CONTRACT,
+        "projection": projection,
+        "first_observed_session": observed_session,
+        "availability_rule": FINANCIAL_AVAILABILITY_RULE,
+        "availability_cutoff": cutoff,
+        "raw_rows": 0,
+        "eligible_primary_rows": 0,
+        "projected_rows": 0,
+        "complete_logical_keys": 0,
+        "blocked_logical_keys": 0,
+        "right_censored_keys": 0,
+        "same_publication_conflict_keys": 0,
+        "proven_events": 0,
+        "proven_revision_events": 0,
+        "equivalent_republication_events": 0,
+        "collapsed_equal_same_date_rows": 0,
+        "excluded_future_rows": 0,
+        "excluded_non_primary_report_type_rows": 0,
+        "excluded_unsupported_statement_period_rows": 0,
+        "excluded_missing_end_type_keys": 0,
+        "canonical_branch_conflict_keys": 0,
+        "observed_only_events": 0,
+        "operational_unresolved_keys": 0,
+        "excluded_observed_after_cutoff": 0,
+        "exceptions": [],
+    }
+    if frame is None or frame.empty:
+        empty = frame.copy() if isinstance(frame, pd.DataFrame) else pd.DataFrame()
+        empty["publication_date"] = pd.Series(dtype="object")
+        empty["availability_date"] = pd.Series(dtype="object")
+        return empty, stats
+
+    work = frame.copy()
+    stats["raw_rows"] = len(work)
+    is_statement = endpoint in STATEMENT_ENDPOINTS
+    logical_key = list(STATEMENT_LOGICAL_KEY if is_statement else INDICATOR_LOGICAL_KEY)
+    consumed_fields = sorted(_LATEST_KNOWN_CONSUMED_PAYLOAD_FIELDS[endpoint])
+    required = set(logical_key) | {"ann_date", "update_flag", *consumed_fields}
+    if is_statement:
+        required.add("f_ann_date")
+    missing = sorted(required - set(work.columns))
+    if missing:
+        raise FinancialAvailabilityError(
+            "missing_financial_fields", endpoint=endpoint, fields=missing,
+        )
+
+    symbols = work["ts_code"].astype("string").str.strip()
+    invalid_symbols = symbols.isna() | symbols.eq("") | symbols.str.lower().eq("nan")
+    if invalid_symbols.any():
+        raise FinancialAvailabilityError(
+            "invalid_financial_symbol", endpoint=endpoint,
+            invalid_count=int(invalid_symbols.sum()),
+        )
+    work["ts_code"] = symbols
+    work["ann_date"] = _normalized_date_column(work, "ann_date", allow_missing=False)
+    work["end_date"] = _normalized_date_column(work, "end_date", allow_missing=False)
+    work["update_flag"] = _normalized_code_column(work, "update_flag")
+    invalid_flags = ~work["update_flag"].isin(["0", "1"])
+    if invalid_flags.any():
+        raise FinancialAvailabilityError(
+            "invalid_update_flag", endpoint=endpoint,
+            invalid_count=int(invalid_flags.sum()),
+        )
+
+    if is_statement:
+        work["f_ann_date"] = _normalized_date_column(
+            work, "f_ann_date", allow_missing=True,
+        )
+        work["publication_date"] = work[["ann_date", "f_ann_date"]].max(axis=1)
+        for column in ("report_type", "comp_type", "end_type"):
+            work[column] = _normalized_code_column(work, column)
+        if work["comp_type"].isna().any():
+            raise FinancialAvailabilityError(
+                "missing_comp_type", endpoint=endpoint,
+                invalid_count=int(work["comp_type"].isna().sum()),
+            )
+        primary = work["report_type"].eq("1")
+        stats["excluded_non_primary_report_type_rows"] = int((~primary).sum())
+        work = work.loc[primary].copy()
+        supported = work["end_date"].astype(str).str.slice(4).isin(_EXPECTED_END_TYPE)
+        stats["excluded_unsupported_statement_period_rows"] = int((~supported).sum())
+        work = work.loc[supported].copy()
+        kept: list[pd.DataFrame] = []
+        for (_symbol, end_date), group in work.groupby(
+            ["ts_code", "end_date"], dropna=False, sort=True,
+        ):
+            expected = _EXPECTED_END_TYPE[str(end_date)[4:]]
+            matched = group.loc[group["end_type"].eq(expected)]
+            if not matched.empty:
+                kept.append(matched)
+                continue
+            if group["end_type"].isna().all():
+                stats["excluded_missing_end_type_keys"] += 1
+                continue
+            raise FinancialAvailabilityError(
+                "statement_end_type_mismatch", endpoint=endpoint,
+                ts_code=str(_symbol), end_date=str(end_date),
+                expected_end_type=expected,
+                branches=sorted(group["end_type"].dropna().unique().tolist()),
+            )
+        work = pd.concat(kept, ignore_index=True) if kept else work.iloc[0:0].copy()
+    else:
+        if len(work) >= 100:
+            raise FinancialAvailabilityError(
+                "fina_indicator_possible_truncation", endpoint=endpoint,
+                returned_rows=len(work), supplier_row_limit=100,
+            )
+        work["publication_date"] = work["ann_date"]
+    work["availability_date"] = work["publication_date"]
+    stats["eligible_primary_rows"] = len(work)
+    if cutoff is not None:
+        future = work["publication_date"].gt(cutoff)
+        stats["excluded_future_rows"] = int(future.sum())
+        work = work.loc[~future].copy()
+
+    selected: list[pd.Series] = []
+    for key, group in work.groupby(logical_key, dropna=False, sort=True):
+        key_values = key if isinstance(key, tuple) else (key,)
+        key_mapping = _diagnostic_json_value(dict(zip(logical_key, key_values)))
+        earliest = group["publication_date"].min()
+        first = group.loc[group["publication_date"].eq(earliest)]
+        right_censored = not first["update_flag"].eq("0").any()
+        conflict_dates = [
+            str(publication_date)
+            for publication_date, published in group.groupby(
+                "publication_date", dropna=False, sort=True,
+            )
+            if _differing_columns(published, consumed_fields)
+        ]
+        if right_censored or conflict_dates:
+            stats["blocked_logical_keys"] += 1
+            stats["right_censored_keys"] += int(right_censored)
+            stats["same_publication_conflict_keys"] += int(bool(conflict_dates))
+            if len(stats["exceptions"]) < 100:
+                stats["exceptions"].append({
+                    "reason": (
+                        "initial_publication_value_missing"
+                        if right_censored else "same_publication_value_conflict"
+                    ),
+                    "endpoint": endpoint,
+                    "logical_key": key_mapping,
+                    "conflict_dates": conflict_dates,
+                    "row_count": len(group),
+                })
+            if projection == "operational":
+                current = group.loc[group["update_flag"].eq("1")].copy()
+                if current.empty:
+                    latest_publication = group["publication_date"].max()
+                    current = group.loc[
+                        group["publication_date"].eq(latest_publication)
+                    ].copy()
+                else:
+                    latest_publication = current["publication_date"].max()
+                    current = current.loc[
+                        current["publication_date"].eq(latest_publication)
+                    ].copy()
+                if _differing_columns(current, consumed_fields):
+                    stats["operational_unresolved_keys"] += 1
+                    continue
+                row = _deterministic_first(current).copy()
+                availability_date = max(
+                    str(observed_session), str(row["publication_date"]),
+                )
+                if cutoff is not None and availability_date > cutoff:
+                    stats["excluded_observed_after_cutoff"] += 1
+                    continue
+                value = _consumed_value_tuple(row, consumed_fields)
+                row["availability_date"] = availability_date
+                row["source_available_session"] = pd.NA
+                row["first_observed_session"] = observed_session
+                row["availability_evidence"] = "observed_only"
+                row["pit_tier"] = "operational_pit"
+                row["row_fingerprint"] = _value_fingerprint(value)
+                row["event_kind"] = (
+                    "RIGHT_CENSORED_FIRST_OBSERVED"
+                    if right_censored else "UNTIMED_REVISION_FIRST_OBSERVED"
+                )
+                row["capability_status"] = "OBSERVED_ONLY"
+                selected.append(row)
+                stats["observed_only_events"] += 1
+            continue
+
+        stats["complete_logical_keys"] += 1
+        previous_value: tuple[Any, ...] | None = None
+        for position, (_publication_date, published) in enumerate(group.groupby(
+            "publication_date", dropna=False, sort=True,
+        )):
+            stats["collapsed_equal_same_date_rows"] += len(published) - 1
+            row = _deterministic_first(published).copy()
+            value = _consumed_value_tuple(row, consumed_fields)
+            if position == 0:
+                event_kind = "INITIAL_PUBLICATION"
+            elif value == previous_value:
+                event_kind = "EQUIVALENT_REPUBLICATION"
+                stats["equivalent_republication_events"] += 1
+            else:
+                event_kind = "REVISION_PUBLICATION"
+                stats["proven_revision_events"] += 1
+            row["event_kind"] = event_kind
+            row["capability_status"] = "PROVEN_COMPLETE_KEY"
+            row["source_available_session"] = row["publication_date"]
+            row["first_observed_session"] = observed_session
+            row["availability_evidence"] = "provider_date"
+            row["pit_tier"] = "strict_market_pit"
+            row["row_fingerprint"] = _value_fingerprint(value)
+            selected.append(row)
+            stats["proven_events"] += 1
+            previous_value = value
+
+    result = (
+        pd.DataFrame(selected).reset_index(drop=True)
+        if selected else work.iloc[0:0].copy()
+    )
+    if is_statement and not result.empty:
+        bad_periods: set[tuple[str, str]] = set()
+        for (symbol, end_date, _publication_date), published in result.groupby(
+            ["ts_code", "end_date", "publication_date"],
+            dropna=False, sort=True,
+        ):
+            if _differing_columns(published, consumed_fields):
+                bad_periods.add((str(symbol), str(end_date)))
+        if bad_periods:
+            bad = pd.Series(
+                list(zip(result["ts_code"].astype(str), result["end_date"].astype(str))),
+                index=result.index,
+            ).isin(bad_periods)
+            result = result.loc[~bad].copy()
+            stats["canonical_branch_conflict_keys"] = len(bad_periods)
+        collapsed: list[pd.Series] = []
+        for (_symbol, _end_date, _publication_date), published in result.groupby(
+            ["ts_code", "end_date", "publication_date"],
+            dropna=False, sort=True,
+        ):
+            collapsed.append(_deterministic_first(published).copy())
+        result = (
+            pd.DataFrame(collapsed).reset_index(drop=True)
+            if collapsed else result.iloc[0:0].copy()
+        )
+    stats["projected_rows"] = len(result)
+    return result.reset_index(drop=True), stats
+
+
+def select_latest_known_financial_rows(
+    frame: pd.DataFrame,
+    *,
+    endpoint: str,
+    availability_cutoff: str | None,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Project only source-dated, complete latest-known market events."""
+
+    return _select_financial_versioned_rows(
+        frame,
+        endpoint=endpoint,
+        availability_cutoff=availability_cutoff,
+        projection="strict_market",
+        first_observed_at=None,
+    )
+
+
+def select_operational_financial_rows(
+    frame: pd.DataFrame,
+    *,
+    endpoint: str,
+    availability_cutoff: str | None,
+    first_observed_at: str,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Project source-dated events plus observation-bounded current versions."""
+
+    return _select_financial_versioned_rows(
+        frame,
+        endpoint=endpoint,
+        availability_cutoff=availability_cutoff,
+        projection="operational",
+        first_observed_at=first_observed_at,
+    )
+
+
 def select_first_available_financial_rows(
     frame: pd.DataFrame,
     *,
     endpoint: str,
     availability_cutoff: str | None,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
-    """Validate and project one raw financial response conservatively.
+    """Implement the legacy vendor-date projection used by bootstrap only.
 
     Supplier rows are never modified by the caller before its raw receipt is
     persisted.  This function returns a separate projection: statements use
@@ -129,7 +522,9 @@ def select_first_available_financial_rows(
     otherwise only statements with an independently later final-announcement
     date remain eligible.  A public canonical row cannot represent conflicting
     consumed company-type branches, so those responses fail closed instead of
-    relying on row order.
+    relying on row order. Callers that consume these rows must go through
+    :func:`select_best_effort_bootstrap_financial_rows` so the downgraded trust
+    tier is explicit.
     """
 
     endpoint = str(endpoint)
@@ -428,6 +823,44 @@ def select_first_available_financial_rows(
         "revision_timeline_unproven_exceptions": unproven_exceptions,
     }
     return eligible.reset_index(drop=True), stats
+
+
+def select_best_effort_bootstrap_financial_rows(
+    frame: pd.DataFrame,
+    *,
+    endpoint: str,
+    availability_cutoff: str | None,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Expose legacy vendor-date history only under an explicit downgraded tier."""
+
+    projected, stats = select_first_available_financial_rows(
+        frame,
+        endpoint=endpoint,
+        availability_cutoff=availability_cutoff,
+    )
+    stats = {
+        **stats,
+        "contract": FINANCIAL_BEST_EFFORT_BOOTSTRAP_CONTRACT,
+        "source_projection_contract": FINANCIAL_AVAILABILITY_CONTRACT,
+        "projection": "best_effort_bootstrap",
+    }
+    if projected.empty:
+        return projected, stats
+    projected = projected.copy()
+    value_fields = sorted(
+        set(_LATEST_KNOWN_CONSUMED_PAYLOAD_FIELDS[str(endpoint)])
+        .intersection(projected.columns)
+    )
+    projected["source_available_session"] = pd.NA
+    projected["first_observed_session"] = pd.NA
+    projected["availability_evidence"] = "vendor_date"
+    projected["pit_tier"] = "best_effort_pit"
+    projected["row_fingerprint"] = projected.apply(
+        lambda row: _value_fingerprint(_consumed_value_tuple(row, value_fields)),
+        axis=1,
+    )
+    projected["capability_status"] = "BEST_EFFORT_BOOTSTRAP"
+    return projected, stats
 
 
 def merge_trade_frames(left: pd.DataFrame, right: pd.DataFrame, *, keys: list[str]) -> pd.DataFrame:

@@ -28,6 +28,7 @@ usecases:
       - harness/checks/check_shareholder_data_freshness.py
       - tests/test_source_audit.py
       - tests/test_data_sync_csi1800.py
+      - tests/test_financial_replay.py
       - tests/test_daily_incremental_fastpath.py
       - tests/ops/test_universe_history.py
     allowed_paths:
@@ -357,6 +358,7 @@ usecases:
       - scripts/research/certify_pit_baseline.py
     supporting_tools:
       - scripts/ops/audit_raw_to_qlib_coverage.py
+      - scripts/data_sync.py --collect-source-revision-announcements-from-trusted-run-id
     artifacts:
       - data/audit/audit.db
       - data/audit/source_runs/{run_id}/receipt.json
@@ -378,6 +380,7 @@ usecases:
       - tests/ops/test_shareholder_sync.py
       - tests/research/test_lightgbm_window_cache_identity.py
       - tests/test_data_sync_csi1800.py
+      - tests/test_financial_replay.py
     allowed_paths:
       - scripts/research/certify_pit_baseline.py
       - scripts/ops/audit_raw_to_qlib_coverage.py
@@ -385,11 +388,21 @@ usecases:
       - qsys/pit_datapack.py
       - qsys/ops/data_coverage.py
       - qsys/ops/shareholder_sync.py
+      - qsys/ops/financial_replay.py
+      - qsys/data/_merge_helpers.py
+      - qsys/data/income_sidecar.py
+      - qsys/data/collector.py
+      - qsys/data/_fetch_strategies.py
+      - qsys/data/source_audit.py
+      - qsys/data/storage.py
       - qsys/research/generators/lightgbm_single_label.py
       - qsys/research/matrix_job.py
       - scripts/data_sync.py
       - configs/audit/csi1800_s180_baseline_v1_r1.yaml
+      - configs/audit/csi1800_s180_r3_source_revision_v1.yaml
       - configs/audit/feature_dependencies/v3a_plus_liquidity_financial_rc_v1.yaml
+      - configs/research/60d/financial_rc_180d_rolling_5y_to_202607_v3_pit_csi1800_terminal_r2.yaml
+      - configs/research/60d/financial_rc_180d_rolling_5y_to_202607_v3_pit_csi1800_terminal_r3.yaml
       - docs/requirements/
       - docs/CONTRACTS.md
       - docs/ops/DAILY_OPS_SOP.md
@@ -398,6 +411,10 @@ usecases:
       - tests/ops/test_shareholder_sync.py
       - tests/research/test_lightgbm_window_cache_identity.py
       - tests/test_data_sync_csi1800.py
+      - tests/test_financial_replay.py
+      - tests/test_financial_pit.py
+      - tests/test_income_sidecar.py
+      - tests/test_source_revision_certification.py
       - .claude/skills/sysq-dev/SKILL.md
     forbidden_paths:
       - scripts/run_daily.py

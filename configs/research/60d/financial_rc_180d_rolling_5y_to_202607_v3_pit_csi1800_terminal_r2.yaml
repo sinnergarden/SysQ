@@ -1,0 +1,59 @@
+# Frozen CSI1800 S180 rerun bound to terminal-backed income and shareholder
+# feature sources.  Research, model, label, rolling-window and transform
+# semantics match the v1_r1 comparison baseline.
+experiment_id: financial_rc_180d_rolling_5y_to_202607_v3_pit_csi1800_terminal_r2
+calendar:
+  start_date: "2021-01-01"
+  end_date: "2026-07-31"
+  train_window_days: 504
+  step_days: 20
+signal:
+  signal_id: v3a_growth_financial_180d_pit_csi1800_terminal_r2
+  score_column: score
+feature_list_id: v3a_plus_liquidity_financial_rc
+source_manifest_hash: f656bd0bdee1718823d12fb28e23234273cdd3f4771ac6352f71e810b7a875f6
+window_checkpoints: true
+use_feature_cache: true
+feature_cache_root: data/feature_cache
+generators:
+  - generator_id: v3a_growth_financial_180d_pit_csi1800_terminal_r2
+    type: multi_label_lightgbm
+    params:
+      universe: csi1800_pit_union
+      n_estimators: 300
+      feature_list_id: v3a_plus_liquidity_financial_rc
+      pit_membership: true
+      pit_universe_artifact: csi1800_pit_v2
+      income_source_mode: audited_sidecar_v1
+      income_sidecar_path: data/research/source_snapshots/income/7775d55750de73d80e1cd30a4cc3fd91d065750867d478a3d9c7f1e8027fbe0b/income.parquet
+      income_sidecar_sha256: 6ef941166aaeed8658ee5dd796056d728303d23e0d28703e5b089ac26214fa42
+      income_sidecar_manifest_path: data/research/source_snapshots/income/7775d55750de73d80e1cd30a4cc3fd91d065750867d478a3d9c7f1e8027fbe0b/manifest.json
+      income_sidecar_manifest_sha256: 0b549ae0ff2ae82b6a6ed90c242d9a4a46e6227e008ff39e6ef987de21d85bae
+      income_sidecar_required_history_start: "20140313"
+      shareholder_holder_path: data/research/source_snapshots/shareholder/ef35654cfc2ba1da62cafcfa5640eda3ebc6b38964182e3569109c7e91be2ea9/holder_num.parquet
+      shareholder_holder_sha256: 039d36c8f56415bdf8be3d166ade2c44b4701543c8a018244d69b0b108ebfadc
+      shareholder_top10_path: data/research/source_snapshots/shareholder/ef35654cfc2ba1da62cafcfa5640eda3ebc6b38964182e3569109c7e91be2ea9/top10_holder_ratio.parquet
+      shareholder_top10_sha256: 69d7523f2ac43027d7a7a5ee3b0c7ff9d71030bf943458e46012ebac9f0e4c41
+      shareholder_manifest_path: data/research/source_snapshots/shareholder/ef35654cfc2ba1da62cafcfa5640eda3ebc6b38964182e3569109c7e91be2ea9/manifest.json
+      shareholder_manifest_sha256: a1918dc2af67dbaea9c5032eea8a56ca02d821d615e855b9fd167c5ec522b336
+      shareholder_freshness_contract:
+        source: tushare.stk_holdernumber+tushare.top10_holders
+        availability_rule: announcement_date_asof
+        min_coverage: 0.95
+        features:
+          holder_num_stale_days:
+            min_coverage: 0.94
+            max_median_days: 200
+            max_row_days: 365
+          top10_holder_stale_days:
+            min_coverage: 0.99
+            max_median_days: 250
+            max_row_days: 365
+      labels:
+        - label_id: fwd_ret_180d_raw_pit_csi1800
+signal_transforms:
+  - transform_id: daily_zscore
+    type: daily_zscore
+labels:
+  - label_id: fwd_ret_180d_raw_pit_csi1800
+    label_maturity_lag_trading_days: 181

@@ -85,8 +85,10 @@ Qlib readback 和 terminal watermark 做交集验证，产出不可变 certifica
 
 该 entrypoint 必须只读，不得 import/call daily fetch、repair、research runner 或 production
 runner。daily evidence 仍由 `UC_DAILY_OPS` 的既有 entrypoint 生产。`scripts/data_sync.py`
-另有显式、与 normal sync 互斥的 offline shareholder snapshot bootstrap mode；它只从指定
-trusted terminal 的 verified raw payload 重建 immutable v2 snapshot，不联网，也不由 certifier 调度。
+另有显式、与 normal sync 互斥的 shareholder history supporting mode 与 offline snapshot
+bootstrap mode；前者从精确 SHA 锚定的 trusted base terminal 生产 shareholder evidence，后者
+只从指定 trusted terminal 的 verified raw payload 重建 immutable v2 snapshot。两者都不由
+certifier 调度。
 
 ### Key Artifacts
 
@@ -106,6 +108,7 @@ trusted terminal 的 verified raw payload 重建 immutable v2 snapshot，不联�
 - `tests/ops/test_shareholder_sync.py`
 - `tests/research/test_lightgbm_window_cache_identity.py`
 - `tests/test_data_sync_csi1800.py`
+- `tests/test_financial_replay.py`
 
 ### Execution Guidance For Future Audit Tasks
 
@@ -118,6 +121,10 @@ trusted terminal 的 verified raw payload 重建 immutable v2 snapshot，不联�
 - `published_at` 未知必须为 null，`observed_at` 与 `ingested_at` 不得替代它；
 - required endpoint 的 empty/partial/failure、无法解释的 requested-symbol 缺口、null
   required field、canonical/Qlib mismatch 均 fail closed；
+- 财务认证的目标语义是 `financial_latest_known_actual_publication_v1`：首次披露公开后使用初值，
+  修订披露公开后才切换修订值。`financial_first_available_v1` 可以作为保守研究输入，但不能据此
+  声称完整 latest-known PIT；若修订有效日无法由独立 publication evidence 证明，或当前派生层
+  尚未按修订事件投影，必须产生 `FINANCIAL_LATEST_KNOWN_REVISION_CAPABILITY_UNVERIFIED` blocker；
 - same-key value revision 必须进入 canonical mutation 与 Qlib value readback，不能只看新增日；
 - watermark 只能在 fetch/raw payload、canonical commit、Qlib readback、readiness 和
   contiguous-range gates 全部通过后由唯一 terminal owner 推进；legacy/untrusted 永不推进；
@@ -147,10 +154,18 @@ reviewer_agent
 - `qsys/pit_datapack.py`
 - `qsys/ops/data_coverage.py`
 - `qsys/ops/shareholder_sync.py`（仅 terminal-backed offline snapshot materializer）
+- `qsys/data/_merge_helpers.py`（仅 financial source-event materializer）
+- `qsys/data/income_sidecar.py`（仅 immutable income event sidecar）
+- `qsys/data/collector.py`（仅 raw financial response projection）
+- `qsys/data/_fetch_strategies.py`（仅保留 supplier terminal failure detail）
+- `qsys/data/source_audit.py`（仅在 frozen raw reuse 中保留原始 observed_at）
+- `qsys/ops/financial_replay.py`（仅 frozen-raw offline replay）
 - `qsys/research/generators/lightgbm_single_label.py`
 - `qsys/research/matrix_job.py`
-- `scripts/data_sync.py`（仅显式 offline snapshot bootstrap mode）
+- `scripts/data_sync.py`（仅显式 shareholder/announcement evidence supporting mode 与
+  offline snapshot bootstrap mode）
 - `configs/audit/csi1800_s180_baseline_v1_r1.yaml`
+- `configs/audit/csi1800_s180_r3_source_revision_v1.yaml`
 - `configs/audit/feature_dependencies/v3a_plus_liquidity_financial_rc_v1.yaml`
 - `docs/requirements/`
 - `docs/CONTRACTS.md`
@@ -160,6 +175,10 @@ reviewer_agent
 - `tests/ops/test_shareholder_sync.py`
 - `tests/research/test_lightgbm_window_cache_identity.py`
 - `tests/test_data_sync_csi1800.py`
+- `tests/test_financial_replay.py`
+- `tests/test_financial_pit.py`
+- `tests/test_income_sidecar.py`
+- `tests/test_source_revision_certification.py`
 - `.claude/skills/sysq-dev/SKILL.md`
 
 ### Forbidden Paths

@@ -3,6 +3,8 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from qsys.feature.transforms import PIT_CROSS_SECTION_COLUMN, cross_section_transform
+
 
 def build_fundamental_context_features(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
@@ -156,8 +158,11 @@ def build_fundamental_context_features(df: pd.DataFrame) -> pd.DataFrame:
     if all(x is not None for x in [_ts60, _rps120, _rps20, _pp252]):
         # BUGFIX: percent_rank of trend_smoothness must be per trade_date
         # (cross-sectional rank), not across all dates × stocks.
-        cont = (out.groupby("trade_date")["trend_smoothness_60d"].transform(
-                    lambda s: s.fillna(0).clip(-1, 1).rank(pct=True)
+        cont = (cross_section_transform(
+                    out,
+                    "trend_smoothness_60d",
+                    "trade_date",
+                    lambda s: s.fillna(0).clip(-1, 1).rank(pct=True),
                 ) * 1.0
                 + _rps120.fillna(0) * 1.0
                 + _pp252.fillna(0) * 0.5
@@ -201,7 +206,7 @@ def build_fundamental_context_features(df: pd.DataFrame) -> pd.DataFrame:
 
     # Clean up intermediates
     for c in list(out.columns):
-        if c.startswith("_"):
+        if c.startswith("_") and c != PIT_CROSS_SECTION_COLUMN:
             out = out.drop(columns=[c])
 
     return out

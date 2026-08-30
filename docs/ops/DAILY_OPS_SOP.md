@@ -105,6 +105,26 @@ python scripts/data_sync.py \
 完整历史起点，rolling request window 仅负责本次 cutoff。已有相同 identity
 只在两份文件 byte-for-byte 一致时复用；任何 terminal/payload/hash/scope 不一致都阻断。
 
+当 market/financial terminal 已可信而 certification 仍需补充 shareholder history 时，使用
+同一个 canonical entrypoint 的显式 supporting mode。它先按 run id 与 SHA-256 复核 base
+terminal，再只采集 CSI1800 historical union 的 holdernumber/top10 shards，提交两份 canonical
+sidecar 并发布新的 trusted terminal：
+
+```bash
+python scripts/data_sync.py \
+  --universe csi1800 \
+  --target-date YYYY-MM-DD \
+  --shareholder-start-date YYYY-MM-DD \
+  --repair-shareholder-history-from-trusted-run-id <trusted_base_run_id> \
+  --trusted-base-receipt-sha256 <exact_receipt_sha256> \
+  --apply
+```
+
+该模式持有 data-root writer lock，不运行 market/Qlib child；readiness 只读复核 base Qlib。
+中断后按原参数添加 `--resume-from-run-id <failed_shareholder_run_id>`，只复用经 receipt 与
+payload hash 验证的 shareholder shards。最终 JSON 的 `run_id` 必须对应 `trust_state=trusted`
+terminal，随后再用该 run 构建 immutable shareholder snapshot。
+
 若 universe-history catch-up 实际开始写 canonical，当前 target-day source receipt 不能替
 这段历史背书。运行会先写 `untrusted_outer_repair_scope`（planned symbols 是 collector
 无 changed-set 返回时的保守上界），阻断水位并非零退出。即使 after-check 随后失败或

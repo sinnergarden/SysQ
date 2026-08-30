@@ -13,12 +13,15 @@ import pytest
 from qsys.data.collector import TushareCollector
 from qsys.data.source_audit import SourceAuditStore
 from qsys.ops.shareholder_sync import (
+    AUDITED_SNAPSHOT_CONTRACT,
+    ShareholderProjectionError,
     _load_audited_shareholder_payload,
     _calendar_year_chunks,
     _paged_call,
     fetch_shareholder_backfill,
     inspect_shareholder_sidecar_health,
     materialize_audited_shareholder_snapshot,
+    merge_shareholder_rows,
     normalise_holder_rows,
     normalise_top10_rows,
     run_shareholder_history_repair,
@@ -135,11 +138,12 @@ def test_materializes_terminal_backed_immutable_shareholder_snapshot(
         "end_date": ["20191231", "20191231"], "holder_num": [1000, 2000],
     })
     top10 = pd.DataFrame({
-        "ts_code": ["000001.SZ", "000001.SZ", "600000.SH"],
-        "ann_date": ["20200430", "20200430", "20200430"],
-        "end_date": ["20191231", "20191231", "20191231"],
-        "holder_name": ["A", "B", "outside"],
-        "hold_ratio": [10.0, 5.0, 50.0],
+        "ts_code": ["000001.SZ"] * 10 + ["600000.SH", "C18001"],
+        "ann_date": ["20200430"] * 12,
+        "end_date": ["20191231"] * 12,
+        "holder_name": [f"holder-{index}" for index in range(10)]
+        + ["outside", "non-equity"],
+        "hold_ratio": [float(index) for index in range(1, 11)] + [50.0, 25.0],
     })
     collector = TushareCollector.__new__(TushareCollector)
     collector.max_retries = 1
@@ -182,13 +186,15 @@ def test_materializes_terminal_backed_immutable_shareholder_snapshot(
     manifest = json.loads(Path(result["manifest_path"]).read_text())
     assert manifest["schema_version"] == 2
     assert manifest["artifact_type"] == "audited_shareholder_pit_sidecars_v2"
+    assert manifest["contracts"]["transform"] == AUDITED_SNAPSHOT_CONTRACT
     assert manifest["source_evidence"]["terminal_receipt_sha256"] == terminal[
         "terminal_receipt_sha256"
     ]
     assert manifest["scope"]["symbols"] == ["000001.SZ", "000002.SZ"]
-    assert manifest["projection"]["excluded_outside_union_rows"] == 2
+    assert manifest["projection"]["excluded_outside_union_rows"] == 3
+    assert manifest["projection"]["excluded_non_equity_identifier_rows"] == 1
     projected = pd.read_parquet(result["top10_path"])
-    assert projected.loc[0, "top10_ratio"] == 15.0
+    assert projected.loc[0, "top10_ratio"] == 55.0
     assert set(projected["inst"]) == {"000001.SZ"}
     projected_holder = pd.read_parquet(result["holder_path"])
     assert set(projected_holder["inst"]) == {"000001.SZ"}
@@ -327,6 +333,124 @@ def test_normalises_corrupt_period_and_aggregates_top10() -> None:
             "top10_ratio": 30.0,
         }
     ]
+
+
+def test_holder_latest_null_period_does_not_borrow_older_same_day_value() -> None:
+    raw = pd.DataFrame({
+        "ts_code": ["000001.SZ", "000001.SZ"],
+        "ann_date": ["20260430", "20260430"],
+        "end_date": ["20251231", "20260331"],
+        "holder_num": [1000, pd.NA],
+    })
+
+    assert normalise_holder_rows(raw, strict_raw=True).empty
+
+
+def test_holder_merge_removes_same_announcement_when_latest_period_is_null() -> None:
+    existing = pd.DataFrame({
+        "inst": ["000001.SZ"], "ann_date": ["2026-04-30"],
+        "end_date": ["2025-12-31"], "holder_num": [1000],
+    })
+    incoming = pd.DataFrame({
+        "ts_code": ["000001.SZ"], "ann_date": ["20260430"],
+        "end_date": ["20260331"], "holder_num": [pd.NA],
+    })
+
+    assert merge_shareholder_rows(existing, incoming, kind="holder_num").empty
+
+
+def test_holder_conflicting_exact_event_fails_closed() -> None:
+    raw = pd.DataFrame({
+        "ts_code": ["000001.SZ", "000001.SZ"],
+        "ann_date": ["20260430", "20260430"],
+        "end_date": ["20260331", "20260331"],
+        "holder_num": [1000, 999],
+    })
+
+    with pytest.raises(ShareholderProjectionError, match="conflicting holder_num"):
+        normalise_holder_rows(raw, strict_raw=True)
+
+
+def test_strict_top10_normalises_identity_and_requires_complete_exact_event() -> None:
+    raw = pd.DataFrame({
+        "ts_code": ["000001.SZ"] * 11,
+        "ann_date": ["20260430"] * 11,
+        "end_date": ["20260331"] * 11,
+        "holder_name": ["A-B", "A－B"] + [f"holder-{index}" for index in range(2, 11)],
+        "hold_ratio": [10.0, 10.0] + [5.0] * 9,
+    })
+
+    projected = normalise_top10_rows(raw, require_complete_raw=True)
+
+    assert projected["top10_ratio"].tolist() == [55.0]
+
+
+def test_strict_top10_rejects_partial_latest_period_instead_of_using_older() -> None:
+    older = pd.DataFrame({
+        "ts_code": ["000001.SZ"] * 10,
+        "ann_date": ["20260430"] * 10,
+        "end_date": ["20251231"] * 10,
+        "holder_name": [f"old-{index}" for index in range(10)],
+        "hold_ratio": [5.0] * 10,
+    })
+    newer = pd.DataFrame({
+        "ts_code": ["000001.SZ"] * 2,
+        "ann_date": ["20260430"] * 2,
+        "end_date": ["20260331"] * 2,
+        "holder_name": ["new-a", "new-b"],
+        "hold_ratio": [5.0, 5.0],
+    })
+
+    projected = normalise_top10_rows(
+        pd.concat([older, newer], ignore_index=True),
+        require_complete_raw=True,
+    )
+
+    assert projected.empty
+    assert projected.attrs["projection_stats"]["excluded_incomplete_event_count"] == 1
+
+
+def test_strict_top10_rejects_normalized_holder_ratio_conflict() -> None:
+    raw = pd.DataFrame({
+        "ts_code": ["000001.SZ", "000001.SZ"],
+        "ann_date": ["20260430", "20260430"],
+        "end_date": ["20260331", "20260331"],
+        "holder_name": ["A-B", "A－B"],
+        "hold_ratio": [10.0, 9.0],
+    })
+
+    projected = normalise_top10_rows(raw, require_complete_raw=True)
+
+    assert projected.empty
+    assert (
+        projected.attrs["projection_stats"]["excluded_conflicting_ratio_event_count"]
+        == 1
+    )
+
+
+def test_strict_top10_accepts_cutoff_ties_but_excludes_ambiguous_overfill() -> None:
+    base = {
+        "ts_code": ["000001.SZ"] * 11,
+        "ann_date": ["20260430"] * 11,
+        "end_date": ["20260331"] * 11,
+        "holder_name": [f"holder-{index}" for index in range(11)],
+    }
+    tied = normalise_top10_rows(
+        pd.DataFrame({**base, "hold_ratio": list(range(10, 1, -1)) + [1.0, 1.0]}),
+        require_complete_raw=True,
+    )
+    ambiguous = normalise_top10_rows(
+        pd.DataFrame({**base, "hold_ratio": list(range(11, 0, -1))}),
+        require_complete_raw=True,
+    )
+
+    assert tied["top10_ratio"].tolist() == [55.0]
+    assert tied.attrs["projection_stats"]["accepted_cutoff_tie_event_count"] == 1
+    assert ambiguous.empty
+    assert (
+        ambiguous.attrs["projection_stats"]["excluded_ambiguous_overfull_event_count"]
+        == 1
+    )
 
 
 def test_health_uses_announcement_date_asof_and_fails_stale_rows(tmp_path: Path) -> None:

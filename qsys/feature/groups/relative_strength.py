@@ -3,6 +3,8 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from qsys.feature.transforms import PIT_CROSS_SECTION_COLUMN, cross_section_rank
+
 
 def _rolling_return(series: pd.Series, window: int) -> pd.Series:
     return series.pct_change(window)
@@ -24,7 +26,9 @@ def build_relative_strength_features(df: pd.DataFrame) -> pd.DataFrame:
     out["amount_mean_5d"] = amount_grp.transform(lambda s: s.rolling(5).mean())
 
     for col in ["ret_1d", "ret_3d", "ret_5d", "vol_mean_3d", "vol_mean_5d", "amount_mean_3d", "amount_mean_5d"]:
-        out[f"{col}_rank"] = out.groupby("trade_date")[col].rank(pct=True, method="average")
+        out[f"{col}_rank"] = cross_section_rank(
+            out, col, "trade_date", method="average"
+        )
 
     if "index_close" in out.columns:
         idx_ret_3 = out.groupby("trade_date")["index_close"].transform("first").pct_change(3)
@@ -83,15 +87,20 @@ def build_relative_strength_features(df: pd.DataFrame) -> pd.DataFrame:
 
     # RPS (Relative Price Strength): cross-sectional percentile rank of returns
     # This replaces RSI for relative-strength measurement (CANSLIM convention)
-    out["rps_60d"] = out.groupby("trade_date")["ret_60d"].rank(pct=True)
-    out["rps_120d"] = out.groupby("trade_date")["ret_120d"].rank(pct=True)
-    out["rps_20d"] = out.groupby("trade_date")["ret_20d"].rank(pct=True)
+    out["rps_60d"] = cross_section_rank(out, "ret_60d", "trade_date")
+    out["rps_120d"] = cross_section_rank(out, "ret_120d", "trade_date")
+    out["rps_20d"] = cross_section_rank(out, "ret_20d", "trade_date")
     out["rps_20d_minus_rps_60d"] = out["rps_20d"] - out["rps_60d"]
 
     # Industry-relative RPS
     if "industry" in out.columns and out["industry"].notna().any():
-        out["rps_industry_60d"] = out.groupby(["trade_date", "industry"])["ret_60d"].rank(pct=True)
-        out["rps_industry_120d"] = out.groupby(["trade_date", "industry"])["ret_120d"].rank(pct=True)
+        groups = ["trade_date", "industry"]
+        out["rps_industry_60d"] = cross_section_rank(
+            out, "ret_60d", groups
+        )
+        out["rps_industry_120d"] = cross_section_rank(
+            out, "ret_120d", groups
+        )
     else:
         out["rps_industry_60d"] = pd.NA
         out["rps_industry_120d"] = pd.NA
@@ -142,7 +151,7 @@ def build_relative_strength_features(df: pd.DataFrame) -> pd.DataFrame:
     # ═══════════════════════════════════════════════════════════════
     # Clean up intermediates
     for c in list(out.columns):
-        if c.startswith("_"):
+        if c.startswith("_") and c != PIT_CROSS_SECTION_COLUMN:
             out = out.drop(columns=[c])
 
     return out

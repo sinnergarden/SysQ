@@ -7,6 +7,11 @@ lookback_contract:
   runtime_max_lookback_trading_sessions: 756
   input_warmup_calendar_days: 1461
   provenance: runtime_feature_builders_plus_explicit_conservative_input_warmup
+semantic_blockers:
+- code: FINANCIAL_LATEST_KNOWN_REVISION_CAPABILITY_UNVERIFIED
+  required_contract: financial_latest_known_actual_publication_v1
+  endpoints: [income, balancesheet, cashflow, fina_indicator]
+  reason: current first-available projection does not apply later public revisions, and same-announcement fina_indicator revisions lack an independently proven effective date
 features:
 - feature: $roe
   required: true
@@ -18,8 +23,6 @@ features:
     - roe
     visibility: announcement_date_asof
     pit_status: evidence_required
-    blocker_codes:
-    - FINANCIAL_FALLBACK_PROVENANCE_UNBOUND
 - feature: $grossprofit_margin
   required: true
   dependencies:
@@ -30,8 +33,6 @@ features:
     - grossprofit_margin
     visibility: announcement_date_asof
     pit_status: evidence_required
-    blocker_codes:
-    - FINANCIAL_FALLBACK_PROVENANCE_UNBOUND
 - feature: $debt_to_assets
   required: true
   dependencies:
@@ -42,8 +43,6 @@ features:
     - debt_to_assets
     visibility: announcement_date_asof
     pit_status: evidence_required
-    blocker_codes:
-    - FINANCIAL_FALLBACK_PROVENANCE_UNBOUND
 - feature: $op_cashflow
   required: true
   dependencies:
@@ -109,8 +108,6 @@ features:
     - roe
     visibility: announcement_date_asof
     pit_status: evidence_required
-    blocker_codes:
-    - FINANCIAL_FALLBACK_PROVENANCE_UNBOUND
 - feature: grossprofit_margin_delta_252d
   required: true
   dependencies:
@@ -121,8 +118,6 @@ features:
     - grossprofit_margin
     visibility: announcement_date_asof
     pit_status: evidence_required
-    blocker_codes:
-    - FINANCIAL_FALLBACK_PROVENANCE_UNBOUND
 - feature: debt_to_assets_delta_252d
   required: true
   dependencies:
@@ -133,8 +128,6 @@ features:
     - debt_to_assets
     visibility: announcement_date_asof
     pit_status: evidence_required
-    blocker_codes:
-    - FINANCIAL_FALLBACK_PROVENANCE_UNBOUND
 - feature: op_cashflow_delta_252d
   required: true
   dependencies:
@@ -576,8 +569,6 @@ features:
     - roe
     visibility: announcement_date_asof
     pit_status: evidence_required
-    blocker_codes:
-    - FINANCIAL_FALLBACK_PROVENANCE_UNBOUND
 - feature: net_margin_delta_756d
   required: true
   dependencies:
@@ -738,8 +729,6 @@ features:
     - roe
     visibility: announcement_date_asof
     pit_status: evidence_required
-    blocker_codes:
-    - FINANCIAL_FALLBACK_PROVENANCE_UNBOUND
   - source: tushare
     dataset: canonical_daily
     endpoint: income
@@ -889,6 +878,7 @@ features:
   dependencies:
   - source: tushare
     dataset: shareholder_holdernumber
+    evidence_date_floor: '20170101'
     endpoint: stk_holdernumber
     leaf_fields:
     - holder_num
@@ -902,6 +892,7 @@ features:
   dependencies:
   - source: tushare
     dataset: shareholder_holdernumber
+    evidence_date_floor: '20170101'
     endpoint: stk_holdernumber
     leaf_fields:
     - holder_num
@@ -915,6 +906,7 @@ features:
   dependencies:
   - source: tushare
     dataset: shareholder_holdernumber
+    evidence_date_floor: '20170101'
     endpoint: stk_holdernumber
     leaf_fields:
     - holder_num
@@ -928,6 +920,7 @@ features:
   dependencies:
   - source: tushare
     dataset: shareholder_top10
+    evidence_date_floor: '20170101'
     endpoint: top10_holders
     leaf_fields:
     - hold_ratio
@@ -941,6 +934,7 @@ features:
   dependencies:
   - source: tushare
     dataset: shareholder_holdernumber
+    evidence_date_floor: '20170101'
     endpoint: stk_holdernumber
     leaf_fields:
     - holder_num
@@ -951,6 +945,7 @@ features:
     - SHAREHOLDER_REVISION_CAPABILITY_UNVERIFIED
   - source: tushare
     dataset: shareholder_top10
+    evidence_date_floor: '20170101'
     endpoint: top10_holders
     leaf_fields:
     - hold_ratio
@@ -964,6 +959,7 @@ features:
   dependencies:
   - source: tushare
     dataset: shareholder_holdernumber
+    evidence_date_floor: '20170101'
     endpoint: stk_holdernumber
     leaf_fields:
     - holder_num
@@ -984,6 +980,7 @@ features:
   dependencies:
   - source: tushare
     dataset: shareholder_holdernumber
+    evidence_date_floor: '20170101'
     endpoint: stk_holdernumber
     leaf_fields:
     - holder_num
@@ -994,6 +991,7 @@ features:
     - SHAREHOLDER_REVISION_CAPABILITY_UNVERIFIED
   - source: tushare
     dataset: shareholder_top10
+    evidence_date_floor: '20170101'
     endpoint: top10_holders
     leaf_fields:
     - hold_ratio
@@ -1014,6 +1012,7 @@ features:
   dependencies:
   - source: tushare
     dataset: shareholder_holdernumber
+    evidence_date_floor: '20170101'
     endpoint: stk_holdernumber
     leaf_fields:
     - holder_num
@@ -1027,6 +1026,7 @@ features:
   dependencies:
   - source: tushare
     dataset: shareholder_top10
+    evidence_date_floor: '20170101'
     endpoint: top10_holders
     leaf_fields:
     - hold_ratio
@@ -1040,6 +1040,7 @@ features:
   dependencies:
   - source: tushare
     dataset: shareholder_top10
+    evidence_date_floor: '20170101'
     endpoint: top10_holders
     leaf_fields:
     - hold_ratio

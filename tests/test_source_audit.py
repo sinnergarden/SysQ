@@ -41,6 +41,15 @@ def _row(close: float) -> pd.DataFrame:
     )
 
 
+def test_audit_connections_wait_for_bounded_writer_lock_contention(
+    tmp_path: Path,
+) -> None:
+    store = SourceAuditStore(tmp_path / "audit.db")
+
+    with store._connect() as connection:
+        assert connection.execute("PRAGMA busy_timeout").fetchone()[0] == 60000
+
+
 def test_normalized_response_metadata_preserves_legacy_hash_contract() -> None:
     frame = pd.DataFrame(
         {
