@@ -58,6 +58,37 @@ def test_weight_policy_default_preserves_unweighted_behavior() -> None:
     assert training.compute_sample_weight(labels, dates, None) is None
 
 
+def test_complete_date_validation_reaches_target_without_splitting_date() -> None:
+    dates = pd.Series(
+        ["2026-01-01"] * 4
+        + ["2026-01-02"] * 3
+        + ["2026-01-03"] * 4
+        + ["2026-01-04"] * 3
+    )
+
+    validation_size = training.resolve_complete_date_validation_size(
+        dates, validation_size=5
+    )
+
+    assert validation_size == 7
+    boundary = len(dates) - validation_size
+    assert dates.iloc[boundary - 1] < dates.iloc[boundary]
+
+
+def test_complete_date_validation_fails_closed_on_non_chronological_rows() -> None:
+    with pytest.raises(ValueError, match="sorted"):
+        training.resolve_complete_date_validation_size(
+            pd.Series(["2026-01-02", "2026-01-01", "2026-01-03"]),
+            validation_size=1,
+        )
+
+    with pytest.raises(ValueError, match="at least two label dates"):
+        training.resolve_complete_date_validation_size(
+            pd.Series(["2026-01-01", "2026-01-01"]),
+            validation_size=1,
+        )
+
+
 def test_weight_helper_requires_exact_alignment_and_finite_values() -> None:
     labels = pd.Series([1.0, 2.0], index=[10, 11])
     dates = pd.Series(["2026-01-01", "2026-01-01"], index=[11, 10])
