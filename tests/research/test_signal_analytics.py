@@ -189,6 +189,45 @@ def test_canonical_cli_runs_diagnostics_mode(
     assert str(tmp_path / "manifest.json") in output
 
 
+def test_canonical_cli_runs_diagnostics_validation_mode(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    import qsys.research.diagnostics_validation as validation_module
+    from scripts.run_signal_analytics import main
+
+    config_path = tmp_path / "diagnostics.yaml"
+    config_path.write_text("experiment_id: tiny\n", encoding="utf-8")
+    validation_path = tmp_path / "diagnostics_validation.json"
+    monkeypatch.setattr(
+        validation_module,
+        "validate_research_diagnostics",
+        lambda path, **kwargs: {
+            "diagnostics_identity_sha256": "v" * 64,
+            "validation": str(validation_path),
+        },
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_signal_analytics.py",
+            "--diagnostics-config",
+            str(config_path),
+            "--research-root",
+            str(tmp_path),
+            "--validate-only",
+        ],
+    )
+
+    main()
+
+    output = capsys.readouterr().out
+    assert "v" * 64 in output
+    assert str(validation_path) in output
+
+
 class SimpleDiagnostics:
     def __init__(self, result: dict[str, str]) -> None:
         self._result = result

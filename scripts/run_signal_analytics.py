@@ -58,8 +58,13 @@ def main():
             "--feature-catalog-config, or direct "
             "--signal-id/--signal-run-id/--label-id"
         )
-    if args.validate_only and not args.feature_catalog_config:
-        p.error("--validate-only requires --feature-catalog-config")
+    if args.validate_only and not (
+        args.feature_catalog_config or args.diagnostics_config
+    ):
+        p.error(
+            "--validate-only requires --feature-catalog-config or "
+            "--diagnostics-config"
+        )
     if args.diagnostics_config and any(
         (args.signal_run_id, args.label_id)
     ):
@@ -93,13 +98,24 @@ def main():
             print(f"Manifest: {result['manifest']}")
         return
     if args.diagnostics_config:
-        from qsys.analysis.research_diagnostics import ResearchDiagnostics
+        if args.validate_only:
+            from qsys.research.diagnostics_validation import (
+                validate_research_diagnostics,
+            )
 
-        result = ResearchDiagnostics.from_config(
-            args.diagnostics_config, root=args.research_root
-        ).run()
-        print(f"Diagnostics: {result['diagnostics_identity_sha256']}")
-        print(f"Manifest: {result['manifest']}")
+            result = validate_research_diagnostics(
+                args.diagnostics_config, root=args.research_root
+            )
+            print(f"Diagnostics validation: {result['diagnostics_identity_sha256']}")
+            print(f"Validation: {result['validation']}")
+        else:
+            from qsys.analysis.research_diagnostics import ResearchDiagnostics
+
+            result = ResearchDiagnostics.from_config(
+                args.diagnostics_config, root=args.research_root
+            ).run()
+            print(f"Diagnostics: {result['diagnostics_identity_sha256']}")
+            print(f"Manifest: {result['manifest']}")
         return
     from qsys.research.signal_analytics import SignalAnalytics
     with SignalAnalytics(root=args.research_root) as sa:

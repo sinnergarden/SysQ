@@ -293,9 +293,15 @@ class ResearchDiagnostics:
     # ── Data loading ────────────────────────────────────────────────────
 
     def _load_data(self) -> None:
-        self._adapter.init_qlib()
-
         from qsys.config import cfg as settings
+
+        cache_cfg = self._cfg.get("feature_cache") or {}
+        if cache_cfg and not isinstance(cache_cfg, dict):
+            raise ValueError("feature_cache must be a mapping")
+        if self._cfg.get("require_feature_cache") and not cache_cfg:
+            raise ValueError("formal cached diagnostics require feature_cache")
+        if not cache_cfg:
+            self._adapter.init_qlib()
 
         source_artifacts = self._cfg.get("source_artifacts", {})
         if self._cfg.get("require_source_artifacts") and not source_artifacts:
@@ -391,15 +397,23 @@ class ResearchDiagnostics:
                 "raw_source_sha256": pit_store.provenance.raw_source_hash,
             }
 
-        raw = self._adapter.get_features(
-            feature_universe,
-            all_requested + ["$factor"],
-            start_time=start,
-            end_time=end,
-            semantic_pit_membership_spans=semantic_spans,
-            semantic_pit_filter_mode=pit_mode,
-        )
-        frame = raw.reset_index().rename(columns={"datetime": "trade_date"})
+        if cache_cfg:
+            frame = self._load_feature_cache(
+                cache_cfg,
+                requested_features=all_requested,
+                start=str(start),
+                end=str(end),
+            )
+        else:
+            raw = self._adapter.get_features(
+                feature_universe,
+                all_requested + ["$factor"],
+                start_time=start,
+                end_time=end,
+                semantic_pit_membership_spans=semantic_spans,
+                semantic_pit_filter_mode=pit_mode,
+            )
+            frame = raw.reset_index().rename(columns={"datetime": "trade_date"})
         if frame.columns.duplicated().any():
             duplicated = sorted(set(frame.columns[frame.columns.duplicated()]))
             raise ValueError(
@@ -407,6 +421,19 @@ class ResearchDiagnostics:
                 + ", ".join(duplicated)
             )
         frame["trade_date"] = frame["trade_date"].astype(str).str[:10]
+        alignment_cfg = self._cfg.get("feature_label_alignment") or {}
+        if self._cfg.get("require_feature_label_alignment") and not alignment_cfg:
+            raise ValueError("formal diagnostics require feature_label_alignment")
+        if alignment_cfg:
+            if not isinstance(alignment_cfg, dict):
+                raise ValueError("feature_label_alignment must be a mapping")
+            frame = self._align_feature_dates(
+                frame,
+                alignment_cfg,
+                data_root=settings.data_root,
+                execution_start=str(start),
+                execution_end=str(end),
+            )
         if pit_store is not None:
             spans = pit_store.spans[
                 ["instrument", "effective_from", "effective_to"]
@@ -523,6 +550,187 @@ class ResearchDiagnostics:
                 if self._cfg.get("require_all_labels", True):
                     raise RuntimeError(f"Could not load required label {lid}: {exc}") from exc
                 log.warning("Could not load label %s: %s", lid, exc)
+
+    def _load_feature_cache(
+        self,
+        cache_cfg: dict[str, Any],
+        *,
+        requested_features: list[str],
+        start: str,
+        end: str,
+    ) -> pd.DataFrame:
+        """Load only declared columns and years from a validated annual cache."""
+        project_root = Path(__file__).resolve().parents[2]
+
+        def resolve_file(value: str, label: str) -> Path:
+            path = Path(str(value)).expanduser()
+            if not path.is_absolute():
+                path = project_root / path
+            if path.is_symlink() or not path.is_file():
+                raise ValueError(f"{label} must be an existing regular file: {path}")
+            return path.resolve()
+
+        manifest_path = resolve_file(
+            str(cache_cfg.get("manifest_path", "")), "feature cache manifest"
+        )
+        validation_path = resolve_file(
+            str(cache_cfg.get("validation_path", "")), "feature cache validation"
+        )
+        manifest_sha256 = _sha256_file(manifest_path)
+        validation_sha256 = _sha256_file(validation_path)
+        expected_manifest_sha256 = str(
+            cache_cfg.get("manifest_sha256", "")
+        ).strip().lower()
+        expected_validation_sha256 = str(
+            cache_cfg.get("validation_sha256", "")
+        ).strip().lower()
+        if not expected_manifest_sha256 or manifest_sha256 != expected_manifest_sha256:
+            raise ValueError("feature cache manifest hash mismatch")
+        if not expected_validation_sha256 or validation_sha256 != expected_validation_sha256:
+            raise ValueError("feature cache validation hash mismatch")
+
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        validation = json.loads(validation_path.read_text(encoding="utf-8"))
+        if manifest.get("schema_version") != 2 or validation.get("status") != "pass":
+            raise ValueError("feature cache has not passed the required validation schema")
+        if validation.get("manifest_sha256") != manifest_sha256:
+            raise ValueError("feature cache validation does not bind the manifest")
+        shards = list(manifest.get("shards", []))
+        if not shards:
+            raise ValueError("feature cache manifest has no shards")
+        identity = shards[0].get("identity", {})
+        column_contract = identity.get("column_contract", {})
+        materialized = list(column_contract.get("materialized_features", []))
+        consumed = list(column_contract.get("consumed_features", []))
+        if self._features != consumed:
+            raise ValueError("diagnostics feature list does not match cache consumed contract")
+        unavailable = sorted(set(requested_features) - set(materialized))
+        if unavailable:
+            raise ValueError(f"requested diagnostics columns absent from cache: {unavailable}")
+        feature_contract = FeatureListRegistry.contract(str(identity["feature_list_id"]))
+        if feature_contract["features"] != consumed:
+            raise ValueError("current feature registry differs from cache consumed contract")
+        if identity.get("pit_universe_artifact") != self._cfg.get("pit_universe_artifact"):
+            raise ValueError("cache and diagnostics PIT universe artifacts differ")
+        if identity.get("pit_filter_mode") != self._cfg.get("pit_filter_mode"):
+            raise ValueError("cache and diagnostics PIT filter modes differ")
+        expected_source = str(self._cfg.get("source_manifest_hash", ""))
+        if manifest.get("source_manifest_hash") != expected_source:
+            raise ValueError("cache and diagnostics source manifest hashes differ")
+        if str(manifest.get("cache_coverage_start", "")) > start:
+            raise ValueError("feature cache does not cover diagnostics start")
+        if str(manifest.get("cache_coverage_end", "")) < end:
+            raise ValueError("feature cache does not cover diagnostics end")
+
+        validation_shards = {
+            str(Path(item["path"]).resolve()): item
+            for item in validation.get("shards", [])
+        }
+        selected: list[dict[str, Any]] = []
+        frames: list[pd.DataFrame] = []
+        columns = ["trade_date", "instrument", *requested_features]
+        for shard in shards:
+            coverage_start = str(shard["source_coverage_start"])
+            coverage_end = str(shard["source_coverage_end"])
+            if coverage_end < start or coverage_start > end:
+                continue
+            path = resolve_file(str(shard["path"]), "feature cache shard")
+            data_sha256 = _sha256_file(path)
+            if data_sha256 != shard.get("data_sha256"):
+                raise ValueError(f"feature cache shard hash mismatch: {path}")
+            validation_entry = validation_shards.get(str(path))
+            if not validation_entry or validation_entry.get("data_sha256") != data_sha256:
+                raise ValueError(f"feature cache validation lacks shard binding: {path}")
+            frame = pd.read_parquet(path, columns=columns)
+            frame["trade_date"] = frame["trade_date"].astype(str).str[:10]
+            frame = frame[
+                frame["trade_date"].between(start, end, inclusive="both")
+            ]
+            frames.append(frame)
+            selected.append({
+                "path": str(shard["path"]),
+                "data_sha256": data_sha256,
+                "source_coverage_start": coverage_start,
+                "source_coverage_end": coverage_end,
+                "consumed_rows": len(frame),
+            })
+        if not frames:
+            raise ValueError("no feature cache shards overlap diagnostics range")
+        result = pd.concat(frames, ignore_index=True)
+        if result.duplicated(["trade_date", "instrument"]).any():
+            raise ValueError("selected feature cache rows contain duplicate keys")
+        self._lineage["feature_cache"] = {
+            "manifest_path": str(cache_cfg["manifest_path"]),
+            "manifest_sha256": manifest_sha256,
+            "validation_path": str(cache_cfg["validation_path"]),
+            "validation_sha256": validation_sha256,
+            "materialized_feature_list_id": identity["feature_cache_list_id"],
+            "consumed_feature_list_id": identity["feature_list_id"],
+            "materialized_feature_count": len(materialized),
+            "consumed_feature_count": len(consumed),
+            "selected_shards": selected,
+            "rows_before_daily_pit_filter": len(result),
+        }
+        return result
+
+    def _align_feature_dates(
+        self,
+        frame: pd.DataFrame,
+        alignment_cfg: dict[str, Any],
+        *,
+        data_root: Path,
+        execution_start: str,
+        execution_end: str,
+    ) -> pd.DataFrame:
+        """Map after-close feature date ``f`` to next-session execution date."""
+        contract = str(alignment_cfg.get("contract", ""))
+        if contract != "previous_open_session_to_execution_date_v1":
+            raise ValueError(f"unsupported feature-label alignment contract: {contract}")
+        calendar_path = Path(str(alignment_cfg.get("calendar_path", "")))
+        if not calendar_path.is_absolute():
+            calendar_path = Path(data_root) / calendar_path
+        if calendar_path.is_symlink() or not calendar_path.is_file():
+            raise ValueError(f"alignment calendar must be a regular file: {calendar_path}")
+        calendar_sha256 = _sha256_file(calendar_path)
+        if calendar_sha256 != str(alignment_cfg.get("calendar_sha256", "")):
+            raise ValueError("feature-label alignment calendar hash mismatch")
+        calendar = sorted({
+            line.strip()[:10]
+            for line in calendar_path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        })
+        next_session = {
+            date: calendar[index + 1]
+            for index, date in enumerate(calendar[:-1])
+        }
+        aligned = frame.copy()
+        aligned["data_date"] = aligned["trade_date"].astype(str).str[:10]
+        aligned["trade_date"] = aligned["data_date"].map(next_session)
+        unresolved = int(aligned["trade_date"].isna().sum())
+        aligned = aligned.dropna(subset=["trade_date"])
+        aligned = aligned[
+            aligned["trade_date"].between(
+                execution_start, execution_end, inclusive="both"
+            )
+        ].copy()
+        if aligned.empty:
+            raise ValueError("feature-label alignment removed all diagnostics rows")
+        if not aligned["data_date"].lt(aligned["trade_date"]).all():
+            raise ValueError("feature-label alignment consumed a non-prior feature date")
+        if aligned.duplicated(["trade_date", "instrument"]).any():
+            raise ValueError("feature-label alignment produced duplicate execution keys")
+        self._lineage["feature_label_alignment"] = {
+            "contract": contract,
+            "calendar_path": str(alignment_cfg["calendar_path"]),
+            "calendar_sha256": calendar_sha256,
+            "data_date_max": str(aligned["data_date"].max()),
+            "execution_date_min": str(aligned["trade_date"].min()),
+            "execution_date_max": str(aligned["trade_date"].max()),
+            "strict_prior_date_check": "pass",
+            "unresolved_terminal_rows": unresolved,
+            "aligned_rows": len(aligned),
+        }
+        return aligned
 
     # ── Coverage ────────────────────────────────────────────────────────
 

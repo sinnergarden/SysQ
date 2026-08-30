@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -164,3 +165,110 @@ def test_empty_correlation_result_keeps_stable_schema(tmp_path: Path) -> None:
     result = diagnostics._run_correlation()
     assert result.empty
     assert list(result.columns) == ["feature_a", "feature_b", "corr"]
+
+
+def test_diagnostics_loads_only_bound_columns_from_validated_cache(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    shard_path = tmp_path / "2024.parquet"
+    pd.DataFrame({
+        "trade_date": ["2024-01-02", "2024-01-03"],
+        "instrument": ["AAA", "AAA"],
+        "f1": [1.0, 2.0],
+        "$industry": [1.0, 1.0],
+        "unused": [9.0, 9.0],
+    }).to_parquet(shard_path, index=False)
+    data_sha256 = hashlib.sha256(shard_path.read_bytes()).hexdigest()
+    identity = {
+        "feature_list_id": "tiny_features",
+        "feature_cache_list_id": "tiny_superset",
+        "pit_universe_artifact": "csi1800_pit_v2",
+        "pit_filter_mode": "member_as_of",
+        "column_contract": {
+            "materialized_features": ["f1", "$industry", "unused"],
+            "consumed_features": ["f1"],
+        },
+    }
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(json.dumps({
+        "schema_version": 2,
+        "source_manifest_hash": "source-v1",
+        "cache_coverage_start": "2024-01-01",
+        "cache_coverage_end": "2024-12-31",
+        "shards": [{
+            "path": str(shard_path),
+            "data_sha256": data_sha256,
+            "source_coverage_start": "2024-01-01",
+            "source_coverage_end": "2024-12-31",
+            "identity": identity,
+        }],
+    }), encoding="utf-8")
+    manifest_sha256 = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+    validation_path = tmp_path / "validation.json"
+    validation_path.write_text(json.dumps({
+        "status": "pass",
+        "manifest_sha256": manifest_sha256,
+        "shards": [{"path": str(shard_path), "data_sha256": data_sha256}],
+    }), encoding="utf-8")
+    validation_sha256 = hashlib.sha256(validation_path.read_bytes()).hexdigest()
+    monkeypatch.setattr(
+        "qsys.analysis.research_diagnostics.FeatureListRegistry.contract",
+        lambda _feature_list_id: {"features": ["f1"]},
+    )
+    diagnostics = ResearchDiagnostics({
+        "pit_universe_artifact": "csi1800_pit_v2",
+        "pit_filter_mode": "member_as_of",
+        "source_manifest_hash": "source-v1",
+    }, root=tmp_path / "research")
+    diagnostics._features = ["f1"]
+    result = diagnostics._load_feature_cache(
+        {
+            "manifest_path": str(manifest_path),
+            "manifest_sha256": manifest_sha256,
+            "validation_path": str(validation_path),
+            "validation_sha256": validation_sha256,
+        },
+        requested_features=["f1", "$industry"],
+        start="2024-01-02",
+        end="2024-01-03",
+    )
+    assert result.columns.tolist() == [
+        "trade_date", "instrument", "f1", "$industry",
+    ]
+    assert diagnostics._lineage["feature_cache"]["consumed_feature_count"] == 1
+    assert diagnostics._lineage["feature_cache"]["rows_before_daily_pit_filter"] == 2
+
+
+def test_feature_dates_align_to_strictly_later_execution_session(
+    tmp_path: Path,
+) -> None:
+    calendar_path = tmp_path / "day.txt"
+    calendar_path.write_text(
+        "2024-01-02\n2024-01-03\n2024-01-04\n",
+        encoding="utf-8",
+    )
+    calendar_sha256 = hashlib.sha256(calendar_path.read_bytes()).hexdigest()
+    diagnostics = ResearchDiagnostics({}, root=tmp_path / "research")
+    result = diagnostics._align_feature_dates(
+        pd.DataFrame({
+            "trade_date": ["2024-01-02", "2024-01-03"],
+            "instrument": ["AAA", "AAA"],
+            "f1": [1.0, 2.0],
+        }),
+        {
+            "contract": "previous_open_session_to_execution_date_v1",
+            "calendar_path": str(calendar_path),
+            "calendar_sha256": calendar_sha256,
+        },
+        data_root=tmp_path,
+        execution_start="2024-01-02",
+        execution_end="2024-01-04",
+    )
+    assert result[["data_date", "trade_date"]].values.tolist() == [
+        ["2024-01-02", "2024-01-03"],
+        ["2024-01-03", "2024-01-04"],
+    ]
+    assert diagnostics._lineage["feature_label_alignment"][
+        "strict_prior_date_check"
+    ] == "pass"
