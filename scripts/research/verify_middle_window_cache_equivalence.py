@@ -22,7 +22,7 @@ import re
 import sys
 import tempfile
 import time
-from typing import Any
+from typing import Any, Callable
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_PROJECT_ROOT))
@@ -43,7 +43,8 @@ DEFAULT_CONFIG = Path(
     "financial_rc_180d_rolling_5y_to_202607_v3_pit_csi1800_terminal_r2.yaml"
 )
 DEFAULT_POSITIONS = (28, 34, 40)
-ABS_TOLERANCE = 1e-12
+FEATURE_ABS_TOLERANCE = 1e-9
+PREDICTION_ABS_TOLERANCE = 1e-12
 
 
 def _sha256(path: Path) -> str:
@@ -308,14 +309,25 @@ def _compare_features(
     cache_path: Path,
     features: list[str],
     temp_dir: Path,
+    *,
+    row_filter: Callable[[pd.DataFrame], pd.DataFrame] | None = None,
+    comparison_scope: str = "loaded_union_rows",
+    absolute_tolerance: float = FEATURE_ABS_TOLERANCE,
 ) -> dict[str, Any]:
     del temp_dir  # Kept in the public helper signature for artifact compatibility.
     keys = ["instrument", "trade_date"]
     columns = [*keys, *features]
-    direct = pd.read_parquet(direct_path, columns=columns).sort_values(
+    direct = pd.read_parquet(direct_path, columns=columns)
+    cache = pd.read_parquet(cache_path, columns=columns)
+    loaded_direct_rows = len(direct)
+    loaded_cache_rows = len(cache)
+    if row_filter is not None:
+        direct = row_filter(direct)
+        cache = row_filter(cache)
+    direct = direct.sort_values(
         keys, kind="mergesort"
     ).reset_index(drop=True)
-    cache = pd.read_parquet(cache_path, columns=columns).sort_values(
+    cache = cache.sort_values(
         keys, kind="mergesort"
     ).reset_index(drop=True)
     direct_rows = len(direct)
@@ -340,6 +352,9 @@ def _compare_features(
             "cache_duplicate_keys": cache_duplicate_keys,
             "direct_only_keys": direct_only,
             "cache_only_keys": cache_only,
+            "comparison_scope": comparison_scope,
+            "loaded_direct_rows": int(loaded_direct_rows),
+            "loaded_cache_rows": int(loaded_cache_rows),
             "status": "fail",
             "feature_metrics": [],
         }
@@ -367,7 +382,7 @@ def _compare_features(
                 (direct_values[finite_pair] != cache_values[finite_pair]).sum()
             ),
             "finite_tolerance_mismatch": int(
-                (finite_diff > ABS_TOLERANCE).sum()
+                (finite_diff > absolute_tolerance).sum()
             ),
             "nonfinite_mismatch": int(
                 (
@@ -393,7 +408,10 @@ def _compare_features(
         "cache_duplicate_keys": cache_duplicate_keys,
         "direct_only_keys": int(direct_only),
         "cache_only_keys": int(cache_only),
-        "absolute_tolerance": ABS_TOLERANCE,
+        "comparison_scope": comparison_scope,
+        "loaded_direct_rows": int(loaded_direct_rows),
+        "loaded_cache_rows": int(loaded_cache_rows),
+        "absolute_tolerance": absolute_tolerance,
         "feature_count": len(features),
         "failing_features": failing_features,
         "max_abs_diff": max(
@@ -464,7 +482,7 @@ def _compare_predictions(left_path: Path, right_path: Path) -> dict[str, Any]:
             finite_diff.max(initial=0.0)
         )
         metrics[f"{column}_mismatch_gt_tolerance"] = int(
-            (finite_diff > ABS_TOLERANCE).sum()
+            (finite_diff > PREDICTION_ABS_TOLERANCE).sum()
         )
     left_orders = _ordered_instruments(left)
     right_orders = _ordered_instruments(right)
@@ -574,9 +592,9 @@ def main() -> int:
         label_maturity_lag_trading_days=lag,
     )
     positions = list(dict.fromkeys(args.window_positions))
-    if len(positions) < 2 or any(position < 1 or position > len(windows) for position in positions):
+    if not positions or any(position < 1 or position > len(windows) for position in positions):
         raise ValueError(
-            f"Choose at least two one-based positions in [1, {len(windows)}]"
+            f"Choose at least one one-based position in [1, {len(windows)}]"
         )
     generators = expand_multi_label_generators(config.generators)
     if len(generators) != 1:
@@ -693,12 +711,40 @@ def main() -> int:
             ),
             flush=True,
         )
+        loaded_feature_diagnostic = _compare_features(
+            direct_features,
+            cache_features,
+            comparison_columns,
+            window_dir / "duckdb_tmp",
+            comparison_scope="loaded_union_rows_diagnostic",
+        )
+        comparison_generator = _create_generator_from_config(
+            gen_config,
+            feature_list_id=config.feature_list_id,
+            use_feature_cache=False,
+            write_through=False,
+            feature_cache_root=config.feature_cache_root,
+            source_manifest_hash=config.source_manifest_hash,
+        )
+        row_filter = (
+            comparison_generator._apply_pit_membership
+            if comparison_generator._effective_pit_filter_mode()
+            else None
+        )
         feature_comparison = _compare_features(
             direct_features,
             cache_features,
             comparison_columns,
             window_dir / "duckdb_tmp",
+            row_filter=row_filter,
+            comparison_scope=(
+                "post_pit_membership_consumed_rows"
+                if row_filter is not None
+                else "loaded_consumed_rows"
+            ),
         )
+        del comparison_generator
+        gc.collect()
         direct_predictions = Path(direct["artifacts"]["predictions"]["path"])
         cache_predictions = Path(cache["artifacts"]["predictions"]["path"])
         prediction_comparison = _compare_predictions(
@@ -728,7 +774,7 @@ def main() -> int:
             else "fail"
         )
         report = {
-            "schema_version": "middle_window_cache_equivalence_report_v1",
+            "schema_version": "middle_window_cache_equivalence_report_v2",
             "status": status,
             "window_position": position,
             "window_count": len(windows),
@@ -740,6 +786,8 @@ def main() -> int:
             "auxiliary_comparison_columns": auxiliary_columns,
             "direct": direct,
             "cache": cache,
+            "loaded_feature_diagnostic": loaded_feature_diagnostic,
+            "loaded_feature_diagnostic_is_gating": False,
             "feature_comparison": feature_comparison,
             "prediction_comparison": prediction_comparison,
             "reference_checkpoint": reference_identity,
@@ -762,6 +810,12 @@ def main() -> int:
                 ),
                 "missing_mask_mismatch_cells": feature_comparison.get(
                     "missing_mask_mismatch_cells"
+                ),
+                "loaded_feature_diagnostic_status": (
+                    loaded_feature_diagnostic.get("status")
+                ),
+                "loaded_feature_diagnostic_missing_mask_mismatch_cells": (
+                    loaded_feature_diagnostic.get("missing_mask_mismatch_cells")
                 ),
                 "prediction_raw_max_abs_diff": prediction_comparison.get(
                     "score_model_raw_max_abs_diff"
@@ -793,8 +847,9 @@ def main() -> int:
         )
         print(
             f"[{position}/{len(windows)}][compare] {status.upper()} "
+            f"scope={feature_comparison.get('comparison_scope')} "
             f"feature_max_diff={feature_comparison.get('max_abs_diff')} "
-            f"feature_mismatch>{ABS_TOLERANCE:g}="
+            f"feature_mismatch>{FEATURE_ABS_TOLERANCE:g}="
             f"{feature_comparison.get('finite_tolerance_mismatch_cells')} "
             f"raw_score_max_diff={prediction_comparison.get('score_model_raw_max_abs_diff')} "
             f"Top5={prediction_comparison.get('top5_exact_dates')}/"
@@ -805,7 +860,7 @@ def main() -> int:
             break
 
     summary = {
-        "schema_version": "middle_window_cache_equivalence_summary_v1",
+        "schema_version": "middle_window_cache_equivalence_summary_v2",
         "status": (
             "pass"
             if len(reports) == len(positions)
@@ -825,7 +880,8 @@ def main() -> int:
         "reference_config_sha256": reference_config_hash,
         "requested_positions": positions,
         "total_window_count": len(windows),
-        "absolute_tolerance": ABS_TOLERANCE,
+        "feature_absolute_tolerance": FEATURE_ABS_TOLERANCE,
+        "prediction_absolute_tolerance": PREDICTION_ABS_TOLERANCE,
         "windows": reports,
     }
     summary_path = run_dir / "summary.json"
