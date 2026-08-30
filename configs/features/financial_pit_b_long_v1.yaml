@@ -1,0 +1,34 @@
+feature_list_id: financial_pit_b_long_v1
+description: First-publication-only financial level and change features for 60/120/180-session research.
+feature_count: 29
+contract: pit_b_first_publication_only_long_horizon_v1
+features:
+  - $roe
+  - $grossprofit_margin
+  - $debt_to_assets
+  - $current_ratio
+  - $net_income
+  - $revenue
+  - $total_assets
+  - $equity
+  - $op_cashflow
+  - roe
+  - roa
+  - gross_margin
+  - net_margin
+  - operating_cf_to_profit
+  - debt_to_asset
+  - revenue_yoy
+  - profit_yoy
+  - roe_delta_252d
+  - grossprofit_margin_delta_252d
+  - debt_to_assets_delta_252d
+  - op_cashflow_delta_252d
+  - earnings_yield_proxy
+  - peg_proxy
+  - revenue_yoy_accel
+  - profit_yoy_accel
+  - roe_delta_756d
+  - net_margin_delta_756d
+  - ocf_margin
+  - value_trap_risk_score
