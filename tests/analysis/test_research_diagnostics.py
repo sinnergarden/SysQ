@@ -148,3 +148,19 @@ def test_formal_diagnostics_requires_pit_artifact(tmp_path: Path) -> None:
     diagnostics._adapter = MagicMock()
     with pytest.raises(ValueError, match="require pit_universe_artifact"):
         diagnostics._load_data()
+
+
+def test_empty_correlation_result_keeps_stable_schema(tmp_path: Path) -> None:
+    diagnostics = ResearchDiagnostics({}, root=tmp_path)
+    diagnostics._features = ["f1", "f2"]
+    diagnostics._feature_frame = pd.DataFrame(
+        {
+            "trade_date": ["2024-01-02", "2024-01-02"],
+            "f1": [1.0, 2.0],
+            "f2": [2.0, 1.0],
+        }
+    )
+    diagnostics._cfg["correlation_threshold"] = 1.1
+    result = diagnostics._run_correlation()
+    assert result.empty
+    assert list(result.columns) == ["feature_a", "feature_b", "corr"]

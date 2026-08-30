@@ -725,7 +725,10 @@ class ResearchDiagnostics:
                     pairs.append(CorrelationPair(feature_a=a, feature_b=b, corr=v))
                     seen.add((a, b))
         pairs.sort(key=lambda p: -abs(p.corr))
-        return pd.DataFrame([asdict(p) for p in pairs])
+        return pd.DataFrame(
+            [asdict(p) for p in pairs],
+            columns=["feature_a", "feature_b", "corr"],
+        )
 
     # ── Exposure breakdown ──────────────────────────────────────────────
 
