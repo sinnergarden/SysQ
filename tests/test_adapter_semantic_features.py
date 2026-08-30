@@ -106,6 +106,15 @@ class TestAdapterSemanticFeatures(unittest.TestCase):
             [True, True, False, False, True, False, True, True, True, False],
         )
 
+    def test_industry_relative_features_enable_return_dependencies(self):
+        flags = QlibAdapter._semantic_feature_flags(
+            ["industry_top_stock_momentum", "stock_minus_industry_ret_60d"]
+        )
+
+        self.assertTrue(flags["enable_relative_strength_features"])
+        self.assertTrue(flags["enable_industry_momentum_features"])
+        self.assertTrue(flags["enable_industry_context_features"])
+
     @patch("qsys.data.adapter.build_phase1_features")
     def test_growth_sidecar_identity_is_forwarded_with_requested_window(
         self, mock_build

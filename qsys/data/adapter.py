@@ -544,6 +544,14 @@ class QlibAdapter:
         if requested.intersection({"stock_minus_industry_ret_3d", "stock_minus_industry_ret_5d"}):
             flags["enable_industry_context_features"] = True
             flags["enable_relative_strength_features"] = True
+        if requested.intersection(
+            {
+                "industry_top_stock_momentum",
+                "stock_minus_industry_ret_20d",
+                "stock_minus_industry_ret_60d",
+            }
+        ):
+            flags["enable_relative_strength_features"] = True
         if requested.intersection({"inventory_yoy", "ar_yoy"}):
             flags["enable_fundamental_context_features"] = True
         if any(f.startswith("industry_") or f.startswith("stock_minus_industry_") for f in requested):
