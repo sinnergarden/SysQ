@@ -295,17 +295,20 @@ class FeatureCatalog:
         if kind != "named_builder_feature":
             return _stable_unique(_RAW_RE.findall(feature))
         if feature in _NAMED_DEPENDENCY_OVERRIDES:
-            return list(_NAMED_DEPENDENCY_OVERRIDES[feature])
-        if feature in _GROWTH_FORECAST_FEATURES:
-            return ["forecast_ann_date"]
-        if feature in _GROWTH_MARKET_FEATURES:
-            return ["close"]
-        from qsys.feature.resolver import _required_fields
+            dependencies = list(_NAMED_DEPENDENCY_OVERRIDES[feature])
+        elif feature in _GROWTH_FORECAST_FEATURES:
+            dependencies = ["forecast_ann_date"]
+        elif feature in _GROWTH_MARKET_FEATURES:
+            dependencies = ["close"]
+        else:
+            from qsys.feature.resolver import _required_fields
 
-        resolved = _required_fields(feature, group or None)
-        if resolved:
-            return _stable_unique(resolved)
-        return list(_CATALOG_GROUP_DEFAULTS.get(group, []))
+            dependencies = _required_fields(feature, group or None)
+            if not dependencies:
+                dependencies = list(_CATALOG_GROUP_DEFAULTS.get(group, []))
+        if set(dependencies) & _PRICE_FIELDS:
+            dependencies = [*dependencies, "factor"]
+        return _stable_unique(dependencies)
 
     @staticmethod
     def _family(feature: str, kind: str, groups: list[str], deps: list[str]) -> str:

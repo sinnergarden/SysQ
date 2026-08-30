@@ -61,6 +61,10 @@ def test_catalog_static_checks_and_adjustment_review(catalog_run):
     assert rows["($close*$factor)/(Ref($close*$factor, 5)+1e-12)-1"][
         "adjustment_contract"
     ] == "explicit adjusted-price history via factor"
+    assert "factor" in rows["ret_60d"]["raw_dependencies"].split("|")
+    assert rows["ret_60d"][
+        "adjustment_contract"
+    ] == "explicit adjusted-price history via factor"
     assert "review required" in rows["Ref($close, 5)/$close"][
         "adjustment_contract"
     ]

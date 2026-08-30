@@ -113,18 +113,41 @@ def build_industry_momentum_features(df: pd.DataFrame) -> pd.DataFrame:
             out[f"stock_minus_industry_ret_{h[1]}"] = _clip_inf(out[col] - ind_mean)
 
     # ── Step 7: stock-industry return rolling correlation (per stock) ──
-    _follow = (out["_daily_ret"] * out["ind_ret"]).groupby(out["ts_code"]).transform(
-        lambda s: s.rolling(60, min_periods=20).mean()
+    # Use paired, centered moments.  The previous cosine-style ratio of raw
+    # second moments was not a correlation when either return series had a
+    # non-zero rolling mean.
+    stock_ret = pd.to_numeric(out["_daily_ret"], errors="coerce")
+    industry_ret = pd.to_numeric(out["ind_ret"], errors="coerce")
+    valid_pair = stock_ret.notna() & industry_ret.notna()
+    stock_ret = stock_ret.where(valid_pair)
+    industry_ret = industry_ret.where(valid_pair)
+
+    def _rolling_sum(series: pd.Series) -> pd.Series:
+        return series.groupby(out["ts_code"]).transform(
+            lambda values: values.rolling(60, min_periods=1).sum()
+        )
+
+    count = _rolling_sum(valid_pair.astype(float))
+    sum_stock = _rolling_sum(stock_ret)
+    sum_industry = _rolling_sum(industry_ret)
+    sum_product = _rolling_sum(stock_ret * industry_ret)
+    sum_stock_sq = _rolling_sum(stock_ret**2)
+    sum_industry_sq = _rolling_sum(industry_ret**2)
+    covariance = sum_product - _safe_div(sum_stock * sum_industry, count)
+    stock_ss = (sum_stock_sq - _safe_div(sum_stock**2, count)).clip(lower=0)
+    industry_ss = (
+        sum_industry_sq - _safe_div(sum_industry**2, count)
+    ).clip(lower=0)
+    denominator = np.sqrt(stock_ss * industry_ss)
+    non_constant = (
+        stock_ss > 1e-12 * sum_stock_sq.abs()
+    ) & (
+        industry_ss > 1e-12 * sum_industry_sq.abs()
     )
-    _ret_var = (out["_daily_ret"] ** 2).groupby(out["ts_code"]).transform(
-        lambda s: s.rolling(60, min_periods=20).mean()
-    ) ** 0.5
-    _ind_var = (out["ind_ret"] ** 2).groupby(out["ts_code"]).transform(
-        lambda s: s.rolling(60, min_periods=20).mean()
-    ) ** 0.5
+    correlation = _safe_div(covariance, denominator.where(non_constant))
     out["stock_industry_ret_corr_60d"] = _clip_inf(
-        _safe_div(_follow, _ret_var * _ind_var)
-    )
+        correlation.where(count >= 20)
+    ).clip(lower=-1, upper=1)
 
     # Clean up intermediates
     for c in list(out.columns):
