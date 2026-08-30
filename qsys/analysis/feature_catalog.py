@@ -535,6 +535,12 @@ class FeatureCatalog:
         review_status, review_notes = self._review(
             tier, future_check, label_check, adjustment
         )
+        definition_review = (
+            self.config.get("definition_reviews", {}).get(feature, {})
+        )
+        if definition_review:
+            review_status = str(definition_review["review_status"])
+            review_notes = str(definition_review["review_notes"])
         mappings: list[str] = []
         if feature in runtime:
             mappings.append("current_runtime_universe")

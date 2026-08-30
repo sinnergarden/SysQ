@@ -58,7 +58,7 @@ def build_trend_quality_features(df: pd.DataFrame) -> pd.DataFrame:
 
     # ── trend_consistency_120d ───────────────────────────────────────
     # Fraction of positive daily returns over 120d
-    ret_1d = _grp.pct_change()
+    ret_1d = _grp.pct_change(fill_method=None)
     for window, label in [(60, "60d"), (120, "120d")]:
         up_days = ret_1d.gt(0).groupby(out["ts_code"]).transform(
             lambda s: s.rolling(window, min_periods=40).mean()
@@ -68,7 +68,7 @@ def build_trend_quality_features(df: pd.DataFrame) -> pd.DataFrame:
     # ── low_vol_uptrend_120d ─────────────────────────────────────────
     # ret_120d / realized_vol_120d — higher = smooth uptrend
     for window, label in [(60, "60d"), (120, "120d")]:
-        _ret = _grp.pct_change(window)
+        _ret = _grp.pct_change(window, fill_method=None)
         _vol = ret_1d.groupby(out["ts_code"]).transform(
             lambda s: s.rolling(window, min_periods=40).std(ddof=0)
         )
@@ -77,7 +77,7 @@ def build_trend_quality_features(df: pd.DataFrame) -> pd.DataFrame:
     # ── return_drawdown_ratio_120d ───────────────────────────────────
     # ret_120d / abs(max_drawdown_120d)
     for window, label in [(60, "60d"), (120, "120d")]:
-        _ret = _grp.pct_change(window)
+        _ret = _grp.pct_change(window, fill_method=None)
         # max drawdown over window: rolling max close vs current close
         _rolling_max = _grp.transform(lambda s: s.rolling(window, min_periods=40).max())
         _drawdown = _safe_div(_rolling_max - out["close"], _rolling_max)
@@ -125,12 +125,12 @@ def build_volume_quality_features(df: pd.DataFrame) -> pd.DataFrame:
     _inst_key = "ts_code"
 
     # Per-stock daily close returns
-    _ret_1d = out.groupby(_inst_key)["close"].pct_change()
+    _ret_1d = out.groupby(_inst_key)["close"].pct_change(fill_method=None)
 
     # Per-stock change helper
     def _grp_pct_change(series: pd.Series, periods: int = 1):
         return series.groupby(out[_inst_key]).transform(
-            lambda s: s.pct_change(periods)
+            lambda s: s.pct_change(periods, fill_method=None)
         )
 
     # ── up_volume_down_volume_ratio_120d ─────────────────────────────

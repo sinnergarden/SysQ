@@ -41,7 +41,7 @@ def build_industry_momentum_features(df: pd.DataFrame) -> pd.DataFrame:
     out = out.sort_values(["ts_code", "trade_date"]).reset_index(drop=True)
 
     # ── Step 1: per-stock daily return (time-series within each stock) ──
-    daily_ret = out.groupby("ts_code")["close"].pct_change()
+    daily_ret = out.groupby("ts_code")["close"].pct_change(fill_method=None)
     out["_daily_ret"] = daily_ret
 
     # ── Step 2: per-stock rolling values (time-series, not cross-sectional) ──

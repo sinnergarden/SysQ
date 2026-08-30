@@ -14,6 +14,20 @@ evidence:
   revision_capability_contract: docs/requirements/contracts/source_revision_capability_v1.yaml
   source_revision_audit: configs/audit/csi1800_s180_r3_source_revision_v1.yaml
 
+definition_reviews:
+  max_pullback_120d:
+    review_status: rejected
+    review_notes: nested 120-session maxima consume up to 239 sessions and do not implement the declared trailing-window maximum drawdown
+  return_drawdown_ratio_60d:
+    review_status: rejected
+    review_notes: nested rolling drawdown consumes up to 119 sessions and does not implement the declared 60-session return-to-drawdown ratio
+  pullback_recovery_speed_60d:
+    review_status: rejected
+    review_notes: implementation is current position within the 60-session range and contains no recovery-speed measurement
+  volume_contraction_after_rise_60d:
+    review_status: rejected
+    review_notes: implementation uses a 20-session return mean and a 10-session change in 20-session amount mean rather than a 60-session contract
+
 disputed_features:
   financial:
     - {feature: "$debt_to_assets", endpoints: [fina_indicator]}

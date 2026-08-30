@@ -7,7 +7,7 @@ from qsys.feature.transforms import PIT_CROSS_SECTION_COLUMN, cross_section_rank
 
 
 def _rolling_return(series: pd.Series, window: int) -> pd.Series:
-    return series.pct_change(window)
+    return series.pct_change(window, fill_method=None)
 
 
 def build_relative_strength_features(df: pd.DataFrame) -> pd.DataFrame:
@@ -17,9 +17,9 @@ def build_relative_strength_features(df: pd.DataFrame) -> pd.DataFrame:
     vol_grp = out.groupby("ts_code")[volume_col]
     amount_grp = out.groupby("ts_code")["amount"]
 
-    out["ret_1d"] = close_grp.pct_change(1)
-    out["ret_3d"] = close_grp.pct_change(3)
-    out["ret_5d"] = close_grp.pct_change(5)
+    out["ret_1d"] = close_grp.pct_change(1, fill_method=None)
+    out["ret_3d"] = close_grp.pct_change(3, fill_method=None)
+    out["ret_5d"] = close_grp.pct_change(5, fill_method=None)
     out["vol_mean_3d"] = vol_grp.transform(lambda s: s.rolling(3).mean())
     out["vol_mean_5d"] = vol_grp.transform(lambda s: s.rolling(5).mean())
     out["amount_mean_3d"] = amount_grp.transform(lambda s: s.rolling(3).mean())
@@ -31,10 +31,17 @@ def build_relative_strength_features(df: pd.DataFrame) -> pd.DataFrame:
         )
 
     if "index_close" in out.columns:
-        idx_ret_3 = out.groupby("trade_date")["index_close"].transform("first").pct_change(3)
-        idx_ret_5 = out.groupby("trade_date")["index_close"].transform("first").pct_change(5)
-        out["stock_minus_index_ret_3d"] = out["ret_3d"] - idx_ret_3
-        out["stock_minus_index_ret_5d"] = out["ret_5d"] - idx_ret_5
+        index_close = (
+            out.groupby("trade_date", sort=True)["index_close"].first().sort_index()
+        )
+        idx_ret_3 = index_close.pct_change(3, fill_method=None)
+        idx_ret_5 = index_close.pct_change(5, fill_method=None)
+        out["stock_minus_index_ret_3d"] = (
+            out["ret_3d"] - out["trade_date"].map(idx_ret_3)
+        )
+        out["stock_minus_index_ret_5d"] = (
+            out["ret_5d"] - out["trade_date"].map(idx_ret_5)
+        )
     else:
         out["stock_minus_index_ret_3d"] = pd.NA
         out["stock_minus_index_ret_5d"] = pd.NA
@@ -45,9 +52,9 @@ def build_relative_strength_features(df: pd.DataFrame) -> pd.DataFrame:
         out["stock_minus_industry_ret_5d"] = out["ret_5d"] - out["industry_ret_5d"]
 
     # ── Value-growth: market confirmation (medium/long-horizon) ──
-    out["ret_20d"] = close_grp.pct_change(20)
-    out["ret_60d"] = close_grp.pct_change(60)
-    out["ret_120d"] = close_grp.pct_change(120)
+    out["ret_20d"] = close_grp.pct_change(20, fill_method=None)
+    out["ret_60d"] = close_grp.pct_change(60, fill_method=None)
+    out["ret_120d"] = close_grp.pct_change(120, fill_method=None)
 
     out["volume_ratio_20d"] = out[volume_col] / vol_grp.transform(lambda s: s.rolling(20).mean()).replace(0, pd.NA)
     out["volume_ratio_60d"] = out[volume_col] / vol_grp.transform(lambda s: s.rolling(60).mean()).replace(0, pd.NA)
@@ -119,9 +126,13 @@ def build_relative_strength_features(df: pd.DataFrame) -> pd.DataFrame:
     # ═══════════════════════════════════════════════════════════════
     _up_vol = (out[volume_col] * _up).groupby(out["ts_code"]).transform(lambda s: s.rolling(60, min_periods=20).sum())
     _up_count = _up.groupby(out["ts_code"]).transform(lambda s: s.rolling(60, min_periods=20).sum())
-    _down_vol = (out[volume_col] * (_up == 0).astype(float)).groupby(out["ts_code"]).transform(lambda s: s.rolling(60, min_periods=20).sum())
-    _down_count = (_up == 0).astype(float).groupby(out["ts_code"]).transform(lambda s: s.rolling(60, min_periods=20).sum())
-    out["volume_up_down_ratio_60d"] = (_up_vol / _up_count) / (_down_vol / _down_count.replace(0, pd.NA))
+    _down = daily_ret.lt(0).astype(float)
+    _down_vol = (out[volume_col] * _down).groupby(out["ts_code"]).transform(lambda s: s.rolling(60, min_periods=20).sum())
+    _down_count = _down.groupby(out["ts_code"]).transform(lambda s: s.rolling(60, min_periods=20).sum())
+    out["volume_up_down_ratio_60d"] = (
+        (_up_vol / _up_count.replace(0, np.nan))
+        / (_down_vol / _down_count.replace(0, np.nan)).replace(0, np.nan)
+    ).replace([np.inf, -np.inf], np.nan)
 
     # Above-average volume ratio: fraction of days with volume > 60d mean
     _vol_mean_60 = vol_grp.transform(lambda s: s.rolling(60, min_periods=20).mean())

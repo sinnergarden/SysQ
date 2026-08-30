@@ -71,3 +71,14 @@ def test_catalog_static_checks_and_adjustment_review(catalog_run):
     summary = json.loads((output_dir / "review_summary.json").read_text())
     assert summary["feature_config_count"] >= 1
     assert summary["feature_config_reference_count"] >= summary["unique_feature_count"]
+
+
+def test_definition_reviews_reject_misaligned_formulas(catalog_run):
+    _, _, rows, _ = catalog_run
+    for feature in (
+        "max_pullback_120d",
+        "return_drawdown_ratio_60d",
+        "pullback_recovery_speed_60d",
+        "volume_contraction_after_rise_60d",
+    ):
+        assert rows[feature]["review_status"] == "rejected"

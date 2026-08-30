@@ -113,6 +113,17 @@ def validate_feature_catalog(
     if _canonical_sha256(tiering) != summary["pit_tiering_rows_sha256"]:
         raise ValueError("PIT tiering canonical identity mismatch")
 
+    rows_by_name = {row["feature_name"]: row for row in rows}
+    for feature, expected in config.get("definition_reviews", {}).items():
+        if feature not in rows_by_name:
+            raise ValueError(f"definition review references unknown feature: {feature}")
+        row = rows_by_name[feature]
+        for key in ("review_status", "review_notes"):
+            if row[key] != str(expected[key]):
+                raise ValueError(
+                    f"definition review mismatch for {feature}: {key}"
+                )
+
     identity_basis = {
         "catalog_id": catalog_id,
         "inputs": manifest["inputs"],
