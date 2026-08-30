@@ -1,0 +1,18 @@
+feature_list_id: industry_relative_superset_v1
+description: Shared PIT-member-scoped materialization for long-horizon industry-relative research.
+feature_count: 13
+contract: pit_daily_industry_relative_materialization_v1
+features:
+  - industry_ret_20d
+  - industry_ret_60d
+  - industry_ret_120d
+  - industry_breadth_20d
+  - industry_breadth_60d
+  - industry_new_high_ratio
+  - industry_top_stock_momentum
+  - industry_volume_expansion
+  - stock_minus_industry_ret_20d
+  - stock_minus_industry_ret_60d
+  - stock_industry_ret_corr_60d
+  - $circ_mv
+  - $industry
