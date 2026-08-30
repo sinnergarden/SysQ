@@ -33,6 +33,9 @@ Qlib readback 和 terminal watermark 做交集验证，产出不可变 certifica
 - 区分 `published_at`、`observed_at`、`ingested_at`，未知发布时间保持 null；
 - 拒绝 gap、缺 endpoint capability、缺 terminal receipt 回链或 legacy/untrusted evidence；
 - 产出显式范围、exceptions、consumed evidence identity 的认证结果。
+- source-revision audit 的 signal/backtest 身份只从 upstream certification receipt
+  的 `input_identities.identities` 读取并复核；正式对象必须位于 manifest-SHA
+  命名的 frozen bundle，request 不得另设 `current_r3_outputs` 第二真相源。
 
 不包含：
 
@@ -165,6 +168,8 @@ reviewer_agent
 - `scripts/data_sync.py`（仅显式 shareholder/announcement evidence supporting mode 与
   offline snapshot bootstrap mode）
 - `configs/audit/csi1800_s180_baseline_v1_r1.yaml`
+- `configs/audit/csi1800_s180_baseline_v1_r3.yaml`
+- `configs/audit/csi1800_s180_baseline_v1_r3_frozen_v1.yaml`
 - `configs/audit/csi1800_s180_r3_source_revision_v1.yaml`
 - `configs/audit/feature_dependencies/v3a_plus_liquidity_financial_rc_v1.yaml`
 - `docs/requirements/`

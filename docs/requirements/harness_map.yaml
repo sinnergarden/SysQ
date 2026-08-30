@@ -399,6 +399,8 @@ usecases:
       - qsys/research/matrix_job.py
       - scripts/data_sync.py
       - configs/audit/csi1800_s180_baseline_v1_r1.yaml
+      - configs/audit/csi1800_s180_baseline_v1_r3.yaml
+      - configs/audit/csi1800_s180_baseline_v1_r3_frozen_v1.yaml
       - configs/audit/csi1800_s180_r3_source_revision_v1.yaml
       - configs/audit/feature_dependencies/v3a_plus_liquidity_financial_rc_v1.yaml
       - configs/research/60d/financial_rc_180d_rolling_5y_to_202607_v3_pit_csi1800_terminal_r2.yaml

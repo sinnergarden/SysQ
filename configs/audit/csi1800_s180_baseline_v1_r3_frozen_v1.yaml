@@ -1,5 +1,5 @@
 schema_version: pit_baseline_request_v1
-baseline_id: csi1800_s180_baseline_v1_r3
+baseline_id: csi1800_s180_baseline_v1_r3_frozen_v1
 scope_key: csi1800
 feature_list_id: v3a_plus_liquidity_financial_rc
 feature_dependencies_path: configs/audit/feature_dependencies/v3a_plus_liquidity_financial_rc_v1.yaml
@@ -55,11 +55,11 @@ identities:
     path: configs/research/60d/financial_rc_180d_rolling_5y_to_202607_v3_pit_csi1800_terminal_r3.yaml
     sha256: 87c2b8a14076cd81492bf725d4ca48afc079082328aed6aa37920fa78b5cda31
   signal_manifest:
-    path: data/research/signals/fwd_ret_180d_raw_pit_csi1800__daily_zscore/rolling__financial_rc_180d_rolling_5y_to_202607_v3_pit_csi1800_terminal_r3__v3a_growth_financial_180d_pit_csi1800_terminal_r3__fwd_ret_180d_raw_pit_csi1800__daily_zscore__2021-01-01_2026-07-31/manifest.json
-    sha256: d5696e19f86ffd9ffb94dcbab80b6f948ca588833bc0d8e10f4db2a5e0a9dc42
+    path: data/research/frozen_outputs/signal_runs/fbeddce0ce1f9ca35309803ed6d7c7c8da86572ed33ddc224e6591dcab9b86ef/manifest.json
+    sha256: fbeddce0ce1f9ca35309803ed6d7c7c8da86572ed33ddc224e6591dcab9b86ef
   signal_predictions:
-    path: data/research/signals/fwd_ret_180d_raw_pit_csi1800__daily_zscore/rolling__financial_rc_180d_rolling_5y_to_202607_v3_pit_csi1800_terminal_r3__v3a_growth_financial_180d_pit_csi1800_terminal_r3__fwd_ret_180d_raw_pit_csi1800__daily_zscore__2021-01-01_2026-07-31/predictions.parquet
-    sha256: 8cd6a5f233dbc3729e771dc082420a85db7fccdf910e949a372c139149b125b9
+    path: data/research/frozen_outputs/signal_runs/fbeddce0ce1f9ca35309803ed6d7c7c8da86572ed33ddc224e6591dcab9b86ef/predictions.parquet
+    sha256: 52f1a9bcc6980cfc804e69da9d7d2061df90f3706df2a1b2f12839472eb588ba
   universe_manifest:
     path: data/research/universes/csi1800_pit_v2/manifest.json
     sha256: 70065082299a682a4c3443fafcee21e57fe62f159ce18c0002895a960683c579
@@ -70,14 +70,14 @@ identities:
     path: data/research/universes/csi1800_pit_v2/csi1800_pit_union.txt
     sha256: b911afeeb6519524fe47e0c8a5ab1a53ea44181c645fa3b66d12370eba748bea
   backtest_manifest:
-    path: data/research/backtests/CSI1800_S180_baseline_v1_r3/manifest.json
-    sha256: 577720ca3ecc77797a1ba8cb90b20fdf38fde5b0a5fe662baacf2b8fc3e11c80
+    path: data/research/frozen_outputs/backtest_runs/6ad427f5794d8ea70054aad922fefcbd9e531b069d912a7fa3f64d0da420f6e7/manifest.json
+    sha256: 6ad427f5794d8ea70054aad922fefcbd9e531b069d912a7fa3f64d0da420f6e7
 
 checkpoints:
   path: data/research/experiments/financial_rc_180d_rolling_5y_to_202607_v3_pit_csi1800_terminal_r3/window_checkpoints
   checkpoint_count: 68
-  checkpoint_set_sha256: 416414a336f2abbe8ddc10d32cd3be2717bfaee0e9485536289a56c986d45cb7
-  base_identity_sha256: 83c033cb8391e5590c79888a864da83304a4999d949fb34277264fb30c9ab258
+  checkpoint_set_sha256: 69338082032ad195840dbaa2958bfc59730d5ef901f413e754ea8b57fd96b763
+  base_identity_sha256: 9ebe882b47b3d1e377d302c4d1a772e09f32e9d0488e1fc4ed3485314afe92db
   model:
     mode: ephemeral_per_window
     path: null

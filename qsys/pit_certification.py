@@ -31,6 +31,11 @@ from qsys.feature.registry import FeatureListRegistry
 SCHEMA_VERSION = "pit_baseline_certification_v1"
 EVIDENCE_SNAPSHOT_SCHEMA_VERSION = "pit_evidence_snapshot_v1"
 SOURCE_REVISION_AUDIT_SCHEMA_VERSION = "source_revision_capability_audit_v1"
+R3_FROZEN_OUTPUT_ROOTS = {
+    "signal_manifest": Path("data/research/frozen_outputs/signal_runs"),
+    "signal_predictions": Path("data/research/frozen_outputs/signal_runs"),
+    "backtest_manifest": Path("data/research/frozen_outputs/backtest_runs"),
+}
 FINANCIAL_LATEST_KNOWN_CONTRACT = (
     "financial_latest_known_actual_publication_v1"
 )
@@ -2691,6 +2696,45 @@ def _validate_r3_source_blockers(
         != sha256_file(exceptions_path)
     ):
         raise CertificationError("R3 source blocker backlink mismatch")
+    receipt_inputs = receipt.get("input_identities")
+    receipt_identities = (
+        receipt_inputs.get("identities")
+        if isinstance(receipt_inputs, Mapping) else None
+    )
+    if not isinstance(receipt_identities, Mapping):
+        raise CertificationError("R3 certification receipt lacks input identities")
+    output_identities: dict[str, dict[str, str]] = {}
+    output_paths: dict[str, Path] = {}
+    for name, frozen_root in R3_FROZEN_OUTPUT_ROOTS.items():
+        identity_spec = receipt_identities.get(name)
+        if not isinstance(identity_spec, Mapping):
+            raise CertificationError(
+                f"R3 certification receipt lacks output identity: {name}"
+            )
+        path = _verify_identity(
+            project, identity_spec, f"R3 certification output {name}",
+        )
+        _reject_symlink_components(path.absolute())
+        bundle_identity = (
+            receipt_identities.get("signal_manifest")
+            if name == "signal_predictions" else identity_spec
+        )
+        if not isinstance(bundle_identity, Mapping):
+            raise CertificationError("R3 signal bundle identity is incomplete")
+        expected_parent = (
+            project / frozen_root / str(bundle_identity.get("sha256") or "")
+        ).resolve()
+        if path.parent != expected_parent:
+            raise CertificationError(
+                f"R3 certification output is not content-addressed: {name}"
+            )
+        output_paths[name] = path
+        output_identities[name] = {
+            "path": path.relative_to(project).as_posix(),
+            "sha256": sha256_file(path),
+        }
+    if output_paths["signal_manifest"].parent != output_paths["signal_predictions"].parent:
+        raise CertificationError("R3 signal manifest/predictions frozen bundle mismatch")
     exceptions = pd.read_parquet(exceptions_path)
     required = {"reason_code", "affected_features_json"}
     if not required.issubset(exceptions.columns):
@@ -2734,6 +2778,7 @@ def _validate_r3_source_blockers(
             "path": exceptions_path.relative_to(project).as_posix(),
             "sha256": sha256_file(exceptions_path),
         },
+        "output_identities": output_identities,
         **actual,
         "reason_counts": reason_counts,
         "shareholder_features": sorted(feature_sets["shareholder"]),
@@ -3088,18 +3133,10 @@ def audit_source_revision_capabilities(
     r3_context = _validate_r3_source_blockers(
         project=project, spec=r3_spec, feature_date_end=feature_date_end,
     )
-    current_r3_specs = request.get("current_r3_outputs")
-    if not isinstance(current_r3_specs, Mapping) or not current_r3_specs:
-        raise CertificationError("current R3 output identities are missing")
-    current_r3_outputs: dict[str, dict[str, str]] = {}
-    for name, spec in current_r3_specs.items():
-        if not isinstance(spec, Mapping):
-            raise CertificationError(f"invalid current R3 output identity: {name}")
-        path = _verify_identity(project, spec, f"current R3 output {name}")
-        current_r3_outputs[str(name)] = {
-            "path": path.relative_to(project).as_posix(),
-            "sha256": sha256_file(path),
-        }
+    if "current_r3_outputs" in request:
+        raise CertificationError(
+            "current_r3_outputs is forbidden; source audit must use upstream receipt identities"
+        )
     trade_dates, trade_calendar_identity = _load_trade_calendar(
         project=project, spec=calendar_spec,
         availability_cutoff=feature_date_end,
@@ -3172,7 +3209,6 @@ def audit_source_revision_capabilities(
             for path in implementation_paths
         ],
         "upstream_r3_certification": r3_context,
-        "current_r3_outputs": current_r3_outputs,
         "feature_date_end": feature_date_end,
         "trade_calendar": trade_calendar_identity,
         "financial_terminal": {

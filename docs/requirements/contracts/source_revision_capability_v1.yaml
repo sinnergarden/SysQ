@@ -143,6 +143,19 @@ evidence_requirements:
   - exclusive_new_output_identity
   - audit_database_sha256_unchanged
 
+upstream_r3_output_binding:
+  identity_source: upstream_certification_receipt_input_identities
+  duplicate_request_identity_source: forbidden
+  required_outputs: [signal_manifest, signal_predictions, backtest_manifest]
+  signal_bundle_path: data/research/frozen_outputs/signal_runs/{signal_manifest_sha256}
+  backtest_bundle_path: data/research/frozen_outputs/backtest_runs/{backtest_manifest_sha256}
+  validation:
+    - verify_each_receipt_declared_sha256_against_current_bytes
+    - require_signal_manifest_and_predictions_in_one_content_addressed_bundle
+    - reject_symlink_components
+    - reject_legacy_mutable_output_paths
+  publication: create_only_new_audit_id_directory
+
 legal_supplementation_without_normal_data_sync:
   - path: targeted_announcement_evidence_import
     rule: >-
