@@ -1,0 +1,54 @@
+schema_version: feature_universe_catalog_request_v1
+catalog_id: csi1800_pit_full_feature_universe_v1
+feature_config_root: configs/features
+expected_min_unique_features: 300
+
+scope:
+  universe: current_runtime_registry_and_all_feature_configs
+  review_type: static_dependency_scoped
+  bulk_materialization: forbidden
+  numerical_recompute: only_when_selected_for_an_experiment
+
+evidence:
+  daily_source_contract: docs/requirements/contracts/tushare_daily.yaml
+  revision_capability_contract: docs/requirements/contracts/source_revision_capability_v1.yaml
+  source_revision_audit: configs/audit/csi1800_s180_r3_source_revision_v1.yaml
+
+disputed_features:
+  financial:
+    - {feature: "$debt_to_assets", endpoints: [fina_indicator]}
+    - {feature: "$grossprofit_margin", endpoints: [fina_indicator]}
+    - {feature: "$op_cashflow", endpoints: [cashflow]}
+    - {feature: "$roe", endpoints: [fina_indicator]}
+    - {feature: debt_to_assets_delta_252d, endpoints: [fina_indicator]}
+    - {feature: earnings_yield_proxy, endpoints: [income]}
+    - {feature: gross_margin_delta_yoy, endpoints: [income]}
+    - {feature: grossprofit_margin_delta_252d, endpoints: [fina_indicator]}
+    - {feature: is_profitable_ttm, endpoints: [income]}
+    - {feature: net_margin, endpoints: [income]}
+    - {feature: net_margin_delta_756d, endpoints: [income]}
+    - {feature: ocf_margin, endpoints: [cashflow, income]}
+    - {feature: op_cashflow_delta_252d, endpoints: [cashflow]}
+    - {feature: operating_cf_to_profit, endpoints: [cashflow, income]}
+    - {feature: peg_proxy, endpoints: [income]}
+    - {feature: profit_yoy, endpoints: [income]}
+    - {feature: profit_yoy_accel, endpoints: [income]}
+    - {feature: revenue_yoy, endpoints: [income]}
+    - {feature: revenue_yoy_accel, endpoints: [income]}
+    - {feature: roa, endpoints: [income, balancesheet]}
+    - {feature: roe_delta_252d, endpoints: [fina_indicator]}
+    - {feature: roe_delta_756d, endpoints: [fina_indicator]}
+    - {feature: single_q_revenue_yoy, endpoints: [income]}
+    - {feature: ttm_revenue_yoy, endpoints: [income]}
+    - {feature: value_trap_risk_score, endpoints: [fina_indicator, income]}
+  shareholder:
+    - {feature: holder_num_chg_qoq, endpoints: [stk_holdernumber]}
+    - {feature: holder_num_chg_2q, endpoints: [stk_holdernumber]}
+    - {feature: avg_shares_per_holder_chg_qoq, endpoints: [stk_holdernumber]}
+    - {feature: top10_holder_ratio_chg_qoq, endpoints: [top10_holders]}
+    - {feature: holder_concentration_score, endpoints: [stk_holdernumber, top10_holders]}
+    - {feature: holder_squeeze_score, endpoints: [stk_holdernumber]}
+    - {feature: holder_price_confirm_score, endpoints: [stk_holdernumber, top10_holders]}
+    - {feature: holder_num_stale_days, endpoints: [stk_holdernumber]}
+    - {feature: top10_holder_stale_days, endpoints: [top10_holders]}
+    - {feature: top10_holder_ratio, endpoints: [top10_holders]}

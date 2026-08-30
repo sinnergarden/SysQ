@@ -4,6 +4,7 @@
 Usage:
     python scripts/run_signal_analytics.py --experiment-id <id>
     python scripts/run_signal_analytics.py --diagnostics-config <path>
+    python scripts/run_signal_analytics.py --feature-catalog-config <path>
     python scripts/run_signal_analytics.py --signal-id <id> --signal-run-id <run> --label-id <id>
 """
 import argparse, sys
@@ -31,6 +32,16 @@ def main():
         default=None,
         help="Run PIT-filtered ResearchDiagnostics from an explicit YAML config",
     )
+    p.add_argument(
+        "--feature-catalog-config",
+        default=None,
+        help="Review the current complete feature universe from an explicit YAML config",
+    )
+    p.add_argument(
+        "--validate-only",
+        action="store_true",
+        help="Independently validate the selected feature-catalog artifact",
+    )
     p.add_argument("--signal-id", default=None); p.add_argument("--signal-run-id", default=None)
     p.add_argument("--label-id", default=None)
     p.add_argument("--start-date", default=None); p.add_argument("--end-date", default=None)
@@ -38,13 +49,17 @@ def main():
     p.add_argument("--output-dir", default=None); p.add_argument("--research-root", default="data/research")
     args = p.parse_args()
     selected_modes = sum(bool(value) for value in (
-        args.experiment_id, args.diagnostics_config, args.signal_id,
+        args.experiment_id, args.diagnostics_config, args.feature_catalog_config,
+        args.signal_id,
     ))
     if selected_modes != 1:
         p.error(
             "select exactly one mode: --experiment-id, --diagnostics-config, "
-            "or direct --signal-id/--signal-run-id/--label-id"
+            "--feature-catalog-config, or direct "
+            "--signal-id/--signal-run-id/--label-id"
         )
+    if args.validate_only and not args.feature_catalog_config:
+        p.error("--validate-only requires --feature-catalog-config")
     if args.diagnostics_config and any(
         (args.signal_run_id, args.label_id)
     ):
@@ -57,6 +72,26 @@ def main():
         p.error(
             "direct analytics requires --signal-id, --signal-run-id, and --label-id"
         )
+    if args.feature_catalog_config:
+        if any((args.signal_run_id, args.label_id)):
+            p.error("--feature-catalog-config cannot be combined with direct signal arguments")
+        if args.validate_only:
+            from qsys.research.feature_catalog_validation import validate_feature_catalog
+
+            result = validate_feature_catalog(
+                args.feature_catalog_config, root=args.research_root
+            )
+            print(f"Feature catalog validation: {result['catalog_identity_sha256']}")
+            print(f"Validation: {result['validation']}")
+        else:
+            from qsys.analysis.feature_catalog import FeatureCatalog
+
+            result = FeatureCatalog.from_config(
+                args.feature_catalog_config, root=args.research_root
+            ).run()
+            print(f"Feature catalog: {result['catalog_identity_sha256']}")
+            print(f"Manifest: {result['manifest']}")
+        return
     if args.diagnostics_config:
         from qsys.analysis.research_diagnostics import ResearchDiagnostics
 
