@@ -583,6 +583,62 @@ def test_income_sidecar_manifest_identity_enters_lineage_cache_and_checkpoint(
     assert adapter_kwargs["income_sidecar_required_history_start"] == "20180313"
 
 
+def test_content_addressed_income_identity_resolves_from_configured_data_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from qsys.config import cfg
+    from qsys.research.matrix_job import _create_generator_from_config
+
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    explicit = _income_identity(staging)
+    source_manifest = Path(explicit["income_sidecar_manifest_path"])
+    artifact_id = json.loads(source_manifest.read_text())["artifact_id"]
+    data_root = tmp_path / "portable_data"
+    target = (
+        data_root / "research" / "source_snapshots" / "income" / artifact_id
+    )
+    target.mkdir(parents=True)
+    Path(explicit["income_sidecar_path"]).replace(target / "income.parquet")
+    source_manifest.replace(target / "manifest.json")
+    monkeypatch.setitem(cfg.dirs, "root", data_root)
+    portable = {
+        "income_source_mode": INCOME_SOURCE_MODE_AUDITED,
+        "income_sidecar_artifact_id": artifact_id,
+        "income_sidecar_sha256": explicit["income_sidecar_sha256"],
+        "income_sidecar_manifest_sha256": explicit[
+            "income_sidecar_manifest_sha256"
+        ],
+        "income_sidecar_required_history_start": "20180313",
+    }
+
+    generator = _create_generator_from_config({
+        "generator_id": "portable-growth",
+        "type": "single_label_lightgbm",
+        "params": {
+            "label_id": "fwd_ret_20d_xsz_clip3",
+            **portable,
+        },
+    })
+
+    assert generator.income_sidecar_artifact_id == artifact_id
+    assert generator.income_sidecar_path == str(
+        (target / "income.parquet").absolute()
+    )
+    assert generator.income_sidecar_manifest_path == str(
+        (target / "manifest.json").absolute()
+    )
+    assert generator.checkpoint_contract_identity["income_feature_source"] == {
+        "mode": INCOME_SOURCE_MODE_AUDITED,
+        "artifact_id": artifact_id,
+        "artifact_path": "",
+        "artifact_sha256": explicit["income_sidecar_sha256"],
+        "manifest_path": "",
+        "manifest_sha256": explicit["income_sidecar_manifest_sha256"],
+        "required_history_start": "20180313",
+    }
+
+
 def test_income_sidecar_requires_complete_identity_and_rejects_tamper(
     tmp_path: Path,
 ) -> None:

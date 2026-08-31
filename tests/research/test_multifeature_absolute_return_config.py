@@ -1,8 +1,10 @@
+import hashlib
 import sys
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
+import yaml
 
 from qsys.feature.registry import FeatureListRegistry
 from qsys.research.generators.temporal_validation import (
@@ -30,6 +32,7 @@ TERMINAL_68W_CONFIG = (
     REPO
     / "configs/research/csi1800_multifeature_ridge_total_return_120d_20d_terminal_68w_v1.yaml"
 )
+TERMINAL_68W_LOCK = TERMINAL_68W_CONFIG.with_suffix(".lock.yaml")
 
 
 def test_multifeature_protocol_is_frozen_and_holdout_safe() -> None:
@@ -156,13 +159,48 @@ def test_terminal_ridge_config_is_exactly_68_windows_and_locked() -> None:
         for window in windows
     ) == 20
     assert config.research_protocol["terminal_evaluation"] == {
-        "signal_ic_label_scope": (
-            "preholdout_labels_strictly_mature_before_2025-01-02"
-        ),
+        "contract": "terminal_final_evaluation_v1",
+        "data_use": "one_time_final_evaluation_only",
+        "signal_scope": {
+            "prediction_start_date": "2025-01-02",
+            "prediction_end_date": "2026-07-31",
+            "maturity_cutoff_exclusive": "2026-08-01",
+            "maturity_contract": (
+                "maturity_and_return_end_strictly_before_cutoff_v1"
+            ),
+        },
+        "required_signal_metrics": [
+            "IC", "RankIC", "quantile_5", "decile", "Top5", "Top20",
+            "Top50", "calendar_year_stability", "frozen_phase_stability",
+        ],
+        "stability_phases": [
+            {
+                "phase_id": "terminal_2025",
+                "start_date": "2025-01-02",
+                "end_date": "2025-12-31",
+            },
+            {
+                "phase_id": "terminal_2026_matured_as_of_cutoff",
+                "start_date": "2026-01-01",
+                "end_date": "2026-07-31",
+            },
+        ],
+        "required_portfolio_metrics": [
+            "total_return", "cagr", "sharpe", "max_drawdown", "turnover",
+            "annual_returns", "beta", "alpha_daily", "alpha_annualized",
+            "commission", "tax", "total_fee",
+        ],
         "portfolio_scope": (
             "one_time_terminal_backtest_without_selection_feedback"
         ),
         "post_terminal_model_or_feature_selection": "forbidden",
+        "post_terminal_parameter_selection": "forbidden",
+        "required_artifact_contracts": {
+            "signal_evaluation": "signal_evaluation_methodology_v2",
+            "stability": "signal_evaluation_stability_v1",
+            "portfolio": "portfolio_analytics_v3",
+            "accounting": "accounting_v1",
+        },
     }
     assert config.research_protocol["benchmark_ids"] == [
         "csi800_official_price_index_v1",
@@ -170,6 +208,21 @@ def test_terminal_ridge_config_is_exactly_68_windows_and_locked() -> None:
         "csi1800_pit_float_cap_total_return_proxy_v1",
     ]
     assert len(config.generators) == len(config.transforms) == 1
+    assert config.labels == [{
+        "label_id": "fwd_ret_120d_open_open_raw_pit_csi1800_v1",
+        "label_maturity_lag_trading_days": 121,
+        "evaluation_start_date": "2025-01-02",
+        "evaluation_end_date": "2026-07-31",
+        "label_maturity_before": "2026-08-01",
+        "require_pit_lineage": True,
+    }]
+    params = config.generators[0]["params"]
+    assert params["income_sidecar_artifact_id"] == (
+        "7775d55750de73d80e1cd30a4cc3fd91d065750867d478a3d9c7f1e8027fbe0b"
+    )
+    assert "income_sidecar_path" not in params
+    assert "income_sidecar_manifest_path" not in params
+    assert "/home/liuming" not in TERMINAL_68W_CONFIG.read_text(encoding="utf-8")
     with pytest.raises(ValueError, match="overlaps a locked holdout"):
         SignalResearchPipeline._validate_config(config)
 
@@ -182,6 +235,37 @@ def test_terminal_ridge_config_is_exactly_68_windows_and_locked() -> None:
     SignalResearchPipeline._validate_config(
         replace(config, research_protocol=authorized_protocol)
     )
+
+
+def test_terminal_readiness_lock_binds_config_feature_source_and_label() -> None:
+    lock = yaml.safe_load(TERMINAL_68W_LOCK.read_text(encoding="utf-8"))
+    config_sha = hashlib.sha256(TERMINAL_68W_CONFIG.read_bytes()).hexdigest()
+    feature_contract = FeatureListRegistry.contract(
+        "csi1800_multifeature_120d_v1"
+    )
+
+    assert lock["schema_version"] == "terminal_readiness_lock_v1"
+    assert lock["terminal_config"]["sha256"] == config_sha
+    assert lock["terminal_config"]["report_contract"] == (
+        "terminal_final_evaluation_v1"
+    )
+    assert lock["feature_identity"]["feature_count"] == 97
+    assert lock["feature_identity"]["config_sha256"] == feature_contract[
+        "feature_list_config_sha256"
+    ]
+    assert lock["feature_identity"]["ordered_features_sha256"] == (
+        feature_contract["features_sha256"]
+    )
+    assert lock["source_identity"]["pit_universe"]["artifact_id"] == (
+        "csi1800_pit_v2"
+    )
+    assert lock["label_identity"]["label_id"] == (
+        "fwd_ret_120d_open_open_raw_pit_csi1800_v1"
+    )
+    assert lock["holdout"]["status"] == (
+        "locked_pending_explicit_authorization"
+    )
+    assert lock["holdout"]["holdout_consumed"] is False
 
 
 def test_terminal_ridge_preheat_is_locked_before_writes(

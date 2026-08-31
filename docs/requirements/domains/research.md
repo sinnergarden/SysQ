@@ -36,8 +36,9 @@ UC-5（Signal Analytics）、UC-6（Signal Combination）、UC-7（Signal Backte
 - 标签配置（`configs/labels/*.yaml`）
 - 行情数据（canonical / qlib_bin）
 - 启用四个 growth-confirmation income feature 时，正式 audited research 必须显式
-  选择 `audited_sidecar_v1`，pin parquet path+SHA、manifest path+SHA，并声明由
-  audit scope/feature-set 消费范围给出的 `required_history_start`。旧配置映射为
+  选择 `audited_sidecar_v1`，pin content-addressed artifact id、parquet SHA、manifest
+  SHA，并声明由 audit scope/feature-set 消费范围给出的 `required_history_start`。
+  runtime 从配置的 data root 经 manifest 解析实际文件；旧配置映射为
   `legacy_unverified_global_v0` 并在运行时告警；该模式只用于兼容，不能通过 PIT
   certification。
 - 启用 shareholder feature 时，正式 audited research 还必须 pin holder/top10 path+SHA
@@ -99,14 +100,17 @@ params:
 ```yaml
 params:
   income_source_mode: audited_sidecar_v1
-  income_sidecar_path: data/research/income_sidecars/<artifact_id>/income.parquet
+  income_sidecar_artifact_id: <artifact_id>
   income_sidecar_sha256: <exact_sha256>
-  income_sidecar_manifest_path: data/research/income_sidecars/<artifact_id>/manifest.json
   income_sidecar_manifest_sha256: <exact_manifest_sha256>
   income_sidecar_required_history_start: '20140313'  # example; derive from audit scope
 ```
 
-四项必须来自同一次 bootstrap 输出；禁止填 `latest` 或 symlink。完整历史起点与单次
+四项必须来自同一次 bootstrap 输出。runtime 只从
+`QSYS_DATA_ROOT/research/source_snapshots/income/<artifact_id>/manifest.json`
+解析 manifest 声明的 basename，并复核 artifact id、manifest SHA 与数据 SHA；禁止填
+`latest`、symlink 或在 content-addressed identity 中混入机器路径。显式 path+SHA 只保留
+为旧研究配置的兼容输入。完整历史起点与单次
 rolling request 的 `start/end` 是两项独立约束：manifest `range_start` 必须覆盖显式
 `required_history_start`，而 request window 只校验本次消费 cutoff，不能替代历史起点。
 真实 baseline identity 只能在 terminal sidecar 生成后写入；当前不得伪造 path/hash 或
@@ -136,6 +140,12 @@ Supporting `scripts/research/preheat_feature_cache.py` 必须复用同一配置 
 终端 benchmark 与 portfolio analytics 同样必须接收并 hash-bind 非空
 `terminal_authorization_ref`，同时把 `holdout_consumed` 明确写为 `true`；未授权时
 仍在读取或写入留出制品前 fail closed。
+
+一次性 terminal report 的口径必须在授权前写进冻结 research config。信号部分至少
+预声明 2025+ prediction 区间、严格 label maturity cutoff、IC、RankIC、五分位/十分位、
+Top5/20/50，以及 calendar-year 和固定 phase 稳定性；portfolio 部分至少预声明收益、
+Sharpe、回撤、换手、逐年收益、CAPM beta/alpha 与 commission/tax/total fee。terminal
+数据仅用于一次最终评价；报告生成后禁止再据其选择 feature、模型或参数。
 
 `run_from_signal_cache` 的 accounting v1 是研究回测的账本边界，不是生产
 ledger，也不改变 signal、feature、model 或 strategy。输入 SignalRun 的内容、

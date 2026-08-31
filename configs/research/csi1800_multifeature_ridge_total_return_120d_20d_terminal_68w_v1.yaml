@@ -21,9 +21,51 @@ research_protocol:
     run_mode: one_time_online_walk_forward_no_selection_feedback
     unlock_rule: explicit user authorization in this thread
   terminal_evaluation:
-    signal_ic_label_scope: preholdout_labels_strictly_mature_before_2025-01-02
+    contract: terminal_final_evaluation_v1
+    data_use: one_time_final_evaluation_only
+    signal_scope:
+      prediction_start_date: '2025-01-02'
+      prediction_end_date: '2026-07-31'
+      maturity_cutoff_exclusive: '2026-08-01'
+      maturity_contract: maturity_and_return_end_strictly_before_cutoff_v1
+    required_signal_metrics:
+      - IC
+      - RankIC
+      - quantile_5
+      - decile
+      - Top5
+      - Top20
+      - Top50
+      - calendar_year_stability
+      - frozen_phase_stability
+    stability_phases:
+      - phase_id: terminal_2025
+        start_date: '2025-01-02'
+        end_date: '2025-12-31'
+      - phase_id: terminal_2026_matured_as_of_cutoff
+        start_date: '2026-01-01'
+        end_date: '2026-07-31'
+    required_portfolio_metrics:
+      - total_return
+      - cagr
+      - sharpe
+      - max_drawdown
+      - turnover
+      - annual_returns
+      - beta
+      - alpha_daily
+      - alpha_annualized
+      - commission
+      - tax
+      - total_fee
     portfolio_scope: one_time_terminal_backtest_without_selection_feedback
     post_terminal_model_or_feature_selection: forbidden
+    post_terminal_parameter_selection: forbidden
+    required_artifact_contracts:
+      signal_evaluation: signal_evaluation_methodology_v2
+      stability: signal_evaluation_stability_v1
+      portfolio: portfolio_analytics_v3
+      accounting: accounting_v1
   portfolio:
     top_n: 20
     rebalance_sessions: 20
@@ -70,9 +112,8 @@ generators:
       pit_filter_mode: member_as_of
       pit_universe_artifact: csi1800_pit_v2
       income_source_mode: audited_sidecar_v1
-      income_sidecar_path: /home/liuming/.openclaw/workspace/SysQ/data/research/source_snapshots/income/7775d55750de73d80e1cd30a4cc3fd91d065750867d478a3d9c7f1e8027fbe0b/income.parquet
+      income_sidecar_artifact_id: 7775d55750de73d80e1cd30a4cc3fd91d065750867d478a3d9c7f1e8027fbe0b
       income_sidecar_sha256: 6ef941166aaeed8658ee5dd796056d728303d23e0d28703e5b089ac26214fa42
-      income_sidecar_manifest_path: /home/liuming/.openclaw/workspace/SysQ/data/research/source_snapshots/income/7775d55750de73d80e1cd30a4cc3fd91d065750867d478a3d9c7f1e8027fbe0b/manifest.json
       income_sidecar_manifest_sha256: 0b549ae0ff2ae82b6a6ed90c242d9a4a46e6227e008ff39e6ef987de21d85bae
       income_sidecar_required_history_start: '20140313'
 signal_transforms:
@@ -81,5 +122,7 @@ signal_transforms:
 labels:
   - label_id: fwd_ret_120d_open_open_raw_pit_csi1800_v1
     label_maturity_lag_trading_days: 121
-    label_maturity_before: '2025-01-02'
+    evaluation_start_date: '2025-01-02'
+    evaluation_end_date: '2026-07-31'
+    label_maturity_before: '2026-08-01'
     require_pit_lineage: true

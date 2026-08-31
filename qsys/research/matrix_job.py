@@ -338,7 +338,8 @@ def _create_generator_from_config(
             "shareholder_top10_path", "shareholder_top10_sha256",
             "shareholder_manifest_path", "shareholder_manifest_sha256",
             "shareholder_freshness_contract",
-            "income_sidecar_path", "income_sidecar_sha256",
+            "income_sidecar_artifact_id", "income_sidecar_path",
+            "income_sidecar_sha256",
             "income_sidecar_manifest_path", "income_sidecar_manifest_sha256",
             "income_source_mode", "income_sidecar_required_history_start",
         }
@@ -422,6 +423,9 @@ def _create_generator_from_config(
             shareholder_manifest_path=params.get("shareholder_manifest_path", ""),
             shareholder_manifest_sha256=params.get(
                 "shareholder_manifest_sha256", ""
+            ),
+            income_sidecar_artifact_id=params.get(
+                "income_sidecar_artifact_id", ""
             ),
             income_sidecar_path=params.get("income_sidecar_path", ""),
             income_sidecar_sha256=params.get("income_sidecar_sha256", ""),

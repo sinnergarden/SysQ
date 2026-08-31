@@ -179,6 +179,7 @@ class LightGBMSingleLabelGenerator:
     # Required when the selected feature list consumes growth-confirmation
     # income fields.  This is one immutable audited bootstrap artifact, never
     # an implicit mutable ``data/tushare/income.parquet`` input.
+    income_sidecar_artifact_id: str = ""
     income_sidecar_path: str = ""
     income_sidecar_sha256: str = ""
     income_sidecar_manifest_path: str = ""
@@ -415,11 +416,13 @@ class LightGBMSingleLabelGenerator:
         from qsys.data.income_sidecar import (
             INCOME_SOURCE_MODE_AUDITED,
             normalize_income_feature_source,
+            resolve_income_sidecar_identity,
             validate_income_sidecar_identity,
         )
 
         source = normalize_income_feature_source({
             "mode": self.income_source_mode,
+            "artifact_id": self.income_sidecar_artifact_id,
             "artifact_path": self.income_sidecar_path,
             "artifact_sha256": self.income_sidecar_sha256,
             "manifest_path": self.income_sidecar_manifest_path,
@@ -434,14 +437,23 @@ class LightGBMSingleLabelGenerator:
         if source["mode"] != INCOME_SOURCE_MODE_AUDITED:
             return
 
-        identity = validate_income_sidecar_identity(
-            artifact_path=source["artifact_path"],
-            artifact_sha256=source["artifact_sha256"],
-            manifest_path=source["manifest_path"],
-            manifest_sha256=source["manifest_sha256"],
-            required_history_start=source["required_history_start"],
-        )
+        if source["artifact_id"]:
+            identity = resolve_income_sidecar_identity(
+                artifact_id=source["artifact_id"],
+                artifact_sha256=source["artifact_sha256"],
+                manifest_sha256=source["manifest_sha256"],
+                required_history_start=source["required_history_start"],
+            )
+        else:
+            identity = validate_income_sidecar_identity(
+                artifact_path=source["artifact_path"],
+                artifact_sha256=source["artifact_sha256"],
+                manifest_path=source["manifest_path"],
+                manifest_sha256=source["manifest_sha256"],
+                required_history_start=source["required_history_start"],
+            )
         manifest = identity["manifest"]
+        self.income_sidecar_artifact_id = str(manifest["artifact_id"])
         self.income_sidecar_path = identity["artifact_path"]
         self.income_sidecar_sha256 = identity["artifact_sha256"]
         self.income_sidecar_manifest_path = identity["manifest_path"]
@@ -452,7 +464,7 @@ class LightGBMSingleLabelGenerator:
                 "sha256": self.income_sidecar_sha256,
                 "manifest_path": self.income_sidecar_manifest_path,
                 "manifest_sha256": self.income_sidecar_manifest_sha256,
-                "artifact_id": manifest["artifact_id"],
+                "artifact_id": self.income_sidecar_artifact_id,
                 "source_run_id": manifest["source_evidence"]["run_id"],
                 "terminal_receipt_sha256": manifest["source_evidence"][
                     "terminal_receipt_sha256"

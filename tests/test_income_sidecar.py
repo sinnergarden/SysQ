@@ -506,6 +506,25 @@ def test_income_source_modes_keep_history_scope_explicit() -> None:
         })
 
 
+def test_audited_source_accepts_portable_content_identity() -> None:
+    portable = normalize_income_feature_source({
+        "mode": INCOME_SOURCE_MODE_AUDITED,
+        "artifact_id": "c" * 64,
+        "artifact_sha256": "a" * 64,
+        "manifest_sha256": "b" * 64,
+        "required_history_start": START,
+    })
+
+    assert portable["artifact_id"] == "c" * 64
+    assert portable["artifact_path"] == ""
+    assert portable["manifest_path"] == ""
+    with pytest.raises(ValueError, match="cannot mix"):
+        normalize_income_feature_source({
+            **portable,
+            "artifact_path": "income.parquet",
+        })
+
+
 def test_formal_strategy_configs_declare_unverified_compatibility_mode() -> None:
     project_root = Path(__file__).resolve().parents[1]
     for name in ("financial_rc.yaml", "s180_top10.yaml"):

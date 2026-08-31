@@ -479,6 +479,163 @@ def summarize_group_returns(
     }
 
 
+def _evaluation_period_summary(
+    ic_daily: pd.DataFrame,
+    rank_ic_daily: pd.DataFrame,
+    quantile_daily: pd.DataFrame,
+    decile_daily: pd.DataFrame,
+    topk_daily: pd.DataFrame,
+    *,
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+) -> dict[str, Any]:
+    def bounded(frame: pd.DataFrame, date_column: str) -> pd.DataFrame:
+        if frame.empty:
+            return frame
+        dates = pd.to_datetime(frame[date_column], errors="coerce")
+        return frame.loc[dates.between(start, end, inclusive="both")]
+
+    ic = bounded(ic_daily, "date")
+    rank_ic = bounded(rank_ic_daily, "date")
+    quantile = bounded(quantile_daily, "trade_date")
+    decile = bounded(decile_daily, "trade_date")
+    topk = bounded(topk_daily, "trade_date")
+
+    def correlation_summary(
+        frame: pd.DataFrame, column: str
+    ) -> dict[str, int | float | None]:
+        values = pd.to_numeric(frame[column], errors="coerce").dropna()
+        stats = _ic_stats(values)
+        return {
+            "n_dates": int(len(values)),
+            "mean": stats["mean"],
+            "std": stats["std"],
+            "ir": stats["ir"],
+            "positive_ratio": (
+                _finite_float((values > 0).mean()) if not values.empty else None
+            ),
+        }
+
+    def quantile_summary(frame: pd.DataFrame) -> dict[str, int | float | None]:
+        spread_source = (
+            frame["top_minus_bottom"]
+            if "top_minus_bottom" in frame.columns
+            else pd.Series(dtype=float)
+        )
+        monotonicity_source = (
+            frame["monotonicity_score"]
+            if "monotonicity_score" in frame.columns
+            else pd.Series(dtype=float)
+        )
+        spread = pd.to_numeric(
+            spread_source, errors="coerce"
+        ).dropna()
+        monotonicity = pd.to_numeric(
+            monotonicity_source, errors="coerce"
+        ).dropna()
+        return {
+            "n_dates": int(len(spread)),
+            "top_minus_bottom_mean": (
+                _finite_float(spread.mean()) if not spread.empty else None
+            ),
+            "monotonicity_mean": (
+                _finite_float(monotonicity.mean())
+                if not monotonicity.empty else None
+            ),
+        }
+
+    topk_summary: dict[str, Any] = {}
+    topk_groups = topk.groupby("top_k") if not topk.empty else ()
+    for top_k, group in topk_groups:
+        topk_summary[str(int(top_k))] = {
+            "n_dates": int(
+                pd.to_numeric(
+                    group["predicted_topk_return"], errors="coerce"
+                ).notna().sum()
+            ),
+            "hit_recall_at_k": _finite_float(group["hit_recall_at_k"].mean()),
+            "predicted_topk_return": _finite_float(
+                group["predicted_topk_return"].mean()
+            ),
+            "excess_vs_universe": _finite_float(
+                group["excess_vs_universe"].mean()
+            ),
+            "excess_vs_benchmark": _finite_float(
+                pd.to_numeric(group["excess_vs_benchmark"], errors="coerce").mean()
+            ),
+            "excess_vs_random": _finite_float(group["excess_vs_random"].mean()),
+        }
+    return {
+        "start_date": start.strftime("%Y-%m-%d"),
+        "end_date": end.strftime("%Y-%m-%d"),
+        "ic": correlation_summary(ic, "ic"),
+        "rank_ic": correlation_summary(rank_ic, "rank_ic"),
+        "quantile_5": quantile_summary(quantile),
+        "decile": quantile_summary(decile),
+        "topk": topk_summary,
+    }
+
+
+def summarize_evaluation_stability(
+    ic_daily: pd.DataFrame,
+    rank_ic_daily: pd.DataFrame,
+    quantile_daily: pd.DataFrame,
+    decile_daily: pd.DataFrame,
+    topk_daily: pd.DataFrame,
+    *,
+    phases: list[dict[str, str]] | None = None,
+) -> dict[str, Any]:
+    """Summarize signal evidence by calendar year and predeclared phases."""
+
+    dates = pd.DatetimeIndex([])
+    for frame, column in (
+        (ic_daily, "date"),
+        (rank_ic_daily, "date"),
+        (quantile_daily, "trade_date"),
+        (decile_daily, "trade_date"),
+        (topk_daily, "trade_date"),
+    ):
+        if not frame.empty:
+            dates = dates.union(
+                pd.DatetimeIndex(pd.to_datetime(frame[column], errors="coerce").dropna())
+            )
+    yearly = {
+        str(year): _evaluation_period_summary(
+            ic_daily,
+            rank_ic_daily,
+            quantile_daily,
+            decile_daily,
+            topk_daily,
+            start=pd.Timestamp(year=year, month=1, day=1),
+            end=pd.Timestamp(year=year, month=12, day=31),
+        )
+        for year in sorted(set(dates.year))
+    }
+    phase_summaries: dict[str, Any] = {}
+    for raw in phases or []:
+        phase_id = str(raw.get("phase_id") or "").strip()
+        if not phase_id or phase_id in phase_summaries:
+            raise ValueError("evaluation stability phase ids must be non-empty and unique")
+        start = pd.Timestamp(raw.get("start_date")).normalize()
+        end = pd.Timestamp(raw.get("end_date")).normalize()
+        if pd.isna(start) or pd.isna(end) or start > end:
+            raise ValueError(f"invalid evaluation stability phase: {phase_id}")
+        phase_summaries[phase_id] = _evaluation_period_summary(
+            ic_daily,
+            rank_ic_daily,
+            quantile_daily,
+            decile_daily,
+            topk_daily,
+            start=start,
+            end=end,
+        )
+    return {
+        "contract": "signal_evaluation_stability_v1",
+        "calendar_year": yearly,
+        "phases": phase_summaries,
+    }
+
+
 def _circular_block_bootstrap_mean(
     values: pd.Series,
     *,
@@ -1014,6 +1171,7 @@ class SignalEvaluator:
         require_pit_lineage: bool = False,
         research_config_sha256: str | None = None,
         label_maturity_before: str | None = None,
+        stability_phases: list[dict[str, str]] | None = None,
     ) -> SignalEvaluationResult:
         """Run full evaluation and write artifacts."""
         # 1. Load data
@@ -1151,6 +1309,14 @@ class SignalEvaluator:
         topk_df, topk_summary = compute_topk_metrics(
             joined, score_column=score_column
         )
+        stability_by_period = summarize_evaluation_stability(
+            ic_df,
+            rank_ic_df,
+            quantile_daily,
+            decile_daily,
+            topk_df,
+            phases=stability_phases,
+        )
         stability_df, stability_summary = compute_rank_stability(
             joined, score_column=score_column
         )
@@ -1240,6 +1406,7 @@ class SignalEvaluator:
             "label_horizon_sessions": horizon,
             "research_config_sha256": research_config_sha256,
             "label_maturity_filter": maturity_filter,
+            "stability_phases": list(stability_phases or []),
             "ic_decay_lags": list(decay_lags),
             "overlap_inference": (
                 "horizon_block_bootstrap_newey_west_all_offsets_v1"
@@ -1328,6 +1495,7 @@ class SignalEvaluator:
             "quantile_summary": quantile_summary,
             "decile_summary": decile_summary,
             "topk_summary": topk_summary,
+            "stability_by_period": stability_by_period,
             "ranking_stability": stability_summary,
             "neutralized_rank_ic": neutral_summary,
             "overlap_robustness": overlap_stats,

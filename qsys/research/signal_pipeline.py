@@ -422,6 +422,13 @@ class SignalResearchPipeline:
                 require_pit_lineage=bool(lcfg.get("require_pit_lineage", False)),
                 research_config_sha256=_research_config_sha256(config),
                 label_maturity_before=lcfg.get("label_maturity_before"),
+                start_date=lcfg.get("evaluation_start_date"),
+                end_date=lcfg.get("evaluation_end_date"),
+                stability_phases=(
+                    config.research_protocol.get("terminal_evaluation", {}).get(
+                        "stability_phases"
+                    )
+                ),
             )
             eval_refs.append(SignalEvalRef(
                 signal_id=signal_id,
@@ -715,6 +722,13 @@ class SignalResearchPipeline:
                     ),
                     research_config_sha256=_research_config_sha256(config),
                     label_maturity_before=lcfg.get("label_maturity_before"),
+                    start_date=lcfg.get("evaluation_start_date"),
+                    end_date=lcfg.get("evaluation_end_date"),
+                    stability_phases=(
+                        config.research_protocol.get(
+                            "terminal_evaluation", {}
+                        ).get("stability_phases")
+                    ),
                 )
                 eval_refs.append(SignalEvalRef(
                     signal_id=job.signal_id,
@@ -781,6 +795,13 @@ class SignalResearchPipeline:
                         research_config_sha256=_research_config_sha256(config),
                         label_maturity_before=lcfg.get(
                             "label_maturity_before"
+                        ),
+                        start_date=lcfg.get("evaluation_start_date"),
+                        end_date=lcfg.get("evaluation_end_date"),
+                        stability_phases=(
+                            config.research_protocol.get(
+                                "terminal_evaluation", {}
+                            ).get("stability_phases")
                         ),
                     )
                     combined_eval_refs.append(SignalEvalRef(

@@ -200,6 +200,95 @@ class TestCoverage:
 
 
 class TestSignalEvaluator:
+    def test_terminal_stability_contract_covers_years_phases_and_topk(
+        self, tmp_path: Path
+    ) -> None:
+        import json
+
+        dates = (
+            "2025-06-16", "2025-06-17", "2026-06-15", "2026-06-16",
+        )
+        signal_rows = []
+        label_rows = []
+        for trade_date in dates:
+            data_date = (
+                pd.Timestamp(trade_date) - pd.Timedelta(days=1)
+            ).strftime("%Y-%m-%d")
+            maturity_date = (
+                pd.Timestamp(trade_date) + pd.Timedelta(days=1)
+            ).strftime("%Y-%m-%d")
+            for index in range(60):
+                instrument = f"{index:06d}.SZ"
+                signal_rows.append({
+                    "trade_date": trade_date,
+                    "data_date": data_date,
+                    "instrument": instrument,
+                    "signal_id": "terminal_fixture",
+                    "signal_run_id": "terminal_run_fixture",
+                    "score": float(index),
+                })
+                label_rows.append({
+                    "trade_date": trade_date,
+                    "instrument": instrument,
+                    "label_id": "terminal_label_fixture",
+                    "horizon": 5,
+                    "label_value": float(index) / 1000.0,
+                    "maturity_date": maturity_date,
+                    "return_end_date": maturity_date,
+                })
+        SignalStore(str(tmp_path)).save_signal_run(
+            "terminal_fixture",
+            "terminal_run_fixture",
+            pd.DataFrame(signal_rows),
+            check_no_lookahead=False,
+        )
+        LabelStore(str(tmp_path)).save_labels(
+            "terminal_label_fixture", pd.DataFrame(label_rows)
+        )
+        phases = [
+            {
+                "phase_id": "terminal_2025",
+                "start_date": "2025-01-02",
+                "end_date": "2025-12-31",
+            },
+            {
+                "phase_id": "terminal_2026_matured_as_of_cutoff",
+                "start_date": "2026-01-01",
+                "end_date": "2026-07-31",
+            },
+        ]
+
+        SignalEvaluator(str(tmp_path)).evaluate(
+            signal_id="terminal_fixture",
+            signal_run_id="terminal_run_fixture",
+            label_id="terminal_label_fixture",
+            start_date="2025-01-02",
+            end_date="2026-07-31",
+            label_maturity_before="2026-08-01",
+            stability_phases=phases,
+            overwrite=True,
+        )
+
+        output_dir = (
+            tmp_path / "signals" / "terminal_fixture" / "terminal_run_fixture"
+            / "eval" / "terminal_label_fixture"
+        )
+        summary = json.loads((output_dir / "summary.json").read_text())
+        stability = summary["stability_by_period"]
+        assert stability["contract"] == "signal_evaluation_stability_v1"
+        assert set(stability["calendar_year"]) == {"2025", "2026"}
+        assert set(stability["phases"]) == {
+            "terminal_2025", "terminal_2026_matured_as_of_cutoff",
+        }
+        for period in stability["phases"].values():
+            assert period["ic"]["n_dates"] == 2
+            assert period["rank_ic"]["n_dates"] == 2
+            assert period["quantile_5"]["n_dates"] == 2
+            assert period["decile"]["n_dates"] == 2
+            assert set(period["topk"]) == {"5", "20", "50"}
+        manifest = json.loads((output_dir / "manifest.json").read_text())
+        assert manifest["methodology"]["stability_phases"] == phases
+
     def test_maturity_cutoff_excludes_labels_reaching_holdout(
         self, tmp_path: Path
     ) -> None:
