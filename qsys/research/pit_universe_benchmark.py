@@ -15,6 +15,7 @@ import yaml
 
 from qsys.research.pit_universe import PitUniverseStore
 from qsys.research.portfolio_analytics import write_portfolio_analytics
+from qsys.backtest.market_data import MarketDataAdapter
 
 
 SCHEMA_VERSION = "pit_universe_benchmark_v1"
@@ -76,6 +77,7 @@ def write_pit_universe_benchmark(
     min_constituent_coverage: float = 0.95,
     config_path: str | Path | None = None,
     terminal_authorization_ref: str | None = None,
+    freeze_canonical_data_to: str | Path | None = None,
 ) -> dict[str, Any]:
     """Build a prior-float-cap-weighted total-return proxy without lookahead.
 
@@ -141,6 +143,15 @@ def write_pit_universe_benchmark(
     )
     if not instruments:
         raise ValueError("PIT universe is empty over benchmark range")
+    market_slice: dict[str, Any] | None = None
+    if freeze_canonical_data_to is not None:
+        market_slice = MarketDataAdapter(market_root).freeze_sources(
+            instruments,
+            freeze_canonical_data_to,
+            through_date=end.strftime("%Y-%m-%d"),
+            allow_missing=True,
+        )
+        market_root = Path(market_slice["root"])
 
     source_rows: list[dict[str, Any]] = []
     in_range: list[pd.DataFrame] = []
@@ -308,6 +319,14 @@ def write_pit_universe_benchmark(
         "calendar_sha256": _sha256(calendar_path),
         "source_inventory_sha256": _sha256(sources_path),
     }
+    if market_slice is not None:
+        inputs["market_slice"] = {
+            "manifest_path": market_slice["manifest"],
+            "manifest_sha256": market_slice["manifest_sha256"],
+            "market_slice_identity_sha256": market_slice[
+                "market_slice_identity_sha256"
+            ],
+        }
     if config_path is not None:
         resolved_config = Path(config_path).resolve()
         _regular_file(resolved_config, "benchmark config")

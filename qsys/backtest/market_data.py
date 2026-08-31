@@ -451,6 +451,7 @@ class MarketDataAdapter:
         output_root: str | Path,
         *,
         through_date: str,
+        allow_missing: bool = False,
     ) -> dict[str, Any]:
         """Atomically freeze selected canonical files through one as-of date."""
 
@@ -469,8 +470,12 @@ class MarketDataAdapter:
         if source_root == target or source_root in target.parents:
             raise ValueError("market-data slice target cannot be inside its source root")
         missing = [name for name in names if not self._path_for(name).is_file()]
-        if missing:
+        if missing and not allow_missing:
             raise ValueError(f"market-data slice source files are missing: {missing}")
+        missing_set = set(missing)
+        present = [name for name in names if name not in missing_set]
+        if not present:
+            raise ValueError("market-data slice has no available source files")
 
         target.parent.mkdir(parents=True, exist_ok=True)
         staging = Path(
@@ -478,7 +483,7 @@ class MarketDataAdapter:
         )
         try:
             files: list[dict[str, Any]] = []
-            for instrument in names:
+            for instrument in present:
                 source_path = self._path_for(instrument)
                 source_sha256 = _file_sha256(source_path)
                 frame = pd.read_feather(source_path)
@@ -518,6 +523,7 @@ class MarketDataAdapter:
                 "schema_version": MARKET_SLICE_SCHEMA_VERSION,
                 "source_root": str(source_root),
                 "through_date": through,
+                "requested_missing_instruments": missing,
                 "producer_code_sha256": _file_sha256(Path(__file__)),
                 "files": files,
             }

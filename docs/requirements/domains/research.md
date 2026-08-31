@@ -153,6 +153,8 @@ Accounting v1 的规范如下：
   回测随即只读取该切片。slice manifest 必须同时绑定源文件与冻结文件 SHA-256、
   截止日、逐文件行数和 producer code hash，backtest manifest 必须继续绑定 slice
   manifest。终端区间的切片创建仍受同一显式授权门约束。
+  PIT-universe benchmark 可通过同名配置字段复用该冻结契约；缺失的历史成分行情
+  必须显式记录在 slice manifest，并继续受 benchmark 最低覆盖率门约束。
 
 - **Raw price + event ledger。** 执行与收盘估值只使用 canonical raw price；
   corporate actions 来自不可变的、hash-bound event artifact。artifact 必须绑定

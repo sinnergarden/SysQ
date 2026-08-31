@@ -73,10 +73,17 @@ def test_pit_benchmark_uses_strict_prior_caps_and_zero_carries_suspension(
 ) -> None:
     universe = tmp_path / "universe"
     market = tmp_path / "market"
+    frozen_market = tmp_path / "frozen_market"
     output = tmp_path / "benchmark"
     calendar = tmp_path / "calendar.csv"
     _write_universe(universe)
     _write_market_data(market)
+    future = pd.read_feather(market / "A.SZ.feather").tail(1).assign(
+        trade_date="20250102"
+    )
+    pd.concat([pd.read_feather(market / "A.SZ.feather"), future]).to_feather(
+        market / "A.SZ.feather"
+    )
     pd.DataFrame({"trade_date": ["20240102", "20240103", "20240104"]}).to_csv(
         calendar, index=False
     )
@@ -91,6 +98,7 @@ def test_pit_benchmark_uses_strict_prior_caps_and_zero_carries_suspension(
         end_date="2024-01-04",
         holdout_start="2025-01-02",
         min_constituent_coverage=1.0,
+        freeze_canonical_data_to=frozen_market,
     )
 
     benchmark = pd.read_csv(output / "benchmark.csv")
@@ -102,6 +110,13 @@ def test_pit_benchmark_uses_strict_prior_caps_and_zero_carries_suspension(
     ])
     assert coverage["zero_return_carry_count"].tolist() == [0, 1, 0]
     assert coverage["constituent_count_coverage"].tolist() == [1.0, 1.0, 1.0]
+    assert pd.read_feather(frozen_market / "A.SZ.feather")[
+        "trade_date"
+    ].max() == "20240104"
+    manifest = json.loads((output / "manifest.json").read_text())
+    assert manifest["inputs"]["market_slice"]["manifest_sha256"] == _sha256(
+        frozen_market / "market_slice_manifest.json"
+    )
     validation = validate_pit_universe_benchmark(output)
     assert validation["validation"] == "passed"
     assert validation["benchmark_identity_sha256"] == result[
