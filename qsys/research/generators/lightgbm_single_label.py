@@ -203,6 +203,9 @@ class LightGBMSingleLabelGenerator:
     _shareholder_freshness_profiles: dict[str, dict[str, object]] = field(
         default_factory=dict, repr=False, init=False
     )
+    _window_model_diagnostics: list[dict[str, object]] = field(
+        default_factory=list, repr=False, init=False
+    )
     _feature_cache_code_identity: list[dict[str, str]] | None = field(
         default=None, repr=False, init=False
     )
@@ -484,6 +487,16 @@ class LightGBMSingleLabelGenerator:
         return {
             "contract": self.shareholder_freshness_contract,
             "profiles": dict(self._shareholder_freshness_profiles),
+        }
+
+    @property
+    def model_diagnostics_lineage(self) -> dict[str, object] | None:
+        """Return basic, per-window validation and feature-importance evidence."""
+        if not self._window_model_diagnostics:
+            return None
+        return {
+            "schema_version": "rolling_model_diagnostics_v1",
+            "windows": list(self._window_model_diagnostics),
         }
 
     @property
@@ -1400,6 +1413,83 @@ class LightGBMSingleLabelGenerator:
     # Training + prediction
     # ═══════════════════════════════════════════════════════════════
 
+    def _train_window_model(
+        self,
+        X_train: pd.DataFrame,
+        y_train: pd.Series,
+        label_dates: pd.Series,
+        *,
+        window_id: str,
+    ):
+        from qsys.signal.alpha_v1.training import (
+            compute_train_partition_sample_weight,
+            resolve_validation_size,
+            train_model,
+        )
+
+        validation_size = resolve_validation_size(len(y_train))
+        sample_weight = compute_train_partition_sample_weight(
+            y_train,
+            label_dates,
+            self.sample_weight_policy,
+            validation_size=validation_size,
+        )
+        model, center, scale = train_model(
+            X_train,
+            y_train,
+            "window",
+            n_estimators=self.n_estimators,
+            lgb_params=self.lgb_params,
+            validation_size=validation_size,
+            sample_weight=sample_weight,
+        )
+        validation_pred = self._predict_window_model(
+            model,
+            center,
+            scale,
+            X_train.iloc[-validation_size:],
+        )
+        validation_rank_ic = validation_pred.corr(
+            y_train.iloc[-validation_size:], method="spearman"
+        )
+        feature_importance = getattr(model, "feature_importance", None)
+        if callable(feature_importance):
+            gain = feature_importance(importance_type="gain")
+            split = feature_importance(importance_type="split")
+        else:
+            gain = np.zeros(len(X_train.columns), dtype=float)
+            split = np.zeros(len(X_train.columns), dtype=int)
+        best_iteration = getattr(model, "best_iteration", None)
+        self._window_model_diagnostics.append({
+            "window_id": window_id,
+            "model_type": "lightgbm_regression",
+            "train_rows": int(len(y_train) - validation_size),
+            "validation_rows": validation_size,
+            "validation_rank_ic": (
+                float(validation_rank_ic) if pd.notna(validation_rank_ic) else None
+            ),
+            "best_iteration": int(best_iteration or self.n_estimators),
+            "feature_importance_gain": {
+                feature: float(value) for feature, value in zip(X_train.columns, gain)
+            },
+            "feature_importance_split": {
+                feature: int(value) for feature, value in zip(X_train.columns, split)
+            },
+        })
+        return model, center, scale
+
+    @staticmethod
+    def _predict_window_model(model, center, scale, X_predict: pd.DataFrame) -> pd.Series:
+        from qsys.signal.alpha_v1.training import predict_model
+
+        return predict_model(model, center, scale, X_predict)
+
+    @staticmethod
+    def _release_window_model(model) -> None:
+        free_dataset = getattr(model, "free_dataset", None)
+        if callable(free_dataset):
+            free_dataset()
+
     def generate(
         self,
         *,
@@ -1461,13 +1551,6 @@ class LightGBMSingleLabelGenerator:
         )
 
         from qsys.label.store import LabelStore
-        from qsys.signal.alpha_v1.training import (
-            compute_train_partition_sample_weight,
-            predict_model,
-            resolve_validation_size,
-            train_model,
-        )
-
         label_df = LabelStore().load_labels(self.label_id)
 
         # Train
@@ -1498,21 +1581,13 @@ class LightGBMSingleLabelGenerator:
         y_tr = train.loc[y_valid, "label_value"].astype(float)
         if y_tr.empty:
             raise ValueError(f"No valid training samples for {self.label_id}")
-        # Keep this boundary identical to train_model: validation labels must
-        # not affect percentile ranks used for training weights.
-        validation_size = resolve_validation_size(len(y_tr))
-        sample_weight = compute_train_partition_sample_weight(
+        model, center, scale = self._train_window_model(
+            X_tr.loc[y_tr.index],
             y_tr,
             train.loc[y_valid, "label_date"],
-            self.sample_weight_policy,
-            validation_size=validation_size,
-        )
-
-        model, center, scale = train_model(
-            X_tr.loc[y_tr.index], y_tr, "window",
-            n_estimators=self.n_estimators, lgb_params=self.lgb_params,
-            validation_size=validation_size,
-            sample_weight=sample_weight,
+            window_id=(
+                f"train={train_start}:{train_end};predict={predict_start}:{predict_end}"
+            ),
         )
 
         # Predict — F01 backward-shift: the configured [predict_start,
@@ -1526,15 +1601,13 @@ class LightGBMSingleLabelGenerator:
         if pred.empty:
             raise ValueError(f"No feature data for execution window [{predict_start}, {predict_end}]")
 
-        pred["pred"] = predict_model(
+        pred["pred"] = self._predict_window_model(
             model, center, scale, pred[clean_features].fillna(0.0).astype(np.float32)
         ).values
         # A Booster retains native Dataset handles beyond ordinary DataFrame
         # lifetimes.  Release them as soon as prediction is complete so long
         # rolling runs do not grow until the kernel OOM killer intervenes.
-        free_dataset = getattr(model, "free_dataset", None)
-        if callable(free_dataset):
-            free_dataset()
+        self._release_window_model(model)
         del model, center, scale, X_tr, y_tr, train, label_df
         gc.collect()
 

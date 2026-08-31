@@ -481,6 +481,7 @@ class SignalResearchPipeline:
         generator_visibility_contracts: dict[str, str | None] = {}
         generator_feature_source_lineage: dict[str, dict[str, Any]] = {}
         generator_shareholder_freshness: dict[str, dict[str, Any] | None] = {}
+        generator_model_diagnostics: dict[str, dict[str, Any] | None] = {}
         generator_checkpoint_hashes: dict[str, str] = {}
         for gen_cfg in effective_generators:
             gen_id = gen_cfg["generator_id"]
@@ -566,6 +567,9 @@ class SignalResearchPipeline:
             generator_shareholder_freshness[gen_id] = getattr(
                 gen, "shareholder_freshness_lineage", None
             )
+            generator_model_diagnostics[gen_id] = getattr(
+                gen, "model_diagnostics_lineage", None
+            )
             del all_preds
             gc.collect()
 
@@ -619,6 +623,9 @@ class SignalResearchPipeline:
                 signal_manifest["shareholder_freshness_lineage"] = (
                     shareholder_freshness
                 )
+            model_diagnostics = generator_model_diagnostics.get(job.generator_id)
+            if model_diagnostics is not None:
+                signal_manifest["model_diagnostics"] = model_diagnostics
             if config.source_manifest_hash:
                 signal_manifest["source_manifest_hash"] = (
                     config.source_manifest_hash

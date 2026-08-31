@@ -290,9 +290,9 @@ def _create_generator_from_config(
             lgb_params=params.get("lgb_params"),
             label_ids=tuple(params.get("label_ids", ("fwd_ret_5d_xsz_clip3", "fwd_ret_20d_xsz_clip3"))),
         )
-    if gen_type == "single_label_lightgbm":
+    if gen_type in {"single_label_lightgbm", "single_label_ridge"}:
         _CONSUMED_PARAMS = {
-            "label_id", "universe", "n_estimators", "lgb_params",
+            "label_id", "universe",
             "sample_weight_policy",
             "feature_list_id", "feature_cache_list_id",
             "margin_lag_sessions",
@@ -308,10 +308,14 @@ def _create_generator_from_config(
             "income_sidecar_manifest_path", "income_sidecar_manifest_sha256",
             "income_source_mode", "income_sidecar_required_history_start",
         }
+        if gen_type == "single_label_ridge":
+            _CONSUMED_PARAMS.add("ridge_alpha")
+        else:
+            _CONSUMED_PARAMS.update({"n_estimators", "lgb_params"})
         unknown = set(params) - _CONSUMED_PARAMS
         if unknown:
             raise ValueError(
-                "single_label_lightgbm params contains unknown keys that would "
+                f"{gen_type} params contains unknown keys that would "
                 f"be silently dropped: {sorted(unknown)}.  Known keys: "
                 f"{sorted(_CONSUMED_PARAMS)}."
             )
@@ -319,6 +323,14 @@ def _create_generator_from_config(
             LightGBMSingleLabelGenerator,
             _prediction_membership_identity,
         )
+        if gen_type == "single_label_ridge":
+            from qsys.research.generators.ridge_single_label import (
+                RidgeSingleLabelGenerator,
+            )
+
+            generator_class = RidgeSingleLabelGenerator
+        else:
+            generator_class = LightGBMSingleLabelGenerator
         prediction_membership_path = params.get("prediction_membership_path", "")
         if params.get("prediction_membership_sha256") and not prediction_membership_path:
             raise ValueError(
@@ -349,14 +361,12 @@ def _create_generator_from_config(
                 "prediction_membership_path": normalized_path,
                 "prediction_membership_sha256": digest,
             }
-        return LightGBMSingleLabelGenerator(
+        generator_kwargs = dict(
             label_id=params["label_id"],
             universe=params.get("universe", "csi300"),
-            n_estimators=params.get("n_estimators", 200),
             feature_list_id=feature_list_id or params.get("feature_list_id"),
             feature_cache_list_id=params.get("feature_cache_list_id"),
             margin_lag_sessions=params.get("margin_lag_sessions", 0),
-            lgb_params=params.get("lgb_params"),
             sample_weight_policy=params.get("sample_weight_policy"),
             pit_membership=params.get("pit_membership", False),
             pit_filter_mode=params.get("pit_filter_mode", ""),
@@ -395,6 +405,14 @@ def _create_generator_from_config(
             feature_cache_root=feature_cache_root,
             source_manifest_hash=source_manifest_hash,
         )
+        if gen_type == "single_label_ridge":
+            generator_kwargs["ridge_alpha"] = params.get("ridge_alpha", 1.0)
+        else:
+            generator_kwargs.update({
+                "n_estimators": params.get("n_estimators", 200),
+                "lgb_params": params.get("lgb_params"),
+            })
+        return generator_class(**generator_kwargs)
     if gen_type in ("single_label_lightgbm_binary",):
         from qsys.research.generators.lightgbm_binary import LightGBMBinaryGenerator
         return LightGBMBinaryGenerator(
