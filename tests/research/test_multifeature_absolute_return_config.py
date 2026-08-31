@@ -151,6 +151,24 @@ def test_terminal_ridge_config_is_exactly_68_windows_and_locked() -> None:
     assert windows[48].predict_end == "2025-01-16"
     assert preholdout_windows[48].predict_end == "2024-12-31"
     assert windows[-1].predict_end == "2026-07-31"
+    assert sum(
+        window.predict_end >= config.research_protocol["holdout"]["start_date"]
+        for window in windows
+    ) == 20
+    assert config.research_protocol["terminal_evaluation"] == {
+        "signal_ic_label_scope": (
+            "preholdout_labels_strictly_mature_before_2025-01-02"
+        ),
+        "portfolio_scope": (
+            "one_time_terminal_backtest_without_selection_feedback"
+        ),
+        "post_terminal_model_or_feature_selection": "forbidden",
+    }
+    assert config.research_protocol["benchmark_ids"] == [
+        "csi800_official_price_index_v1",
+        "csi800_pit_float_cap_total_return_proxy_v1",
+        "csi1800_pit_float_cap_total_return_proxy_v1",
+    ]
     assert len(config.generators) == len(config.transforms) == 1
     with pytest.raises(ValueError, match="overlaps a locked holdout"):
         SignalResearchPipeline._validate_config(config)

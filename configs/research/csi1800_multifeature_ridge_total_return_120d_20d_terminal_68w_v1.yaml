@@ -20,6 +20,10 @@ research_protocol:
     status: locked_pending_explicit_authorization
     run_mode: one_time_online_walk_forward_no_selection_feedback
     unlock_rule: explicit user authorization in this thread
+  terminal_evaluation:
+    signal_ic_label_scope: preholdout_labels_strictly_mature_before_2025-01-02
+    portfolio_scope: one_time_terminal_backtest_without_selection_feedback
+    post_terminal_model_or_feature_selection: forbidden
   portfolio:
     top_n: 20
     rebalance_sessions: 20
@@ -32,7 +36,8 @@ research_protocol:
     liquidity_gate_mode: reject
     execution: previous_session_information_to_next_open
   benchmark_ids:
-    - csi800
+    - csi800_official_price_index_v1
+    - csi800_pit_float_cap_total_return_proxy_v1
     - csi1800_pit_float_cap_total_return_proxy_v1
 calendar:
   start_date: '2021-01-04'
