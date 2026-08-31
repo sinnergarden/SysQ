@@ -66,8 +66,8 @@ signal_transforms:
     type: identity
 labels:
   - label_id: fwd_ret_120d_open_open_raw_pit_csi1800_v1
-    label_maturity_lag_trading_days: 120
+    label_maturity_lag_trading_days: 121
     require_pit_lineage: true
   - label_id: fwd_ret_120d_close_close_raw_pit_csi1800_v1
-    label_maturity_lag_trading_days: 120
+    label_maturity_lag_trading_days: 121
     require_pit_lineage: true
