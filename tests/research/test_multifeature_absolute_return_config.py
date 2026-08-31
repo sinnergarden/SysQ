@@ -1,4 +1,7 @@
 from pathlib import Path
+from dataclasses import replace
+
+import pytest
 
 from qsys.feature.registry import FeatureListRegistry
 from qsys.research.generators.temporal_validation import (
@@ -20,6 +23,10 @@ CONFIG = (
 PREHOLDOUT_20D_CONFIG = (
     REPO
     / "configs/research/csi1800_multifeature_ridge_total_return_120d_20d_preholdout_v1.yaml"
+)
+TERMINAL_68W_CONFIG = (
+    REPO
+    / "configs/research/csi1800_multifeature_ridge_total_return_120d_20d_terminal_68w_v1.yaml"
 )
 
 
@@ -114,3 +121,41 @@ def test_profitable_ridge_20d_prefix_is_frozen_to_49_preholdout_windows() -> Non
         "terminal_extension_window_count": 68,
         "unlock_rule": "explicit authorization to consume the one-time terminal holdout",
     }
+
+
+def test_terminal_ridge_config_is_exactly_68_windows_and_locked() -> None:
+    config = RollingResearchConfig.from_file(TERMINAL_68W_CONFIG)
+    windows = build_rolling_windows(
+        config.calendar["start_date"],
+        config.calendar["end_date"],
+        train_window_days=config.calendar["train_window_days"],
+        step_days=config.calendar["step_days"],
+        label_maturity_lag_trading_days=121,
+    )
+    assert len(windows) == 68
+    preholdout = RollingResearchConfig.from_file(PREHOLDOUT_20D_CONFIG)
+    preholdout_windows = build_rolling_windows(
+        preholdout.calendar["start_date"],
+        preholdout.calendar["end_date"],
+        train_window_days=preholdout.calendar["train_window_days"],
+        step_days=preholdout.calendar["step_days"],
+        label_maturity_lag_trading_days=121,
+    )
+    assert windows[:48] == preholdout_windows[:48]
+    assert windows[48].predict_start == preholdout_windows[48].predict_start
+    assert windows[48].predict_end == "2025-01-16"
+    assert preholdout_windows[48].predict_end == "2024-12-31"
+    assert windows[-1].predict_end == "2026-07-31"
+    assert len(config.generators) == len(config.transforms) == 1
+    with pytest.raises(ValueError, match="overlaps a locked holdout"):
+        SignalResearchPipeline._validate_config(config)
+
+    authorized_protocol = dict(config.research_protocol)
+    authorized_protocol["holdout"] = {
+        **authorized_protocol["holdout"],
+        "status": "authorized_terminal_run",
+        "authorization_ref": "unit-test-explicit-authorization",
+    }
+    SignalResearchPipeline._validate_config(
+        replace(config, research_protocol=authorized_protocol)
+    )

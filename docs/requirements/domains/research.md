@@ -125,6 +125,12 @@ Canonical cached-signal backtest 还必须输出 manifest 绑定的
 
 ### Canonical cached-signal accounting v1 contract
 
+研究配置若声明 `research_protocol.holdout.start_date`，且 `calendar.end_date`
+达到或越过该边界，canonical `scripts/run_research.py` 必须在写任何实验制品前
+fail closed。只有配置同时声明 `holdout.status: authorized_terminal_run` 与非空
+`holdout.authorization_ref` 才可启动终端运行；这两个字段只能在取得明确授权后
+写入，并作为 research-config identity 的一部分进入 checkpoint 与 signal lineage。
+
 `run_from_signal_cache` 的 accounting v1 是研究回测的账本边界，不是生产
 ledger，也不改变 signal、feature、model 或 strategy。输入 SignalRun 的内容、
 source manifest/hash 与 strategy config 必须保持 immutable；accounting 只替换
