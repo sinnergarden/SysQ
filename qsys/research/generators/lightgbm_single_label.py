@@ -1657,10 +1657,6 @@ class LightGBMSingleLabelGenerator:
                 })
 
         result = pd.DataFrame(rows)
-        if self._window_model_diagnostics:
-            result.attrs["model_diagnostics"] = dict(
-                self._window_model_diagnostics[-1]
-            )
         log.info("Generated {} rows across {} trade dates", len(result), result["trade_date"].nunique())
         del pred, frame, train_frame, prediction_frame, rows
         gc.collect()

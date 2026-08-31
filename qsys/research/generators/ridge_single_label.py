@@ -19,6 +19,15 @@ class RidgeSingleLabelGenerator(LightGBMSingleLabelGenerator):
 
     ridge_alpha: float = 1.0
 
+    def generate(self, **kwargs) -> pd.DataFrame:
+        from qsys.research.generators.temporal_validation import (
+            attach_latest_model_diagnostics,
+        )
+
+        return attach_latest_model_diagnostics(
+            super().generate(**kwargs), self._window_model_diagnostics
+        )
+
     def __post_init__(self) -> None:
         super().__post_init__()
         self.ridge_alpha = float(self.ridge_alpha)

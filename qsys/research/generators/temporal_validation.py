@@ -12,6 +12,17 @@ from qsys.research.generators.lightgbm_single_label import (
 )
 
 
+def attach_latest_model_diagnostics(
+    predictions: pd.DataFrame,
+    diagnostics: list[dict[str, object]],
+) -> pd.DataFrame:
+    """Attach one window's diagnostics to its checkpoint-bound predictions."""
+    if not diagnostics:
+        raise ValueError("window model diagnostics were not recorded")
+    predictions.attrs["model_diagnostics"] = dict(diagnostics[-1])
+    return predictions
+
+
 def chronological_tail_partition(
     X: pd.DataFrame,
     y: pd.Series,
@@ -64,6 +75,11 @@ class TemporalValidationLightGBMSingleLabelGenerator(
     LightGBMSingleLabelGenerator
 ):
     """LightGBM baseline with a strictly later whole-date validation tail."""
+
+    def generate(self, **kwargs) -> pd.DataFrame:
+        return attach_latest_model_diagnostics(
+            super().generate(**kwargs), self._window_model_diagnostics
+        )
 
     def _train_window_model(
         self,
