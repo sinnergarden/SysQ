@@ -16,6 +16,8 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from qsys.feature.transforms import PIT_CROSS_SECTION_COLUMN
+
 
 def _safe_div(num, den):
     return num / den.replace(0, np.nan)
@@ -41,7 +43,7 @@ def build_industry_momentum_features(df: pd.DataFrame) -> pd.DataFrame:
     out = out.sort_values(["ts_code", "trade_date"]).reset_index(drop=True)
 
     # ── Step 1: per-stock daily return (time-series within each stock) ──
-    daily_ret = out.groupby("ts_code")["close"].pct_change()
+    daily_ret = out.groupby("ts_code")["close"].pct_change(fill_method=None)
     out["_daily_ret"] = daily_ret
 
     # ── Step 2: per-stock rolling values (time-series, not cross-sectional) ──
@@ -61,19 +63,29 @@ def build_industry_momentum_features(df: pd.DataFrame) -> pd.DataFrame:
     out["_vol_ratio"] = _clip_inf(_safe_div(_amt_ma, _amt_ma_past))
 
     # ── Step 3: construct (trade_date x industry) daily panel ─────────────
+    if PIT_CROSS_SECTION_COLUMN in out.columns:
+        eligible = out[PIT_CROSS_SECTION_COLUMN].fillna(False).astype(bool)
+    else:
+        eligible = pd.Series(True, index=out.index)
+    out["_industry_daily_ret"] = out["_daily_ret"].where(eligible)
+    out["_industry_near_high"] = out["_near_high"].where(eligible)
+    out["_industry_vol_ratio"] = out["_vol_ratio"].where(eligible)
     ind_panel = out.groupby(["trade_date", "industry"]).agg(
-        ind_ret=("_daily_ret", "mean"),
-        ind_breadth=("_daily_ret", lambda s: (s > 0).mean()),
-        ind_near_high=("_near_high", "mean"),
-        ind_vol_ratio=("_vol_ratio", "mean"),
+        ind_ret=("_industry_daily_ret", "mean"),
+        ind_breadth=(
+            "_industry_daily_ret",
+            lambda s: s.gt(0).where(s.notna()).mean(),
+        ),
+        ind_near_high=("_industry_near_high", "mean"),
+        ind_vol_ratio=("_industry_vol_ratio", "mean"),
     ).reset_index()
 
     if "ret_60d" in out.columns:
-        out["_r60"] = out["ret_60d"].fillna(0)
+        out["_r60"] = out["ret_60d"].where(eligible)
         top20 = out["_r60"].groupby(
             [out["trade_date"], out["industry"]]
-        ).transform(lambda s: (s >= s.quantile(0.8)).astype(float))
-        out["_top_ret"] = out["_r60"] * top20
+        ).transform(lambda s: (s >= s.quantile(0.8)).where(s.notna()))
+        out["_top_ret"] = out["_r60"].where(top20.fillna(False))
         top_panel = out.groupby(["trade_date", "industry"])["_top_ret"].mean().reset_index()
         ind_panel = ind_panel.merge(top_panel, on=["trade_date", "industry"], how="left")
 
@@ -109,26 +121,54 @@ def build_industry_momentum_features(df: pd.DataFrame) -> pd.DataFrame:
     for h in [(60, "60d"), (20, "20d")]:
         col = f"ret_{h[0]}d"
         if col in out.columns:
-            ind_mean = out[col].groupby([out["trade_date"], out["industry"]]).transform("mean")
-            out[f"stock_minus_industry_ret_{h[1]}"] = _clip_inf(out[col] - ind_mean)
+            eligible_return = out[col].where(eligible)
+            ind_mean = eligible_return.groupby(
+                [out["trade_date"], out["industry"]]
+            ).transform("mean")
+            out[f"stock_minus_industry_ret_{h[1]}"] = _clip_inf(
+                (out[col] - ind_mean).where(eligible)
+            )
 
     # ── Step 7: stock-industry return rolling correlation (per stock) ──
-    _follow = (out["_daily_ret"] * out["ind_ret"]).groupby(out["ts_code"]).transform(
-        lambda s: s.rolling(60, min_periods=20).mean()
+    # Use paired, centered moments.  The previous cosine-style ratio of raw
+    # second moments was not a correlation when either return series had a
+    # non-zero rolling mean.
+    stock_ret = pd.to_numeric(out["_daily_ret"], errors="coerce")
+    industry_ret = pd.to_numeric(out["ind_ret"], errors="coerce")
+    valid_pair = stock_ret.notna() & industry_ret.notna()
+    stock_ret = stock_ret.where(valid_pair)
+    industry_ret = industry_ret.where(valid_pair)
+
+    def _rolling_sum(series: pd.Series) -> pd.Series:
+        return series.groupby(out["ts_code"]).transform(
+            lambda values: values.rolling(60, min_periods=1).sum()
+        )
+
+    count = _rolling_sum(valid_pair.astype(float))
+    sum_stock = _rolling_sum(stock_ret)
+    sum_industry = _rolling_sum(industry_ret)
+    sum_product = _rolling_sum(stock_ret * industry_ret)
+    sum_stock_sq = _rolling_sum(stock_ret**2)
+    sum_industry_sq = _rolling_sum(industry_ret**2)
+    covariance = sum_product - _safe_div(sum_stock * sum_industry, count)
+    stock_ss = (sum_stock_sq - _safe_div(sum_stock**2, count)).clip(lower=0)
+    industry_ss = (
+        sum_industry_sq - _safe_div(sum_industry**2, count)
+    ).clip(lower=0)
+    denominator = np.sqrt(stock_ss * industry_ss)
+    non_constant = (
+        stock_ss > 1e-12 * sum_stock_sq.abs()
+    ) & (
+        industry_ss > 1e-12 * sum_industry_sq.abs()
     )
-    _ret_var = (out["_daily_ret"] ** 2).groupby(out["ts_code"]).transform(
-        lambda s: s.rolling(60, min_periods=20).mean()
-    ) ** 0.5
-    _ind_var = (out["ind_ret"] ** 2).groupby(out["ts_code"]).transform(
-        lambda s: s.rolling(60, min_periods=20).mean()
-    ) ** 0.5
+    correlation = _safe_div(covariance, denominator.where(non_constant))
     out["stock_industry_ret_corr_60d"] = _clip_inf(
-        _safe_div(_follow, _ret_var * _ind_var)
-    )
+        correlation.where(count >= 20)
+    ).clip(lower=-1, upper=1)
 
     # Clean up intermediates
     for c in list(out.columns):
-        if c.startswith("_"):
+        if c.startswith("_") and c != PIT_CROSS_SECTION_COLUMN:
             out = out.drop(columns=[c], errors="ignore")
 
     return out

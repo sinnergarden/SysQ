@@ -1,0 +1,9 @@
+feature_list_id: financial_pit_b_short_v1
+description: First-publication-only quarterly confirmation features for 5/10/20-session research.
+feature_count: 4
+contract: pit_b_first_publication_only_short_horizon_v1
+features:
+  - ttm_revenue_yoy
+  - single_q_revenue_yoy
+  - is_profitable_ttm
+  - gross_margin_delta_yoy

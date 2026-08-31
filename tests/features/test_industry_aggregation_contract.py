@@ -176,6 +176,37 @@ class TestIndustryAggregationContract(unittest.TestCase):
                 f"AI stocks ret_corr should be near 1.0, got {ai_corr.mean():.4f}",
             )
 
+    def test_stock_industry_corr_is_not_uncentered_cosine_similarity(self):
+        """A constant industry return has zero variance and no correlation."""
+        dates = pd.bdate_range("2024-01-02", periods=80)
+        oscillation = np.where(np.arange(len(dates)) % 2 == 0, 1.0, -1.0)
+        returns = {
+            "TARGET": 0.01 + 0.005 * oscillation,
+            "PEER_A": 0.01 - 0.0025 * oscillation,
+            "PEER_B": 0.01 - 0.0025 * oscillation,
+        }
+        rows = []
+        for instrument, daily_returns in returns.items():
+            closes = 100.0 * np.cumprod(1.0 + daily_returns)
+            rows.extend(
+                {
+                    "trade_date": date,
+                    "ts_code": instrument,
+                    "close": close,
+                    "amount": 1e8,
+                    "industry": "FLAT_MEAN",
+                }
+                for date, close in zip(dates, closes, strict=True)
+            )
+
+        result = build_industry_momentum_features(pd.DataFrame(rows))
+        target = result.loc[
+            result["ts_code"].eq("TARGET"),
+            "stock_industry_ret_corr_60d",
+        ]
+
+        self.assertTrue(target.isna().all())
+
     # ── Contract 8: Structure check — no intermediate columns ──
 
     def test_no_intermediate_columns(self):

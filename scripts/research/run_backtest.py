@@ -25,7 +25,7 @@ import click
 import yaml
 
 # Add project root to sys.path
-project_root = Path(__file__).resolve().parent.parent
+project_root = Path(__file__).resolve().parents[2]
 sys.path.append(str(project_root))
 
 from qsys.backtest import BacktestEngine

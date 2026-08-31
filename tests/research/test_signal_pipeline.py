@@ -8,7 +8,10 @@ from unittest.mock import patch
 import pandas as pd
 import pytest
 
-from qsys.research.matrix_job import RollingResearchConfig
+from qsys.research.matrix_job import (
+    RollingResearchConfig,
+    apply_signal_transform,
+)
 from qsys.research.signal_pipeline import (
     CheckpointBatchComplete,
     SignalEvalRef,
@@ -38,6 +41,59 @@ def _make_minimal_config(**overrides) -> RollingResearchConfig:
     for k, v in overrides.items():
         setattr(cfg, k, v)
     return cfg
+
+
+def test_daily_linear_residual_removes_declared_exposures() -> None:
+    rows = []
+    for day_number, trade_date in enumerate(("2026-01-05", "2026-01-06")):
+        for index in range(120):
+            size = float(index - 60)
+            momentum = float((index % 11) - 5)
+            residual = float(((index * 17 + day_number) % 13) - 6)
+            rows.append({
+                "trade_date": trade_date,
+                "instrument": f"{index:06d}.SZ",
+                "score": 2.0 * size - 3.0 * momentum + residual,
+                "size": size,
+                "momentum": momentum,
+            })
+    transformed = apply_signal_transform(
+        pd.DataFrame(rows),
+        {
+            "transform_id": "residual",
+            "type": "daily_linear_residual",
+            "params": {
+                "exposure_columns": ["size", "momentum"],
+                "min_observations": 100,
+            },
+        },
+    )
+
+    for _, day in transformed.groupby("trade_date"):
+        assert abs(day["score"].corr(day["size"])) < 1e-10
+        assert abs(day["score"].corr(day["momentum"])) < 1e-10
+    diagnostics = transformed.attrs["transform_diagnostics"]
+    assert diagnostics["dates"] == 2
+    assert diagnostics["mean_r_squared"] > 0.99
+
+
+def test_daily_linear_residual_fails_closed_without_exposures() -> None:
+    frame = pd.DataFrame({
+        "trade_date": ["2026-01-05"] * 10,
+        "score": range(10),
+    })
+    with pytest.raises(ValueError, match="missing exposure columns"):
+        apply_signal_transform(
+            frame,
+            {
+                "transform_id": "residual",
+                "type": "daily_linear_residual",
+                "params": {
+                    "exposure_columns": ["size"],
+                    "min_observations": 5,
+                },
+            },
+        )
 
 
 class TestSignalResearchPipelineBasics:
@@ -260,6 +316,115 @@ class TestSignalResearchPipelineMatrix:
             config, config.generators[0], generator
         )
         assert first["generator_contracts"] != changed["generator_contracts"]
+
+    @patch("qsys.label.store.LabelStore.load_labels")
+    def test_matrix_persists_model_diagnostics(
+        self, mock_labels, tmp_path: Path
+    ) -> None:
+        from qsys.research.generators.fixture import FixtureSignalGenerator
+
+        mock_labels.return_value = _make_fake_labels()
+
+        class DiagnosticFixtureGenerator(FixtureSignalGenerator):
+            model_diagnostics_lineage = {
+                "schema_version": "rolling_model_diagnostics_v1",
+                "windows": [{"window_id": "w1", "validation_rank_ic": 0.03}],
+            }
+
+        generator = DiagnosticFixtureGenerator(n_instruments=10)
+        pipeline = SignalResearchPipeline(str(tmp_path))
+        result = pipeline.run(
+            self._matrix_config(), signal_generator=generator,
+            overwrite_signal=True, overwrite_eval=True,
+        )
+
+        manifest = pipeline._signal_store.load_manifest(
+            result.signal_runs[0].signal_id, result.signal_runs[0].signal_run_id
+        )
+        assert manifest["model_diagnostics"] == generator.model_diagnostics_lineage
+
+    @patch("qsys.label.store.LabelStore.load_labels")
+    def test_checkpoint_resume_restores_all_model_diagnostics(
+        self, mock_labels, tmp_path: Path
+    ) -> None:
+        from qsys.research.generators.fixture import FixtureSignalGenerator
+
+        mock_labels.return_value = _make_fake_labels()
+
+        class CheckpointDiagnosticFixtureGenerator(FixtureSignalGenerator):
+            def generate(self, **kwargs):
+                result = super().generate(**kwargs)
+                result.attrs["model_diagnostics"] = {
+                    "window_id": (
+                        f"train={kwargs['train_start']}:{kwargs['train_end']};"
+                        f"predict={kwargs['predict_start']}:{kwargs['predict_end']}"
+                    ),
+                    "validation_split_contract": (
+                        "strict_later_whole_label_dates_v1"
+                    ),
+                }
+                return result
+
+        config = self._matrix_config()
+        config.window_checkpoints = True
+        config.source_manifest_hash = "source-v1"
+        config.research_protocol = {
+            "require_checkpoint_model_diagnostics": True
+        }
+        generator = CheckpointDiagnosticFixtureGenerator(n_instruments=10)
+        pipeline = SignalResearchPipeline(str(tmp_path))
+        first = pipeline.run(
+            config,
+            signal_generator=generator,
+            overwrite_signal=True,
+            overwrite_eval=True,
+        )
+        with patch.object(
+            generator, "generate", side_effect=AssertionError("must resume")
+        ):
+            second = pipeline.run(
+                config,
+                signal_generator=generator,
+                overwrite_signal=True,
+                overwrite_eval=True,
+            )
+
+        assert len(second.signal_runs) == len(first.signal_runs)
+        manifest = pipeline._signal_store.load_manifest(
+            second.signal_runs[0].signal_id,
+            second.signal_runs[0].signal_run_id,
+        )
+        diagnostics = manifest["model_diagnostics"]
+        assert diagnostics["source"] == "window_checkpoint_manifests"
+        assert len(diagnostics["windows"]) == manifest["window_count"]
+        assert all(
+            item["validation_split_contract"]
+            == "strict_later_whole_label_dates_v1"
+            for item in diagnostics["windows"]
+        )
+
+    @patch("qsys.label.store.LabelStore.load_labels")
+    def test_required_checkpoint_diagnostics_fail_closed_when_missing(
+        self, mock_labels, tmp_path: Path
+    ) -> None:
+        from qsys.research.generators.fixture import FixtureSignalGenerator
+
+        mock_labels.return_value = _make_fake_labels()
+        config = self._matrix_config()
+        config.window_checkpoints = True
+        config.source_manifest_hash = "source-v1"
+        config.research_protocol = {
+            "require_checkpoint_model_diagnostics": True
+        }
+        pipeline = SignalResearchPipeline(str(tmp_path))
+
+        with pytest.raises(
+            ValueError, match="checkpoint model diagnostics incomplete"
+        ):
+            pipeline.run(
+                config,
+                signal_generator=FixtureSignalGenerator(n_instruments=10),
+            )
 
     @patch("qsys.label.store.LabelStore.load_labels")
     @patch("qsys.research.signal_pipeline.FeatureListRegistry.contract")

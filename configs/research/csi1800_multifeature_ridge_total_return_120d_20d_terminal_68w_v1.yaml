@@ -1,0 +1,128 @@
+experiment_id: csi1800_multifeature_ridge_total_return_120d_20d_terminal_68w_v1
+title: Locked 68-window terminal Ridge total-return protocol
+description: Frozen Ridge B arm over the historical 68-window calendar; this config is intentionally non-runnable until the terminal holdout is explicitly authorized.
+research_protocol:
+  protocol_version: ridge_total_return_20d_terminal_68w_v1
+  artifact_contract: rolling_checkpoint_model_diagnostics_v1
+  require_checkpoint_model_diagnostics: true
+  parent_experiment_id: csi1800_multifeature_absolute_return_120d_v2
+  preholdout_evidence_experiment_id: csi1800_multifeature_ridge_total_return_120d_20d_preholdout_v1
+  preholdout_window_alignment: first_48_exact_plus_w0960_truncated_at_2024-12-31
+  frozen_arm: B_ridge_total_return_score_top20
+  frozen_preholdout_config_sha256: b10f359c24ba0026bd92933b6d3c6011f1e4f0f5860ba145b73c57a85e4ea163
+  model_or_feature_search_after_confirmation: forbidden
+  horizon_sessions: 120
+  development_period: {start_date: '2021-01-04', end_date: '2022-12-30'}
+  confirmation_period: {start_date: '2023-01-03', end_date: '2024-12-31'}
+  holdout:
+    start_date: '2025-01-02'
+    end_date: '2026-07-31'
+    status: locked_pending_explicit_authorization
+    run_mode: one_time_online_walk_forward_no_selection_feedback
+    unlock_rule: explicit user authorization in this thread
+  terminal_evaluation:
+    contract: terminal_final_evaluation_v1
+    data_use: one_time_final_evaluation_only
+    signal_scope:
+      prediction_start_date: '2025-01-02'
+      prediction_end_date: '2026-07-31'
+      maturity_cutoff_exclusive: '2026-08-01'
+      maturity_contract: maturity_and_return_end_strictly_before_cutoff_v1
+    required_signal_metrics:
+      - IC
+      - RankIC
+      - quantile_5
+      - decile
+      - Top5
+      - Top20
+      - Top50
+      - calendar_year_stability
+      - frozen_phase_stability
+    stability_phases:
+      - phase_id: terminal_2025
+        start_date: '2025-01-02'
+        end_date: '2025-12-31'
+      - phase_id: terminal_2026_matured_as_of_cutoff
+        start_date: '2026-01-01'
+        end_date: '2026-07-31'
+    required_portfolio_metrics:
+      - total_return
+      - cagr
+      - sharpe
+      - max_drawdown
+      - turnover
+      - annual_returns
+      - beta
+      - alpha_daily
+      - alpha_annualized
+      - commission
+      - tax
+      - total_fee
+    portfolio_scope: one_time_terminal_backtest_without_selection_feedback
+    post_terminal_model_or_feature_selection: forbidden
+    post_terminal_parameter_selection: forbidden
+    required_artifact_contracts:
+      signal_evaluation: signal_evaluation_methodology_v2
+      stability: signal_evaluation_stability_v1
+      portfolio: portfolio_analytics_v3
+      accounting: accounting_v1
+  portfolio:
+    top_n: 20
+    rebalance_sessions: 20
+    initial_capital: 10000000
+    commission: 0.0003
+    stamp_duty: 0.001
+    min_commission: 5.0
+    slippage: 0.001
+    max_participation_rate: 0.10
+    liquidity_gate_mode: reject
+    execution: previous_session_information_to_next_open
+  benchmark_ids:
+    - csi800_official_price_index_v1
+    - csi800_pit_float_cap_total_return_proxy_v1
+    - csi1800_pit_float_cap_total_return_proxy_v1
+calendar:
+  start_date: '2021-01-04'
+  end_date: '2026-07-31'
+  train_window_days: 504
+  step_days: 20
+signal:
+  signal_id: csi1800_multifeature_120d_ridge_total_return_20d_terminal_68w
+  score_column: score
+feature_list_id: csi1800_multifeature_120d_v1
+source_manifest_hash: 726af9f8c3c91432feb78f1df9520655f3e002c246521bd47245286637bc91ce
+window_checkpoints: true
+use_feature_cache: true
+materialize_on_miss: false
+feature_cache_root: data/feature_cache
+generators:
+  - generator_id: ridge_fixed
+    type: single_label_ridge
+    params:
+      label_id: fwd_ret_120d_open_open_raw_pit_csi1800_v1
+      universe: csi1800_pit_union
+      ridge_alpha: 1.0
+      feature_list_id: csi1800_multifeature_120d_v1
+      signal_exposure_features:
+        - Log($circ_mv+1)
+        - ret_60d
+        - Std(($close*$factor)/(Ref($close*$factor, 1)+1e-12)-1, 60)
+        - $amount/(Mean($amount, 60)+1e-12)
+      margin_lag_sessions: 1
+      pit_filter_mode: member_as_of
+      pit_universe_artifact: csi1800_pit_v2
+      income_source_mode: audited_sidecar_v1
+      income_sidecar_artifact_id: 7775d55750de73d80e1cd30a4cc3fd91d065750867d478a3d9c7f1e8027fbe0b
+      income_sidecar_sha256: 6ef941166aaeed8658ee5dd796056d728303d23e0d28703e5b089ac26214fa42
+      income_sidecar_manifest_sha256: 0b549ae0ff2ae82b6a6ed90c242d9a4a46e6227e008ff39e6ef987de21d85bae
+      income_sidecar_required_history_start: '20140313'
+signal_transforms:
+  - transform_id: identity
+    type: identity
+labels:
+  - label_id: fwd_ret_120d_open_open_raw_pit_csi1800_v1
+    label_maturity_lag_trading_days: 121
+    evaluation_start_date: '2025-01-02'
+    evaluation_end_date: '2026-07-31'
+    label_maturity_before: '2026-08-01'
+    require_pit_lineage: true

@@ -11,8 +11,9 @@ Usage
     sa = SignalAnalytics("data/research")
     sa.list_signals()
     sa.list_labels()
-    sa.compute_ic_matrix()         # N×M IC/ICIR matrix
-    sa.compute_rank_ic_matrix()    # Spearman rank IC
+    run_ids = {"my_signal": "reviewed_run_id"}
+    sa.compute_ic_matrix(["my_signal"], run_ids)       # N×M IC/ICIR matrix
+    sa.compute_rank_ic_matrix(["my_signal"], run_ids)  # Spearman rank IC
 """
 
 from __future__ import annotations
@@ -152,10 +153,11 @@ class SignalAnalytics:
         Parameters
         ----------
         signal_ids:
-            Signals to include.  ``None`` = all discovered.
+            Explicit signals to include.
         signal_run_ids:
-            Optional mapping from ``signal_id`` to specific ``signal_run_id``.
-            When absent, uses the most recently created run for each signal.
+            Required mapping from every ``signal_id`` to its reviewed
+            ``signal_run_id``.  Formal analytics never resolve a run by
+            directory order or modification time.
         label_ids:
             Labels to include.  ``None`` = all discovered.
         start_date, end_date:
@@ -227,7 +229,7 @@ class SignalAnalytics:
     def daily_ic(
         self,
         signal_id: str,
-        signal_run_id: str | None = None,
+        signal_run_id: str,
         label_id: str | None = None,
         start_date: str | None = None,
         end_date: str | None = None,
@@ -275,29 +277,26 @@ class SignalAnalytics:
         signal_ids: list[str] | None,
         signal_run_ids: dict[str, str] | None,
     ) -> list[dict[str, Any]]:
-        """Resolve signal paths by most-recently-created run."""
-        discovered = self.list_signals()
-        if discovered.empty:
+        """Resolve only explicitly identified immutable signal runs."""
+        if signal_ids == []:
             return []
-        if signal_ids:
-            discovered = discovered[discovered["signal_id"].isin(signal_ids)]
+        if signal_ids is None:
+            raise ValueError("signal_ids must be explicit for formal analytics")
+        if signal_run_ids is None:
+            raise ValueError("signal_run_ids must be explicit for formal analytics")
+        missing = [signal_id for signal_id in signal_ids if not signal_run_ids.get(signal_id)]
+        if missing:
+            raise ValueError(
+                "signal_run_ids is missing explicit run IDs for: "
+                + ", ".join(sorted(missing))
+            )
         result: list[dict[str, Any]] = []
-        for sig_id in discovered["signal_id"].unique():
-            runs = discovered[discovered["signal_id"] == sig_id]
-            run_id = (signal_run_ids or {}).get(sig_id)
-            if run_id is None:
-                # Pick most recently created run directory (mtime)
-                run_dirs = sorted(
-                    d for d in (self._signals_dir / sig_id).iterdir()
-                    if d.is_dir() and (d / "predictions.parquet").exists()
-                )
-                run_dirs.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-                if not run_dirs:
-                    continue
-                run_id = run_dirs[0].name
+        for sig_id in signal_ids:
+            run_id = signal_run_ids[sig_id]
             path = self._signal_path(sig_id, run_id)
-            if path.exists():
-                result.append({"path": str(path), "signal_id": sig_id, "signal_run_id": run_id})
+            if not path.is_file():
+                raise FileNotFoundError(f"No signal run {sig_id}/{run_id}: {path}")
+            result.append({"path": str(path), "signal_id": sig_id, "signal_run_id": run_id})
         return result
 
     def _resolve_labels(self, label_ids: list[str] | None) -> list[dict[str, Any]]:
@@ -313,31 +312,13 @@ class SignalAnalytics:
                 result.append({"path": str(path), "label_id": row["label_id"]})
         return result
 
-    def _resolve_single_signal(self, signal_id: str, signal_run_id: str | None) -> str:
-        if signal_run_id:
-            path = self._signal_path(signal_id, signal_run_id)
-            if path.exists():
-                return str(path)
-        discovered = self.list_signals()
-        runs = discovered[discovered["signal_id"] == signal_id]
-        if runs.empty:
-            raise FileNotFoundError(f"No signal data for {signal_id}")
-        if signal_run_id:
-            runs = runs[runs["signal_run_id"] == signal_run_id]
-            if runs.empty:
-                raise FileNotFoundError(f"No signal run {signal_id}/{signal_run_id}")
-        # Use mtime for latest-run (parquet-valid only)
-        sig_dir = self._signals_dir / signal_id
-        if sig_dir.exists():
-            run_dirs = sorted(
-                d for d in sig_dir.iterdir()
-                if d.is_dir() and (d / "predictions.parquet").exists()
-            )
-            run_dirs.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-            if not run_dirs:
-                raise FileNotFoundError(f"No valid signal parquet for {signal_id}")
-            run_id = run_dirs[0].name
-        return str(self._signal_path(signal_id, run_id))
+    def _resolve_single_signal(self, signal_id: str, signal_run_id: str) -> str:
+        if not signal_run_id:
+            raise ValueError("signal_run_id must be explicit for formal analytics")
+        path = self._signal_path(signal_id, signal_run_id)
+        if not path.is_file():
+            raise FileNotFoundError(f"No signal run {signal_id}/{signal_run_id}: {path}")
+        return str(path)
 
     # ── IC computation ──────────────────────────────────────────────────
 

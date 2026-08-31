@@ -6,6 +6,8 @@ Core functions are module-level for testability.
 from __future__ import annotations
 
 import json
+import hashlib
+import math
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -82,11 +84,8 @@ def compute_daily_ic(
 
     Returns a DataFrame with columns ``date``, ``ic``, ``n``.
     """
-    dates = joined["trade_date"].unique()
-
     rows = []
-    for d in sorted(dates):
-        day = joined[joined["trade_date"] == d]
+    for d, day in joined.groupby("trade_date", sort=True):
         if len(day) < min_count:
             rows.append({"date": d, "ic": None, "n": len(day)})
             continue
@@ -106,11 +105,8 @@ def compute_daily_rank_ic(
     Uses pandas rank then Pearson correlation of ranks.
     Returns a DataFrame with columns ``date``, ``rank_ic``, ``n``.
     """
-    dates = joined["trade_date"].unique()
-
     rows = []
-    for d in sorted(dates):
-        day = joined[joined["trade_date"] == d]
+    for d, day in joined.groupby("trade_date", sort=True):
         if len(day) < min_count:
             rows.append({"date": d, "rank_ic": None, "n": len(day)})
             continue
@@ -134,6 +130,26 @@ def _ic_stats(ic_series: pd.Series) -> dict[str, float | None]:
     std = float(valid.std(ddof=1))
     ir = mean / std if std > 1e-12 else None
     return {"mean": mean, "std": std, "ir": ir}
+
+
+def _finite_float(value: Any) -> float | None:
+    """Return a JSON-safe finite float, or ``None``."""
+    if value is None or not pd.notna(value):
+        return None
+    result = float(value)
+    return result if math.isfinite(result) else None
+
+
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, np.generic):
+        value = value.item()
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    return value
 
 
 # ── IC distribution stats ───────────────────────────────────────────────────
@@ -180,47 +196,95 @@ def _ic_distribution_stats(ic_series: pd.Series) -> dict[str, Any]:
 
 
 def compute_ic_decay(
-    ic_series: pd.Series,
-    n_segments: int = 5,
+    signal: pd.DataFrame,
+    labels: pd.DataFrame,
+    *,
+    score_column: str = "score",
+    lags: tuple[int, ...] = (0, 1, 2, 3, 5, 10, 20),
+    min_count: int = 5,
 ) -> pd.DataFrame:
-    """Compute ICIR per time segment to measure signal decay.
+    """Measure prediction decay by aligning one signal date to later labels.
 
-    Splits the IC series chronologically into ``n_segments`` equal-length
-    segments and computes ICIR for each.  A declining ICIR across segments
-    indicates the signal's predictive power fades over time.
+    ``lag_sessions=L`` compares the score known on date ``T`` with the label
+    whose own trade date is the ``L``-th later date in the label trading
+    calendar.  This is a real forecast-lag test; it never substitutes
+    chronological sample segments for decay.
 
     Parameters
     ----------
-    ic_series:
-        Daily IC series, index should be chronological (e.g. sorted by date).
-    n_segments:
-        Number of equal-length segments (default 5).
+    signal, labels:
+        Signal and label frames keyed by ``(trade_date, instrument)``.
+    lags:
+        Non-negative trading-session lags to evaluate.
 
     Returns
     -------
     pd.DataFrame
-        Columns: ``segment`` (1-indexed), ``n_days``, ``ic_mean``,
-        ``ic_std``, ``icir``.
+        Columns: ``lag_sessions``, ``n_obs``, ``n_days``, ``ic_mean``,
+        ``ic_std``, ``icir``, ``rank_ic_mean``, and ``rank_icir``.
     """
-    valid = ic_series.dropna().reset_index(drop=True)
-    if len(valid) < 2:
-        return pd.DataFrame(columns=["segment", "n_days", "ic_mean", "ic_std", "icir"])
+    columns = [
+        "lag_sessions", "n_obs", "n_days", "ic_mean", "ic_std", "icir",
+        "rank_ic_mean", "rank_ic_std", "rank_icir",
+    ]
+    if signal.empty or labels.empty:
+        return pd.DataFrame(columns=columns)
+    if score_column not in signal.columns:
+        raise ValueError(f"Score column {score_column!r} not found")
+    calendar = sorted(labels["trade_date"].astype(str).str[:10].unique())
+    if not calendar:
+        return pd.DataFrame(columns=columns)
+    positions = {date: idx for idx, date in enumerate(calendar)}
+    label_values = labels[["trade_date", "instrument", "label_value"]].copy()
+    label_values["trade_date"] = label_values["trade_date"].astype(str).str[:10]
+    base = signal[["trade_date", "instrument", score_column]].copy()
+    base["trade_date"] = base["trade_date"].astype(str).str[:10]
 
-    rows = []
-    total = len(valid)
-    for seg in range(n_segments):
-        start = int(seg * total / n_segments)
-        end = int((seg + 1) * total / n_segments)
-        chunk = valid.iloc[start:end]
-        stats = _ic_stats(chunk)
+    rows: list[dict[str, Any]] = []
+    for lag in sorted(set(lags)):
+        if lag < 0:
+            raise ValueError("IC decay lags must be non-negative")
+        aligned = base.copy()
+        aligned["label_trade_date"] = aligned["trade_date"].map(
+            lambda date: (
+                calendar[positions[date] + lag]
+                if date in positions and positions[date] + lag < len(calendar)
+                else None
+            )
+        )
+        aligned = aligned.dropna(subset=["label_trade_date"])
+        aligned = aligned.merge(
+            label_values.rename(columns={"trade_date": "label_trade_date"}),
+            on=["label_trade_date", "instrument"],
+            how="inner",
+        ).dropna(subset=[score_column, "label_value"])
+        if aligned.empty:
+            rows.append({"lag_sessions": lag, "n_obs": 0, "n_days": 0})
+            continue
+        daily = aligned.groupby("trade_date").apply(
+            lambda group: pd.Series({
+                "ic": group[score_column].corr(group["label_value"])
+                if len(group) >= min_count else np.nan,
+                "rank_ic": group[score_column].corr(
+                    group["label_value"], method="spearman"
+                ) if len(group) >= min_count else np.nan,
+            }),
+            include_groups=False,
+        )
+        ic_stats = _ic_stats(daily["ic"])
+        rank_stats = _ic_stats(daily["rank_ic"])
         rows.append({
-            "segment": seg + 1,
-            "n_days": len(chunk),
-            "ic_mean": stats["mean"],
-            "ic_std": stats["std"],
-            "icir": stats["ir"],
+            "lag_sessions": lag,
+            "n_obs": int(len(aligned)),
+            "n_days": int(daily["ic"].notna().sum()),
+            "ic_mean": ic_stats["mean"],
+            "ic_std": ic_stats["std"],
+            "icir": ic_stats["ir"],
+            "rank_ic_mean": rank_stats["mean"],
+            "rank_ic_std": rank_stats["std"],
+            "rank_icir": rank_stats["ir"],
         })
-    return pd.DataFrame(rows)
+    return pd.DataFrame(rows, columns=columns)
 
 
 # ── Regime-aware IC ─────────────────────────────────────────────────────────
@@ -229,13 +293,16 @@ def compute_ic_decay(
 def compute_regime_ic(
     ic_df: pd.DataFrame,
     index_code: str = "000300.SH",
-    bull_threshold: float = 0.01,
-    bear_threshold: float = -0.01,
+    trend_lookback_sessions: int = 60,
+    uptrend_threshold: float = 0.05,
+    downtrend_threshold: float = -0.05,
+    information_lag_sessions: int = 1,
 ) -> pd.DataFrame:
-    """Compute IC per market regime (bull / neutral / bear).
+    """Compute IC by a predefined, lagged market-trend regime.
 
-    Loads the index daily data for regime classification, merges with
-    daily IC, and aggregates IC statistics per regime.
+    Regimes use only index closes available before the evaluated signal date:
+    trailing ``trend_lookback_sessions`` return is shifted by
+    ``information_lag_sessions``.  Same-day index returns are never used.
 
     Parameters
     ----------
@@ -244,10 +311,12 @@ def compute_regime_ic(
     index_code:
         Tushare index code for regime classification (default 000300.SH).
         Accepts ``000300.SH``, ``hs300``, or any key from ``INDEX_CODE_MAP``.
-    bull_threshold:
-        Minimum index daily return to classify as bull (default 0.01 = 1%).
-    bear_threshold:
-        Maximum index daily return to classify as bear (default -0.01 = -1%).
+    trend_lookback_sessions:
+        Trailing index-return lookback.
+    uptrend_threshold, downtrend_threshold:
+        Fixed thresholds for uptrend/range/downtrend classification.
+    information_lag_sessions:
+        Required lag before index information becomes eligible.
 
     Returns
     -------
@@ -276,28 +345,35 @@ def compute_regime_ic(
     except Exception:
         return pd.DataFrame(columns=["regime", "n_days", "ic_mean", "ic_std", "icir", "positive_ratio"])
 
-    # Daily return
-    idx["return"] = idx["close"].pct_change()
-    idx_map = dict(zip(idx["trade_date"].dt.strftime("%Y-%m-%d"), idx["return"]))
+    if trend_lookback_sessions <= 0 or information_lag_sessions <= 0:
+        raise ValueError("regime lookback and information lag must be positive")
+    idx = idx.sort_values("trade_date").copy()
+    idx["lagged_trend_return"] = idx["close"].pct_change(
+        trend_lookback_sessions
+    ).shift(information_lag_sessions)
+    idx_map = dict(zip(
+        idx["trade_date"].dt.strftime("%Y-%m-%d"),
+        idx["lagged_trend_return"],
+    ))
 
     # Merge regime with IC
     merged = ic_df.copy()
     merged["_td"] = merged["date"].astype(str).str[:10]
-    merged["index_return"] = merged["_td"].map(idx_map)
+    merged["lagged_trend_return"] = merged["_td"].map(idx_map)
 
     def _classify(r: float | None) -> str:
         if r is None or (isinstance(r, float) and pd.isna(r)):
             return "unknown"
-        if r > bull_threshold:
-            return "bull"
-        if r < bear_threshold:
-            return "bear"
-        return "neutral"
+        if r > uptrend_threshold:
+            return "uptrend"
+        if r < downtrend_threshold:
+            return "downtrend"
+        return "range"
 
-    merged["regime"] = merged["index_return"].apply(_classify)
+    merged["regime"] = merged["lagged_trend_return"].apply(_classify)
 
     rows = []
-    for regime in ["bull", "neutral", "bear", "unknown"]:
+    for regime in ["uptrend", "range", "downtrend", "unknown"]:
         sub = merged[merged["regime"] == regime]["ic"]
         if sub.empty:
             continue
@@ -334,8 +410,8 @@ def compute_group_returns(
     """
     groups: list[pd.DataFrame] = []
 
-    for d in sorted(joined["trade_date"].unique()):
-        day = joined[joined["trade_date"] == d].copy()
+    for d, day in joined.groupby("trade_date", sort=True):
+        day = day.copy()
         if day.empty:
             continue
 
@@ -358,6 +434,545 @@ def compute_group_returns(
     result = pd.concat(groups, ignore_index=True)
     result["group_id"] = result["group_id"].astype(int)
     return result
+
+
+def summarize_group_returns(
+    group_returns: pd.DataFrame,
+    n_groups: int,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Return daily top-minus-bottom spreads and monotonicity evidence."""
+    columns = ["trade_date", "top_minus_bottom", "monotonicity_score"]
+    if group_returns.empty:
+        return pd.DataFrame(columns=columns), {
+            "n_dates": 0, "top_minus_bottom_mean": None,
+            "monotonicity_mean": None,
+        }
+    rows: list[dict[str, Any]] = []
+    for trade_date, day in group_returns.groupby("trade_date"):
+        values = day.set_index("group_id")["mean_return"]
+        if 1 not in values or n_groups not in values:
+            continue
+        ordered = [float(values.get(group, np.nan)) for group in range(1, n_groups + 1)]
+        comparisons = [
+            ordered[idx + 1] > ordered[idx]
+            for idx in range(n_groups - 1)
+            if np.isfinite(ordered[idx]) and np.isfinite(ordered[idx + 1])
+        ]
+        rows.append({
+            "trade_date": trade_date,
+            "top_minus_bottom": ordered[-1] - ordered[0],
+            "monotonicity_score": (
+                float(np.mean(comparisons)) if comparisons else None
+            ),
+        })
+    daily = pd.DataFrame(rows, columns=columns)
+    return daily, {
+        "n_dates": int(len(daily)),
+        "top_minus_bottom_mean": (
+            _finite_float(daily["top_minus_bottom"].mean())
+            if not daily.empty else None
+        ),
+        "monotonicity_mean": (
+            _finite_float(daily["monotonicity_score"].mean())
+            if not daily.empty else None
+        ),
+    }
+
+
+def _evaluation_period_summary(
+    ic_daily: pd.DataFrame,
+    rank_ic_daily: pd.DataFrame,
+    quantile_daily: pd.DataFrame,
+    decile_daily: pd.DataFrame,
+    topk_daily: pd.DataFrame,
+    *,
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+) -> dict[str, Any]:
+    def bounded(frame: pd.DataFrame, date_column: str) -> pd.DataFrame:
+        if frame.empty:
+            return frame
+        dates = pd.to_datetime(frame[date_column], errors="coerce")
+        return frame.loc[dates.between(start, end, inclusive="both")]
+
+    ic = bounded(ic_daily, "date")
+    rank_ic = bounded(rank_ic_daily, "date")
+    quantile = bounded(quantile_daily, "trade_date")
+    decile = bounded(decile_daily, "trade_date")
+    topk = bounded(topk_daily, "trade_date")
+
+    def correlation_summary(
+        frame: pd.DataFrame, column: str
+    ) -> dict[str, int | float | None]:
+        values = pd.to_numeric(frame[column], errors="coerce").dropna()
+        stats = _ic_stats(values)
+        return {
+            "n_dates": int(len(values)),
+            "mean": stats["mean"],
+            "std": stats["std"],
+            "ir": stats["ir"],
+            "positive_ratio": (
+                _finite_float((values > 0).mean()) if not values.empty else None
+            ),
+        }
+
+    def quantile_summary(frame: pd.DataFrame) -> dict[str, int | float | None]:
+        spread_source = (
+            frame["top_minus_bottom"]
+            if "top_minus_bottom" in frame.columns
+            else pd.Series(dtype=float)
+        )
+        monotonicity_source = (
+            frame["monotonicity_score"]
+            if "monotonicity_score" in frame.columns
+            else pd.Series(dtype=float)
+        )
+        spread = pd.to_numeric(
+            spread_source, errors="coerce"
+        ).dropna()
+        monotonicity = pd.to_numeric(
+            monotonicity_source, errors="coerce"
+        ).dropna()
+        return {
+            "n_dates": int(len(spread)),
+            "top_minus_bottom_mean": (
+                _finite_float(spread.mean()) if not spread.empty else None
+            ),
+            "monotonicity_mean": (
+                _finite_float(monotonicity.mean())
+                if not monotonicity.empty else None
+            ),
+        }
+
+    topk_summary: dict[str, Any] = {}
+    topk_groups = topk.groupby("top_k") if not topk.empty else ()
+    for top_k, group in topk_groups:
+        topk_summary[str(int(top_k))] = {
+            "n_dates": int(
+                pd.to_numeric(
+                    group["predicted_topk_return"], errors="coerce"
+                ).notna().sum()
+            ),
+            "hit_recall_at_k": _finite_float(group["hit_recall_at_k"].mean()),
+            "predicted_topk_return": _finite_float(
+                group["predicted_topk_return"].mean()
+            ),
+            "excess_vs_universe": _finite_float(
+                group["excess_vs_universe"].mean()
+            ),
+            "excess_vs_benchmark": _finite_float(
+                pd.to_numeric(group["excess_vs_benchmark"], errors="coerce").mean()
+            ),
+            "excess_vs_random": _finite_float(group["excess_vs_random"].mean()),
+        }
+    return {
+        "start_date": start.strftime("%Y-%m-%d"),
+        "end_date": end.strftime("%Y-%m-%d"),
+        "ic": correlation_summary(ic, "ic"),
+        "rank_ic": correlation_summary(rank_ic, "rank_ic"),
+        "quantile_5": quantile_summary(quantile),
+        "decile": quantile_summary(decile),
+        "topk": topk_summary,
+    }
+
+
+def summarize_evaluation_stability(
+    ic_daily: pd.DataFrame,
+    rank_ic_daily: pd.DataFrame,
+    quantile_daily: pd.DataFrame,
+    decile_daily: pd.DataFrame,
+    topk_daily: pd.DataFrame,
+    *,
+    phases: list[dict[str, str]] | None = None,
+) -> dict[str, Any]:
+    """Summarize signal evidence by calendar year and predeclared phases."""
+
+    dates = pd.DatetimeIndex([])
+    for frame, column in (
+        (ic_daily, "date"),
+        (rank_ic_daily, "date"),
+        (quantile_daily, "trade_date"),
+        (decile_daily, "trade_date"),
+        (topk_daily, "trade_date"),
+    ):
+        if not frame.empty:
+            dates = dates.union(
+                pd.DatetimeIndex(pd.to_datetime(frame[column], errors="coerce").dropna())
+            )
+    yearly = {
+        str(year): _evaluation_period_summary(
+            ic_daily,
+            rank_ic_daily,
+            quantile_daily,
+            decile_daily,
+            topk_daily,
+            start=pd.Timestamp(year=year, month=1, day=1),
+            end=pd.Timestamp(year=year, month=12, day=31),
+        )
+        for year in sorted(set(dates.year))
+    }
+    phase_summaries: dict[str, Any] = {}
+    for raw in phases or []:
+        phase_id = str(raw.get("phase_id") or "").strip()
+        if not phase_id or phase_id in phase_summaries:
+            raise ValueError("evaluation stability phase ids must be non-empty and unique")
+        start = pd.Timestamp(raw.get("start_date")).normalize()
+        end = pd.Timestamp(raw.get("end_date")).normalize()
+        if pd.isna(start) or pd.isna(end) or start > end:
+            raise ValueError(f"invalid evaluation stability phase: {phase_id}")
+        phase_summaries[phase_id] = _evaluation_period_summary(
+            ic_daily,
+            rank_ic_daily,
+            quantile_daily,
+            decile_daily,
+            topk_daily,
+            start=start,
+            end=end,
+        )
+    return {
+        "contract": "signal_evaluation_stability_v1",
+        "calendar_year": yearly,
+        "phases": phase_summaries,
+    }
+
+
+def _circular_block_bootstrap_mean(
+    values: pd.Series,
+    *,
+    block_length: int,
+    reps: int = 2_000,
+    seed: int = 42,
+) -> dict[str, Any]:
+    clean = pd.to_numeric(values, errors="coerce").dropna().to_numpy(dtype=float)
+    if len(clean) == 0:
+        return {
+            "n": 0, "mean": None, "ci95": [None, None],
+            "block_length": block_length, "reps": reps, "seed": seed,
+        }
+    block_length = max(1, min(int(block_length), len(clean)))
+    if len(clean) == 1:
+        value = float(clean[0])
+        return {
+            "n": 1, "mean": value, "ci95": [value, value],
+            "block_length": block_length, "reps": reps, "seed": seed,
+        }
+    rng = np.random.default_rng(seed)
+    blocks = math.ceil(len(clean) / block_length)
+    starts = rng.integers(0, len(clean), size=(reps, blocks))
+    offsets = np.arange(block_length)
+    indices = (starts[:, :, None] + offsets) % len(clean)
+    samples = clean[indices.reshape(reps, -1)[:, : len(clean)]]
+    means = samples.mean(axis=1)
+    return {
+        "n": int(len(clean)),
+        "mean": float(clean.mean()),
+        "ci95": [float(np.quantile(means, 0.025)), float(np.quantile(means, 0.975))],
+        "block_length": block_length,
+        "reps": reps,
+        "seed": seed,
+    }
+
+
+def _newey_west_mean_test(values: pd.Series, max_lag: int) -> dict[str, Any]:
+    clean = pd.to_numeric(values, errors="coerce").dropna().to_numpy(dtype=float)
+    n = len(clean)
+    if n < 2:
+        return {"n": n, "mean": float(clean[0]) if n else None, "max_lag": 0,
+                "standard_error": None, "t_stat": None}
+    max_lag = max(0, min(int(max_lag), n - 1))
+    residual = clean - clean.mean()
+    long_run_variance = float(np.dot(residual, residual) / n)
+    for lag in range(1, max_lag + 1):
+        covariance = float(np.dot(residual[lag:], residual[:-lag]) / n)
+        weight = 1.0 - lag / (max_lag + 1.0)
+        long_run_variance += 2.0 * weight * covariance
+    standard_error = math.sqrt(max(long_run_variance, 0.0) / n)
+    return {
+        "n": n,
+        "mean": float(clean.mean()),
+        "max_lag": max_lag,
+        "standard_error": standard_error,
+        "t_stat": float(clean.mean() / standard_error) if standard_error > 0 else None,
+    }
+
+
+def compute_overlap_robustness(
+    values: pd.Series,
+    *,
+    horizon: int,
+) -> dict[str, Any]:
+    """Report horizon-aware bootstrap, HAC, and every non-overlap offset."""
+    if horizon <= 0:
+        raise ValueError("horizon must be positive")
+    clean = pd.to_numeric(values, errors="coerce").dropna().reset_index(drop=True)
+    offsets = []
+    for offset in range(horizon):
+        subset = clean.iloc[offset::horizon]
+        offsets.append({
+            "offset": offset,
+            "n": int(len(subset)),
+            "mean": float(subset.mean()) if len(subset) else None,
+            "std": float(subset.std(ddof=1)) if len(subset) > 1 else None,
+        })
+    return {
+        "contract": "overlapping_forward_label_robustness_v1",
+        "horizon_sessions": horizon,
+        "block_bootstrap": _circular_block_bootstrap_mean(
+            clean, block_length=horizon
+        ),
+        "newey_west": _newey_west_mean_test(clean, max_lag=horizon - 1),
+        "non_overlapping_offsets": offsets,
+    }
+
+
+def compute_topk_metrics(
+    joined: pd.DataFrame,
+    *,
+    score_column: str = "score",
+    top_ks: tuple[int, ...] = (5, 20, 50),
+    random_reps: int = 200,
+    seed: int = 42,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Compute fixed eligible-universe Top-K hit and economic capture metrics."""
+    rng = np.random.default_rng(seed)
+    benchmark_column = next(
+        (
+            column for column in (
+                "benchmark_return", "benchmark_label_value",
+                "benchmark_return_label", "benchmark_label_value_label",
+            ) if column in joined.columns
+        ),
+        None,
+    )
+    rows: list[dict[str, Any]] = []
+    for trade_date, day in joined.groupby("trade_date", sort=True):
+        day = day.dropna(subset=[score_column, "label_value"]).copy()
+        if day.empty:
+            continue
+        prediction_order = day.sort_values(
+            [score_column, "instrument"], ascending=[False, True], kind="mergesort"
+        )
+        label_order = day.sort_values(
+            ["label_value", "instrument"], ascending=[False, True], kind="mergesort"
+        )
+        universe_mean = float(day["label_value"].mean())
+        for top_k in sorted(set(top_ks)):
+            if top_k <= 0 or len(day) < top_k:
+                continue
+            predicted = prediction_order.head(top_k)
+            actual = label_order.head(top_k)
+            predicted_set = set(predicted["instrument"])
+            actual_set = set(actual["instrument"])
+            predicted_mean = float(predicted["label_value"].mean())
+            random_means = np.asarray([
+                float(day["label_value"].iloc[
+                    rng.choice(len(day), size=top_k, replace=False)
+                ].mean())
+                for _ in range(random_reps)
+            ])
+            benchmark = (
+                _finite_float(
+                    pd.to_numeric(day[benchmark_column], errors="coerce").mean()
+                )
+                if benchmark_column else None
+            )
+            rows.append({
+                "trade_date": trade_date,
+                "top_k": top_k,
+                "n_eligible": int(len(day)),
+                "hit_recall_at_k": len(predicted_set & actual_set) / top_k,
+                "predicted_topk_return": predicted_mean,
+                "universe_return": universe_mean,
+                "excess_vs_universe": predicted_mean - universe_mean,
+                "benchmark_return": benchmark,
+                "excess_vs_benchmark": (
+                    predicted_mean - benchmark if benchmark is not None else None
+                ),
+                "random_topk_mean": float(random_means.mean()),
+                "random_topk_std": float(random_means.std(ddof=1)),
+                "excess_vs_random": predicted_mean - float(random_means.mean()),
+            })
+    per_date = pd.DataFrame(rows)
+    summary: dict[str, Any] = {
+        "contract": "eligible_executable_label_topk_v1",
+        "top_ks": list(sorted(set(top_ks))),
+        "random_reps": random_reps,
+        "random_seed": seed,
+        "benchmark_column": benchmark_column,
+        "by_k": {},
+        "yearly": {},
+    }
+    if per_date.empty:
+        return per_date, summary
+    metrics = [
+        "hit_recall_at_k", "predicted_topk_return", "excess_vs_universe",
+        "excess_vs_benchmark", "excess_vs_random",
+    ]
+    per_date["year"] = pd.to_datetime(per_date["trade_date"]).dt.year
+    for top_k, group in per_date.groupby("top_k"):
+        summary["by_k"][str(int(top_k))] = {
+            "n_dates": int(len(group)),
+            **{
+                metric: (
+                    float(pd.to_numeric(group[metric], errors="coerce").mean())
+                    if pd.to_numeric(group[metric], errors="coerce").notna().any()
+                    else None
+                )
+                for metric in metrics
+            },
+        }
+        summary["yearly"][str(int(top_k))] = {
+            str(int(year)): {
+                metric: (
+                    float(pd.to_numeric(year_group[metric], errors="coerce").mean())
+                    if pd.to_numeric(year_group[metric], errors="coerce").notna().any()
+                    else None
+                )
+                for metric in metrics
+            }
+            for year, year_group in group.groupby("year")
+        }
+    return per_date.drop(columns="year"), summary
+
+
+def compute_rank_stability(
+    joined: pd.DataFrame,
+    *,
+    score_column: str = "score",
+    top_ks: tuple[int, ...] = (5, 20, 50),
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Compute consecutive-date rank autocorrelation and Top-K churn."""
+    days = {
+        date: frame[["instrument", score_column]].dropna().copy()
+        for date, frame in joined.groupby("trade_date", sort=True)
+    }
+    ordered_dates = sorted(days)
+    rows: list[dict[str, Any]] = []
+    for previous_date, trade_date in zip(ordered_dates, ordered_dates[1:]):
+        previous = days[previous_date]
+        current = days[trade_date]
+        overlap = previous.merge(current, on="instrument", suffixes=("_prev", "_curr"))
+        autocorrelation = (
+            overlap[f"{score_column}_prev"].corr(
+                overlap[f"{score_column}_curr"], method="spearman"
+            ) if len(overlap) >= 2 else None
+        )
+        for top_k in sorted(set(top_ks)):
+            if len(previous) < top_k or len(current) < top_k:
+                continue
+            previous_top = set(previous.nlargest(top_k, score_column)["instrument"])
+            current_top = set(current.nlargest(top_k, score_column)["instrument"])
+            intersection = len(previous_top & current_top)
+            union = len(previous_top | current_top)
+            rows.append({
+                "previous_date": previous_date,
+                "trade_date": trade_date,
+                "top_k": top_k,
+                "rank_autocorrelation": (
+                    float(autocorrelation) if pd.notna(autocorrelation) else None
+                ),
+                "topk_jaccard": intersection / union if union else None,
+                "ranking_turnover": 1.0 - intersection / top_k,
+            })
+    per_date = pd.DataFrame(rows)
+    summary = {"by_k": {}}
+    if not per_date.empty:
+        for top_k, group in per_date.groupby("top_k"):
+            summary["by_k"][str(int(top_k))] = {
+                "n_transitions": int(len(group)),
+                "rank_autocorrelation": _finite_float(
+                    group["rank_autocorrelation"].mean()
+                ),
+                "topk_jaccard": _finite_float(group["topk_jaccard"].mean()),
+                "ranking_turnover": _finite_float(
+                    group["ranking_turnover"].mean()
+                ),
+            }
+    return per_date, summary
+
+
+def compute_neutralized_rank_ic(
+    joined: pd.DataFrame,
+    *,
+    score_column: str = "score",
+    min_count: int = 5,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Compute industry- and size-neutral RankIC when support fields exist."""
+    industry_field = next(
+        (
+            column for column in (
+                "industry", "industry_code", "sw_l1",
+                "industry_signal", "industry_label",
+            ) if column in joined.columns
+        ),
+        None,
+    )
+    size_field = next(
+        (
+            column for column in (
+                "circ_mv", "total_mv", "circ_mv_signal", "total_mv_signal",
+                "circ_mv_label", "total_mv_label",
+            ) if column in joined.columns
+        ),
+        None,
+    )
+    rows: list[dict[str, Any]] = []
+    for trade_date, day in joined.groupby("trade_date", sort=True):
+        base = day.dropna(subset=[score_column, "label_value"]).copy()
+        if industry_field:
+            industry = base.dropna(subset=[industry_field]).copy()
+            industry["neutral_score"] = industry[score_column] - industry.groupby(
+                industry_field
+            )[score_column].transform("mean")
+            value = (
+                industry["neutral_score"].corr(
+                    industry["label_value"], method="spearman"
+                ) if len(industry) >= min_count else None
+            )
+            rows.append({
+                "trade_date": trade_date,
+                "method": "industry_neutral",
+                "rank_ic": float(value) if pd.notna(value) else None,
+                "n": int(len(industry)),
+            })
+        if size_field:
+            size = base.dropna(subset=[size_field]).copy()
+            size["_size"] = pd.to_numeric(size[size_field], errors="coerce")
+            size = size[size["_size"] > 0]
+            if len(size) >= min_count and size["_size"].nunique() > 1:
+                x = np.log(size["_size"].to_numpy(dtype=float))
+                y = size[score_column].to_numpy(dtype=float)
+                design = np.column_stack([np.ones(len(x)), x])
+                coefficients, *_ = np.linalg.lstsq(design, y, rcond=None)
+                size["neutral_score"] = y - design @ coefficients
+                value = size["neutral_score"].corr(
+                    size["label_value"], method="spearman"
+                )
+            else:
+                value = None
+            rows.append({
+                "trade_date": trade_date,
+                "method": "size_neutral",
+                "rank_ic": float(value) if pd.notna(value) else None,
+                "n": int(len(size)),
+            })
+    daily = pd.DataFrame(rows)
+    summary: dict[str, Any] = {
+        "industry_field": industry_field,
+        "size_field": size_field,
+        "status": "available" if industry_field or size_field else "unavailable",
+        "methods": {},
+    }
+    if not daily.empty:
+        for method, group in daily.groupby("method"):
+            stats = _ic_stats(group["rank_ic"])
+            summary["methods"][str(method)] = {
+                "n_days": int(group["rank_ic"].notna().sum()),
+                "rank_ic_mean": stats["mean"],
+                "rank_ic_std": stats["std"],
+                "rank_icir": stats["ir"],
+            }
+    return daily, summary
 
 
 # ── Coverage ─────────────────────────────────────────────────────────────────
@@ -403,10 +1018,9 @@ def compute_daily_auc(
     """
     from sklearn.metrics import roc_auc_score
 
-    dates = joined["trade_date"].unique()
     rows = []
-    for d in sorted(dates):
-        day = joined[joined["trade_date"] == d].dropna(subset=[score_column, "label_value"])
+    for d, day in joined.groupby("trade_date", sort=True):
+        day = day.dropna(subset=[score_column, "label_value"])
         if len(day) < min_count:
             rows.append({"date": d, "auc": None, "n": len(day), "n_pos": 0, "n_neg": 0})
             continue
@@ -496,6 +1110,33 @@ def _write_parquet_or_csv(df: pd.DataFrame, path: Path) -> None:
         df.to_csv(path.with_suffix(".csv"), index=False)
 
 
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _frame_sha256(frame: pd.DataFrame) -> str:
+    """Hash an in-memory fixture deterministically for legacy test pipelines."""
+    ordered = frame.sort_values(
+        [column for column in ("trade_date", "instrument") if column in frame.columns]
+    ).reset_index(drop=True)
+    payload = ordered.to_csv(index=False, lineterminator="\n").encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _existing_table_path(path: Path) -> Path:
+    parquet = path.with_suffix(".parquet")
+    if parquet.is_file():
+        return parquet
+    csv = path.with_suffix(".csv")
+    if csv.is_file():
+        return csv
+    raise FileNotFoundError(f"evaluation table was not written: {path}")
+
+
 # ── Evaluator ────────────────────────────────────────────────────────────────
 
 
@@ -527,6 +1168,10 @@ class SignalEvaluator:
         min_count: int = 5,
         output_dir: Path | None = None,
         overwrite: bool = False,
+        require_pit_lineage: bool = False,
+        research_config_sha256: str | None = None,
+        label_maturity_before: str | None = None,
+        stability_phases: list[dict[str, str]] | None = None,
     ) -> SignalEvaluationResult:
         """Run full evaluation and write artifacts."""
         # 1. Load data
@@ -538,6 +1183,103 @@ class SignalEvaluator:
             label_id,
             start_date=start_date, end_date=end_date,
         )
+        signal_manifest_path = self._paths.signal_manifest(signal_id, signal_run_id)
+        label_manifest_path = self._paths.label_manifest(label_id)
+        signal_manifest = json.loads(signal_manifest_path.read_text(encoding="utf-8"))
+        label_manifest = (
+            json.loads(label_manifest_path.read_text(encoding="utf-8"))
+            if label_manifest_path.is_file() else {}
+        )
+        signal_data_path = next(
+            path for path in (
+                self._paths.signal_file(signal_id, signal_run_id, "parquet"),
+                self._paths.signal_file(signal_id, signal_run_id, "csv"),
+            ) if path.is_file()
+        )
+        label_data_path = next(
+            (
+                path for path in (
+                    self._paths.label_file(label_id, "parquet"),
+                    self._paths.label_file(label_id, "csv"),
+                ) if path.is_file()
+            ),
+            None,
+        )
+        signal_data_sha256 = _sha256_file(signal_data_path)
+        label_data_sha256 = (
+            _sha256_file(label_data_path)
+            if label_data_path is not None else _frame_sha256(labels)
+        )
+        if signal_manifest.get("predictions_sha256") != signal_data_sha256:
+            raise ValueError("Signal data hash does not match its manifest")
+        if label_manifest and label_manifest.get("labels_sha256") != label_data_sha256:
+            raise ValueError("Label data hash does not match its manifest")
+        if require_pit_lineage and (not label_manifest or label_data_path is None):
+            raise ValueError("Formal evaluation requires a materialized label artifact")
+        pit_fields = (
+            "pit_universe_artifact", "universe_manifest_sha256",
+            "universe_membership_sha256",
+        )
+        missing_pit = [field for field in pit_fields if not label_manifest.get(field)]
+        if require_pit_lineage and missing_pit:
+            raise ValueError(
+                "Formal evaluation requires PIT label lineage fields: "
+                + ", ".join(missing_pit)
+            )
+        if require_pit_lineage and not research_config_sha256:
+            raise ValueError("Formal evaluation requires research config identity")
+        maturity_filter: dict[str, Any] | None = None
+        if label_maturity_before is not None:
+            cutoff = pd.Timestamp(label_maturity_before)
+            required_maturity_columns = {"maturity_date", "return_end_date"}
+            missing_maturity = sorted(
+                required_maturity_columns - set(labels.columns)
+            )
+            if missing_maturity:
+                raise ValueError(
+                    "label_maturity_before requires label columns: "
+                    f"{missing_maturity}"
+                )
+            maturity = pd.to_datetime(labels["maturity_date"], errors="coerce")
+            return_end = pd.to_datetime(
+                labels["return_end_date"], errors="coerce"
+            )
+            eligible = (
+                maturity.notna()
+                & return_end.notna()
+                & (maturity < cutoff)
+                & (return_end < cutoff)
+            )
+            total_label_rows = len(labels)
+            labels = labels.loc[eligible].copy()
+            if labels.empty:
+                raise ValueError(
+                    "label_maturity_before removed every evaluation label"
+                )
+            maturity_filter = {
+                "contract": (
+                    "maturity_and_return_end_strictly_before_cutoff_v1"
+                ),
+                "cutoff": cutoff.strftime("%Y-%m-%d"),
+                "input_rows": total_label_rows,
+                "eligible_rows": len(labels),
+                "excluded_rows": total_label_rows - len(labels),
+                "maximum_maturity_date": str(labels["maturity_date"].max()),
+                "maximum_return_end_date": str(
+                    labels["return_end_date"].max()
+                ),
+            }
+        if "horizon" not in labels.columns:
+            if require_pit_lineage:
+                raise ValueError("Formal evaluation requires label horizon metadata")
+            horizon = 1
+        else:
+            horizons = pd.to_numeric(
+                labels["horizon"], errors="coerce"
+            ).dropna().unique()
+            if len(horizons) != 1 or int(horizons[0]) <= 0:
+                raise ValueError("Evaluation requires exactly one positive label horizon")
+            horizon = int(horizons[0])
 
         # 2. Join
         joined = join_signal_label(signal, labels, score_column=score_column)
@@ -557,6 +1299,30 @@ class SignalEvaluator:
 
         # 4. Group returns
         grp_df = compute_group_returns(joined, score_column, n_groups)
+        quantile_daily, quantile_summary = summarize_group_returns(
+            grp_df, n_groups
+        )
+        decile_df = compute_group_returns(joined, score_column, 10)
+        decile_daily, decile_summary = summarize_group_returns(decile_df, 10)
+
+        # 4b. Fixed Top-K evidence and ranking stability
+        topk_df, topk_summary = compute_topk_metrics(
+            joined, score_column=score_column
+        )
+        stability_by_period = summarize_evaluation_stability(
+            ic_df,
+            rank_ic_df,
+            quantile_daily,
+            decile_daily,
+            topk_df,
+            phases=stability_phases,
+        )
+        stability_df, stability_summary = compute_rank_stability(
+            joined, score_column=score_column
+        )
+        neutral_df, neutral_summary = compute_neutralized_rank_ic(
+            joined, score_column=score_column, min_count=min_count
+        )
 
         # 5. Coverage
         cov_df = compute_coverage(signal, joined)
@@ -565,10 +1331,35 @@ class SignalEvaluator:
         # 6. IC distribution stats
         ic_dist = _ic_distribution_stats(ic_df["ic"])
 
-        # 7. IC decay
-        decay_df = compute_ic_decay(ic_df["ic"], n_segments=5)
-        decay_icirs = [float(r["icir"]) if r["icir"] is not None else None
+        # 7. True forecast-lag IC decay
+        decay_lags = tuple(sorted({
+            0, 1, 2, 3, min(5, horizon), min(10, horizon),
+            min(20, horizon), horizon,
+        }))
+        decay_df = compute_ic_decay(
+            signal,
+            labels,
+            score_column=score_column,
+            lags=decay_lags,
+            min_count=min_count,
+        )
+        decay_icirs = [float(r["icir"]) if pd.notna(r["icir"]) else None
                        for _, r in decay_df.iterrows()] if not decay_df.empty else None
+
+        # 7b. Overlap-aware inference for all reasonable offsets
+        overlap_stats = {
+            "daily_ic": compute_overlap_robustness(
+                ic_df["ic"], horizon=horizon
+            ),
+            "daily_rank_ic": compute_overlap_robustness(
+                rank_ic_df["rank_ic"], horizon=horizon
+            ),
+            "decile_top_minus_bottom": compute_overlap_robustness(
+                decile_daily["top_minus_bottom"]
+                if not decile_daily.empty else pd.Series(dtype=float),
+                horizon=horizon,
+            ),
+        }
 
         # 8. Regime-aware IC
         regime_df = compute_regime_ic(ic_df)
@@ -578,9 +1369,9 @@ class SignalEvaluator:
             for _, r in regime_df.iterrows():
                 regime_ic[str(r["regime"])] = {
                     "n_days": int(r["n_days"]),
-                    "ic_mean": float(r["ic_mean"]) if r["ic_mean"] is not None else None,
-                    "icir": float(r["icir"]) if r["icir"] is not None else None,
-                    "positive_ratio": float(r["positive_ratio"]) if r["positive_ratio"] is not None else None,
+                    "ic_mean": _finite_float(r["ic_mean"]),
+                    "icir": _finite_float(r["icir"]),
+                    "positive_ratio": _finite_float(r["positive_ratio"]),
                 }
 
         # 8b. AUC — only meaningful for binary labels {0, 1}
@@ -605,7 +1396,88 @@ class SignalEvaluator:
 
         output_dir.mkdir(parents=True, exist_ok=True)
 
+        methodology = {
+            "contract": "signal_evaluation_methodology_v2",
+            "score_column": score_column,
+            "min_count": min_count,
+            "quantile_groups": n_groups,
+            "decile_groups": 10,
+            "top_ks": [5, 20, 50],
+            "label_horizon_sessions": horizon,
+            "research_config_sha256": research_config_sha256,
+            "label_maturity_filter": maturity_filter,
+            "stability_phases": list(stability_phases or []),
+            "ic_decay_lags": list(decay_lags),
+            "overlap_inference": (
+                "horizon_block_bootstrap_newey_west_all_offsets_v1"
+            ),
+            "regime": {
+                "contract": "lagged_index_trend_regime_v1",
+                "index_code": "000300.SH",
+                "trend_lookback_sessions": 60,
+                "information_lag_sessions": 1,
+                "uptrend_threshold": 0.05,
+                "downtrend_threshold": -0.05,
+            },
+            "start_date": start_date,
+            "end_date": end_date,
+        }
+        methodology_bytes = json.dumps(
+            methodology, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+        methodology_sha256 = hashlib.sha256(methodology_bytes).hexdigest()
+        code_sha256 = _sha256_file(Path(__file__))
+        input_lineage = {
+            "signal": {
+                "signal_id": signal_id,
+                "signal_run_id": signal_run_id,
+                "data_path": str(signal_data_path),
+                "data_sha256": signal_data_sha256,
+                "manifest_path": str(signal_manifest_path),
+                "manifest_sha256": _sha256_file(signal_manifest_path),
+            },
+            "label": {
+                "label_id": label_id,
+                "data_path": str(label_data_path) if label_data_path else None,
+                "data_sha256": label_data_sha256,
+                "manifest_path": (
+                    str(label_manifest_path) if label_manifest_path.is_file() else None
+                ),
+                "manifest_sha256": (
+                    _sha256_file(label_manifest_path)
+                    if label_manifest_path.is_file() else None
+                ),
+                "lineage_status": (
+                    "materialized" if label_data_path is not None
+                    else "in_memory_legacy_fixture"
+                ),
+                "pit_universe_artifact": label_manifest.get(
+                    "pit_universe_artifact"
+                ),
+                "universe_manifest_sha256": label_manifest.get(
+                    "universe_manifest_sha256"
+                ),
+                "universe_membership_sha256": label_manifest.get(
+                    "universe_membership_sha256"
+                ),
+            },
+        }
+        evaluation_identity_payload = {
+            "inputs": input_lineage,
+            "methodology_sha256": methodology_sha256,
+            "evaluation_code_sha256": code_sha256,
+        }
+        evaluation_identity_sha256 = hashlib.sha256(
+            json.dumps(
+                evaluation_identity_payload,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+
         summary = {
+            "evaluation_identity_sha256": evaluation_identity_sha256,
+            "methodology_sha256": methodology_sha256,
             "signal_id": signal_id,
             "signal_run_id": signal_run_id,
             "label_id": label_id,
@@ -620,6 +1492,13 @@ class SignalEvaluator:
             "rank_ic_std": rank_ic_stats["std"],
             "rank_icir": rank_ic_stats["ir"],
             "coverage_mean": cov_mean,
+            "quantile_summary": quantile_summary,
+            "decile_summary": decile_summary,
+            "topk_summary": topk_summary,
+            "stability_by_period": stability_by_period,
+            "ranking_stability": stability_summary,
+            "neutralized_rank_ic": neutral_summary,
+            "overlap_robustness": overlap_stats,
             "start_date": str(joined["trade_date"].min()) if len(joined) > 0 else None,
             "end_date": str(joined["trade_date"].max()) if len(joined) > 0 else None,
             # IC distribution
@@ -636,28 +1515,80 @@ class SignalEvaluator:
             "auc_min": auc_stats["min"],
             "auc_max": auc_stats["max"],
         }
-        summary = with_standard_metadata(summary)
+        summary = _json_safe(with_standard_metadata(summary))
         write_manifest(output_dir / "summary.json", summary)
 
         _write_parquet_or_csv(ic_df, output_dir / "ic_daily.parquet")
         _write_parquet_or_csv(rank_ic_df, output_dir / "rank_ic_daily.parquet")
         _write_parquet_or_csv(grp_df, output_dir / "group_returns.parquet")
+        _write_parquet_or_csv(quantile_daily, output_dir / "quantile_daily.parquet")
+        _write_parquet_or_csv(decile_df, output_dir / "decile_returns.parquet")
+        _write_parquet_or_csv(decile_daily, output_dir / "decile_daily.parquet")
+        _write_parquet_or_csv(topk_df, output_dir / "topk_daily.parquet")
+        _write_parquet_or_csv(stability_df, output_dir / "ranking_stability.parquet")
+        _write_parquet_or_csv(neutral_df, output_dir / "neutralized_rank_ic.parquet")
         _write_parquet_or_csv(cov_df, output_dir / "coverage.parquet")
         _write_parquet_or_csv(decay_df, output_dir / "decay.parquet")
         _write_parquet_or_csv(regime_df, output_dir / "regime_ic.parquet")
         if is_binary and not auc_df.empty:
             _write_parquet_or_csv(auc_df, output_dir / "auc_daily.parquet")
 
+        output_tables = {}
+        for artifact_name in (
+            "ic_daily", "rank_ic_daily", "group_returns", "quantile_daily",
+            "decile_returns", "decile_daily", "topk_daily",
+            "ranking_stability", "neutralized_rank_ic", "coverage", "decay",
+            "regime_ic",
+        ):
+            artifact_path = _existing_table_path(
+                output_dir / f"{artifact_name}.parquet"
+            )
+            output_tables[artifact_name] = {
+                "path": artifact_path.name,
+                "sha256": _sha256_file(artifact_path),
+                "row_count": int({
+                    "ic_daily": len(ic_df),
+                    "rank_ic_daily": len(rank_ic_df),
+                    "group_returns": len(grp_df),
+                    "quantile_daily": len(quantile_daily),
+                    "decile_returns": len(decile_df),
+                    "decile_daily": len(decile_daily),
+                    "topk_daily": len(topk_df),
+                    "ranking_stability": len(stability_df),
+                    "neutralized_rank_ic": len(neutral_df),
+                    "coverage": len(cov_df),
+                    "decay": len(decay_df),
+                    "regime_ic": len(regime_df),
+                }[artifact_name]),
+            }
+        if is_binary and not auc_df.empty:
+            artifact_path = _existing_table_path(output_dir / "auc_daily.parquet")
+            output_tables["auc_daily"] = {
+                "path": artifact_path.name,
+                "sha256": _sha256_file(artifact_path),
+                "row_count": int(len(auc_df)),
+            }
+
         manifest = {
             "artifact_type": "signal_evaluation",
-            "inputs": {
-                "signal_id": signal_id,
-                "signal_run_id": signal_run_id,
-                "label_id": label_id,
-                "score_column": score_column,
+            "schema_version": 2,
+            "evaluation_identity_sha256": evaluation_identity_sha256,
+            "inputs": input_lineage,
+            "methodology": methodology,
+            "methodology_sha256": methodology_sha256,
+            "evaluation_code_sha256": code_sha256,
+            "outputs": {
+                **output_tables,
+                "summary": {
+                    "path": "summary.json",
+                    "sha256": _sha256_file(output_dir / "summary.json"),
+                },
             },
         }
-        write_manifest(output_dir / "manifest.json", with_standard_metadata(manifest))
+        write_manifest(
+            output_dir / "manifest.json",
+            _json_safe(with_standard_metadata(manifest)),
+        )
 
         return SignalEvaluationResult(
             signal_id=signal_id,

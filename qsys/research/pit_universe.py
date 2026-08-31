@@ -215,9 +215,21 @@ class PitUniverseStore:
         # path; resolve bare names under data/research/universes/.
         raw = Path(artifact_dir)
         if not raw.is_absolute() and not (raw / "manifest.json").is_file():
-            candidate = Path("data") / "research" / "universes" / artifact_dir
-            if (candidate / "manifest.json").is_file():
-                raw = candidate
+            candidates = [
+                Path("data") / "research" / "universes" / artifact_dir,
+            ]
+            try:
+                from qsys.config import cfg
+
+                candidates.insert(
+                    0, cfg.data_root / "research" / "universes" / artifact_dir
+                )
+            except Exception:
+                pass
+            for candidate in candidates:
+                if (candidate / "manifest.json").is_file():
+                    raw = candidate
+                    break
         self.artifact_dir = raw
         self._manifest = self._load_manifest()
         self._spans = self._load_membership(verify_hash=verify_hash)

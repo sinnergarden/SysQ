@@ -1,0 +1,34 @@
+feature_list_id: market_core_5d_v1
+description: >-
+  Ordered short-horizon consumer subset of market_core_superset_v1 for the
+  formal five-session vertical slice.
+feature_count: 26
+features_sha256: aafcf7332d25f04af4d3ab555d80c86a8091dd645944ecf5079a9ed2752c233d
+contract: pit_adjusted_market_core_5d_consumer_v1
+features:
+  - ($close*$factor)/(Ref($close*$factor, 1)+1e-12)-1
+  - ($close*$factor)/(Ref($close*$factor, 3)+1e-12)-1
+  - ($close*$factor)/(Ref($close*$factor, 5)+1e-12)-1
+  - ($close*$factor)/(Ref($close*$factor, 10)+1e-12)-1
+  - ($close*$factor)/(Ref($close*$factor, 20)+1e-12)-1
+  - ($close*$factor)/(Ref($close*$factor, 40)+1e-12)-1
+  - ($close*$factor)/(Ref($close*$factor, 60)+1e-12)-1
+  - ($close*$factor)/(Mean($close*$factor, 5)+1e-12)-1
+  - ($close*$factor)/(Mean($close*$factor, 10)+1e-12)-1
+  - ($close*$factor)/(Mean($close*$factor, 20)+1e-12)-1
+  - ($close*$factor)/(Mean($close*$factor, 60)+1e-12)-1
+  - ($close*$factor)/(Max($close*$factor, 20)+1e-12)-1
+  - ($close*$factor)/(Max($close*$factor, 60)+1e-12)-1
+  - Std(($close*$factor)/(Ref($close*$factor, 1)+1e-12)-1, 5)
+  - Std(($close*$factor)/(Ref($close*$factor, 1)+1e-12)-1, 10)
+  - Std(($close*$factor)/(Ref($close*$factor, 1)+1e-12)-1, 20)
+  - ($open*$factor)/(Ref($close*$factor, 1)+1e-12)-1
+  - $close/($open+1e-12)-1
+  - ($high-$low)/($open+1e-12)
+  - ($close-$low)/($high-$low+1e-12)
+  - $volume/(Mean($volume, 5)+1e-12)
+  - $volume/(Mean($volume, 20)+1e-12)
+  - $amount/(Mean($amount, 5)+1e-12)
+  - $amount/(Mean($amount, 20)+1e-12)
+  - $turnover_rate/(Mean($turnover_rate, 5)+1e-12)
+  - $turnover_rate/(Mean($turnover_rate, 20)+1e-12)

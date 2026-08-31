@@ -1,0 +1,100 @@
+schema_version: pit_baseline_request_v1
+baseline_id: csi1800_s180_baseline_v1_r3_frozen_v1
+scope_key: csi1800
+feature_list_id: v3a_plus_liquidity_financial_rc
+feature_dependencies_path: configs/audit/feature_dependencies/v3a_plus_liquidity_financial_rc_v1.yaml
+
+feature_input_scope:
+  date_start: "2018-03-13"
+  date_end: "2026-07-31"
+  provenance: checkpoint_min_train_start_to_max_predict_end_v1
+
+consumed_sidecars:
+  income:
+    artifact:
+      path: data/research/source_snapshots/income/7775d55750de73d80e1cd30a4cc3fd91d065750867d478a3d9c7f1e8027fbe0b/income.parquet
+      sha256: 6ef941166aaeed8658ee5dd796056d728303d23e0d28703e5b089ac26214fa42
+    manifest:
+      path: data/research/source_snapshots/income/7775d55750de73d80e1cd30a4cc3fd91d065750867d478a3d9c7f1e8027fbe0b/manifest.json
+      sha256: 0b549ae0ff2ae82b6a6ed90c242d9a4a46e6227e008ff39e6ef987de21d85bae
+    artifact_id: 7775d55750de73d80e1cd30a4cc3fd91d065750867d478a3d9c7f1e8027fbe0b
+    source_run_id: data_sync_20260829T074228987495Z_aab34d4c
+    terminal_receipt_sha256: 6f36e14a82434b42121a210eb79f155fe605c5ac3cfff6df2f3e63689cafe2b6
+    scope_key: csi1800
+    range_start: "20140313"
+    range_end: "20260821"
+    availability_cutoff: "20260821"
+    required_history_start: "20140313"
+    transform_contract: income_first_available_projection_v1
+    financial_availability_contract: financial_first_available_v1
+    availability_rule: publication_date_after_close_consumable_only_by_strictly_later_trade_date
+    symbol_count: 3131
+    symbols_sha256: b594264308b7f1fb890cb1c6019b387994816ae7fc7f947ba50b5463a1806897
+  shareholder:
+    holder_num:
+      path: data/research/source_snapshots/shareholder/0baf4e0fc24e5f95f691fb3f332badb8e8d32ed708118c0f1e019a28ce049800/holder_num.parquet
+      sha256: 8bb111f2e9d979bb604c155e4a211dd7087949fa1ecabc317128621c92dc5eb3
+    top10_holder_ratio:
+      path: data/research/source_snapshots/shareholder/0baf4e0fc24e5f95f691fb3f332badb8e8d32ed708118c0f1e019a28ce049800/top10_holder_ratio.parquet
+      sha256: 8690a233c1bb5daeddd54ad88a7c8bdef68be3f1a9dde25e513a517935fc45fb
+    manifest:
+      path: data/research/source_snapshots/shareholder/0baf4e0fc24e5f95f691fb3f332badb8e8d32ed708118c0f1e019a28ce049800/manifest.json
+      sha256: 87cdfe2e5300028206cacb2afca19c1985936d698818be53e614deeb38acce03
+    artifact_id: 0baf4e0fc24e5f95f691fb3f332badb8e8d32ed708118c0f1e019a28ce049800
+    source_run_id: data_sync_20260829T093857823106Z_5e7fc28f
+    terminal_receipt_sha256: 2e7aaad26fedd460b11bafdfc90db516f2e1be676606c5e54a7f7a3b81141147
+    scope_key: csi1800
+    range_start: "20170101"
+    range_end: "20260821"
+    symbol_count: 3131
+    symbols_sha256: b594264308b7f1fb890cb1c6019b387994816ae7fc7f947ba50b5463a1806897
+    transform_contract: shareholder_exact_event_complete_top10_v2
+
+identities:
+  research_config:
+    path: configs/research/60d/financial_rc_180d_rolling_5y_to_202607_v3_pit_csi1800_terminal_r3.yaml
+    sha256: 87c2b8a14076cd81492bf725d4ca48afc079082328aed6aa37920fa78b5cda31
+  signal_manifest:
+    path: data/research/frozen_outputs/signal_runs/fbeddce0ce1f9ca35309803ed6d7c7c8da86572ed33ddc224e6591dcab9b86ef/manifest.json
+    sha256: fbeddce0ce1f9ca35309803ed6d7c7c8da86572ed33ddc224e6591dcab9b86ef
+  signal_predictions:
+    path: data/research/frozen_outputs/signal_runs/fbeddce0ce1f9ca35309803ed6d7c7c8da86572ed33ddc224e6591dcab9b86ef/predictions.parquet
+    sha256: 52f1a9bcc6980cfc804e69da9d7d2061df90f3706df2a1b2f12839472eb588ba
+  universe_manifest:
+    path: data/research/universes/csi1800_pit_v2/manifest.json
+    sha256: 70065082299a682a4c3443fafcee21e57fe62f159ce18c0002895a960683c579
+  universe_membership:
+    path: data/research/universes/csi1800_pit_v2/membership.parquet
+    sha256: 567137db93fb9b2bbdb9220f6d0ed813fec233da87948a953a255b2e08b386df
+  universe_registry:
+    path: data/research/universes/csi1800_pit_v2/csi1800_pit_union.txt
+    sha256: b911afeeb6519524fe47e0c8a5ab1a53ea44181c645fa3b66d12370eba748bea
+  backtest_manifest:
+    path: data/research/frozen_outputs/backtest_runs/6ad427f5794d8ea70054aad922fefcbd9e531b069d912a7fa3f64d0da420f6e7/manifest.json
+    sha256: 6ad427f5794d8ea70054aad922fefcbd9e531b069d912a7fa3f64d0da420f6e7
+
+checkpoints:
+  path: data/research/experiments/financial_rc_180d_rolling_5y_to_202607_v3_pit_csi1800_terminal_r3/window_checkpoints
+  checkpoint_count: 68
+  checkpoint_set_sha256: 69338082032ad195840dbaa2958bfc59730d5ef901f413e754ea8b57fd96b763
+  base_identity_sha256: 9ebe882b47b3d1e377d302c4d1a772e09f32e9d0488e1fc4ed3485314afe92db
+  model:
+    mode: ephemeral_per_window
+    path: null
+
+source_manifest:
+  path: data/research/source_manifests/csi1800_s180_baseline_v1_r3.json
+  sha256: 767870e14368b50aac616a97fc9bb993827e50987168cf6a8b5ba43809e6f352
+
+frozen_evidence:
+  audit_receipt:
+    path: data/research/certifications/csi1800_s180_baseline_v1_r3/15b89cdc875b9563502338a6b4f0b3038e414eded5eddca18ce070623114b84e/audit_receipt.json
+    sha256: 298fdaa785d8de131601efba8d424cdccf693bd72fd7b4777551330fbdf55d51
+  evidence_snapshot:
+    path: data/research/certifications/csi1800_s180_baseline_v1_r3/15b89cdc875b9563502338a6b4f0b3038e414eded5eddca18ce070623114b84e/evidence_snapshot.json
+    sha256: 7e8bc4af236a010b590c5c7f31e7168c76891136b910a434497fb062884cbe1b
+
+portable_datapack:
+  source_contracts:
+    - path: docs/requirements/contracts/frozen/ca61a95d9226930b7da0f7a9379c60a3978a094f77cbff396f72601704caae08/tushare_daily.yaml
+      sha256: ca61a95d9226930b7da0f7a9379c60a3978a094f77cbff396f72601704caae08

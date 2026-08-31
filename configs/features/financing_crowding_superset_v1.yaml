@@ -1,0 +1,16 @@
+feature_list_id: financing_crowding_superset_v1
+description: Shared one-session-lagged margin materialization and neutralization support.
+feature_count: 11
+contract: pit_margin_previous_open_session_materialization_v1
+features:
+  - margin_eligible
+  - margin_balance_to_float_mv
+  - margin_balance_chg_20d
+  - margin_balance_chg_60d
+  - margin_buy_intensity_20d
+  - margin_repay_to_buy_20d
+  - margin_crowding_score
+  - margin_trend_confirm_score
+  - margin_overheat_risk_score
+  - $circ_mv
+  - $industry

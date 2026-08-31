@@ -1,0 +1,17 @@
+feature_list_id: shareholder_pit_x_superset_v1
+description: Materialized provisional shareholder feature frame with exposure support columns.
+feature_count: 12
+contract: pit_x_announcement_asof_long_horizon_materialization_v1
+features:
+  - holder_num_chg_qoq
+  - holder_num_chg_2q
+  - avg_shares_per_holder_chg_qoq
+  - top10_holder_ratio_chg_qoq
+  - holder_concentration_score
+  - holder_squeeze_score
+  - holder_price_confirm_score
+  - holder_num_stale_days
+  - top10_holder_stale_days
+  - top10_holder_ratio
+  - $circ_mv
+  - $industry

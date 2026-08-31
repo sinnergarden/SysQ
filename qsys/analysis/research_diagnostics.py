@@ -18,6 +18,7 @@ Usage (not a script)::
 from __future__ import annotations
 
 import json
+import hashlib
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any
@@ -99,6 +100,26 @@ def _resolve_column(frame: pd.DataFrame, candidates: list[str]) -> str | None:
     return None
 
 
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, np.generic):
+        value = value.item()
+    if isinstance(value, float) and not np.isfinite(value):
+        return None
+    return value
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 class ResearchDiagnostics:
     """Generic config-driven research diagnostics.
 
@@ -126,6 +147,7 @@ class ResearchDiagnostics:
         self._label_data: dict[str, pd.DataFrame] = {}
         self._resolved_ind_field: str | None = None
         self._resolved_size_field: str | None = None
+        self._lineage: dict[str, Any] = {}
 
     # ── Factory ─────────────────────────────────────────────────────────
 
@@ -151,6 +173,7 @@ class ResearchDiagnostics:
         top_cfg = self._cfg.get("top_candidates", {})
         output_dir = self._output_dir()
         output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / "size_exposure.csv").unlink(missing_ok=True)
 
         results: dict[str, Any] = {}
 
@@ -158,6 +181,9 @@ class ResearchDiagnostics:
         if enabled.get("coverage", True):
             cov_df = self._run_coverage()
             cov_df.to_csv(output_dir / "coverage.csv", index=False)
+            cov_daily_df, cov_yearly_df = self._run_coverage_by_time()
+            cov_daily_df.to_csv(output_dir / "coverage_daily.csv", index=False)
+            cov_yearly_df.to_csv(output_dir / "coverage_yearly.csv", index=False)
             results["coverage"] = cov_df.to_dict("records")
             log.info("Coverage: %d features", len(cov_df))
 
@@ -199,27 +225,235 @@ class ResearchDiagnostics:
                 else "",
             }
 
+        # 7. Time-split Stage-A evidence.  This remains feature-level research:
+        # no model fitting or portfolio result is allowed to affect promotion.
+        stage_a_cfg = self._cfg.get("stage_a") or {}
+        if stage_a_cfg.get("enabled", False):
+            from qsys.research.stage_a import StageAEvaluator
+
+            if self._feature_frame is None:
+                raise ValueError("Stage-A requires a loaded feature frame")
+            protocol = StageAEvaluator(
+                feature_frame=self._feature_frame,
+                features=self._features,
+                label_data=self._label_data,
+                label_configs=[
+                    dict(value) for value in self._cfg.get("labels", [])
+                    if isinstance(value, dict)
+                ],
+                config=stage_a_cfg,
+                output_dir=output_dir,
+            ).run()
+            results["stage_a"] = protocol
+            log.info(
+                "Stage-A: %d trials, %d candidates, %d confirmed",
+                protocol["feature_trial_count"],
+                protocol["candidate_count"],
+                protocol["confirmed_count"],
+            )
+
+        # 8. Conservative source-availability delay sensitivity.  This uses
+        # the direction learned at the base Stage-A discovery lag and never
+        # re-optimizes direction at longer lags.
+        lag_cfg = self._cfg.get("availability_lag_sensitivity") or {}
+        if lag_cfg.get("enabled", False):
+            from qsys.config import cfg as settings
+            from qsys.research.lag_sensitivity import AvailabilityLagSensitivity
+
+            if not stage_a_cfg.get("enabled", False) or self._feature_frame is None:
+                raise ValueError("availability-lag sensitivity requires Stage-A")
+            primary = [
+                value for value in self._cfg.get("labels", [])
+                if isinstance(value, dict) and value.get("role") == "primary"
+            ]
+            if len(primary) != 1:
+                raise ValueError("availability-lag sensitivity requires one primary label")
+            triage = pd.read_csv(output_dir / "stage_a_triage.csv")
+            directions = {
+                str(row.feature): int(row.locked_direction)
+                for row in triage.itertuples(index=False)
+            }
+            alignment = self._cfg.get("feature_label_alignment") or {}
+            calendar_path = Path(str(alignment.get("calendar_path", "")))
+            if not calendar_path.is_absolute():
+                calendar_path = Path(settings.data_root) / calendar_path
+            calendar_dates = [
+                value.strip()[:10]
+                for value in calendar_path.read_text(encoding="utf-8").splitlines()
+                if value.strip()
+            ]
+            lag_protocol = AvailabilityLagSensitivity(
+                feature_frame=self._feature_frame,
+                features=self._features,
+                label_frame=self._label_data[str(primary[0]["label_id"])],
+                label_id=str(primary[0]["label_id"]),
+                locked_directions=directions,
+                calendar_dates=calendar_dates,
+                config=lag_cfg,
+                output_dir=output_dir,
+            ).run()
+            results["availability_lag_sensitivity"] = lag_protocol
+            log.info(
+                "Availability lag sensitivity: %d features x %d lags",
+                lag_protocol["feature_count"],
+                len(lag_protocol["lags_sessions"]),
+            )
+
         # Summary
-        summary = self._build_summary(results)
+        summary = _json_safe(self._build_summary(results))
         with open(output_dir / "summary.json", "w", encoding="utf-8") as f:
-            json.dump(summary, f, indent=2, ensure_ascii=False)
+            json.dump(
+                summary, f, indent=2, ensure_ascii=False, allow_nan=False
+            )
+        config_bytes = json.dumps(
+            self._cfg,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
+        code_path = Path(__file__)
+        adapter_path = Path(__import__("qsys.data.adapter", fromlist=["x"]).__file__)
+        outputs = {}
+        for path in sorted(output_dir.iterdir()):
+            if not path.is_file() or path.name == "manifest.json":
+                continue
+            entry = {
+                "sha256": _sha256_file(path),
+                "size": path.stat().st_size,
+            }
+            if path.suffix == ".csv":
+                entry["row_count"] = max(
+                    sum(1 for _ in path.open("r", encoding="utf-8")) - 1,
+                    0,
+                )
+            outputs[path.name] = entry
+        identity_payload = {
+            "config_sha256": hashlib.sha256(config_bytes).hexdigest(),
+            "lineage": self._lineage,
+            "diagnostics_code_sha256": _sha256_file(code_path),
+            "adapter_code_sha256": _sha256_file(adapter_path),
+        }
+        if stage_a_cfg.get("enabled", False):
+            import qsys.research.stage_a as stage_a_module
+
+            identity_payload["stage_a_code_sha256"] = _sha256_file(
+                Path(stage_a_module.__file__).resolve()
+            )
+        if lag_cfg.get("enabled", False):
+            import qsys.research.lag_sensitivity as lag_sensitivity_module
+
+            identity_payload["lag_sensitivity_code_sha256"] = _sha256_file(
+                Path(lag_sensitivity_module.__file__).resolve()
+            )
+        diagnostics_identity_sha256 = hashlib.sha256(
+            json.dumps(
+                identity_payload,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                allow_nan=False,
+            ).encode("utf-8")
+        ).hexdigest()
+        manifest = {
+            "artifact_type": "research_diagnostics",
+            "schema_version": 2,
+            "diagnostics_identity_sha256": diagnostics_identity_sha256,
+            **identity_payload,
+            "outputs": outputs,
+        }
+        (output_dir / "manifest.json").write_text(
+            json.dumps(
+                manifest, indent=2, sort_keys=True, ensure_ascii=False,
+                allow_nan=False,
+            ) + "\n",
+            encoding="utf-8",
+        )
         results["summary"] = summary
         results["output_dir"] = str(output_dir)
+        results["manifest"] = str(output_dir / "manifest.json")
+        results["diagnostics_identity_sha256"] = diagnostics_identity_sha256
 
         return results
 
     # ── Data loading ────────────────────────────────────────────────────
 
     def _load_data(self) -> None:
-        self._adapter.init_qlib()
+        from qsys.config import cfg as settings
+
+        cache_cfg = self._cfg.get("feature_cache") or {}
+        if cache_cfg and not isinstance(cache_cfg, dict):
+            raise ValueError("feature_cache must be a mapping")
+        if self._cfg.get("require_feature_cache") and not cache_cfg:
+            raise ValueError("formal cached diagnostics require feature_cache")
+        if not cache_cfg:
+            self._adapter.init_qlib()
+
+        source_artifacts = self._cfg.get("source_artifacts", {})
+        if self._cfg.get("require_source_artifacts") and not source_artifacts:
+            raise ValueError("formal diagnostics require source_artifacts")
+        verified_sources: dict[str, Any] = {}
+        for name, artifact in sorted(source_artifacts.items()):
+            declared_path = str(artifact.get("path", "")).strip()
+            expected_sha256 = str(artifact.get("sha256", "")).strip().lower()
+            path = Path(declared_path).expanduser()
+            if not path.is_absolute():
+                path = settings.data_root / path
+            if not path.is_file():
+                raise FileNotFoundError(
+                    f"diagnostics source artifact missing: {path}"
+                )
+            actual_sha256 = _sha256_file(path)
+            if actual_sha256 != expected_sha256:
+                raise ValueError(
+                    f"diagnostics source artifact hash mismatch for {name}: "
+                    f"expected {expected_sha256}, got {actual_sha256}"
+                )
+            verified_sources[name] = {
+                "path": declared_path,
+                "sha256": actual_sha256,
+                "size": path.stat().st_size,
+            }
+        if verified_sources:
+            self._lineage["source_artifacts"] = verified_sources
 
         universe = self._cfg.get("universe", "csi800")
         start = self._cfg.get("start_date", "2024-06-01")
         end = self._cfg.get("end_date", "2025-12-31")
+        alignment_cfg = self._cfg.get("feature_label_alignment") or {}
+        source_start = str(start)
+        if alignment_cfg:
+            calendar_path = Path(str(alignment_cfg.get("calendar_path", "")))
+            if not calendar_path.is_absolute():
+                calendar_path = settings.data_root / calendar_path
+            if calendar_path.is_symlink() or not calendar_path.is_file():
+                raise ValueError(
+                    f"alignment calendar must be a regular file: {calendar_path}"
+                )
+            if _sha256_file(calendar_path) != str(
+                alignment_cfg.get("calendar_sha256", "")
+            ):
+                raise ValueError("feature-label alignment calendar hash mismatch")
+            calendar = sorted({
+                line.strip()[:10]
+                for line in calendar_path.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            })
+            prior = [date for date in calendar if date < str(start)]
+            if not prior:
+                raise ValueError("alignment calendar has no session before diagnostics start")
+            source_start = prior[-1]
         fids = self._cfg.get("feature_list_id") or self._cfg.get("focus_features", [])
 
         if self._cfg.get("feature_list_id"):
             self._features = FeatureListRegistry.load(self._cfg["feature_list_id"])
+            self._lineage["feature_list"] = {
+                key: value
+                for key, value in FeatureListRegistry.contract(
+                    self._cfg["feature_list_id"]
+                ).items()
+                if key != "features"
+            }
         else:
             self._features = list(fids) if isinstance(fids, list) else []
 
@@ -242,16 +476,112 @@ class ResearchDiagnostics:
                     all_requested.append(qf)
                     extra_support.append(qf)
 
-        raw = self._adapter.get_features(
-            universe,
-            all_requested + ["$factor"],
-            start_time=start,
-            end_time=end,
-        )
-        frame = raw.reset_index().rename(columns={"datetime": "trade_date"})
-        frame = frame.loc[:, ~frame.columns.duplicated()]
+        pit_artifact = str(self._cfg.get("pit_universe_artifact", "")).strip()
+        pit_mode = str(self._cfg.get("pit_filter_mode", "")).strip()
+        if self._cfg.get("require_pit_universe") and not pit_artifact:
+            raise ValueError("formal diagnostics require pit_universe_artifact")
+        semantic_spans = None
+        feature_universe: str | list[str] = universe
+        pit_store = None
+        if pit_artifact:
+            from qsys.research.pit_universe import PitUniverseStore
+
+            pit_store = PitUniverseStore(pit_artifact)
+            feature_universe = (
+                pit_store.membership_window(start, end)
+                if hasattr(pit_store, "membership_window")
+                else pit_store.instruments
+            )
+            semantic_spans = pit_store.spans
+            pit_mode = pit_mode or "member_as_of"
+            if pit_mode not in {"member_as_of", "ever_member_as_of"}:
+                raise ValueError(f"unsupported diagnostics pit_filter_mode: {pit_mode}")
+            manifest_path = pit_store.artifact_dir / "manifest.json"
+            self._lineage["pit_universe"] = {
+                "artifact": pit_artifact,
+                "filter_mode": pit_mode,
+                "manifest_path": str(manifest_path),
+                "manifest_sha256": _sha256_file(manifest_path),
+                "membership_sha256": pit_store.provenance.membership_sha256,
+                "raw_source_sha256": pit_store.provenance.raw_source_hash,
+            }
+
+        if cache_cfg:
+            frame = self._load_feature_cache(
+                cache_cfg,
+                requested_features=all_requested,
+                start=source_start,
+                end=str(end),
+            )
+        else:
+            raw = self._adapter.get_features(
+                feature_universe,
+                all_requested + ["$factor"],
+                start_time=source_start,
+                end_time=end,
+                semantic_pit_membership_spans=semantic_spans,
+                semantic_pit_filter_mode=pit_mode,
+            )
+            frame = raw.reset_index().rename(columns={"datetime": "trade_date"})
+        if frame.columns.duplicated().any():
+            duplicated = sorted(set(frame.columns[frame.columns.duplicated()]))
+            raise ValueError(
+                "diagnostics feature source has duplicate columns: "
+                + ", ".join(duplicated)
+            )
         frame["trade_date"] = frame["trade_date"].astype(str).str[:10]
+        if self._cfg.get("require_feature_label_alignment") and not alignment_cfg:
+            raise ValueError("formal diagnostics require feature_label_alignment")
+        if alignment_cfg:
+            if not isinstance(alignment_cfg, dict):
+                raise ValueError("feature_label_alignment must be a mapping")
+            frame = self._align_feature_dates(
+                frame,
+                alignment_cfg,
+                data_root=settings.data_root,
+                execution_start=str(start),
+                execution_end=str(end),
+            )
+        if pit_store is not None:
+            spans = pit_store.spans[
+                ["instrument", "effective_from", "effective_to"]
+            ].copy()
+            spans["effective_from"] = (
+                spans["effective_from"].astype(str).str.replace("-", "", regex=False).astype(int)
+            )
+            spans["effective_to"] = (
+                spans["effective_to"].astype(str).str.replace("-", "", regex=False).astype(int)
+            )
+            merged = frame.merge(spans, on="instrument", how="inner")
+            dates = merged["trade_date"].str.replace("-", "", regex=False).astype(int)
+            if pit_mode == "ever_member_as_of":
+                keep = dates >= merged["effective_from"]
+            else:
+                keep = (
+                    (dates >= merged["effective_from"])
+                    & (dates <= merged["effective_to"])
+                )
+            frame = merged.loc[keep, frame.columns].drop_duplicates(
+                ["trade_date", "instrument"]
+            )
+            if frame.empty:
+                raise ValueError("PIT universe filtering removed all diagnostics rows")
         self._feature_frame = frame
+
+        taxonomy_path = settings.get_path("meta") / "industry_map.json"
+        if self._cfg.get("require_industry_taxonomy") and not taxonomy_path.is_file():
+            raise FileNotFoundError(
+                f"formal diagnostics require industry taxonomy: {taxonomy_path}"
+            )
+        self._lineage["industry_taxonomy"] = {
+            "contract": "historical_daily_industry_numeric_map_v1",
+            "path": str(taxonomy_path),
+            "sha256": (
+                _sha256_file(taxonomy_path)
+                if taxonomy_path.is_file() else None
+            ),
+            "source_manifest_hash": self._cfg.get("source_manifest_hash"),
+        }
 
         for f in all_requested:
             self._feature_meta[f] = f in frame.columns
@@ -262,11 +592,253 @@ class ResearchDiagnostics:
             if not lid:
                 continue
             try:
-                self._label_data[lid] = self._label_store.load_labels(
+                label_frame = self._label_store.load_labels(
                     lid, start_date=start, end_date=end,
                 )
+                raw_row_count = len(label_frame)
+                if self._cfg.get("require_executable_labels"):
+                    required = {
+                        "is_valid", "entry_eligible", "is_mature",
+                        "return_type", "label_value",
+                    }
+                    missing = sorted(required - set(label_frame.columns))
+                    if missing:
+                        raise ValueError(
+                            f"label {lid} lacks executable columns: {missing}"
+                        )
+                    if label_frame.duplicated(
+                        ["trade_date", "instrument"]
+                    ).any():
+                        raise ValueError(
+                            f"label {lid} has duplicate instrument/date rows"
+                        )
+                    expected_return_type = (
+                        str(lcfg.get("return_type", "")).strip()
+                        if isinstance(lcfg, dict) else ""
+                    )
+                    actual_return_types = sorted(
+                        label_frame["return_type"].dropna().astype(str).unique()
+                    )
+                    if expected_return_type and actual_return_types != [
+                        expected_return_type
+                    ]:
+                        raise ValueError(
+                            f"label {lid} return_type mismatch: "
+                            f"expected {expected_return_type}, "
+                            f"got {actual_return_types}"
+                        )
+                    # Entry eligibility and maturity are already encoded in
+                    # is_valid by the label contract.  Future exit status is
+                    # intentionally not consulted here.
+                    label_frame = label_frame[
+                        label_frame["is_valid"].eq(True)
+                        & label_frame["label_value"].notna()
+                    ].copy()
+                    if label_frame.empty:
+                        raise ValueError(
+                            f"label {lid} has no valid observed executable rows"
+                        )
+                self._label_data[lid] = label_frame
+                manifest_path = self._label_store.paths.label_manifest(lid)
+                data_path = self._label_store._resolve_data_path(lid)
+                self._lineage.setdefault("labels", {})[lid] = {
+                    "manifest_path": str(manifest_path),
+                    "manifest_sha256": _sha256_file(manifest_path),
+                    "data_path": str(data_path),
+                    "data_sha256": _sha256_file(data_path),
+                    "raw_row_count": raw_row_count,
+                    "consumed_row_count": len(label_frame),
+                    "validity_filter_contract": (
+                        "label_is_valid_and_observed_v1"
+                        if self._cfg.get("require_executable_labels")
+                        else "none"
+                    ),
+                }
             except Exception as exc:
+                if self._cfg.get("require_all_labels", True):
+                    raise RuntimeError(f"Could not load required label {lid}: {exc}") from exc
                 log.warning("Could not load label %s: %s", lid, exc)
+
+    def _load_feature_cache(
+        self,
+        cache_cfg: dict[str, Any],
+        *,
+        requested_features: list[str],
+        start: str,
+        end: str,
+    ) -> pd.DataFrame:
+        """Load only declared columns and years from a validated annual cache."""
+        project_root = Path(__file__).resolve().parents[2]
+
+        def resolve_file(value: str, label: str) -> Path:
+            path = Path(str(value)).expanduser()
+            if not path.is_absolute():
+                path = project_root / path
+            if path.is_symlink() or not path.is_file():
+                raise ValueError(f"{label} must be an existing regular file: {path}")
+            return path.resolve()
+
+        manifest_path = resolve_file(
+            str(cache_cfg.get("manifest_path", "")), "feature cache manifest"
+        )
+        validation_path = resolve_file(
+            str(cache_cfg.get("validation_path", "")), "feature cache validation"
+        )
+        manifest_sha256 = _sha256_file(manifest_path)
+        validation_sha256 = _sha256_file(validation_path)
+        expected_manifest_sha256 = str(
+            cache_cfg.get("manifest_sha256", "")
+        ).strip().lower()
+        expected_validation_sha256 = str(
+            cache_cfg.get("validation_sha256", "")
+        ).strip().lower()
+        if not expected_manifest_sha256 or manifest_sha256 != expected_manifest_sha256:
+            raise ValueError("feature cache manifest hash mismatch")
+        if not expected_validation_sha256 or validation_sha256 != expected_validation_sha256:
+            raise ValueError("feature cache validation hash mismatch")
+
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        validation = json.loads(validation_path.read_text(encoding="utf-8"))
+        if manifest.get("schema_version") != 2 or validation.get("status") != "pass":
+            raise ValueError("feature cache has not passed the required validation schema")
+        if validation.get("manifest_sha256") != manifest_sha256:
+            raise ValueError("feature cache validation does not bind the manifest")
+        shards = list(manifest.get("shards", []))
+        if not shards:
+            raise ValueError("feature cache manifest has no shards")
+        identity = shards[0].get("identity", {})
+        column_contract = identity.get("column_contract", {})
+        materialized = list(column_contract.get("materialized_features", []))
+        consumed = list(column_contract.get("consumed_features", []))
+        if self._features != consumed:
+            raise ValueError("diagnostics feature list does not match cache consumed contract")
+        unavailable = sorted(set(requested_features) - set(materialized))
+        if unavailable:
+            raise ValueError(f"requested diagnostics columns absent from cache: {unavailable}")
+        feature_contract = FeatureListRegistry.contract(str(identity["feature_list_id"]))
+        if feature_contract["features"] != consumed:
+            raise ValueError("current feature registry differs from cache consumed contract")
+        if identity.get("pit_universe_artifact") != self._cfg.get("pit_universe_artifact"):
+            raise ValueError("cache and diagnostics PIT universe artifacts differ")
+        if identity.get("pit_filter_mode") != self._cfg.get("pit_filter_mode"):
+            raise ValueError("cache and diagnostics PIT filter modes differ")
+        expected_source = str(self._cfg.get("source_manifest_hash", ""))
+        if manifest.get("source_manifest_hash") != expected_source:
+            raise ValueError("cache and diagnostics source manifest hashes differ")
+        if str(manifest.get("cache_coverage_start", "")) > start:
+            raise ValueError("feature cache does not cover diagnostics start")
+        if str(manifest.get("cache_coverage_end", "")) < end:
+            raise ValueError("feature cache does not cover diagnostics end")
+
+        validation_shards = {
+            str(Path(item["path"]).resolve()): item
+            for item in validation.get("shards", [])
+        }
+        selected: list[dict[str, Any]] = []
+        frames: list[pd.DataFrame] = []
+        columns = ["trade_date", "instrument", *requested_features]
+        for shard in shards:
+            coverage_start = str(shard["source_coverage_start"])
+            coverage_end = str(shard["source_coverage_end"])
+            if coverage_end < start or coverage_start > end:
+                continue
+            path = resolve_file(str(shard["path"]), "feature cache shard")
+            data_sha256 = _sha256_file(path)
+            if data_sha256 != shard.get("data_sha256"):
+                raise ValueError(f"feature cache shard hash mismatch: {path}")
+            validation_entry = validation_shards.get(str(path))
+            if not validation_entry or validation_entry.get("data_sha256") != data_sha256:
+                raise ValueError(f"feature cache validation lacks shard binding: {path}")
+            frame = pd.read_parquet(path, columns=columns)
+            frame["trade_date"] = frame["trade_date"].astype(str).str[:10]
+            frame = frame[
+                frame["trade_date"].between(start, end, inclusive="both")
+            ]
+            frames.append(frame)
+            selected.append({
+                "path": str(shard["path"]),
+                "data_sha256": data_sha256,
+                "source_coverage_start": coverage_start,
+                "source_coverage_end": coverage_end,
+                "consumed_rows": len(frame),
+            })
+        if not frames:
+            raise ValueError("no feature cache shards overlap diagnostics range")
+        result = pd.concat(frames, ignore_index=True)
+        if result.duplicated(["trade_date", "instrument"]).any():
+            raise ValueError("selected feature cache rows contain duplicate keys")
+        self._lineage["feature_cache"] = {
+            "manifest_path": str(cache_cfg["manifest_path"]),
+            "manifest_sha256": manifest_sha256,
+            "validation_path": str(cache_cfg["validation_path"]),
+            "validation_sha256": validation_sha256,
+            "materialized_feature_list_id": identity["feature_cache_list_id"],
+            "consumed_feature_list_id": identity["feature_list_id"],
+            "materialized_feature_count": len(materialized),
+            "consumed_feature_count": len(consumed),
+            "selected_shards": selected,
+            "rows_before_daily_pit_filter": len(result),
+        }
+        return result
+
+    def _align_feature_dates(
+        self,
+        frame: pd.DataFrame,
+        alignment_cfg: dict[str, Any],
+        *,
+        data_root: Path,
+        execution_start: str,
+        execution_end: str,
+    ) -> pd.DataFrame:
+        """Map after-close feature date ``f`` to next-session execution date."""
+        contract = str(alignment_cfg.get("contract", ""))
+        if contract != "previous_open_session_to_execution_date_v1":
+            raise ValueError(f"unsupported feature-label alignment contract: {contract}")
+        calendar_path = Path(str(alignment_cfg.get("calendar_path", "")))
+        if not calendar_path.is_absolute():
+            calendar_path = Path(data_root) / calendar_path
+        if calendar_path.is_symlink() or not calendar_path.is_file():
+            raise ValueError(f"alignment calendar must be a regular file: {calendar_path}")
+        calendar_sha256 = _sha256_file(calendar_path)
+        if calendar_sha256 != str(alignment_cfg.get("calendar_sha256", "")):
+            raise ValueError("feature-label alignment calendar hash mismatch")
+        calendar = sorted({
+            line.strip()[:10]
+            for line in calendar_path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        })
+        next_session = {
+            date: calendar[index + 1]
+            for index, date in enumerate(calendar[:-1])
+        }
+        aligned = frame.copy()
+        aligned["data_date"] = aligned["trade_date"].astype(str).str[:10]
+        aligned["trade_date"] = aligned["data_date"].map(next_session)
+        unresolved = int(aligned["trade_date"].isna().sum())
+        aligned = aligned.dropna(subset=["trade_date"])
+        aligned = aligned[
+            aligned["trade_date"].between(
+                execution_start, execution_end, inclusive="both"
+            )
+        ].copy()
+        if aligned.empty:
+            raise ValueError("feature-label alignment removed all diagnostics rows")
+        if not aligned["data_date"].lt(aligned["trade_date"]).all():
+            raise ValueError("feature-label alignment consumed a non-prior feature date")
+        if aligned.duplicated(["trade_date", "instrument"]).any():
+            raise ValueError("feature-label alignment produced duplicate execution keys")
+        self._lineage["feature_label_alignment"] = {
+            "contract": contract,
+            "calendar_path": str(alignment_cfg["calendar_path"]),
+            "calendar_sha256": calendar_sha256,
+            "data_date_max": str(aligned["data_date"].max()),
+            "execution_date_min": str(aligned["trade_date"].min()),
+            "execution_date_max": str(aligned["trade_date"].max()),
+            "strict_prior_date_check": "pass",
+            "unresolved_terminal_rows": unresolved,
+            "aligned_rows": len(aligned),
+        }
+        return aligned
 
     # ── Coverage ────────────────────────────────────────────────────────
 
@@ -294,6 +866,45 @@ class ResearchDiagnostics:
                 )
             )
         return pd.DataFrame([asdict(r) for r in rows])
+
+    def _run_coverage_by_time(self) -> tuple[pd.DataFrame, pd.DataFrame]:
+        """Report PIT-filtered feature availability per day and calendar year."""
+        frame = self._feature_frame
+        columns = ["trade_date", "feature", "eligible_count", "available_count", "coverage"]
+        rows: list[dict[str, Any]] = []
+        for trade_date, day in frame.groupby("trade_date", sort=True):
+            eligible_count = int(day["instrument"].nunique())
+            for feature in self._features:
+                available_count = (
+                    int(pd.to_numeric(day[feature], errors="coerce").notna().sum())
+                    if feature in day.columns else 0
+                )
+                rows.append({
+                    "trade_date": trade_date,
+                    "feature": feature,
+                    "eligible_count": eligible_count,
+                    "available_count": available_count,
+                    "coverage": (
+                        available_count / eligible_count if eligible_count else None
+                    ),
+                })
+        daily = pd.DataFrame(rows, columns=columns)
+        if daily.empty:
+            yearly = pd.DataFrame(columns=[
+                "year", "feature", "eligible_count", "available_count", "coverage"
+            ])
+            return daily, yearly
+        daily["year"] = daily["trade_date"].astype(str).str[:4]
+        yearly = daily.groupby(["year", "feature"], as_index=False).agg(
+            eligible_count=("eligible_count", "sum"),
+            available_count=("available_count", "sum"),
+        )
+        yearly["coverage"] = np.where(
+            yearly["eligible_count"] > 0,
+            yearly["available_count"] / yearly["eligible_count"],
+            None,
+        )
+        return daily.drop(columns="year"), yearly
 
     # ── Feature IC ──────────────────────────────────────────────────────
 
@@ -408,9 +1019,16 @@ class ResearchDiagnostics:
         if len(features) < 2:
             return pd.DataFrame(columns=["feature_a", "feature_b", "corr"])
 
-        # Sample 5000 rows for speed
-        sample = frame[features].sample(min(5000, len(frame)), random_state=42)
-        corr_mat = sample.corr(method="pearson")
+        # Average same-date cross-sectional correlations.  Pooling arbitrary
+        # rows across years would mix time-series drift into a feature synonym
+        # decision.
+        corr_mat = (
+            frame[["trade_date", *features]]
+            .groupby("trade_date")[features]
+            .corr(method="pearson")
+            .groupby(level=1)
+            .mean()
+        )
 
         pairs: list[CorrelationPair] = []
         seen: set[tuple[str, str]] = set()
@@ -423,7 +1041,10 @@ class ResearchDiagnostics:
                     pairs.append(CorrelationPair(feature_a=a, feature_b=b, corr=v))
                     seen.add((a, b))
         pairs.sort(key=lambda p: -abs(p.corr))
-        return pd.DataFrame([asdict(p) for p in pairs])
+        return pd.DataFrame(
+            [asdict(p) for p in pairs],
+            columns=["feature_a", "feature_b", "corr"],
+        )
 
     # ── Exposure breakdown ──────────────────────────────────────────────
 
@@ -539,13 +1160,22 @@ class ResearchDiagnostics:
                         sub = merged[merged["_size_bucket"] == bucket]
                         if len(sub) < 5:
                             continue
-                        ic = sub[feat].corr(sub["label_value"], method="spearman")
+                        daily_ic = sub.groupby("trade_date").apply(
+                            lambda group: group[feat].corr(
+                                group["label_value"], method="spearman"
+                            ) if len(group) >= 5 else np.nan,
+                            include_groups=False,
+                        ).dropna()
                         size_rows.append(
                             {
                                 "label_id": lid,
                                 "feature": feat,
                                 "size_bucket": bucket,
-                                "rank_ic": float(ic) if pd.notna(ic) else None,
+                                "rank_ic": (
+                                    float(daily_ic.mean())
+                                    if not daily_ic.empty else None
+                                ),
+                                "n_dates": int(len(daily_ic)),
                             }
                         )
             if size_rows:
@@ -554,7 +1184,10 @@ class ResearchDiagnostics:
                 with open(output_dir / "size_exposure.csv", "w", newline="") as f:
                     w = csv.DictWriter(
                         f,
-                        fieldnames=["label_id", "feature", "size_bucket", "rank_ic"],
+                        fieldnames=[
+                            "label_id", "feature", "size_bucket", "rank_ic",
+                            "n_dates",
+                        ],
                     )
                     w.writeheader()
                     w.writerows(size_rows)
@@ -656,6 +1289,10 @@ class ResearchDiagnostics:
                 "size_field": self._resolved_size_field,
             },
             "top_candidates": results.get("top_candidates", {}),
+            "stage_a": results.get("stage_a", {}),
+            "availability_lag_sensitivity": results.get(
+                "availability_lag_sensitivity", {}
+            ),
         }
         return summary
 

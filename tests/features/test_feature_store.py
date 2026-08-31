@@ -3,6 +3,7 @@
 import json
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -409,7 +410,7 @@ class TestBackfillBatch(unittest.TestCase):
     def _run_backfill(self, extra_args: list[str] | None = None) -> subprocess.CompletedProcess:
         import subprocess
         cmd = [
-            "python", str(REPO / "scripts/dev/backfill_feature_store.py"),
+            sys.executable, str(REPO / "scripts/dev/backfill_feature_store.py"),
             "--feature-set", str(self.yaml_path),
             "--source-panel", str(self.panel_path),
             "--source-manifest-hash", "batch_test",

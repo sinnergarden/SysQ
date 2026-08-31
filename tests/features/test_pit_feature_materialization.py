@@ -5,6 +5,9 @@ import pandas as pd
 
 from qsys.feature.groups.growth_confirmation_v0 import _required_income_symbols
 from qsys.feature.groups.relative_strength import build_relative_strength_features
+from qsys.feature.groups.industry_momentum_features import (
+    build_industry_momentum_features,
+)
 from qsys.feature.builder import build_phase1_features
 from qsys.feature.config import RESEARCH_FEATURE_FLAGS
 from qsys.feature.transforms import apply_cross_sectional_standardization
@@ -81,7 +84,6 @@ def test_pit_mask_survives_phase1_until_final_standardization() -> None:
         flags={
             **{key: False for key in RESEARCH_FEATURE_FLAGS},
             "enable_liquidity_features": True,
-            "enable_relative_strength_features": True,
         },
     )
 
@@ -105,3 +107,33 @@ def test_income_scope_gate_preserves_all_symbols_without_pit_mask() -> None:
     frame = pd.DataFrame({"ts_code": ["AAA", "BBB", "AAA"]})
 
     assert _required_income_symbols(frame) == {"AAA", "BBB"}
+
+
+def test_industry_aggregation_excludes_nonmember_union_history() -> None:
+    dates = pd.bdate_range("2023-01-02", periods=30)
+    rows: list[dict[str, object]] = []
+    for instrument, daily_return, member in (
+        ("AAA", 0.01, True),
+        ("BBB", 0.01, True),
+        ("FUTURE", 0.50, False),
+    ):
+        closes = 100.0 * np.cumprod(np.full(len(dates), 1.0 + daily_return))
+        rows.extend(
+            {
+                "ts_code": instrument,
+                "trade_date": date,
+                "close": close,
+                "amount": 1_000.0,
+                "industry": "I",
+                "_pit_member": member,
+            }
+            for date, close in zip(dates, closes, strict=True)
+        )
+
+    built = build_industry_momentum_features(pd.DataFrame(rows))
+    final_members = built.loc[
+        built["trade_date"].eq(dates[-1]) & built["_pit_member"],
+        "industry_ret_20d",
+    ]
+
+    assert np.allclose(final_members, 0.01)

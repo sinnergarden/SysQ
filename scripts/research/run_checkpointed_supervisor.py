@@ -36,7 +36,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 
-SCHEMA_VERSION = "checkpoint_supervisor_v1"
+SCHEMA_VERSION = "checkpoint_supervisor_v2"
 CHECKPOINT_EXIT = 75
 
 
@@ -249,6 +249,42 @@ def _read_row_count(data_path: Path) -> int:
         return max(0, sum(1 for _ in handle) - 1)
 
 
+def _research_runtime_identity(
+    config: Any,
+    *,
+    project_root: Path,
+    effective_generators: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Bind supervisor state to the exact checkpoint-producing runtime."""
+    from qsys.research.matrix_job import _create_generator_from_config
+    from qsys.research.signal_pipeline import SignalResearchPipeline
+
+    pipeline = SignalResearchPipeline(project_root / "data" / "research")
+    checkpoint_identities: dict[str, str] = {}
+    for generator_config in effective_generators:
+        generator_id = str(generator_config["generator_id"])
+        generator = _create_generator_from_config(
+            generator_config,
+            feature_list_id=config.feature_list_id,
+            use_feature_cache=config.use_feature_cache,
+            write_through=config.write_through,
+            feature_cache_root=config.feature_cache_root,
+            source_manifest_hash=config.source_manifest_hash,
+        )
+        checkpoint_identities[generator_id] = _canonical_sha256(
+            pipeline._window_checkpoint_base_identity(
+                config, generator_config, generator
+            )
+        )
+    return {
+        "supervisor_code_sha256": _sha256_file(Path(__file__).resolve()),
+        "canonical_child_code_sha256": _sha256_file(
+            project_root / "scripts" / "run_research.py"
+        ),
+        "checkpoint_base_identity_sha256_by_generator": checkpoint_identities,
+    }
+
+
 def validate_terminal_artifacts(
     config: Any,
     *,
@@ -307,6 +343,12 @@ def validate_terminal_artifacts(
     pipeline = SignalResearchPipeline(research_root)
     effective_generators = expand_multi_label_generators(config.generators)
     checkpoint_hashes: dict[str, str] = {}
+    checkpoint_diagnostics: dict[str, list[dict[str, Any]]] = {}
+    require_checkpoint_diagnostics = bool(
+        config.research_protocol.get(
+            "require_checkpoint_model_diagnostics", False
+        )
+    )
     for gen_cfg in effective_generators:
         gen_id = str(gen_cfg["generator_id"])
         generator = _create_generator_from_config(
@@ -334,6 +376,18 @@ def validate_terminal_artifacts(
                     f"missing checkpoint commit marker for {gen_id}/{window.window_id}"
                 )
             refs.append(ref)
+        diagnostics = [ref.model_diagnostics for ref in refs]
+        if require_checkpoint_diagnostics and any(
+            item is None for item in diagnostics
+        ):
+            present = sum(item is not None for item in diagnostics)
+            raise SupervisorError(
+                "checkpoint model diagnostics incomplete for "
+                f"{gen_id}: {present}/{total}"
+            )
+        checkpoint_diagnostics[gen_id] = [
+            item for item in diagnostics if item is not None
+        ]
         checkpoint_hashes[gen_id] = store.checkpoint_set_sha256(refs)
 
     signal_runs = exp_manifest.get("signal_runs")
@@ -372,6 +426,20 @@ def validate_terminal_artifacts(
             raise SupervisorError(f"wrong signal manifest type: {manifest_path}")
         if not is_combined and signal_manifest.get("window_checkpoint_set_sha256") != checkpoint_hashes[gen_id]:
             raise SupervisorError(f"signal checkpoint hash mismatch: {manifest_path}")
+        if not is_combined and require_checkpoint_diagnostics:
+            model_diagnostics = signal_manifest.get("model_diagnostics")
+            if not isinstance(model_diagnostics, dict):
+                raise SupervisorError(
+                    f"signal model diagnostics missing: {manifest_path}"
+                )
+            if model_diagnostics.get("source") != "window_checkpoint_manifests":
+                raise SupervisorError(
+                    f"signal model diagnostics source mismatch: {manifest_path}"
+                )
+            if model_diagnostics.get("windows") != checkpoint_diagnostics[gen_id]:
+                raise SupervisorError(
+                    f"signal model diagnostics mismatch: {manifest_path}"
+                )
         data_candidates = [
             paths.signal_file(signal_id, signal_run_id, fmt="parquet"),
             paths.signal_file(signal_id, signal_run_id, fmt="csv"),
@@ -406,6 +474,9 @@ def _new_state(
     run_identity: str,
     experiment_id: str,
     total_windows: int,
+    windows_per_generator: int,
+    generator_ids: list[str],
+    runtime_identity: dict[str, Any],
     checkpoint_batch_size: int,
     log_file: Path,
 ) -> dict[str, Any]:
@@ -423,6 +494,12 @@ def _new_state(
         "attempt": 0,
         "completed_windows": 0,
         "total_windows": total_windows,
+        "windows_per_generator": windows_per_generator,
+        "generator_ids": generator_ids,
+        "runtime_identity": runtime_identity,
+        "completed_windows_by_generator": {
+            generator_id: 0 for generator_id in generator_ids
+        },
         "last_exit_code": None,
         "pid": None,
         "started_at": now,
@@ -442,6 +519,9 @@ def _assert_identity(existing: dict[str, Any], expected: dict[str, Any]) -> None
             )
     if existing.get("total_windows") != expected.get("total_windows"):
         raise SupervisorError("run identity conflict for total_windows")
+    for key in ("windows_per_generator", "generator_ids", "runtime_identity"):
+        if existing.get(key) != expected.get(key):
+            raise SupervisorError(f"run identity conflict for {key}")
 
 
 def _fail(state: dict[str, Any], state_path: Path, reason: str, *, exit_code: int | None = None) -> None:
@@ -484,9 +564,23 @@ def _run_supervisor_impl(
         raise SupervisorError(f"config not found: {config_path}")
 
     from qsys.research.matrix_job import RollingResearchConfig
+    from qsys.research.matrix_job import expand_multi_label_generators
     config = RollingResearchConfig.from_file(config_path)
     windows = _build_windows(config)
-    total_windows = len(windows)
+    windows_per_generator = len(windows)
+    effective_generators = expand_multi_label_generators(config.generators)
+    generator_ids = [
+        str(item["generator_id"])
+        for item in effective_generators
+    ]
+    if not generator_ids or len(generator_ids) != len(set(generator_ids)):
+        raise SupervisorError("generator ids must be present and unique")
+    total_windows = windows_per_generator * len(generator_ids)
+    runtime_identity = _research_runtime_identity(
+        config,
+        project_root=root,
+        effective_generators=effective_generators,
+    )
     config_sha = _sha256_file(config_path)
     revision = revision or _git_revision(root)
     run_identity = _canonical_sha256({
@@ -495,6 +589,9 @@ def _run_supervisor_impl(
         "revision": revision,
         "experiment_id": config.experiment_id,
         "total_windows": total_windows,
+        "windows_per_generator": windows_per_generator,
+        "generator_ids": generator_ids,
+        "runtime_identity": runtime_identity,
     })
     expected_identity = {
         "schema_version": SCHEMA_VERSION,
@@ -503,6 +600,9 @@ def _run_supervisor_impl(
         "revision": revision,
         "experiment_id": config.experiment_id,
         "total_windows": total_windows,
+        "windows_per_generator": windows_per_generator,
+        "generator_ids": generator_ids,
+        "runtime_identity": runtime_identity,
     }
     supervisor_lock.write_metadata({
         "schema_version": "checkpoint_supervisor_lock_v1",
@@ -543,6 +643,9 @@ def _run_supervisor_impl(
             run_identity=run_identity,
             experiment_id=config.experiment_id,
             total_windows=total_windows,
+            windows_per_generator=windows_per_generator,
+            generator_ids=generator_ids,
+            runtime_identity=runtime_identity,
             checkpoint_batch_size=checkpoint_batch_size,
             log_file=log_path,
         )
@@ -601,22 +704,38 @@ def _run_supervisor_impl(
                 raise SupervisorError(reason)
             completed = payload.get("completed_windows")
             reported_total = payload.get("total_windows")
-            previous = int(state.get("completed_windows", 0))
+            generator_id = payload.get("generator_id")
+            if generator_id is None and len(generator_ids) == 1:
+                generator_id = generator_ids[0]
+            progress_by_generator = dict(
+                state.get("completed_windows_by_generator", {})
+            )
+            previous = int(progress_by_generator.get(str(generator_id), 0))
             if (
-                not isinstance(completed, int)
+                generator_id not in generator_ids
+                or not isinstance(completed, int)
                 or not isinstance(reported_total, int)
-                or reported_total != total_windows
+                or reported_total != windows_per_generator
                 or completed <= previous
-                or completed >= total_windows
+                or completed >= windows_per_generator
             ):
                 reason = (
                     "invalid checkpoint progress: "
-                    f"previous={previous}, completed={completed!r}, "
-                    f"reported_total={reported_total!r}, expected_total={total_windows}"
+                    f"generator={generator_id!r}, previous={previous}, "
+                    f"completed={completed!r}, reported_total={reported_total!r}, "
+                    f"expected_total={windows_per_generator}"
                 )
                 _fail(state, state_path, reason, exit_code=result.returncode)
                 raise SupervisorError(reason)
-            state.update({"completed_windows": completed,
+            generator_index = generator_ids.index(str(generator_id))
+            for prior_generator in generator_ids[:generator_index]:
+                progress_by_generator[prior_generator] = windows_per_generator
+            progress_by_generator[str(generator_id)] = completed
+            state.update({"completed_windows": sum(
+                              int(value)
+                              for value in progress_by_generator.values()
+                          ),
+                          "completed_windows_by_generator": progress_by_generator,
                           "stage": "checkpoint_batch_complete",
                           "updated_at": _utc_now()})
             _atomic_write_json(state_path, state)
@@ -639,6 +758,10 @@ def _run_supervisor_impl(
             "status": "complete",
             "stage": "complete",
             "completed_windows": total_windows,
+            "completed_windows_by_generator": {
+                generator_id: windows_per_generator
+                for generator_id in generator_ids
+            },
             "terminal_validation": validation,
             "completed_at": _utc_now(),
             "updated_at": _utc_now(),

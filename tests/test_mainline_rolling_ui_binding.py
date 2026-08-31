@@ -7,7 +7,7 @@ from unittest.mock import patch
 from click.testing import CliRunner
 
 from qsys.research_ui.assembler import ResearchCockpitRepository
-from scripts.publish_mainline_rolling_ui_reports import main as publish_mainline_rolling_ui_reports_main
+from scripts.ops.publish_mainline_rolling_ui_reports import main as publish_mainline_rolling_ui_reports_main
 
 
 def test_publish_mainline_rolling_ui_reports_writes_backtest_reports(tmp_path: Path) -> None:
@@ -17,6 +17,12 @@ def test_publish_mainline_rolling_ui_reports_writes_backtest_reports(tmp_path: P
         ("feature_173", "bundle_feature_173", "extended"),
         ("feature_254", "bundle_feature_254", "semantic_all_features"),
         ("feature_254_absnorm", "bundle_feature_254_absnorm", "semantic_all_features_absnorm"),
+        ("feature_254_xs5", "bundle_feature_254_xs5", "semantic_no_regime_xs5"),
+        (
+            "feature_254_smooth135",
+            "bundle_feature_254_smooth135",
+            "semantic_no_regime_smooth135",
+        ),
     ]:
         obj_dir = rolling_root / name
         obj_dir.mkdir(parents=True, exist_ok=True)
@@ -52,18 +58,24 @@ def test_publish_mainline_rolling_ui_reports_writes_backtest_reports(tmp_path: P
         "mainline_object_name,bundle_id,legacy_feature_set_alias,rolling_window_count,rolling_total_return_mean,rolling_total_return_median,rolling_rankic_mean,rolling_rankic_std,rolling_max_drawdown_worst,rolling_turnover_mean,rolling_empty_portfolio_ratio_mean,decision_status,decision_reason\n"
         "feature_173,bundle_feature_173,extended,20,0.1,0.08,0.02,0.01,-0.1,1.2,0.0,candidate,baseline\n"
         "feature_254,bundle_feature_254,semantic_all_features,20,0.0,-0.01,-0.02,0.03,-0.2,1.3,0.0,research_only,research\n"
-        "feature_254_absnorm,bundle_feature_254_absnorm,semantic_all_features_absnorm,20,0.03,0.02,0.01,0.02,-0.12,1.1,0.0,candidate,watch\n",
+        "feature_254_absnorm,bundle_feature_254_absnorm,semantic_all_features_absnorm,20,0.03,0.02,0.01,0.02,-0.12,1.1,0.0,candidate,watch\n"
+        "feature_254_xs5,bundle_feature_254_xs5,semantic_no_regime_xs5,20,0.02,0.01,0.01,0.02,-0.13,1.1,0.0,research_only,research\n"
+        "feature_254_smooth135,bundle_feature_254_smooth135,semantic_no_regime_smooth135,20,0.02,0.01,0.01,0.02,-0.13,1.1,0.0,research_only,research\n",
         encoding="utf-8",
     )
 
     runner = CliRunner()
-    with patch("scripts.publish_mainline_rolling_ui_reports.project_root", tmp_path):
+    with patch("scripts.ops.publish_mainline_rolling_ui_reports.project_root", tmp_path):
         result = runner.invoke(publish_mainline_rolling_ui_reports_main, [])
     assert result.exit_code == 0, result.output
     report_path = reports_root / "backtest_mainline_rolling_feature_173.json"
     assert report_path.exists()
     assert (reports_root / "backtest_mainline_rolling_feature_254.json").exists()
     assert (reports_root / "backtest_mainline_rolling_feature_254_absnorm.json").exists()
+    assert (reports_root / "backtest_mainline_rolling_feature_254_xs5.json").exists()
+    assert (
+        reports_root / "backtest_mainline_rolling_feature_254_smooth135.json"
+    ).exists()
     payload = json.loads(report_path.read_text(encoding="utf-8"))
     assert payload["artifacts"]["daily_result"].endswith("rolling_daily_result.csv")
     assert (rolling_root / "feature_173" / "rolling_daily_result.csv").exists()

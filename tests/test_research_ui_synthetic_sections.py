@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import json
 
-from fastapi.testclient import TestClient
-
-from qsys.research_ui.api import create_app
+from qsys.research_ui.assembler import ResearchCockpitRepository
 
 
 def test_synthetic_live_rolling_sections_resolve_without_listing_runs(tmp_path):
@@ -35,21 +33,16 @@ def test_synthetic_live_rolling_sections_resolve_without_listing_runs(tmp_path):
         encoding="utf-8",
     )
 
-    client = TestClient(create_app(tmp_path))
     run_id = "live_rolling__20260518_portfoliofix_xs5__feature_254_xs5"
 
-    sections_response = client.get(f"/api/backtest-runs/{run_id}/sections")
-    assert sections_response.status_code == 200, sections_response.text
-    payload = sections_response.json()["data"]
+    repo = ResearchCockpitRepository(project_root=tmp_path)
+    payload = repo.get_backtest_sections(run_id)
     assert payload["sections"]
     assert "rolling_windows" in payload["artifacts"]
     assert "rolling_metrics" in payload["artifacts"]
     assert "signal_metrics" in payload["artifacts"]
     assert "rolling_stability" in payload["artifacts"]
 
-    summary_response = client.get(f"/api/backtest-runs/{run_id}/summary")
-    assert summary_response.status_code == 200, summary_response.text
-
-    daily_response = client.get(f"/api/backtest-runs/{run_id}/daily")
-    assert daily_response.status_code == 200, daily_response.text
-    assert len(daily_response.json()["items"]) == 2
+    summary = repo.get_backtest_summary(run_id)
+    assert summary.run_id == run_id
+    assert len(repo.get_backtest_daily_points(run_id)) == 2

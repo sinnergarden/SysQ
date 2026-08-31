@@ -13,7 +13,7 @@ from qsys.research.decision import (
     parse_decision_record,
     resolve_subject_decision,
 )
-from scripts.run_absnorm_comparison import _ordered_summary
+from scripts.dev.run_absnorm_comparison import _ordered_summary
 
 
 def _write_yaml(path: Path, content: str) -> Path:

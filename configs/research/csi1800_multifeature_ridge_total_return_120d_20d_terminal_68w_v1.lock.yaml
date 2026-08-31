@@ -1,0 +1,44 @@
+schema_version: terminal_readiness_lock_v1
+
+terminal_config:
+  path: configs/research/csi1800_multifeature_ridge_total_return_120d_20d_terminal_68w_v1.yaml
+  sha256: e40cbc52c71ed6bd806d7081b37f9c2340d417555e613e67fbeb44e64792d016
+  report_contract: terminal_final_evaluation_v1
+
+feature_identity:
+  feature_list_id: csi1800_multifeature_120d_v1
+  contract: pit_a_plus_dependency_pinned_pit_b_120d_union_v1
+  feature_count: 97
+  config_sha256: 3b890c0efdf9e0ca53890133375bc666cf3a01226efa5170d2897810db736214
+  ordered_features_sha256: a5ace5bc40cce45015f2bea8e047f2b2ff6870c7754dfabf0a18d44848c78cfe
+
+source_identity:
+  source_manifest_hash: 726af9f8c3c91432feb78f1df9520655f3e002c246521bd47245286637bc91ce
+  pit_universe:
+    artifact_id: csi1800_pit_v2
+    manifest_sha256: 70065082299a682a4c3443fafcee21e57fe62f159ce18c0002895a960683c579
+    membership_sha256: 567137db93fb9b2bbdb9220f6d0ed813fec233da87948a953a255b2e08b386df
+  income_sidecar:
+    artifact_id: 7775d55750de73d80e1cd30a4cc3fd91d065750867d478a3d9c7f1e8027fbe0b
+    artifact_sha256: 6ef941166aaeed8658ee5dd796056d728303d23e0d28703e5b089ac26214fa42
+    manifest_sha256: 0b549ae0ff2ae82b6a6ed90c242d9a4a46e6227e008ff39e6ef987de21d85bae
+    required_history_start: '20140313'
+
+label_identity:
+  label_id: fwd_ret_120d_open_open_raw_pit_csi1800_v1
+  identity_sha256: f2f84187a1aa96cb13848391d44885af2cfb02506645b6cb731b971a603c675c
+  manifest_sha256: 1fa2bbd77450e4930a27d019b991f6ec9cda789e3fa07d543a7040a47fe4cdba
+  labels_sha256: 3431494feff329abdb6d067185dd01087e0c5e472231c0481e8d11b87be50916
+  horizon_sessions: 120
+  return_type: open_to_open
+  price_basis: adjusted_open
+  normalization: none
+  corporate_action_adjustment_contract: tushare_adj_factor_adjusted_price_total_return_v1
+  maturity_lag_trading_days: 121
+  maturity_cutoff_exclusive: '2026-08-01'
+
+holdout:
+  start_date: '2025-01-02'
+  end_date: '2026-07-31'
+  status: locked_pending_explicit_authorization
+  holdout_consumed: false

@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from qsys.research.generators.base import RollingSignalGenerator
@@ -41,6 +42,7 @@ class SignalTransformConfig:
     """Configuration for a single signal transform."""
     transform_id: str
     type: str
+    params: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -76,6 +78,9 @@ class RollingResearchConfig:
     experiment_id: str
     title: str | None = None
     description: str | None = None
+    # Immutable experiment intent: partitions, arms, costs, selection gates,
+    # and holdout policy. Included in every research-config identity.
+    research_protocol: dict[str, Any] = field(default_factory=dict)
 
     calendar: dict[str, Any] = field(default_factory=dict)
     # calendar keys: start_date, end_date, train_window_days, step_days
@@ -117,7 +122,12 @@ class RollingResearchConfig:
     # each combination: combine_id, type, inputs
 
     @classmethod
-    def from_file(cls, path: Path) -> RollingResearchConfig:
+    def from_file(
+        cls,
+        path: Path,
+        *,
+        allow_locked_holdout_for_inspection: bool = False,
+    ) -> RollingResearchConfig:
         """Load config from YAML or JSON file."""
         text = path.read_text(encoding="utf-8")
         suffix = path.suffix.lower()
@@ -128,7 +138,10 @@ class RollingResearchConfig:
             payload = json.loads(text)
         else:
             raise ValueError(f"Unsupported config format: {path}")
-        return cls.from_dict(payload)
+        config = cls.from_dict(payload)
+        if not allow_locked_holdout_for_inspection:
+            validate_terminal_holdout_authorization(config)
+        return config
 
     @classmethod
     def from_dict(cls, payload: dict) -> RollingResearchConfig:
@@ -146,6 +159,7 @@ class RollingResearchConfig:
             feature_list_id=feature_list_id,
             title=payload.get("title"),
             description=payload.get("description"),
+            research_protocol=payload.get("research_protocol", {}),
             calendar=cal,
             signal=sig,
             labels=labels,
@@ -160,6 +174,21 @@ class RollingResearchConfig:
             feature_cache_root=payload.get("feature_cache_root", "data/feature_cache"),
             source_manifest_hash=payload.get("source_manifest_hash", ""),
             window_checkpoints=payload.get("window_checkpoints", False),
+        )
+
+
+def validate_terminal_holdout_authorization(config: RollingResearchConfig) -> None:
+    """Reject execution-bound config loads that overlap a locked holdout."""
+    holdout = config.research_protocol.get("holdout")
+    if not isinstance(holdout, dict) or not holdout.get("start_date"):
+        return
+    if str(config.calendar.get("end_date", "")) >= str(holdout["start_date"]) and (
+        holdout.get("status") != "authorized_terminal_run"
+        or not str(holdout.get("authorization_ref", "")).strip()
+    ):
+        raise ValueError(
+            "research calendar overlaps a locked holdout; set "
+            "status=authorized_terminal_run with an explicit authorization_ref"
         )
 
 
@@ -240,6 +269,7 @@ def _create_generator_from_config(
     feature_list_id: str | None = None,
     *,
     use_feature_cache: bool = False,
+    materialize_on_miss: bool = False,
     write_through: bool = False,
     feature_cache_root: str = "data/feature_cache",
     source_manifest_hash: str = "",
@@ -289,11 +319,18 @@ def _create_generator_from_config(
             lgb_params=params.get("lgb_params"),
             label_ids=tuple(params.get("label_ids", ("fwd_ret_5d_xsz_clip3", "fwd_ret_20d_xsz_clip3"))),
         )
-    if gen_type == "single_label_lightgbm":
+    if gen_type in {
+        "single_label_lightgbm",
+        "single_label_lightgbm_temporal",
+        "single_label_ridge",
+    }:
         _CONSUMED_PARAMS = {
-            "label_id", "universe", "n_estimators", "lgb_params",
+            "label_id", "universe",
             "sample_weight_policy",
-            "feature_list_id", "pit_membership", "pit_filter_mode",
+            "feature_list_id", "feature_cache_list_id",
+            "signal_exposure_features",
+            "margin_lag_sessions",
+            "pit_membership", "pit_filter_mode",
             "pit_universe_artifact", "liquidity_exclusion_path",
             "prediction_membership_path", "prediction_membership_sha256",
             "prediction_universe",
@@ -301,14 +338,19 @@ def _create_generator_from_config(
             "shareholder_top10_path", "shareholder_top10_sha256",
             "shareholder_manifest_path", "shareholder_manifest_sha256",
             "shareholder_freshness_contract",
-            "income_sidecar_path", "income_sidecar_sha256",
+            "income_sidecar_artifact_id", "income_sidecar_path",
+            "income_sidecar_sha256",
             "income_sidecar_manifest_path", "income_sidecar_manifest_sha256",
             "income_source_mode", "income_sidecar_required_history_start",
         }
+        if gen_type == "single_label_ridge":
+            _CONSUMED_PARAMS.add("ridge_alpha")
+        else:
+            _CONSUMED_PARAMS.update({"n_estimators", "lgb_params"})
         unknown = set(params) - _CONSUMED_PARAMS
         if unknown:
             raise ValueError(
-                "single_label_lightgbm params contains unknown keys that would "
+                f"{gen_type} params contains unknown keys that would "
                 f"be silently dropped: {sorted(unknown)}.  Known keys: "
                 f"{sorted(_CONSUMED_PARAMS)}."
             )
@@ -316,6 +358,20 @@ def _create_generator_from_config(
             LightGBMSingleLabelGenerator,
             _prediction_membership_identity,
         )
+        if gen_type == "single_label_ridge":
+            from qsys.research.generators.ridge_single_label import (
+                RidgeSingleLabelGenerator,
+            )
+
+            generator_class = RidgeSingleLabelGenerator
+        elif gen_type == "single_label_lightgbm_temporal":
+            from qsys.research.generators.temporal_validation import (
+                TemporalValidationLightGBMSingleLabelGenerator,
+            )
+
+            generator_class = TemporalValidationLightGBMSingleLabelGenerator
+        else:
+            generator_class = LightGBMSingleLabelGenerator
         prediction_membership_path = params.get("prediction_membership_path", "")
         if params.get("prediction_membership_sha256") and not prediction_membership_path:
             raise ValueError(
@@ -346,12 +402,13 @@ def _create_generator_from_config(
                 "prediction_membership_path": normalized_path,
                 "prediction_membership_sha256": digest,
             }
-        return LightGBMSingleLabelGenerator(
+        generator_kwargs = dict(
             label_id=params["label_id"],
             universe=params.get("universe", "csi300"),
-            n_estimators=params.get("n_estimators", 200),
             feature_list_id=feature_list_id or params.get("feature_list_id"),
-            lgb_params=params.get("lgb_params"),
+            feature_cache_list_id=params.get("feature_cache_list_id"),
+            signal_exposure_features=params.get("signal_exposure_features", ()),
+            margin_lag_sessions=params.get("margin_lag_sessions", 0),
             sample_weight_policy=params.get("sample_weight_policy"),
             pit_membership=params.get("pit_membership", False),
             pit_filter_mode=params.get("pit_filter_mode", ""),
@@ -366,6 +423,9 @@ def _create_generator_from_config(
             shareholder_manifest_path=params.get("shareholder_manifest_path", ""),
             shareholder_manifest_sha256=params.get(
                 "shareholder_manifest_sha256", ""
+            ),
+            income_sidecar_artifact_id=params.get(
+                "income_sidecar_artifact_id", ""
             ),
             income_sidecar_path=params.get("income_sidecar_path", ""),
             income_sidecar_sha256=params.get("income_sidecar_sha256", ""),
@@ -385,10 +445,19 @@ def _create_generator_from_config(
                 "shareholder_freshness_contract"
             ),
             use_feature_cache=use_feature_cache,
+            materialize_on_miss=materialize_on_miss,
             write_through=write_through,
             feature_cache_root=feature_cache_root,
             source_manifest_hash=source_manifest_hash,
         )
+        if gen_type == "single_label_ridge":
+            generator_kwargs["ridge_alpha"] = params.get("ridge_alpha", 1.0)
+        else:
+            generator_kwargs.update({
+                "n_estimators": params.get("n_estimators", 200),
+                "lgb_params": params.get("lgb_params"),
+            })
+        return generator_class(**generator_kwargs)
     if gen_type in ("single_label_lightgbm_binary",):
         from qsys.research.generators.lightgbm_binary import LightGBMBinaryGenerator
         return LightGBMBinaryGenerator(
@@ -428,6 +497,89 @@ def apply_signal_transform(
         result["score"] = result.groupby("trade_date", group_keys=False)["score"].transform(
             _safe_zscore
         )
+    elif transform_config.type == "daily_linear_residual":
+        exposure_columns = list(
+            transform_config.params.get("exposure_columns", [])
+        )
+        min_observations = int(
+            transform_config.params.get("min_observations", 100)
+        )
+        if not exposure_columns:
+            raise ValueError(
+                "daily_linear_residual requires params.exposure_columns"
+            )
+        if min_observations < len(exposure_columns) + 2:
+            raise ValueError(
+                "daily_linear_residual min_observations is too small"
+            )
+        missing = sorted(set(exposure_columns) - set(result.columns))
+        if missing:
+            raise ValueError(
+                "daily_linear_residual missing exposure columns: "
+                f"{missing}"
+            )
+
+        diagnostics: list[dict[str, Any]] = []
+        residuals = pd.Series(index=result.index, dtype=float)
+        for trade_date, day in result.groupby("trade_date", sort=True):
+            score = pd.to_numeric(day["score"], errors="coerce")
+            exposures = day[exposure_columns].apply(
+                pd.to_numeric, errors="coerce"
+            ).replace([np.inf, -np.inf], np.nan)
+            valid = score.notna()
+            if int(valid.sum()) < min_observations:
+                raise ValueError(
+                    "daily_linear_residual insufficient score rows on "
+                    f"{trade_date}: {int(valid.sum())} < {min_observations}"
+                )
+            clean = exposures.loc[valid]
+            medians = clean.median()
+            all_missing = medians[medians.isna()].index.tolist()
+            if all_missing:
+                raise ValueError(
+                    "daily_linear_residual all-missing exposure columns on "
+                    f"{trade_date}: {all_missing}"
+                )
+            missing_values = int(clean.isna().sum().sum())
+            clean = clean.fillna(medians)
+            scale = clean.std(ddof=0).replace(0.0, 1.0)
+            design = ((clean - clean.mean()) / scale).fillna(0.0)
+            matrix = np.column_stack(
+                [np.ones(len(design)), design.to_numpy(dtype=float)]
+            )
+            target = score.loc[valid].to_numpy(dtype=float)
+            coefficients, *_ = np.linalg.lstsq(matrix, target, rcond=None)
+            fitted = matrix @ coefficients
+            day_residual = target - fitted
+            residuals.loc[clean.index] = day_residual
+            total_ss = float(((target - target.mean()) ** 2).sum())
+            residual_ss = float((day_residual ** 2).sum())
+            diagnostics.append({
+                "trade_date": str(trade_date),
+                "observations": int(valid.sum()),
+                "imputed_exposure_values": missing_values,
+                "r_squared": (
+                    1.0 - residual_ss / total_ss if total_ss > 0 else 0.0
+                ),
+            })
+        if residuals.isna().any():
+            raise ValueError(
+                "daily_linear_residual produced missing scores; exposure "
+                "coverage must be complete for every signal row"
+            )
+        result["score"] = residuals
+        result.attrs["transform_diagnostics"] = {
+            "type": transform_config.type,
+            "exposure_columns": exposure_columns,
+            "min_observations": min_observations,
+            "dates": len(diagnostics),
+            "mean_r_squared": float(
+                pd.Series([row["r_squared"] for row in diagnostics]).mean()
+            ),
+            "max_r_squared": float(
+                pd.Series([row["r_squared"] for row in diagnostics]).max()
+            ),
+        }
     else:
         raise ValueError(f"Unknown signal transform type: {transform_config.type!r}")
 

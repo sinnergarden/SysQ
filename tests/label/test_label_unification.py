@@ -362,12 +362,13 @@ class TestComputeLabelsCoverage:
         assert expected_rows == 0
 
     def test_coverage_function(self) -> None:
-        """_coverage caps at 1.0, handles 0 expected."""
-        from scripts.research.compute_labels import _coverage
-        assert _coverage(9, 9) == 1.0
-        assert _coverage(8, 9) == pytest.approx(8 / 9)
-        assert _coverage(0, 10) == 0.0
-        assert _coverage(100, 0) == 0.0
+        """coverage caps at 1.0 and handles 0 expected rows."""
+        from qsys.label.compute import coverage
+
+        assert coverage(9, 9) == 1.0
+        assert coverage(8, 9) == pytest.approx(8 / 9)
+        assert coverage(0, 10) == 0.0
+        assert coverage(100, 0) == 0.0
 
 
 # ── DNN generator enforce exactly two label_ids ──────────────────────────
@@ -499,7 +500,10 @@ class TestComputeLabelFunctions:
             for inst in instruments:
                 di = dates.index(d)
                 values.append(close_by_inst[inst][di])
-        return pd.DataFrame({"$close": values}, index=idx)
+        return pd.DataFrame(
+            {"$close": values, "$factor": [1.0] * len(values)},
+            index=idx,
+        )
 
     def test_compute_label_raw_forward_return(self) -> None:
         """compute_label_raw: verify shift(-2)/close - 1 for known data."""
@@ -507,8 +511,8 @@ class TestComputeLabelFunctions:
             instance = MockAdapter.return_value
             instance.get_features.return_value = self._make_mock_features()
 
-            from scripts.research.compute_labels import compute_label_raw
-            df = compute_label_raw("csi300", 2, "2024-01-01", "2024-01-10")
+            from qsys.label.compute import compute_raw_forward_return
+            df = compute_raw_forward_return("csi300", 2, "2024-01-01", "2024-01-10")
 
         # horizon=2, 5 dates → last 2 dates have NaN → 3 dates * 3 inst = 9 rows
         assert len(df) == 9
@@ -524,10 +528,10 @@ class TestComputeLabelFunctions:
             instance = MockAdapter.return_value
             instance.get_features.return_value = self._make_mock_features()
 
-            from scripts.research.compute_labels import compute_label
-            df = compute_label("csi300", 2, "2024-01-01", "2024-01-10")
+            from qsys.label.compute import compute_forward_return
+            df = compute_forward_return("csi300", 2, "2024-01-01", "2024-01-10")
 
-        assert df["label_id"].iloc[0] == "fwd_ret_2d_xsz_clip3"
+        assert df["label_id"].iloc[0] == "fwd_ret_2d_cs_zscore_clip3"
         assert df["label_value"].max() <= 3.0
         assert df["label_value"].min() >= -3.0
         assert len(df) == 9  # same row count as raw (zscore doesn't change shape)
@@ -538,8 +542,8 @@ class TestComputeLabelFunctions:
             instance = MockAdapter.return_value
             instance.get_features.return_value = self._make_mock_features()
 
-            from scripts.research.compute_labels import compute_label_raw
-            df = compute_label_raw("csi300", 3, "2024-01-01", "2024-01-10")
+            from qsys.label.compute import compute_raw_forward_return
+            df = compute_raw_forward_return("csi300", 3, "2024-01-01", "2024-01-10")
 
         # horizon=3, 5 dates → last 3 dates NaN → 2 dates * 3 inst = 6 rows
         assert len(df) == 6
@@ -551,8 +555,8 @@ class TestComputeLabelFunctions:
             instance = MockAdapter.return_value
             instance.get_features.return_value = self._make_mock_features()
 
-            from scripts.research.compute_labels import compute_label_raw
-            df = compute_label_raw("csi300", 5, "2024-01-01", "2024-01-10")
+            from qsys.label.compute import compute_raw_forward_return
+            df = compute_raw_forward_return("csi300", 5, "2024-01-01", "2024-01-10")
 
         # horizon=5, only 5 dates → all NaN after dropna
         assert df.empty
@@ -563,9 +567,9 @@ class TestComputeLabelFunctions:
             instance = MockAdapter.return_value
             instance.get_features.return_value = self._make_mock_features()
 
-            from scripts.research.compute_labels import compute_label
-            df_1d = compute_label("csi300", 1, "2024-01-01", "2024-01-10")
-            df_2d = compute_label("csi300", 2, "2024-01-01", "2024-01-10")
+            from qsys.label.compute import compute_forward_return
+            df_1d = compute_forward_return("csi300", 1, "2024-01-01", "2024-01-10")
+            df_2d = compute_forward_return("csi300", 2, "2024-01-01", "2024-01-10")
 
         # 1d: last 1 date NaN → 4 dates * 3 inst = 12 rows
         assert len(df_1d) == 12

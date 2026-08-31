@@ -17,6 +17,7 @@ from qsys.backtest.strategy_runner import (
     FACTOR_ROUNDING_REL_TOLERANCE,
     _adjust_posterior_corporate_action_state,
     _adjust_valuation_corporate_action_reference,
+    _enrich_accounting_day,
     _load_corporate_action_store,
     _prune_factor_completeness_state,
     _update_factor_completeness_guard,
@@ -57,6 +58,37 @@ def test_missing_close_carries_and_resumes() -> None:
     resumed = valuation.mark_to_market(account, "2026-01-03").iloc[0]
     assert resumed["last_price"] == 11
     assert not bool(resumed["stale_price"])
+
+
+def test_accounting_enrichment_fills_receivable_fields_on_no_trade_day() -> None:
+    account = BacktestAccount(10_000.0)
+    account.start_day("2026-01-02")
+    valuation = ValuationState()
+    day_result = {"total_value_after": 10_000.0}
+    attribution = {
+        "_previous": {
+            "realized_pnl": 0.0,
+            "unrealized_pnl": 0.0,
+            "corporate_action_income": 0.0,
+        },
+        "missing_price": {
+            "stale_position_days": 0,
+            "stale_market_value_day_sum": 0.0,
+            "stale_position_count_day_sum": 0,
+        },
+    }
+
+    _enrich_accounting_day(
+        day_result,
+        account,
+        valuation,
+        "2026-01-02",
+        [],
+        attribution,
+    )
+
+    assert day_result["receivable_before"] == 0.0
+    assert day_result["receivable_after"] == 0.0
 
 
 def test_raw_cash_and_share_events_preserve_economic_value() -> None:
@@ -453,6 +485,95 @@ def test_complete_accounting_fails_before_output_on_missing_market_source(
             require_complete_accounting=True,
         )
     assert not output.exists()
+
+
+def test_complete_accounting_executes_from_frozen_market_slice(tmp_path) -> None:
+    day = "2026-06-15"
+    SignalStore(str(tmp_path)).save_signal_run(
+        "sig",
+        "run",
+        pd.DataFrame([{
+            "trade_date": day,
+            "data_date": "2026-06-12",
+            "instrument": "A",
+            "signal_id": "sig",
+            "signal_run_id": "run",
+            "score": 1.0,
+        }]),
+        overwrite=True,
+    )
+    _write_raw_bound_empty_actions(tmp_path, "actions")
+    canonical = tmp_path / "canonical"
+    canonical.mkdir()
+    market_dates = pd.bdate_range(end=day, periods=6).strftime("%Y-%m-%d")
+    pd.DataFrame({
+        "trade_date": market_dates,
+        "open": [10.0] * 6,
+        "close": [10.0] * 6,
+        "paused": [0] * 6,
+        "high_limit": [20.0] * 6,
+        "low_limit": [1.0] * 6,
+        "amount": [100_000_000.0] * 6,
+        "factor": [1.0] * 6,
+    }).to_feather(canonical / "A.feather")
+    frozen = tmp_path / "frozen_market"
+    output = tmp_path / "backtest"
+
+    with pytest.raises(ValueError, match="without terminal authorization"):
+        BacktestRunner().run_from_signal_cache(
+            signal_id="sig",
+            signal_run_id="run",
+            start_date=day,
+            end_date=day,
+            research_root=tmp_path,
+            output_dir=tmp_path / "blocked_backtest",
+            top_n=1,
+            corporate_action_artifact="actions",
+            canonical_data_root=canonical,
+            freeze_canonical_data_to=tmp_path / "blocked_market",
+            holdout_start=day,
+            max_participation_rate=0.10,
+            liquidity_gate_mode="reject",
+            require_complete_accounting=True,
+        )
+    assert not (tmp_path / "blocked_market").exists()
+    assert not (tmp_path / "blocked_backtest").exists()
+
+    result = BacktestRunner().run_from_signal_cache(
+        signal_id="sig",
+        signal_run_id="run",
+        start_date=day,
+        end_date=day,
+        research_root=tmp_path,
+        output_dir=output,
+        overwrite=True,
+        top_n=1,
+        commission=0.0,
+        stamp_duty=0.0,
+        min_commission=0.0,
+        slippage=0.0,
+        corporate_action_artifact="actions",
+        canonical_data_root=canonical,
+        freeze_canonical_data_to=frozen,
+        holdout_start=day,
+        terminal_authorization_ref="unit-test-explicit-authorization",
+        max_participation_rate=0.10,
+        liquidity_gate_mode="reject",
+        require_complete_accounting=True,
+    )
+
+    assert result.status == "completed"
+    manifest = json.loads((output / "manifest.json").read_text())
+    assert manifest["accounting_params"]["canonical_data_root"] == str(frozen)
+    assert manifest["market_source_identity"]["market_slice"][
+        "through_date"
+    ] == day
+    assert manifest["terminal_holdout"] == {
+        "holdout_start": day,
+        "holdout_consumed": True,
+        "terminal_authorization_ref": "unit-test-explicit-authorization",
+    }
+    assert pd.read_feather(frozen / "A.feather")["trade_date"].max() == day
 
 
 @pytest.mark.parametrize("missing_kind", ["raw", "manifest_hash"])

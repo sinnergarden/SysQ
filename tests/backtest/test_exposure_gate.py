@@ -14,6 +14,7 @@ Key properties under test:
 
 from __future__ import annotations
 
+import json
 from unittest.mock import patch
 
 import pandas as pd
@@ -70,7 +71,8 @@ def _signal(store: SignalStore, *, rotate: bool = False) -> None:
 def _run(tmp_path, *, schedule: dict[str, bool] | None = None,
          gate_mode: str = "market_risk", gate_scale: float = 0.5,
          rebalance_freq: str = "daily", rotate: bool = False,
-         top_n: int = 5, initial_capital: float = 100_000.0):
+         top_n: int = 5, initial_capital: float = 100_000.0,
+         holding_policy: str = "posterior_confirmed"):
     store = SignalStore(str(tmp_path))
     _signal(store, rotate=rotate)
     with patch("qsys.backtest.strategy_runner.fetch_market_snapshot", _mock_prices), \
@@ -86,7 +88,7 @@ def _run(tmp_path, *, schedule: dict[str, bool] | None = None,
             commission=0.0, stamp_duty=0.0, min_commission=0.0, slippage=0.0,
             top_n=top_n,
             initial_capital=initial_capital,
-            holding_policy="posterior_confirmed",
+            holding_policy=holding_policy,
             rebalance_freq=rebalance_freq,
             rank_exit=True,
             exposure_gate_mode=gate_mode,
@@ -157,6 +159,41 @@ class TestExposureGate:
         a = _run(tmp_path, schedule=None)
         b = _run(tmp_path, schedule={d: True for d in _TRADING_CAL})
         assert a.backtest_id != b.backtest_id
+
+    def test_target_rebalance_gate_scales_absolute_targets(self, tmp_path) -> None:
+        schedule = {d: True for d in _TRADING_CAL}
+        result = _run(
+            tmp_path,
+            schedule=schedule,
+            holding_policy="target_rebalance",
+        )
+        exp = _exposure(result)
+        assert result.status == "completed"
+        assert all(0.42 < value < 0.58 for value in exp)
+        manifest = json.loads(
+            (tmp_path / "bt_gate" / "manifest.json").read_text()
+        )
+        assert manifest["holding_policy"] == "target_rebalance"
+        assert manifest["exposure_gate"]["mode"] == "market_risk"
+        assert manifest["exposure_gate"]["gated_days"] == len(_TRADING_CAL)
+
+    def test_target_rebalance_ungated_dates_stay_fully_invested(self, tmp_path) -> None:
+        schedule = {d: False for d in _TRADING_CAL}
+        result = _run(
+            tmp_path,
+            schedule=schedule,
+            holding_policy="target_rebalance",
+        )
+        assert all(value > 0.95 for value in _exposure(result))
+
+    def test_schedule_requires_non_none_mode(self, tmp_path) -> None:
+        with pytest.raises(ValueError, match="requires exposure_gate_mode"):
+            _run(
+                tmp_path,
+                schedule={d: True for d in _TRADING_CAL},
+                gate_mode="none",
+                holding_policy="target_rebalance",
+            )
 
     def test_config_validates_mode_and_scale(self) -> None:
         with pytest.raises(ValueError, match="exposure_gate_mode"):

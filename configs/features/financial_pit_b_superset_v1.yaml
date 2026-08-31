@@ -1,0 +1,40 @@
+feature_list_id: financial_pit_b_superset_v1
+description: Shared materialization for first-publication-only financial research and neutralization support.
+feature_count: 35
+contract: pit_b_first_publication_only_materialization_v1
+features:
+  - ttm_revenue_yoy
+  - single_q_revenue_yoy
+  - is_profitable_ttm
+  - gross_margin_delta_yoy
+  - $roe
+  - $grossprofit_margin
+  - $debt_to_assets
+  - $current_ratio
+  - $net_income
+  - $revenue
+  - $total_assets
+  - $equity
+  - $op_cashflow
+  - roe
+  - roa
+  - gross_margin
+  - net_margin
+  - operating_cf_to_profit
+  - debt_to_asset
+  - revenue_yoy
+  - profit_yoy
+  - roe_delta_252d
+  - grossprofit_margin_delta_252d
+  - debt_to_assets_delta_252d
+  - op_cashflow_delta_252d
+  - earnings_yield_proxy
+  - peg_proxy
+  - revenue_yoy_accel
+  - profit_yoy_accel
+  - roe_delta_756d
+  - net_margin_delta_756d
+  - ocf_margin
+  - value_trap_risk_score
+  - $circ_mv
+  - $industry

@@ -20,6 +20,9 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
+import shutil
+import tempfile
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
@@ -35,6 +38,21 @@ _ACCOUNTING_COLUMNS = (
     "trade_date", "open", "close", "paused", "high_limit", "low_limit",
     "amount", "factor",
 )
+MARKET_SLICE_SCHEMA_VERSION = "canonical_market_slice_v1"
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _canonical_hash(value: Any) -> str:
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
 
 
 def _normalise_day(value: Any) -> str:
@@ -160,11 +178,7 @@ class MarketDataAdapter:
             return None
         # Hash exact file bytes without retaining them.  Do not use mtime or a
         # path alias as provenance.
-        hasher = hashlib.sha256()
-        with path.open("rb") as handle:
-            while chunk := handle.read(1024 * 1024):
-                hasher.update(chunk)
-        digest = hasher.hexdigest()
+        digest = _file_sha256(path)
         hashed = _HashedFile(instrument, path, digest)
         self._digest_cache[instrument] = hashed
         self._requested_missing.discard(instrument)
@@ -431,6 +445,150 @@ class MarketDataAdapter:
                 result[instrument] = factor
         return result
 
+    def freeze_sources(
+        self,
+        instruments: Iterable[str],
+        output_root: str | Path,
+        *,
+        through_date: str,
+        allow_missing: bool = False,
+    ) -> dict[str, Any]:
+        """Atomically freeze selected canonical files through one as-of date."""
+
+        names = sorted(self._instruments(instruments))
+        if not names:
+            raise ValueError("market-data slice requires at least one instrument")
+        through = _normalise_day(through_date)
+        if not through:
+            raise ValueError("market-data slice through_date must be a valid date")
+        source_root = self.root.resolve()
+        target = Path(output_root).resolve()
+        if self.root.is_symlink() or not source_root.is_dir():
+            raise ValueError("canonical market-data root must be a regular directory")
+        if target.is_symlink() or target.exists():
+            raise FileExistsError(f"market-data slice target already exists: {target}")
+        if source_root == target or source_root in target.parents:
+            raise ValueError("market-data slice target cannot be inside its source root")
+        missing = [name for name in names if not self._path_for(name).is_file()]
+        if missing and not allow_missing:
+            raise ValueError(f"market-data slice source files are missing: {missing}")
+        missing_set = set(missing)
+        present = [name for name in names if name not in missing_set]
+        if not present:
+            raise ValueError("market-data slice has no available source files")
+
+        target.parent.mkdir(parents=True, exist_ok=True)
+        staging = Path(
+            tempfile.mkdtemp(prefix=f".{target.name}.", dir=target.parent)
+        )
+        try:
+            files: list[dict[str, Any]] = []
+            for instrument in present:
+                source_path = self._path_for(instrument)
+                source_sha256 = _file_sha256(source_path)
+                frame = pd.read_feather(source_path)
+                source_sha256_after_read = _file_sha256(source_path)
+                if source_sha256_after_read != source_sha256:
+                    raise ValueError(
+                        f"canonical market source changed while freezing: {instrument}"
+                    )
+                if _REQUIRED_DATE_COLUMN not in frame.columns:
+                    raise ValueError(
+                        f"{source_path} lacks required column {_REQUIRED_DATE_COLUMN!r}"
+                    )
+                dates = frame[_REQUIRED_DATE_COLUMN].map(_normalise_day)
+                if dates.eq("").any():
+                    raise ValueError(
+                        f"canonical market source contains invalid dates: {instrument}"
+                    )
+                if dates.duplicated().any():
+                    raise ValueError(
+                        f"canonical market source contains duplicate dates: {instrument}"
+                    )
+                frozen = frame.loc[dates.le(through)].copy()
+                frozen_path = staging / f"{instrument}.feather"
+                frozen.to_feather(frozen_path)
+                frozen_dates = dates.loc[frozen.index]
+                files.append({
+                    "instrument": instrument,
+                    "file": frozen_path.name,
+                    "source_sha256": source_sha256,
+                    "frozen_sha256": _file_sha256(frozen_path),
+                    "source_row_count": int(len(frame)),
+                    "frozen_row_count": int(len(frozen)),
+                    "frozen_date_min": frozen_dates.min() if len(frozen_dates) else None,
+                    "frozen_date_max": frozen_dates.max() if len(frozen_dates) else None,
+                })
+            identity = {
+                "schema_version": MARKET_SLICE_SCHEMA_VERSION,
+                "source_root": str(source_root),
+                "through_date": through,
+                "requested_missing_instruments": missing,
+                "producer_code_sha256": _file_sha256(Path(__file__)),
+                "files": files,
+            }
+            manifest = {
+                **identity,
+                "market_slice_identity_sha256": _canonical_hash(identity),
+            }
+            manifest_path = staging / "market_slice_manifest.json"
+            manifest_path.write_text(
+                json.dumps(manifest, indent=2, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+            os.replace(staging, target)
+        finally:
+            if staging.exists():
+                shutil.rmtree(staging)
+        final_manifest = target / "market_slice_manifest.json"
+        return {
+            "root": str(target),
+            "manifest": str(final_manifest),
+            "manifest_sha256": _file_sha256(final_manifest),
+            "market_slice_identity_sha256": manifest[
+                "market_slice_identity_sha256"
+            ],
+        }
+
+    def _slice_artifact_identity(
+        self, files: list[dict[str, str]]
+    ) -> dict[str, Any] | None:
+        manifest_path = self.root / "market_slice_manifest.json"
+        if not manifest_path.exists():
+            return None
+        if manifest_path.is_symlink() or not manifest_path.is_file():
+            raise ValueError("market-data slice manifest is not a regular file")
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if manifest.get("schema_version") != MARKET_SLICE_SCHEMA_VERSION:
+            raise ValueError("unsupported market-data slice schema")
+        identity = {
+            key: value for key, value in manifest.items()
+            if key != "market_slice_identity_sha256"
+        }
+        if _canonical_hash(identity) != manifest.get(
+            "market_slice_identity_sha256"
+        ):
+            raise ValueError("market-data slice identity hash mismatch")
+        declared = {
+            str(item["file"]): item for item in manifest.get("files", [])
+        }
+        if len(declared) != len(manifest.get("files", [])):
+            raise ValueError("market-data slice manifest contains duplicate files")
+        for item in files:
+            source = declared.get(item["file"])
+            if source is None or source.get("frozen_sha256") != item["sha256"]:
+                raise ValueError(
+                    f"market-data slice file lineage mismatch: {item['file']}"
+                )
+        return {
+            "manifest": str(manifest_path.resolve()),
+            "manifest_sha256": _file_sha256(manifest_path),
+            "market_slice_identity_sha256": manifest[
+                "market_slice_identity_sha256"
+            ],
+            "through_date": manifest["through_date"],
+        }
+
     def source_identity(self, instruments: Iterable[str] | None = None) -> dict[str, Any]:
         """Return deterministic identity of files actually read.
 
@@ -463,6 +621,9 @@ class MarketDataAdapter:
             "requested_missing_instruments": requested_missing,
             "files": files,
         }
+        slice_artifact = self._slice_artifact_identity(files)
+        if slice_artifact is not None:
+            payload["market_slice"] = slice_artifact
         aggregate = hashlib.sha256(
             json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
         ).hexdigest()

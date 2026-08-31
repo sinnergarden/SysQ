@@ -30,7 +30,7 @@ def _build_markdown_summary(result: dict[str, Any]) -> str:
 
 def run_preopen_plan(**kwargs) -> dict[str, Any]:
     # Import lazily so the adapter can be imported without pulling heavy runtime deps until used.
-    from scripts.run_daily_trading import run_preopen_workflow
+    from scripts.deprecated.run_daily_trading import run_preopen_workflow
 
     workflow = run_preopen_workflow(**kwargs)
 

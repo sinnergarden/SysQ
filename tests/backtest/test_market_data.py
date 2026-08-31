@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 
 import pandas as pd
 import pytest
@@ -160,6 +161,41 @@ def test_source_identity_explicit_instruments_loads_present_files(market_root):
     assert adapter.observed_close("2026-01-07", ["A"]) == {"A": 10.1}
     assert "A" in adapter._cache
     assert adapter._digest_cache["A"] is hashed_a
+
+
+def test_freeze_sources_creates_hash_bound_asof_slice(market_root, tmp_path):
+    frozen_root = tmp_path / "frozen_market"
+    result = MarketDataAdapter(market_root).freeze_sources(
+        ["B", "A"], frozen_root, through_date="2026-01-06"
+    )
+    manifest = json.loads(
+        (frozen_root / "market_slice_manifest.json").read_text(encoding="utf-8")
+    )
+    assert manifest["through_date"] == "2026-01-06"
+    assert [item["instrument"] for item in manifest["files"]] == ["A", "B"]
+    assert pd.read_feather(frozen_root / "A.feather")["trade_date"].tolist() == [
+        "20260105", "20260106",
+    ]
+    assert pd.read_feather(frozen_root / "B.feather").empty
+    identity = MarketDataAdapter(frozen_root).source_identity(["A", "B"])
+    assert identity["market_slice"]["manifest_sha256"] == result["manifest_sha256"]
+    original_identity = identity["sha256"]
+
+    source_a = pd.read_feather(market_root / "A.feather")
+    pd.concat([source_a, source_a.tail(1).assign(trade_date="20260108")]).to_feather(
+        market_root / "A.feather"
+    )
+    assert MarketDataAdapter(frozen_root).source_identity(["A", "B"])[
+        "sha256"
+    ] == original_identity
+    frozen_a = pd.read_feather(frozen_root / "A.feather")
+    frozen_a.assign(close=999.0).to_feather(frozen_root / "A.feather")
+    with pytest.raises(ValueError, match="file lineage mismatch"):
+        MarketDataAdapter(frozen_root).source_identity(["A", "B"])
+    with pytest.raises(FileExistsError, match="already exists"):
+        MarketDataAdapter(market_root).freeze_sources(
+            ["A"], frozen_root, through_date="2026-01-06"
+        )
 
 
 def test_lazy_parse_projects_only_accounting_columns(tmp_path):

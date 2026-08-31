@@ -1,0 +1,53 @@
+diagnostics_id: csi1800_pit_market_core_5d_v1
+experiment_id: csi1800_pit_market_core_5d_diagnostics_v1
+research_status: exploratory
+purpose: harness_validation
+
+feature_list_id: momentum_price_volume_v1
+universe: csi1800_pit_union
+pit_universe_artifact: csi1800_pit_v2
+pit_filter_mode: member_as_of
+require_pit_universe: true
+require_industry_taxonomy: true
+
+start_date: "2024-01-02"
+end_date: "2026-07-31"
+
+labels:
+  - label_id: fwd_ret_5d_open_open_raw_pit_csi1800_v1
+    role: primary
+    return_type: open_to_open
+  - label_id: fwd_ret_5d_close_close_raw_pit_csi1800_v1
+    role: secondary
+    return_type: close_to_close
+require_all_labels: true
+require_executable_labels: true
+
+source_artifacts:
+  trusted_data_receipt:
+    path: audit/source_runs/data_sync_20260830T092226011729Z_2746dabe/receipt.json
+    sha256: 726af9f8c3c91432feb78f1df9520655f3e002c246521bd47245286637bc91ce
+require_source_artifacts: true
+source_manifest_hash: 726af9f8c3c91432feb78f1df9520655f3e002c246521bd47245286637bc91ce
+
+focus_features: []
+
+diagnostics:
+  coverage: true
+  feature_ic: true
+  bucket_return: true
+  correlation: true
+  exposure_breakdown: true
+
+exposure:
+  industry_field_candidates:
+    - industry
+  size_field_candidates:
+    - circ_mv
+    - total_mv
+  size_buckets: 5
+
+correlation_threshold: 0.85
+
+top_candidates:
+  enabled: false

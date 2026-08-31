@@ -56,7 +56,10 @@ def discover_feature_sets(config_dir: str = "configs/features") -> dict[str, Fea
         return {}
 
     specs: dict[str, FeatureSetSpec] = {}
-    for p in sorted(base.rglob("*.yaml")):
+    # Nested directories contain explicit-path research snapshots.  They are
+    # not part of the canonical ID namespace and may intentionally preserve
+    # an existing feature_set_id.
+    for p in sorted(base.glob("*.yaml")):
         if p.name.startswith("__"):
             continue
         spec = load_feature_set_yaml(p)

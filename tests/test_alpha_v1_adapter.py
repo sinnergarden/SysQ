@@ -296,8 +296,20 @@ class TestAlphaV1StrategyAdapter(unittest.TestCase):
 
     def test_train_returns_training_result(self):
         """train() returns a TrainingResult-like object."""
-        result = self.adapter.train(None)
-        # When no training script exists, should return a failed result with a message
+        from qsys.model.training import TrainingResult
+
+        expected = TrainingResult(
+            strategy_id="alpha_v1",
+            model_version="test",
+            model_dir="",
+            status="failed",
+            message="fixture",
+        )
+        with patch(
+            "qsys.model.alpha_v1_trainer.AlphaV1Trainer.run",
+            return_value=expected,
+        ):
+            result = self.adapter.train(None)
         self.assertIsNotNone(result)
         self.assertTrue(hasattr(result, "status"))
         self.assertTrue(hasattr(result, "strategy_id"))

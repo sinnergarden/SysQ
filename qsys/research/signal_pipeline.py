@@ -27,6 +27,7 @@ from qsys.research.matrix_job import (
     apply_signal_transform,
     build_matrix_jobs,
     expand_multi_label_generators,
+    validate_terminal_holdout_authorization,
 )
 from qsys.research.paths import ResearchPaths
 from qsys.research.rolling_window import RollingWindow, build_rolling_windows
@@ -44,6 +45,13 @@ def _sha256_path(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else "missing"
 
 
+def _research_config_sha256(config: RollingResearchConfig) -> str:
+    payload = json.dumps(
+        asdict(config), sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
 def _generator_dependency_code_identity(
     generator: RollingSignalGenerator,
 ) -> list[dict[str, str]]:
@@ -54,15 +62,31 @@ def _generator_dependency_code_identity(
     stable name and content hash are persisted, so checkout location does not
     become part of the checkpoint identity.
     """
-    declared = getattr(generator, "checkpoint_code_dependencies", None)
-    if declared is None:
+    declared: dict[str, Any] = {}
+    for attribute in (
+        "checkpoint_code_dependencies",
+        "model_checkpoint_code_dependencies",
+    ):
+        dependency_group = getattr(generator, attribute, None)
+        if dependency_group is None:
+            continue
+        if callable(dependency_group):
+            dependency_group = dependency_group()
+        if not isinstance(dependency_group, dict):
+            raise ValueError(f"{attribute} must be a mapping of name to file path")
+        conflicts = {
+            name
+            for name, path in dependency_group.items()
+            if name in declared and declared[name] != path
+        }
+        if conflicts:
+            raise ValueError(
+                "checkpoint dependency names resolve to conflicting paths: "
+                f"{sorted(conflicts)}"
+            )
+        declared.update(dependency_group)
+    if not declared:
         return []
-    if callable(declared):
-        declared = declared()
-    if not isinstance(declared, dict):
-        raise ValueError(
-            "checkpoint_code_dependencies must be a mapping of name to file path"
-        )
     dependencies: list[dict[str, str]] = []
     for name, raw_path in sorted(declared.items(), key=lambda item: str(item[0])):
         if not isinstance(name, str) or not name.strip():
@@ -250,6 +274,7 @@ class SignalResearchPipeline:
     @staticmethod
     def _validate_config(config: RollingResearchConfig) -> None:
         """Reject configs that mix strategy/backtest concerns."""
+        validate_terminal_holdout_authorization(config)
         if config.window_checkpoints and not config.source_manifest_hash.strip():
             raise ValueError(
                 "window_checkpoints requires a non-empty source_manifest_hash; "
@@ -394,12 +419,26 @@ class SignalResearchPipeline:
                 label_id=lcfg["label_id"],
                 score_column=config.signal.get("score_column", "score"),
                 overwrite=overwrite_eval,
+                require_pit_lineage=bool(lcfg.get("require_pit_lineage", False)),
+                research_config_sha256=_research_config_sha256(config),
+                label_maturity_before=lcfg.get("label_maturity_before"),
+                start_date=lcfg.get("evaluation_start_date"),
+                end_date=lcfg.get("evaluation_end_date"),
+                stability_phases=(
+                    config.research_protocol.get("terminal_evaluation", {}).get(
+                        "stability_phases"
+                    )
+                ),
             )
             eval_refs.append(SignalEvalRef(
                 signal_id=signal_id,
                 signal_run_id=signal_run_id,
                 label_id=lcfg["label_id"],
-                eval_id=str(result.output_dir) if result.output_dir else None,
+                eval_id=(
+                    str(result.output_dir)
+                    if getattr(result, "output_dir", None)
+                    else None
+                ),
             ))
 
         # ── Manifest ──
@@ -472,12 +511,14 @@ class SignalResearchPipeline:
         generator_visibility_contracts: dict[str, str | None] = {}
         generator_feature_source_lineage: dict[str, dict[str, Any]] = {}
         generator_shareholder_freshness: dict[str, dict[str, Any] | None] = {}
+        generator_model_diagnostics: dict[str, dict[str, Any] | None] = {}
         generator_checkpoint_hashes: dict[str, str] = {}
         for gen_cfg in effective_generators:
             gen_id = gen_cfg["generator_id"]
             gen = signal_generator if explicit_generator else _create_generator_from_config(
                 gen_cfg, feature_list_id=config.feature_list_id,
                 use_feature_cache=config.use_feature_cache,
+                materialize_on_miss=config.materialize_on_miss,
                 write_through=config.write_through,
                 feature_cache_root=config.feature_cache_root,
                 source_manifest_hash=config.source_manifest_hash,
@@ -548,6 +589,32 @@ class SignalResearchPipeline:
                 generator_checkpoint_hashes[gen_id] = (
                     checkpoint_store.checkpoint_set_sha256(checkpoint_refs)
                 )
+                checkpoint_diagnostics = [
+                    ref.model_diagnostics for ref in checkpoint_refs
+                ]
+                require_checkpoint_diagnostics = bool(
+                    config.research_protocol.get(
+                        "require_checkpoint_model_diagnostics", False
+                    )
+                )
+                if require_checkpoint_diagnostics and any(
+                    item is None for item in checkpoint_diagnostics
+                ):
+                    present = sum(
+                        item is not None for item in checkpoint_diagnostics
+                    )
+                    raise ValueError(
+                        "checkpoint model diagnostics incomplete for "
+                        f"{gen_id}: {present}/{len(windows)}"
+                    )
+                if checkpoint_diagnostics and all(
+                    item is not None for item in checkpoint_diagnostics
+                ):
+                    generator_model_diagnostics[gen_id] = {
+                        "schema_version": "rolling_model_diagnostics_v1",
+                        "source": "window_checkpoint_manifests",
+                        "windows": checkpoint_diagnostics,
+                    }
             raw_predictions[gen_id] = pd.concat(all_preds, ignore_index=True)
             # Read this only after every window has been generated.  The
             # lineage property snapshots the accumulated per-window profiles;
@@ -556,6 +623,10 @@ class SignalResearchPipeline:
             generator_shareholder_freshness[gen_id] = getattr(
                 gen, "shareholder_freshness_lineage", None
             )
+            if gen_id not in generator_model_diagnostics:
+                generator_model_diagnostics[gen_id] = getattr(
+                    gen, "model_diagnostics_lineage", None
+                )
             del all_preds
             gc.collect()
 
@@ -586,8 +657,16 @@ class SignalResearchPipeline:
                 "window_count": len(windows),
                 "generator_id": job.generator_id,
                 "transform_id": job.transform_id,
+                "signal_transform": tf_cfg,
                 "train_window_days": config.calendar.get("train_window_days"),
+                "research_config_sha256": _research_config_sha256(config),
             }
+            if config.research_protocol:
+                signal_manifest["research_protocol"] = config.research_protocol
+            if transformed.attrs.get("transform_diagnostics") is not None:
+                signal_manifest["transform_diagnostics"] = transformed.attrs[
+                    "transform_diagnostics"
+                ]
             feature_visibility_contract = generator_visibility_contracts.get(
                 job.generator_id
             )
@@ -609,6 +688,9 @@ class SignalResearchPipeline:
                 signal_manifest["shareholder_freshness_lineage"] = (
                     shareholder_freshness
                 )
+            model_diagnostics = generator_model_diagnostics.get(job.generator_id)
+            if model_diagnostics is not None:
+                signal_manifest["model_diagnostics"] = model_diagnostics
             if config.source_manifest_hash:
                 signal_manifest["source_manifest_hash"] = (
                     config.source_manifest_hash
@@ -639,12 +721,28 @@ class SignalResearchPipeline:
                     label_id=lcfg["label_id"],
                     score_column=config.signal.get("score_column", "score"),
                     overwrite=overwrite_eval,
+                    require_pit_lineage=bool(
+                        lcfg.get("require_pit_lineage", False)
+                    ),
+                    research_config_sha256=_research_config_sha256(config),
+                    label_maturity_before=lcfg.get("label_maturity_before"),
+                    start_date=lcfg.get("evaluation_start_date"),
+                    end_date=lcfg.get("evaluation_end_date"),
+                    stability_phases=(
+                        config.research_protocol.get(
+                            "terminal_evaluation", {}
+                        ).get("stability_phases")
+                    ),
                 )
                 eval_refs.append(SignalEvalRef(
                     signal_id=job.signal_id,
                     signal_run_id=job.signal_run_id,
                     label_id=lcfg["label_id"],
-                    eval_id=str(result.output_dir) if result.output_dir else None,
+                    eval_id=(
+                        str(result.output_dir)
+                        if getattr(result, "output_dir", None)
+                        else None
+                    ),
                 ))
 
         # ── 5. Signal combinations ──
@@ -699,12 +797,30 @@ class SignalResearchPipeline:
                         label_id=lcfg["label_id"],
                         score_column=config.signal.get("score_column", "score"),
                         overwrite=overwrite_eval,
+                        require_pit_lineage=bool(
+                            lcfg.get("require_pit_lineage", False)
+                        ),
+                        research_config_sha256=_research_config_sha256(config),
+                        label_maturity_before=lcfg.get(
+                            "label_maturity_before"
+                        ),
+                        start_date=lcfg.get("evaluation_start_date"),
+                        end_date=lcfg.get("evaluation_end_date"),
+                        stability_phases=(
+                            config.research_protocol.get(
+                                "terminal_evaluation", {}
+                            ).get("stability_phases")
+                        ),
                     )
                     combined_eval_refs.append(SignalEvalRef(
                         signal_id=out_sig_id,
                         signal_run_id=out_run_id,
                         label_id=lcfg["label_id"],
-                        eval_id=str(result.output_dir) if result.output_dir else None,
+                        eval_id=(
+                            str(result.output_dir)
+                            if getattr(result, "output_dir", None)
+                            else None
+                        ),
                     ))
 
             build_cross_signal_index(
@@ -768,6 +884,8 @@ class SignalResearchPipeline:
                 "start": config.calendar.get("start_date"),
                 "end": config.calendar.get("end_date"),
             },
+            "research_config_sha256": _research_config_sha256(config),
+            "research_protocol": config.research_protocol,
         })
         manifest_path = exp_dir / "signal_research_manifest.json"
         write_manifest(manifest_path, manifest)

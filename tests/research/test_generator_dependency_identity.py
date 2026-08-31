@@ -29,11 +29,23 @@ def test_lightgbm_declares_training_dependency() -> None:
 
     repo_root = Path(__file__).resolve().parents[2]
     expected_paths = {
+        "qsys.data._merge_helpers": repo_root / "qsys/data/_merge_helpers.py",
         "qsys.data.adapter": repo_root / "qsys/data/adapter.py",
         "qsys.feature.builder": repo_root / "qsys/feature/builder.py",
+        "qsys.feature.transforms": repo_root / "qsys/feature/transforms.py",
+        "qsys.feature.groups.fundamental_context": (
+            repo_root / "qsys/feature/groups/fundamental_context.py"
+        ),
+        "qsys.feature.groups.liquidity": (
+            repo_root / "qsys/feature/groups/liquidity.py"
+        ),
+        "qsys.feature.groups.relative_strength": (
+            repo_root / "qsys/feature/groups/relative_strength.py"
+        ),
         "qsys.feature.groups.value_growth_v3a": (
             repo_root / "qsys/feature/groups/value_growth_v3a.py"
         ),
+        "qsys.research.pit_universe": repo_root / "qsys/research/pit_universe.py",
         "qsys.signal.alpha_v1.training": (
             repo_root / "qsys/signal/alpha_v1/training.py"
         ),

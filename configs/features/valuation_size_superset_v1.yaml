@@ -1,0 +1,10 @@
+feature_list_id: valuation_size_superset_v1
+description: Historical daily valuation and circulating-size materialization for long-horizon research.
+feature_count: 5
+contract: pit_daily_valuation_size_materialization_v1
+features:
+  - $pe
+  - $pb
+  - Log($circ_mv+1)
+  - $circ_mv
+  - $industry

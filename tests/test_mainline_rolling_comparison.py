@@ -7,7 +7,7 @@ from unittest.mock import patch
 import pandas as pd
 from click.testing import CliRunner
 
-from scripts.run_mainline_rolling_comparison import main as rolling_comparison_main
+from scripts.dev.run_mainline_rolling_comparison import main as rolling_comparison_main
 
 
 SUMMARY_ROWS = {
@@ -50,6 +50,32 @@ SUMMARY_ROWS = {
         "rolling_turnover_mean": 0.24,
         "rolling_empty_portfolio_ratio_mean": 0.0,
     },
+    "feature_254_xs5": {
+        "mainline_object_name": "feature_254_xs5",
+        "bundle_id": "bundle_feature_254_xs5",
+        "legacy_feature_set_alias": "semantic_no_regime_xs5",
+        "rolling_window_count": 3,
+        "rolling_total_return_mean": 0.09,
+        "rolling_total_return_median": 0.08,
+        "rolling_rankic_mean": 0.04,
+        "rolling_rankic_std": 0.02,
+        "rolling_max_drawdown_worst": -0.10,
+        "rolling_turnover_mean": 0.25,
+        "rolling_empty_portfolio_ratio_mean": 0.0,
+    },
+    "feature_254_smooth135": {
+        "mainline_object_name": "feature_254_smooth135",
+        "bundle_id": "bundle_feature_254_smooth135",
+        "legacy_feature_set_alias": "semantic_no_regime_smooth135",
+        "rolling_window_count": 3,
+        "rolling_total_return_mean": 0.08,
+        "rolling_total_return_median": 0.07,
+        "rolling_rankic_mean": 0.03,
+        "rolling_rankic_std": 0.02,
+        "rolling_max_drawdown_worst": -0.11,
+        "rolling_turnover_mean": 0.26,
+        "rolling_empty_portfolio_ratio_mean": 0.0,
+    },
 }
 
 
@@ -65,7 +91,7 @@ def test_mainline_rolling_comparison_writes_csv_and_markdown(tmp_path: Path) -> 
         _write_summary(rolling_root, name, payload)
 
     runner = CliRunner()
-    with patch("scripts.run_mainline_rolling_comparison.project_root", tmp_path):
+    with patch("scripts.dev.run_mainline_rolling_comparison.project_root", tmp_path):
         result = runner.invoke(
             rolling_comparison_main,
             [

@@ -1,0 +1,49 @@
+feature_list_id: market_core_superset_v1
+description: >-
+  PIT-safe market-bar feature frame for short-, medium-, and long-horizon
+  research. Price-history expressions use the adjustment factor; categorical
+  industry and circulating market value are retained as analysis dependencies.
+feature_count: 40
+features_sha256: f55451366c14e58e11a8e61739b7492b6f193d700ba6c1f6f853548efb072159
+contract: pit_adjusted_market_core_materialization_v1
+features:
+  - ($close*$factor)/(Ref($close*$factor, 1)+1e-12)-1
+  - ($close*$factor)/(Ref($close*$factor, 3)+1e-12)-1
+  - ($close*$factor)/(Ref($close*$factor, 5)+1e-12)-1
+  - ($close*$factor)/(Ref($close*$factor, 10)+1e-12)-1
+  - ($close*$factor)/(Ref($close*$factor, 20)+1e-12)-1
+  - ($close*$factor)/(Ref($close*$factor, 40)+1e-12)-1
+  - ($close*$factor)/(Ref($close*$factor, 60)+1e-12)-1
+  - ($close*$factor)/(Ref($close*$factor, 120)+1e-12)-1
+  - ($close*$factor)/(Ref($close*$factor, 180)+1e-12)-1
+  - ($close*$factor)/(Ref($close*$factor, 252)+1e-12)-1
+  - ($close*$factor)/(Mean($close*$factor, 5)+1e-12)-1
+  - ($close*$factor)/(Mean($close*$factor, 10)+1e-12)-1
+  - ($close*$factor)/(Mean($close*$factor, 20)+1e-12)-1
+  - ($close*$factor)/(Mean($close*$factor, 60)+1e-12)-1
+  - ($close*$factor)/(Mean($close*$factor, 120)+1e-12)-1
+  - ($close*$factor)/(Max($close*$factor, 20)+1e-12)-1
+  - ($close*$factor)/(Max($close*$factor, 60)+1e-12)-1
+  - ($close*$factor)/(Max($close*$factor, 120)+1e-12)-1
+  - ($close*$factor)/(Max($close*$factor, 252)+1e-12)-1
+  - Std(($close*$factor)/(Ref($close*$factor, 1)+1e-12)-1, 5)
+  - Std(($close*$factor)/(Ref($close*$factor, 1)+1e-12)-1, 10)
+  - Std(($close*$factor)/(Ref($close*$factor, 1)+1e-12)-1, 20)
+  - Std(($close*$factor)/(Ref($close*$factor, 1)+1e-12)-1, 60)
+  - ($open*$factor)/(Ref($close*$factor, 1)+1e-12)-1
+  - $close/($open+1e-12)-1
+  - ($high-$low)/($open+1e-12)
+  - ($close-$low)/($high-$low+1e-12)
+  - ($high-Greater($open, $close))/($high-$low+1e-12)
+  - (Less($open, $close)-$low)/($high-$low+1e-12)
+  - $volume/(Mean($volume, 5)+1e-12)
+  - $volume/(Mean($volume, 20)+1e-12)
+  - $volume/(Mean($volume, 60)+1e-12)
+  - $amount/(Mean($amount, 5)+1e-12)
+  - $amount/(Mean($amount, 20)+1e-12)
+  - $amount/(Mean($amount, 60)+1e-12)
+  - $turnover_rate/(Mean($turnover_rate, 5)+1e-12)
+  - $turnover_rate/(Mean($turnover_rate, 20)+1e-12)
+  - $turnover_rate/(Mean($turnover_rate, 60)+1e-12)
+  - $circ_mv
+  - $industry

@@ -88,5 +88,5 @@ source_manifest:
 
 portable_datapack:
   source_contracts:
-    - path: docs/requirements/contracts/tushare_daily.yaml
+    - path: docs/requirements/contracts/frozen/ca61a95d9226930b7da0f7a9379c60a3978a094f77cbff396f72601704caae08/tushare_daily.yaml
       sha256: ca61a95d9226930b7da0f7a9379c60a3978a094f77cbff396f72601704caae08

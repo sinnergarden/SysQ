@@ -93,10 +93,10 @@ class TestShadowBusinessGating(unittest.TestCase):
             model_dir.mkdir(parents=True, exist_ok=True)
             feature_frame = pd.DataFrame({"Ref($close, 5)/$close": [None, None]}, index=pd.Index([0, 1]))
             model_input_frame = pd.DataFrame({"Ref($close, 5)/$close": [0.0, 1.0]}, index=pd.Index([0, 1]))
-            with patch("qsys.research.readiness.resolve_mainline_feature_config", return_value=["Ref($close, 5)/$close"]), \
-                 patch("scripts.ops.run_shadow_daily.resolve_mainline_feature_config", return_value=["Ref($close, 5)/$close"]), \
-                 patch("scripts.ops.run_shadow_daily.QlibAdapter") as adapter_cls, \
-                 patch("scripts.ops.run_shadow_daily.build_model_input_frame", return_value=model_input_frame):
+            with patch("qsys.research.mainline.resolve_mainline_feature_config", return_value=["Ref($close, 5)/$close"]), \
+                 patch("qsys.research.readiness.resolve_mainline_feature_config", return_value=["Ref($close, 5)/$close"]), \
+                 patch("qsys.ops.daily_health.QlibAdapter") as adapter_cls, \
+                 patch("qsys.research.readiness.build_model_input_frame", return_value=model_input_frame):
                 adapter = adapter_cls.return_value
                 adapter.init_qlib.return_value = None
                 adapter.get_features.return_value = feature_frame

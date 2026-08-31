@@ -36,8 +36,9 @@ UC-5（Signal Analytics）、UC-6（Signal Combination）、UC-7（Signal Backte
 - 标签配置（`configs/labels/*.yaml`）
 - 行情数据（canonical / qlib_bin）
 - 启用四个 growth-confirmation income feature 时，正式 audited research 必须显式
-  选择 `audited_sidecar_v1`，pin parquet path+SHA、manifest path+SHA，并声明由
-  audit scope/feature-set 消费范围给出的 `required_history_start`。旧配置映射为
+  选择 `audited_sidecar_v1`，pin content-addressed artifact id、parquet SHA、manifest
+  SHA，并声明由 audit scope/feature-set 消费范围给出的 `required_history_start`。
+  runtime 从配置的 data root 经 manifest 解析实际文件；旧配置映射为
   `legacy_unverified_global_v0` 并在运行时告警；该模式只用于兼容，不能通过 PIT
   certification。
 - 启用 shareholder feature 时，正式 audited research 还必须 pin holder/top10 path+SHA
@@ -99,14 +100,17 @@ params:
 ```yaml
 params:
   income_source_mode: audited_sidecar_v1
-  income_sidecar_path: data/research/income_sidecars/<artifact_id>/income.parquet
+  income_sidecar_artifact_id: <artifact_id>
   income_sidecar_sha256: <exact_sha256>
-  income_sidecar_manifest_path: data/research/income_sidecars/<artifact_id>/manifest.json
   income_sidecar_manifest_sha256: <exact_manifest_sha256>
   income_sidecar_required_history_start: '20140313'  # example; derive from audit scope
 ```
 
-四项必须来自同一次 bootstrap 输出；禁止填 `latest` 或 symlink。完整历史起点与单次
+四项必须来自同一次 bootstrap 输出。runtime 只从
+`QSYS_DATA_ROOT/research/source_snapshots/income/<artifact_id>/manifest.json`
+解析 manifest 声明的 basename，并复核 artifact id、manifest SHA 与数据 SHA；禁止填
+`latest`、symlink 或在 content-addressed identity 中混入机器路径。显式 path+SHA 只保留
+为旧研究配置的兼容输入。完整历史起点与单次
 rolling request 的 `start/end` 是两项独立约束：manifest `range_start` 必须覆盖显式
 `required_history_start`，而 request window 只校验本次消费 cutoff，不能替代历史起点。
 真实 baseline identity 只能在 terminal sidecar 生成后写入；当前不得伪造 path/hash 或
@@ -125,6 +129,24 @@ Canonical cached-signal backtest 还必须输出 manifest 绑定的
 
 ### Canonical cached-signal accounting v1 contract
 
+研究配置若声明 `research_protocol.holdout.start_date`，且 `calendar.end_date`
+达到或越过该边界，canonical `scripts/run_research.py` 必须在写任何实验制品前
+fail closed。只有配置同时声明 `holdout.status: authorized_terminal_run` 与非空
+`holdout.authorization_ref` 才可启动终端运行；这两个字段只能在取得明确授权后
+写入，并作为 research-config identity 的一部分进入 checkpoint 与 signal lineage。
+Supporting `scripts/research/preheat_feature_cache.py` 必须复用同一配置 gate，并在
+读取或写入任何留出期 feature shard 前失败；不得把 cache 物化当作绕过终端授权的
+旁路。
+终端 benchmark 与 portfolio analytics 同样必须接收并 hash-bind 非空
+`terminal_authorization_ref`，同时把 `holdout_consumed` 明确写为 `true`；未授权时
+仍在读取或写入留出制品前 fail closed。
+
+一次性 terminal report 的口径必须在授权前写进冻结 research config。信号部分至少
+预声明 2025+ prediction 区间、严格 label maturity cutoff、IC、RankIC、五分位/十分位、
+Top5/20/50，以及 calendar-year 和固定 phase 稳定性；portfolio 部分至少预声明收益、
+Sharpe、回撤、换手、逐年收益、CAPM beta/alpha 与 commission/tax/total fee。terminal
+数据仅用于一次最终评价；报告生成后禁止再据其选择 feature、模型或参数。
+
 `run_from_signal_cache` 的 accounting v1 是研究回测的账本边界，不是生产
 ledger，也不改变 signal、feature、model 或 strategy。输入 SignalRun 的内容、
 source manifest/hash 与 strategy config 必须保持 immutable；accounting 只替换
@@ -134,6 +156,15 @@ identity、strategy/config 参数及所有 accounting 参数。不得用 `latest
 未绑定路径推断 lineage。
 
 Accounting v1 的规范如下：
+
+- **不可变行情切片。** `scripts/research/backtest_from_signal.py` 可通过
+  `--freeze-canonical-data-to` 在回测启动时按实际再平衡候选标的、保留截至
+  `end_date` 的全部历史行，并原子写入不可覆盖的 canonical market slice；本次
+  回测随即只读取该切片。slice manifest 必须同时绑定源文件与冻结文件 SHA-256、
+  截止日、逐文件行数和 producer code hash，backtest manifest 必须继续绑定 slice
+  manifest。终端区间的切片创建仍受同一显式授权门约束。
+  PIT-universe benchmark 可通过同名配置字段复用该冻结契约；缺失的历史成分行情
+  必须显式记录在 slice manifest，并继续受 benchmark 最低覆盖率门约束。
 
 - **Raw price + event ledger。** 执行与收盘估值只使用 canonical raw price；
   corporate actions 来自不可变的、hash-bound event artifact。artifact 必须绑定
@@ -217,6 +248,13 @@ artifact，但旧 v1 产物不能被宣称为 complete accounting、不能冒充
 本 contract 明确不做：adjusted-price accounting、full order matching engine、
 market-impact model、order slicing、VWAP/TWAP execution 或 order-book simulation。
 这些不属于 accounting v1 的验收范围。
+
+冻结产物的独立验收通过 canonical `scripts/run_signal_analytics.py
+--backtest-validation-config <yaml>` 只读执行。validation config 必须 pin backtest
+manifest SHA、research root、holdout 边界与（若已消费留出期）同一个 terminal
+authorization ref；验收会重新计算所有 accounting artifact、SignalRun、PIT universe、
+corporate-action raw provenance 与实际使用 market slice 的 hash，并复核逐日账务恒等式。
+进程成功或仅有 metrics 文件不能替代该验收。
 
 ### Financial RC 60d/180d Cache-to-Backtest Runbook
 

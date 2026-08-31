@@ -20,6 +20,7 @@ import argparse
 import hashlib
 import json
 import sys
+from datetime import date
 from pathlib import Path
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -152,6 +153,15 @@ def main() -> None:
         help="Root of immutable canonical daily raw-price files",
     )
     parser.add_argument(
+        "--freeze-canonical-data-to",
+        type=Path,
+        default=None,
+        help=(
+            "Atomically freeze actual rebalance-candidate market files through "
+            "end-date, then execute only from that immutable slice"
+        ),
+    )
+    parser.add_argument(
         "--max-participation-rate", type=float, default=None,
         help="ADV participation cap; baseline uses 0.10 with reject gate",
     )
@@ -188,6 +198,31 @@ def main() -> None:
     parser.add_argument("--output-dir", type=Path, default=None)
     parser.add_argument("--artifact-mode", choices=["summary", "debug"], default="summary")
     parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument(
+        "--portfolio-analytics",
+        action="store_true",
+        help="Write hash-bound portfolio analytics after a complete backtest",
+    )
+    parser.add_argument("--benchmark-id", default=None)
+    parser.add_argument("--benchmark-csv", type=Path, default=None)
+    parser.add_argument(
+        "--portfolio-analytics-output-name",
+        default=None,
+        help="Optional safe name for a benchmark-specific analytics subdirectory",
+    )
+    parser.add_argument(
+        "--holdout-start",
+        default=None,
+        help="First untouched holdout date; required for portfolio analytics",
+    )
+    parser.add_argument(
+        "--terminal-authorization-ref",
+        default=None,
+        help=(
+            "Explicit authorization lineage required when portfolio analytics "
+            "overlap the declared holdout"
+        ),
+    )
     parser.add_argument("--accumulate", action="store_true",
                         help="Accumulate mode: never sell based on signal; only buy to fill top_n")
     parser.add_argument("--stop-loss", type=float, default=None,
@@ -271,6 +306,17 @@ def main() -> None:
         help="JSON file mapping trade_date (YYYY-MM-DD) -> bool (gate active). "
              "Precomputed point-in-time schedule; data, not config.",
     )
+    parser.add_argument(
+        "--market-risk-overlay-config", type=Path, default=None,
+        help=(
+            "Pre-register and materialize a PIT market-risk schedule, then "
+            "bind its identity into this backtest"
+        ),
+    )
+    parser.add_argument(
+        "--risk-overlay-overwrite", action="store_true",
+        help="Replace matching risk-overlay artifact files after validation",
+    )
     args = parser.parse_args()
 
     if (args.signal_id_2 is None) != (args.signal_run_id_2 is None):
@@ -302,11 +348,79 @@ def main() -> None:
             parser.error(
                 "complete accounting requires --liquidity-gate-mode reject"
             )
+    if args.freeze_canonical_data_to is not None and not args.require_complete_accounting:
+        parser.error(
+            "--freeze-canonical-data-to requires --require-complete-accounting"
+        )
+    if args.freeze_canonical_data_to is not None and not args.holdout_start:
+        parser.error(
+            "--freeze-canonical-data-to requires --holdout-start so terminal "
+            "market data cannot be materialized without authorization"
+        )
+    if args.portfolio_analytics:
+        if args.accumulate or not args.require_complete_accounting:
+            parser.error(
+                "--portfolio-analytics requires a non-accumulate complete-accounting backtest"
+            )
+        if not all((args.benchmark_id, args.benchmark_csv, args.holdout_start)):
+            parser.error(
+                "--portfolio-analytics requires --benchmark-id, --benchmark-csv, "
+                "and --holdout-start"
+            )
+    if args.holdout_start:
+        try:
+            consumes_holdout = date.fromisoformat(args.end_date) >= date.fromisoformat(
+                args.holdout_start
+            )
+        except ValueError:
+            parser.error("--end-date and --holdout-start must be ISO dates")
+        if consumes_holdout and not str(args.terminal_authorization_ref or "").strip():
+            parser.error(
+                "backtest or portfolio analytics overlap the declared holdout; "
+                "--terminal-authorization-ref is required before backtest execution"
+            )
+    if (
+        args.exposure_gate_schedule is not None
+        and args.market_risk_overlay_config is not None
+    ):
+        parser.error(
+            "use either --exposure-gate-schedule or "
+            "--market-risk-overlay-config, not both"
+        )
 
     exposure_gate_schedule: dict[str, bool] | None = None
+    exposure_gate_identity: dict[str, object] | None = None
+    if args.market_risk_overlay_config is not None:
+        if args.exposure_gate_mode not in {"market_risk", "either"}:
+            parser.error(
+                "--market-risk-overlay-config requires "
+                "--exposure-gate-mode market_risk or either"
+            )
+        from qsys.research.risk_overlay import build_market_risk_overlay
+
+        overlay = build_market_risk_overlay(
+            args.market_risk_overlay_config,
+            research_root=args.research_root,
+            overwrite=args.risk_overlay_overwrite,
+        )
+        exposure_gate_schedule = overlay["schedule"]
+        exposure_gate_identity = overlay["identity"]
+        configured_scale = float(exposure_gate_identity["exposure_scale"])
+        if abs(args.exposure_gate_scale - configured_scale) > 1e-12:
+            parser.error(
+                "--exposure-gate-scale must equal the overlay config "
+                f"exposure_scale ({configured_scale})"
+            )
     if args.exposure_gate_schedule is not None:
         raw = json.loads(args.exposure_gate_schedule.read_text())
-        exposure_gate_schedule = {str(d): bool(v) for d, v in raw.items()}
+        if not isinstance(raw, dict) or not all(
+            isinstance(date, str) and isinstance(active, bool)
+            for date, active in raw.items()
+        ):
+            parser.error(
+                "--exposure-gate-schedule must map date strings to booleans"
+            )
+        exposure_gate_schedule = dict(raw)
         if not exposure_gate_schedule:
             parser.error("--exposure-gate-schedule must be a non-empty JSON object")
 
@@ -365,9 +479,13 @@ def main() -> None:
         exposure_gate_mode=args.exposure_gate_mode,
         exposure_gate_scale=args.exposure_gate_scale,
         exposure_gate_schedule=exposure_gate_schedule,
+        exposure_gate_identity=exposure_gate_identity,
         pit_universe_artifact=args.pit_universe_artifact,
         corporate_action_artifact=args.corporate_action_artifact,
         canonical_data_root=args.canonical_data_root,
+        freeze_canonical_data_to=args.freeze_canonical_data_to,
+        holdout_start=args.holdout_start,
+        terminal_authorization_ref=args.terminal_authorization_ref,
         max_participation_rate=args.max_participation_rate,
         liquidity_gate_mode=args.liquidity_gate_mode,
         adv_window=args.adv_window,
@@ -380,6 +498,9 @@ def main() -> None:
         kwargs.pop("pit_universe_artifact", None)
         kwargs.pop("corporate_action_artifact", None)
         kwargs.pop("canonical_data_root", None)
+        kwargs.pop("freeze_canonical_data_to", None)
+        kwargs.pop("holdout_start", None)
+        kwargs.pop("terminal_authorization_ref", None)
         kwargs.pop("max_participation_rate", None)
         kwargs.pop("liquidity_gate_mode", None)
         kwargs.pop("adv_window", None)
@@ -394,6 +515,20 @@ def main() -> None:
         kwargs["max_weight"] = args.max_weight
         result = runner.run_from_signal_cache(**kwargs)
 
+    portfolio_analytics = None
+    if args.portfolio_analytics:
+        from qsys.research.portfolio_analytics import write_portfolio_analytics
+
+        portfolio_analytics = write_portfolio_analytics(
+            backtest_dir=Path(result.artifacts["manifest"]).parent,
+            research_root=args.research_root,
+            benchmark_id=args.benchmark_id,
+            benchmark_csv=args.benchmark_csv,
+            holdout_start=args.holdout_start,
+            output_name=args.portfolio_analytics_output_name,
+            terminal_authorization_ref=args.terminal_authorization_ref,
+        )
+
     print(json.dumps({
         "status": result.status,
         "backtest_id": result.backtest_id,
@@ -403,6 +538,7 @@ def main() -> None:
         "trading_dates": len(result.daily_summary),
         "notes": result.notes,
         "combined_signal_manifest": str(blend_manifest) if blend_manifest else None,
+        "portfolio_analytics": portfolio_analytics,
     }, indent=2, ensure_ascii=False))
 
 

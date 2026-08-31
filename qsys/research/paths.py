@@ -65,6 +65,13 @@ class ResearchPaths:
     def label_manifest(self, label_id: str) -> Path:
         return self.label_dir(label_id) / "manifest.json"
 
+    def label_suite_dir(self, suite_id: str) -> Path:
+        _sanitize_segment(suite_id, "suite_id")
+        return self.root / "label_suites" / suite_id
+
+    def label_suite_manifest(self, suite_id: str) -> Path:
+        return self.label_suite_dir(suite_id) / "manifest.json"
+
     # ── Signals ─────────────────────────────────────────────────────────
 
     def signal_dir(self, signal_id: str, signal_run_id: str) -> Path:

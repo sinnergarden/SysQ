@@ -344,6 +344,7 @@ class QlibAdapter:
             "$high",
             "$low",
             "$close",
+            "$factor",
             "$volume",
             "$amount",
             "$turnover_rate",
@@ -397,6 +398,7 @@ class QlibAdapter:
             "$high": "high",
             "$low": "low",
             "$close": "close",
+            "$factor": "factor",
             "$volume": "volume",
             "$amount": "amount",
             "$turnover_rate": "turnover_rate",
@@ -429,6 +431,26 @@ class QlibAdapter:
             "$industry": "industry",
         }
         out = out.rename(columns=rename_map)
+        # Qlib daily OHLC and limit fields are stored in raw price units.
+        # Semantic builders compare prices across dates, so give only that
+        # derived-feature path the adjusted series while native fields remain
+        # unchanged in ``get_features``.
+        if "factor" in out.columns:
+            factor = pd.to_numeric(out["factor"], errors="coerce").where(
+                lambda value: value > 0
+            )
+            for column in (
+                "open",
+                "high",
+                "low",
+                "close",
+                "high_limit",
+                "low_limit",
+            ):
+                if column in out.columns:
+                    out[column] = (
+                        pd.to_numeric(out[column], errors="coerce") * factor
+                    )
         if "trade_date" in out.columns:
             out["trade_date"] = pd.to_datetime(out["trade_date"])
         return out
@@ -521,6 +543,31 @@ class QlibAdapter:
                 flags[group["enabled_by"]] = True
         if requested.intersection({"stock_minus_industry_ret_3d", "stock_minus_industry_ret_5d"}):
             flags["enable_industry_context_features"] = True
+            flags["enable_relative_strength_features"] = True
+        if requested.intersection(
+            {
+                "industry_top_stock_momentum",
+                "stock_minus_industry_ret_20d",
+                "stock_minus_industry_ret_60d",
+            }
+        ):
+            flags["enable_relative_strength_features"] = True
+        if requested.intersection(
+            {"margin_trend_confirm_score", "margin_overheat_risk_score"}
+        ):
+            flags["enable_relative_strength_features"] = True
+        if requested.intersection(
+            {"holder_squeeze_score", "holder_price_confirm_score"}
+        ):
+            flags["enable_relative_strength_features"] = True
+        if requested.intersection(
+            {
+                "continuation_candidate_score",
+                "repair_candidate_score",
+                "overheat_risk_score",
+                "value_trap_risk_score",
+            }
+        ):
             flags["enable_relative_strength_features"] = True
         if requested.intersection({"inventory_yoy", "ar_yoy"}):
             flags["enable_fundamental_context_features"] = True

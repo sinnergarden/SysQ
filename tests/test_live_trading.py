@@ -375,7 +375,7 @@ class TestLiveTrading(unittest.TestCase):
         self.assertAlmostEqual(float(normalized.iloc[0]), 0.85)
 
     def test_scheduler_find_latest(self):
-        """Test finding latest model"""
+        """Legacy helper must not select a model by directory mtime."""
         # Create fake model dirs
         models_dir = os.path.join(self.test_dir, "models")
         experiments_dir = os.path.join(self.test_dir, "experiments")
@@ -397,7 +397,7 @@ class TestLiveTrading(unittest.TestCase):
         os.utime(m2, (now_time, now_time))
         
         latest = ModelScheduler.find_latest_model(models_dir=models_dir, experiments_dir=experiments_dir)
-        self.assertEqual(str(latest), m2)
+        self.assertIsNone(latest)
 
 if __name__ == '__main__':
     unittest.main()

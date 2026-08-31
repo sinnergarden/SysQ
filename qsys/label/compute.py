@@ -6,8 +6,25 @@ in scripts/; all business logic lives here.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from typing import Any
+
 import numpy as np
 import pandas as pd
+
+
+EXECUTABLE_ENTRY_ELIGIBILITY_CONTRACT = (
+    "canonical_open_snapshot_buyable_v1"
+)
+EXECUTABLE_SIGNAL_CUTOFF_CONTRACT = (
+    "previous_trading_session_close_before_entry_open_v1"
+)
+EXECUTABLE_EXIT_OBSERVATION_CONTRACT = (
+    "target_session_price_no_future_tradability_filter_v1"
+)
+ADJUSTED_PRICE_CONTRACT = (
+    "tushare_adj_factor_adjusted_price_total_return_v1"
+)
 
 
 def cs_zscore(s: pd.Series, clip: float = 3.0) -> pd.Series:
@@ -219,6 +236,293 @@ def compute_raw_forward_return(
         label_id_override=label_id_override,
         pit_universe_artifact=pit_universe_artifact,
     )
+
+
+def _load_executable_price_panel(
+    *,
+    universe: str,
+    start: str,
+    end: str,
+    pit_universe_artifact: str,
+) -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
+    """Load one shared PIT market panel for an executable label suite."""
+    from qsys.data.adapter import QlibAdapter
+    from qsys.data.calendar import get_trading_calendar
+
+    adapter = QlibAdapter()
+    adapter.init_qlib()
+    instruments, spans = _resolve_pit_artifact(pit_universe_artifact)
+    if instruments is None or spans is None:
+        raise ValueError("executable label suite requires an immutable PIT artifact")
+    spans = spans[
+        (spans["effective_to"] >= start)
+        & (spans["effective_from"] <= end)
+    ].copy()
+    end_membership = spans[
+        (spans["effective_from"] <= end) & (spans["effective_to"] >= end)
+    ]
+    if spans.empty or end_membership.empty:
+        raise ValueError(
+            "PIT membership does not cover the requested data cutoff: "
+            f"{end}"
+        )
+    instruments = sorted(spans["instrument"].unique().tolist())
+    fields = [
+        "$open", "$close", "$factor", "$paused", "$high_limit", "$low_limit"
+    ]
+    raw = adapter.get_features(
+        instruments,
+        fields,
+        start_time=start,
+        end_time=end,
+    )
+    frame = raw.reset_index().rename(columns={"datetime": "trade_date"})
+    if frame.columns.duplicated().any():
+        duplicated = sorted(set(frame.columns[frame.columns.duplicated()]))
+        raise ValueError(
+            "executable label source has duplicate columns: "
+            + ", ".join(duplicated)
+        )
+    missing = [field for field in fields if field not in frame.columns]
+    if missing:
+        raise ValueError(
+            "executable label source lacks canonical market fields: "
+            + ", ".join(missing)
+        )
+    frame["trade_date"] = frame["trade_date"].astype(str).str[:10]
+    frame["instrument"] = frame["instrument"].astype(str).str.upper()
+    if frame.duplicated(["trade_date", "instrument"]).any():
+        raise ValueError("executable label source has duplicate instrument/date rows")
+    if frame.empty:
+        raise ValueError("executable label source panel is empty")
+    calendar_start = (
+        pd.Timestamp(start) - pd.Timedelta(days=14)
+    ).strftime("%Y-%m-%d")
+    calendar = get_trading_calendar(calendar_start, end)
+    if not calendar or start not in calendar:
+        raise ValueError(
+            f"executable label start must be a trading session: {start}"
+        )
+    if end not in calendar:
+        raise ValueError(
+            f"executable label data cutoff must be a trading session: {end}"
+        )
+    return frame, spans, calendar
+
+
+def _entry_eligibility(frame: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
+    open_price = pd.to_numeric(frame["$open"], errors="coerce")
+    paused = pd.to_numeric(frame["$paused"], errors="coerce")
+    high_limit = pd.to_numeric(frame["$high_limit"], errors="coerce")
+    low_limit = pd.to_numeric(frame["$low_limit"], errors="coerce")
+    has_open = open_price.notna() & np.isfinite(open_price) & open_price.gt(0)
+    constraints_known = (
+        paused.notna()
+        & high_limit.notna()
+        & low_limit.notna()
+        & high_limit.gt(0)
+        & low_limit.gt(0)
+    )
+    eligible = has_open & constraints_known & paused.eq(0) & open_price.lt(high_limit)
+    reason = pd.Series("", index=frame.index, dtype="string")
+    reason.loc[~has_open] = "missing_or_nonpositive_entry_open"
+    reason.loc[has_open & ~constraints_known] = "entry_constraints_unknown"
+    reason.loc[has_open & constraints_known & paused.ne(0)] = "entry_suspended"
+    reason.loc[
+        has_open & constraints_known & paused.eq(0) & open_price.ge(high_limit)
+    ] = "entry_limit_up"
+    return eligible.astype(bool), reason
+
+
+def _exit_status(frame: pd.DataFrame) -> pd.Series:
+    open_price = pd.to_numeric(frame["$open_end"], errors="coerce")
+    paused = pd.to_numeric(frame["$paused_end"], errors="coerce")
+    high_limit = pd.to_numeric(frame["$high_limit_end"], errors="coerce")
+    low_limit = pd.to_numeric(frame["$low_limit_end"], errors="coerce")
+    status = pd.Series("executable", index=frame.index, dtype="string")
+    status.loc[frame["return_end_date"].isna()] = "immature"
+    target = frame["return_end_date"].notna()
+    observed = open_price.notna() & np.isfinite(open_price) & open_price.gt(0)
+    status.loc[target & ~observed] = "target_open_unobserved"
+    known = (
+        paused.notna()
+        & high_limit.notna()
+        & low_limit.notna()
+        & high_limit.gt(0)
+        & low_limit.gt(0)
+    )
+    status.loc[target & observed & ~known] = "target_constraints_unknown"
+    status.loc[target & observed & known & paused.ne(0)] = "target_suspended"
+    status.loc[
+        target & observed & known & paused.eq(0) & open_price.ge(high_limit)
+    ] = "target_limit_up"
+    status.loc[
+        target & observed & known & paused.eq(0) & open_price.le(low_limit)
+    ] = "target_limit_down"
+    return status
+
+
+def iter_executable_forward_returns(
+    *,
+    universe: str,
+    horizons: list[int],
+    start: str,
+    end: str,
+    pit_universe_artifact: str,
+    label_templates: dict[str, str],
+) -> Iterator[tuple[str, pd.DataFrame, dict[str, Any]]]:
+    """Yield independently named open/open and close/close PIT labels.
+
+    The shared panel is loaded once.  Entry eligibility uses only the entry
+    session's canonical open snapshot.  Target-session tradability is
+    recorded but never filters a row or changes ``is_valid``.
+    """
+    supported = {"open_to_open": "$open", "close_to_close": "$close"}
+    unknown = sorted(set(label_templates) - set(supported))
+    if unknown:
+        raise ValueError(f"unsupported executable label intervals: {unknown}")
+    clean_horizons = sorted(set(int(value) for value in horizons))
+    if not clean_horizons or clean_horizons[0] <= 0:
+        raise ValueError("executable label horizons must be positive")
+
+    panel, spans, calendar = _load_executable_price_panel(
+        universe=universe,
+        start=start,
+        end=end,
+        pit_universe_artifact=pit_universe_artifact,
+    )
+    positions = {date: idx for idx, date in enumerate(calendar)}
+    previous = {
+        date: calendar[idx - 1] if idx > 0 else None
+        for idx, date in enumerate(calendar)
+    }
+    base = panel[panel["trade_date"].between(start, end)].copy()
+    base["signal_data_cutoff"] = base["trade_date"].map(previous)
+    if base["signal_data_cutoff"].isna().any():
+        raise ValueError("could not resolve a prior-session signal cutoff")
+    entry_eligible, entry_reason = _entry_eligibility(base)
+    base["entry_eligible"] = entry_eligible
+    base["entry_invalid_reason"] = entry_reason
+
+    end_columns = [
+        "trade_date", "instrument", "$open", "$close", "$factor", "$paused",
+        "$high_limit", "$low_limit",
+    ]
+    end_panel = panel[end_columns].rename(columns={
+        "trade_date": "return_end_date",
+        **{column: f"{column}_end" for column in end_columns[2:]},
+    })
+    for horizon in clean_horizons:
+        working = base.copy()
+        working["return_end_date"] = working["trade_date"].map(
+            lambda date: (
+                calendar[positions[date] + horizon]
+                if date in positions and positions[date] + horizon < len(calendar)
+                else None
+            )
+        )
+        working = working.merge(
+            end_panel,
+            on=["return_end_date", "instrument"],
+            how="left",
+            # Several forward-tail rows can share a null target date.  The
+            # target market panel must remain unique, while the left side is
+            # legitimately many-to-one for those immature rows.
+            validate="many_to_one",
+        )
+        working["maturity_date"] = working["return_end_date"]
+        working["is_mature"] = working["return_end_date"].notna()
+        working["exit_execution_status"] = _exit_status(working)
+        working = _filter_membership(working, spans)
+
+        for return_type, price_column in label_templates.items():
+            label_id = str(price_column).format(horizon=horizon)
+            field = supported[return_type]
+            start_raw = pd.to_numeric(working[field], errors="coerce")
+            end_raw = pd.to_numeric(
+                working[f"{field}_end"], errors="coerce"
+            )
+            start_factor = pd.to_numeric(working["$factor"], errors="coerce")
+            end_factor = pd.to_numeric(
+                working["$factor_end"], errors="coerce"
+            )
+            start_price = start_raw * start_factor
+            end_price = end_raw * end_factor
+            label_value = end_price / start_price - 1.0
+            finite_start = np.isfinite(start_price) & start_price.gt(0)
+            finite_end = np.isfinite(end_price) & end_price.gt(0)
+            finite_label = (
+                np.isfinite(label_value) & finite_start & finite_end
+            )
+            label_missing_reason = np.select(
+                [
+                    working["return_end_date"].isna(),
+                    ~finite_start,
+                    ~finite_end,
+                    ~finite_label,
+                ],
+                [
+                    "immature",
+                    "entry_price_unobserved",
+                    "target_price_unobserved",
+                    "nonfinite_return",
+                ],
+                default="",
+            )
+            result = pd.DataFrame({
+                "trade_date": working["trade_date"],
+                "label_date": working["trade_date"],
+                "instrument": working["instrument"],
+                "label_id": label_id,
+                "horizon": horizon,
+                "shift": horizon,
+                "return_type": return_type,
+                "price_basis": f"adjusted_{field[1:]}",
+                "signal_data_cutoff": working["signal_data_cutoff"],
+                "return_start_date": working["trade_date"],
+                "return_start_price": start_price,
+                "return_end_date": working["return_end_date"],
+                "return_end_price": end_price,
+                "maturity_date": working["maturity_date"],
+                "is_mature": working["is_mature"],
+                "entry_eligible": working["entry_eligible"],
+                "exit_execution_status": working["exit_execution_status"],
+                "label_value": label_value.where(finite_label).astype(np.float32),
+                "universe": universe,
+                "is_valid": working["entry_eligible"] & working["is_mature"],
+                "invalid_reason": working["entry_invalid_reason"],
+                "label_missing_reason": label_missing_reason,
+            }).reset_index(drop=True)
+            metadata = {
+                "horizon": horizon,
+                "return_type": return_type,
+                "price_basis": f"adjusted_{field[1:]}",
+                "signal_cutoff_contract": EXECUTABLE_SIGNAL_CUTOFF_CONTRACT,
+                "entry_eligibility_contract": (
+                    EXECUTABLE_ENTRY_ELIGIBILITY_CONTRACT
+                ),
+                "exit_observation_contract": EXECUTABLE_EXIT_OBSERVATION_CONTRACT,
+                "exit_status_basis": "canonical_open_snapshot",
+                "future_exit_status_used_for_filter": False,
+                "corporate_action_adjustment_contract": ADJUSTED_PRICE_CONTRACT,
+                "data_cutoff": end,
+                "mature_row_count": int(result["is_mature"].sum()),
+                "entry_eligible_row_count": int(result["entry_eligible"].sum()),
+                "valid_observed_row_count": int(
+                    (result["is_valid"] & result["label_value"].notna()).sum()
+                ),
+                "missing_target_price_row_count": int(
+                    result["label_missing_reason"].eq(
+                        "target_price_unobserved"
+                    ).sum()
+                ),
+                "missing_entry_price_row_count": int(
+                    result["label_missing_reason"].eq(
+                        "entry_price_unobserved"
+                    ).sum()
+                ),
+            }
+            yield label_id, result, metadata
 
 
 def compute_future_max_drawdown(

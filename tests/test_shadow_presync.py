@@ -179,12 +179,12 @@ class TestShadowPresync(unittest.TestCase):
         self.assertEqual(summary["qlib_update_status"], "skipped")
         self.assertIn("raw-only", repair_result["reason"])
 
-    def test_qlib_only_does_not_trigger_raw_collector(self):
+    def test_qlib_only_syncs_qlib_without_raw_collector(self):
         _, result, adapter, collector = self._run(active_symbols=300, apply=True, qlib_only=True, max_symbols=5)
         summary = load_json(Path(result["summary_path"]))
         self.assertFalse(collector.calls)
-        self.assertFalse(adapter.convert_incremental_calls)
-        self.assertEqual(summary["qlib_update_status"], "skipped_requires_manual_rebuild")
+        self.assertEqual(adapter.convert_incremental_calls, ["2026-04-25"])
+        self.assertEqual(summary["qlib_update_status"], "success")
 
     def test_resume_skips_previous_success(self):
         tmpdir = tempfile.TemporaryDirectory()

@@ -72,6 +72,7 @@ def normalize_income_feature_source(
         raise ValueError(f"unsupported income feature source mode: {mode!r}")
     result = {
         "mode": mode,
+        "artifact_id": str(raw.get("artifact_id") or "").strip().lower(),
         "artifact_path": str(raw.get("artifact_path") or "").strip(),
         "artifact_sha256": str(raw.get("artifact_sha256") or "").strip().lower(),
         "manifest_path": str(raw.get("manifest_path") or "").strip(),
@@ -81,12 +82,22 @@ def normalize_income_feature_source(
         ).strip(),
     }
     identity_keys = (
-        "artifact_path", "artifact_sha256", "manifest_path", "manifest_sha256",
+        "artifact_id", "artifact_path", "artifact_sha256", "manifest_path",
+        "manifest_sha256",
     )
     if mode == INCOME_SOURCE_MODE_AUDITED:
+        portable = bool(result["artifact_id"])
+        required = (
+            ("artifact_id", "artifact_sha256", "manifest_sha256")
+            if portable
+            else (
+                "artifact_path", "artifact_sha256", "manifest_path",
+                "manifest_sha256",
+            )
+        )
         missing = [
             key
-            for key in (*identity_keys, "required_history_start")
+            for key in (*required, "required_history_start")
             if not result[key]
         ]
         if missing:
@@ -94,6 +105,12 @@ def normalize_income_feature_source(
                 "audited income feature source requires artifact/manifest identity "
                 f"and required_history_start; missing {missing}"
             )
+        if portable and (result["artifact_path"] or result["manifest_path"]):
+            raise ValueError(
+                "content-addressed income identity cannot mix artifact_id with paths"
+            )
+        if portable and not _is_sha256(result["artifact_id"]):
+            raise ValueError("income sidecar artifact_id must be a SHA-256")
         try:
             _normalize_date(
                 result["required_history_start"], field="required_history_start"
@@ -112,6 +129,81 @@ def normalize_income_feature_source(
                 f"{unexpected}"
             )
     return result
+
+
+def resolve_income_sidecar_identity(
+    *,
+    artifact_id: str,
+    artifact_sha256: str,
+    manifest_sha256: str,
+    data_root: str | Path | None = None,
+    required_start: str | None = None,
+    required_end: str | None = None,
+    required_history_start: str | None = None,
+    required_symbols: Iterable[str] = (),
+) -> dict[str, Any]:
+    """Resolve one content-addressed sidecar through its pinned manifest."""
+
+    normalized_id = str(artifact_id or "").strip().lower()
+    if not _is_sha256(normalized_id):
+        raise IncomeSidecarError("income sidecar artifact_id must be a SHA-256")
+    if data_root is None:
+        from qsys.config import cfg
+
+        data_root = cfg.get_path("root")
+    root = Path(data_root).expanduser().absolute()
+    directory = (
+        root / "research" / "source_snapshots" / "income" / normalized_id
+    )
+    for path in (
+        root,
+        root / "research",
+        root / "research" / "source_snapshots",
+        root / "research" / "source_snapshots" / "income",
+        directory,
+    ):
+        if path.is_symlink():
+            raise IncomeSidecarError(
+                f"income sidecar content-addressed path must not be a symlink: {path}"
+            )
+    manifest_file = directory / INCOME_SIDECAR_MANIFEST_FILENAME
+    if manifest_file.is_symlink() or not manifest_file.is_file():
+        raise IncomeSidecarError(
+            "income sidecar content-addressed manifest does not exist: "
+            f"{manifest_file}"
+        )
+    if _sha256_file(manifest_file) != str(manifest_sha256 or "").lower():
+        raise IncomeSidecarError("income sidecar manifest sha256 mismatch")
+    try:
+        manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise IncomeSidecarError("income sidecar manifest is invalid JSON") from exc
+    if not isinstance(manifest, dict):
+        raise IncomeSidecarError("income sidecar manifest must be a JSON object")
+    artifact_spec = manifest.get("artifact")
+    artifact_name = (
+        str(artifact_spec.get("path") or "")
+        if isinstance(artifact_spec, dict)
+        else ""
+    )
+    if (
+        manifest.get("artifact_id") != normalized_id
+        or not artifact_name
+        or Path(artifact_name).name != artifact_name
+    ):
+        raise IncomeSidecarError(
+            "income sidecar content-addressed manifest identity mismatch"
+        )
+    return validate_income_sidecar_identity(
+        artifact_path=directory / artifact_name,
+        artifact_sha256=artifact_sha256,
+        manifest_path=manifest_file,
+        manifest_sha256=manifest_sha256,
+        required_start=required_start,
+        required_end=required_end,
+        required_history_start=required_history_start,
+        required_symbols=required_symbols,
+    )
 
 
 def _sha256_bytes(content: bytes) -> str:

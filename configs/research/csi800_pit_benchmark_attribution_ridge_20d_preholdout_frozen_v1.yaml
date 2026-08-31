@@ -1,0 +1,18 @@
+schema_version: pit_universe_benchmark_config_v1
+
+benchmark:
+  benchmark_id: csi800_pit_float_cap_total_return_proxy_v1
+  universe_artifact: data/research/universes/csi800_pit_v2
+  canonical_data_root: /home/liuming/.openclaw/workspace/SysQ/data/canonical/daily
+  freeze_canonical_data_to: data/research/market_slices/csi800_pit_benchmark_20210104_20241231_v1
+  calendar_csv: data/research/backtests/csi1800_multifeature_ridge_total_return_120d_20d_preholdout_v1/top20_complete_accounting_frozen_market_v1/daily_summary.csv
+  output_dir: data/research/benchmarks/csi800_pit_float_cap_total_return_proxy_v1_2021_2024
+  start_date: '2021-01-04'
+  end_date: '2024-12-31'
+  holdout_start: '2025-01-02'
+  min_constituent_coverage: 0.98
+
+portfolio_analytics:
+  backtest_dir: data/research/backtests/csi1800_multifeature_ridge_total_return_120d_20d_preholdout_v1/top20_complete_accounting_frozen_market_v1
+  research_root: data/research
+  output_name: csi800_pit_float_cap_total_return_proxy_v1

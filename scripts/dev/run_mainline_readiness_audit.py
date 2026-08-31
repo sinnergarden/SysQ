@@ -12,7 +12,7 @@ from pathlib import Path
 
 import click
 
-project_root = Path(__file__).resolve().parent.parent
+project_root = Path(__file__).resolve().parents[2]
 sys.path.append(str(project_root))
 
 from qsys.research.readiness import (
@@ -21,8 +21,8 @@ from qsys.research.readiness import (
     build_readiness_summary,
     fetch_mainline_feature_frame,
     resolve_mainline_specs,
-    write_json,
 )
+from qsys.utils.json_io import write_json
 
 
 @click.command(name="run_mainline_readiness_audit")

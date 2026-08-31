@@ -1,0 +1,6 @@
+feature_list_id: confirmed_financial_quality_120d_v1
+description: Confirmation-locked PIT-B financial quality input for 120-session model comparison.
+feature_count: 1
+contract: confirmed_feature_input_stage_b_v1
+features:
+  - operating_cf_to_profit

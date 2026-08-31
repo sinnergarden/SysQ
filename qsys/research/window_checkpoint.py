@@ -55,6 +55,7 @@ class WindowCheckpointRef:
     manifest_sha256: str
     predictions_path: Path
     manifest_path: Path
+    model_diagnostics: dict[str, Any] | None
 
 
 class WindowPredictionCheckpointStore:
@@ -126,6 +127,14 @@ class WindowPredictionCheckpointStore:
             raise ValueError(
                 f"Rolling-window checkpoint row_count invalid for {window.window_id}"
             )
+        model_diagnostics = manifest.get("model_diagnostics")
+        if model_diagnostics is not None and not isinstance(
+            model_diagnostics, dict
+        ):
+            raise ValueError(
+                "Rolling-window checkpoint model_diagnostics invalid for "
+                f"{window.window_id}"
+            )
 
         return WindowCheckpointRef(
             window_id=window.window_id,
@@ -135,6 +144,7 @@ class WindowPredictionCheckpointStore:
             manifest_sha256=_sha256_file(manifest_path),
             predictions_path=predictions_path,
             manifest_path=manifest_path,
+            model_diagnostics=model_diagnostics,
         )
 
     def save(
@@ -169,6 +179,11 @@ class WindowPredictionCheckpointStore:
                 "predictions_sha256": predictions_sha256,
                 "row_count": int(len(predictions)),
             }
+            model_diagnostics = predictions.attrs.get("model_diagnostics")
+            if model_diagnostics is not None:
+                if not isinstance(model_diagnostics, dict):
+                    raise ValueError("model_diagnostics must be a JSON object")
+                manifest["model_diagnostics"] = model_diagnostics
             with manifest_tmp.open("wb") as handle:
                 handle.write(json.dumps(
                     manifest,

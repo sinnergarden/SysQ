@@ -59,6 +59,7 @@ class TestAdapterSemanticFeatures(unittest.TestCase):
 
         requested_fields = mock_dataset.dataset.call_args.args[1]
         self.assertIn("$amount", requested_fields)
+        self.assertIn("$factor", requested_fields)
         self.assertIn("$high_limit", requested_fields)
         self.assertEqual(mock_dataset.dataset.call_args.kwargs["start_time"], "2022-04-03")
         self.assertEqual(mock_dataset.dataset.call_args.kwargs["end_time"], "2026-04-03")
@@ -104,6 +105,44 @@ class TestAdapterSemanticFeatures(unittest.TestCase):
             marked["_pit_member"].tolist(),
             [True, True, False, False, True, False, True, True, True, False],
         )
+
+    def test_industry_relative_features_enable_return_dependencies(self):
+        flags = QlibAdapter._semantic_feature_flags(
+            ["industry_top_stock_momentum", "stock_minus_industry_ret_60d"]
+        )
+
+        self.assertTrue(flags["enable_relative_strength_features"])
+        self.assertTrue(flags["enable_industry_momentum_features"])
+        self.assertTrue(flags["enable_industry_context_features"])
+
+    def test_margin_interactions_enable_return_dependencies(self):
+        flags = QlibAdapter._semantic_feature_flags(
+            ["margin_trend_confirm_score", "margin_overheat_risk_score"]
+        )
+
+        self.assertTrue(flags["enable_relative_strength_features"])
+        self.assertTrue(flags["enable_v3a_margin_features"])
+
+    def test_shareholder_interactions_enable_return_dependencies(self):
+        flags = QlibAdapter._semantic_feature_flags(
+            ["holder_squeeze_score", "holder_price_confirm_score"]
+        )
+
+        self.assertTrue(flags["enable_relative_strength_features"])
+        self.assertTrue(flags["enable_v3a_shareholder_features"])
+
+    def test_path_scores_enable_price_context_dependencies(self):
+        flags = QlibAdapter._semantic_feature_flags(
+            [
+                "continuation_candidate_score",
+                "repair_candidate_score",
+                "overheat_risk_score",
+                "value_trap_risk_score",
+            ]
+        )
+
+        self.assertTrue(flags["enable_relative_strength_features"])
+        self.assertTrue(flags["enable_fundamental_context_features"])
 
     @patch("qsys.data.adapter.build_phase1_features")
     def test_growth_sidecar_identity_is_forwarded_with_requested_window(
@@ -219,6 +258,33 @@ class TestAdapterSemanticFeatures(unittest.TestCase):
         self.assertIn("$close", requested_fields)
         self.assertIn("$amount", requested_fields)
         self.assertIn("$volume", requested_fields)
+
+    @patch("qsys.data.adapter.DatasetD")
+    def test_semantic_price_returns_are_adjusted_without_mutating_native_price(
+        self, mock_dataset
+    ):
+        native_df = self._mock_native_frame()
+        native_df["$close"] = [10.0, 10.2, 5.2, 5.25, 5.4]
+        native_df["$open"] = [9.9, 10.1, 5.1, 5.2, 5.3]
+        native_df["$high"] = [10.1, 10.3, 5.3, 5.35, 5.45]
+        native_df["$low"] = [9.8, 10.0, 5.0, 5.1, 5.2]
+        native_df["$high_limit"] = [11.0, 11.2, 5.7, 5.75, 5.9]
+        native_df["$low_limit"] = [9.0, 9.2, 4.7, 4.75, 4.9]
+        native_df["$factor"] = [1.0, 1.0, 2.0, 2.0, 2.0]
+        mock_dataset.dataset.return_value = native_df
+
+        adapter = QlibAdapter()
+        out = adapter.get_features(
+            instruments=["AAA"],
+            fields=["$close", "ret_3d"],
+            start_time="2026-04-03",
+            end_time="2026-04-03",
+        )
+
+        self.assertAlmostEqual(out.iloc[0]["$close"], 5.4)
+        self.assertAlmostEqual(out.iloc[0]["ret_3d"], (5.4 * 2.0 / 10.2) - 1.0)
+        requested_fields = mock_dataset.dataset.call_args.args[1]
+        self.assertIn("$factor", requested_fields)
 
 
 if __name__ == "__main__":

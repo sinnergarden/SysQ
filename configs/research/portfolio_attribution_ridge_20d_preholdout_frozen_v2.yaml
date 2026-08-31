@@ -1,0 +1,14 @@
+schema_version: portfolio_analytics_config_v1
+backtest_dir: data/research/backtests/csi1800_multifeature_ridge_total_return_120d_20d_preholdout_v1/top20_complete_accounting_frozen_market_v2
+research_root: data/research
+holdout_start: '2025-01-02'
+benchmarks:
+  - benchmark_id: csi800_official_price_index_v1
+    benchmark_csv: /home/liuming/.openclaw/workspace/SysQ/data/raw/index/000906.SH.csv
+    output_name: csi800_official_price_index_v1
+  - benchmark_id: csi800_pit_float_cap_total_return_proxy_v1
+    benchmark_csv: data/research/benchmarks/csi800_pit_float_cap_total_return_proxy_v1_2021_2024/benchmark.csv
+    output_name: csi800_pit_float_cap_total_return_proxy_v1
+  - benchmark_id: csi1800_pit_float_cap_total_return_proxy_v1
+    benchmark_csv: data/research/benchmarks/csi1800_pit_float_cap_total_return_proxy_v1_2021_2024/benchmark.csv
+    output_name: csi1800_pit_float_cap_total_return_proxy_v1

@@ -19,7 +19,11 @@ from scripts.research.run_checkpointed_supervisor import (
 from qsys.research.matrix_job import RollingResearchConfig
 
 
-def _config(tmp_path: Path) -> Path:
+def _config(
+    tmp_path: Path,
+    *,
+    generator_ids: tuple[str, ...] = ("fixture",),
+) -> Path:
     path = tmp_path / "research.json"
     path.write_text(json.dumps({
         "experiment_id": "exp_supervisor",
@@ -31,11 +35,14 @@ def _config(tmp_path: Path) -> Path:
         },
         "labels": [{"label_id": "label_1"}],
         "signal_transforms": [{"transform_id": "raw", "type": "raw"}],
-        "generators": [{
-            "generator_id": "fixture",
-            "type": "fixture",
-            "params": {"n_instruments": 2},
-        }],
+        "generators": [
+            {
+                "generator_id": generator_id,
+                "type": "fixture",
+                "params": {"n_instruments": 2},
+            }
+            for generator_id in generator_ids
+        ],
         "window_checkpoints": True,
         "source_manifest_hash": "source-v1",
     }), encoding="utf-8")
@@ -63,14 +70,22 @@ def _validator(config, *, project_root):
     return {"validated": True, "experiment_id": config.experiment_id}
 
 
-def _progress(done: int, total: int) -> ChildResult:
+def _progress(
+    done: int,
+    total: int,
+    *,
+    generator_id: str | None = None,
+) -> ChildResult:
+    payload = {
+        "status": "checkpoint_batch_complete",
+        "completed_windows": done,
+        "total_windows": total,
+    }
+    if generator_id is not None:
+        payload["generator_id"] = generator_id
     return ChildResult(
         75,
-        "noise\n" + json.dumps({
-            "status": "checkpoint_batch_complete",
-            "completed_windows": done,
-            "total_windows": total,
-        }),
+        "noise\n" + json.dumps(payload),
     )
 
 
@@ -101,6 +116,78 @@ def test_checkpoint_exit_75_progresses_then_terminal_exit(tmp_path: Path) -> Non
     assert "scripts/run_research.py" in children.commands[0][1]
     assert children.commands[0][-2:] == ["--checkpoint-batch-size", "1"]
     assert json.loads(state_path.read_text())["stage"] == "complete"
+
+
+def test_two_generators_track_checkpoint_progress_independently(
+    tmp_path: Path,
+) -> None:
+    generator_ids = ("ridge", "lightgbm")
+    config = _config(tmp_path, generator_ids=generator_ids)
+    state_path = tmp_path / "state.json"
+    per_generator = _window_count(config)
+    children = FakeChildren([
+        *[
+            _progress(done, per_generator, generator_id=generator_ids[0])
+            for done in range(1, per_generator)
+        ],
+        *[
+            _progress(done, per_generator, generator_id=generator_ids[1])
+            for done in range(1, per_generator)
+        ],
+        ChildResult(0, "completed\n"),
+    ])
+
+    state = run_supervisor(
+        config_path=config,
+        checkpoint_batch_size=1,
+        run_state_path=state_path,
+        child_runner=children,
+        terminal_validator=_validator,
+        revision="rev-1",
+    )
+
+    assert state["status"] == "complete"
+    assert state["windows_per_generator"] == per_generator
+    assert state["total_windows"] == per_generator * len(generator_ids)
+    assert state["completed_windows"] == state["total_windows"]
+    assert state["completed_windows_by_generator"] == {
+        generator_id: per_generator for generator_id in generator_ids
+    }
+    assert len(children.commands) == 2 * (per_generator - 1) + 1
+
+
+def test_later_generator_progress_marks_prior_generator_complete(
+    tmp_path: Path,
+) -> None:
+    generator_ids = ("ridge", "lightgbm")
+    config = _config(tmp_path, generator_ids=generator_ids)
+    state_path = tmp_path / "state.json"
+    per_generator = _window_count(config)
+    children = FakeChildren([
+        *[
+            _progress(done, per_generator, generator_id=generator_ids[0])
+            for done in range(1, per_generator)
+        ],
+        _progress(1, per_generator, generator_id=generator_ids[1]),
+        _progress(1, per_generator, generator_id=generator_ids[1]),
+    ])
+
+    with pytest.raises(SupervisorError, match="invalid checkpoint progress"):
+        run_supervisor(
+            config_path=config,
+            checkpoint_batch_size=1,
+            run_state_path=state_path,
+            child_runner=children,
+            terminal_validator=_validator,
+            revision="rev-1",
+        )
+
+    state = json.loads(state_path.read_text())
+    assert state["completed_windows_by_generator"] == {
+        "ridge": per_generator,
+        "lightgbm": 1,
+    }
+    assert state["completed_windows"] == per_generator + 1
 
 
 def test_exit_75_without_monotonic_progress_fails_closed(tmp_path: Path) -> None:

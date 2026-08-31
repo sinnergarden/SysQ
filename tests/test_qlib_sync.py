@@ -235,7 +235,7 @@ class TestQlibSync(unittest.TestCase):
     # ── QlibAdapter._prepare_csvs behavior (unchanged) ───────────────────
 
     def test_prepare_csvs_preserves_history_up_to_target_date(self):
-        raw_dir = cfg.get_path("raw_daily")
+        raw_dir = cfg.get_path("canonical_dir")
         pd.DataFrame(
             {
                 "trade_date": ["20250102", "20260417", "20260420"],
@@ -266,7 +266,7 @@ class TestQlibSync(unittest.TestCase):
         self.assertEqual(len(out), 2)
 
     def test_prepare_csvs_without_until_date_keeps_later_rows_for_incremental_path(self):
-        raw_dir = cfg.get_path("raw_daily")
+        raw_dir = cfg.get_path("canonical_dir")
         pd.DataFrame(
             {
                 "trade_date": ["20260417", "20260420"],

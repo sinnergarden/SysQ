@@ -3,9 +3,14 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from qsys.ops.model_registry import latest_shadow_model_is_usable, read_latest_shadow_model
 from qsys.ops.state import atomic_write_json, load_json
@@ -95,6 +100,7 @@ def _read_shadow_ledger(base_dir: Path) -> tuple[dict[str, Any], list[str]]:
                 "exists": summary["fill_count"] > 0,
                 "source": "ledger",
                 "fill_count": summary["fill_count"],
+                "row_count": summary["fill_count"],
                 "order_count": summary["order_count"],
                 "last_run_id": summary.get("last_run_id"),
                 "last_trade_date": summary.get("last_trade_date"),
@@ -105,7 +111,7 @@ def _read_shadow_ledger(base_dir: Path) -> tuple[dict[str, Any], list[str]]:
     # Fallback to shadow CSV
     ledger_path = base_dir / "shadow" / "ledger.csv"
     if not ledger_path.exists():
-        return {"exists": False, "source": "missing", "fill_count": 0, "last_run_id": None, "last_trade_date": None}, ["shadow ledger missing"]
+        return {"exists": False, "source": "missing", "fill_count": 0, "row_count": 0, "last_run_id": None, "last_trade_date": None}, ["shadow ledger missing"]
     with ledger_path.open("r", encoding="utf-8", newline="") as handle:
         rows = list(csv.DictReader(handle))
     last_row = rows[-1] if rows else {}
@@ -113,6 +119,7 @@ def _read_shadow_ledger(base_dir: Path) -> tuple[dict[str, Any], list[str]]:
         "exists": True,
         "source": "shadow_csv",
         "fill_count": len(rows),
+        "row_count": len(rows),
         "order_count": len(rows),
         "last_run_id": last_row.get("run_id"),
         "last_trade_date": last_row.get("trade_date"),

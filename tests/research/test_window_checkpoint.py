@@ -44,6 +44,22 @@ def test_checkpoint_round_trip_and_stable_set_hash(tmp_path):
     assert store.checkpoint_set_sha256([first]) == store.checkpoint_set_sha256([second])
 
 
+def test_checkpoint_persists_hash_bound_model_diagnostics(tmp_path):
+    store = _store(tmp_path)
+    predictions = _predictions()
+    predictions.attrs["model_diagnostics"] = {
+        "window_id": "train=2020-01-02:2020-12-31;predict=2021-01-04:2021-01-29",
+        "validation_split_contract": "strict_later_whole_label_dates_v1",
+    }
+
+    ref = store.save(_window(), predictions)
+    manifest = json.loads(ref.manifest_path.read_text(encoding="utf-8"))
+
+    assert ref.model_diagnostics == predictions.attrs["model_diagnostics"]
+    assert manifest["model_diagnostics"] == predictions.attrs["model_diagnostics"]
+    assert store.validate(_window()).model_diagnostics == ref.model_diagnostics
+
+
 def test_checkpoint_fails_closed_on_parquet_tamper(tmp_path):
     store = _store(tmp_path)
     ref = store.save(_window(), _predictions())

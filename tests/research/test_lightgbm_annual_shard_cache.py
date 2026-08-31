@@ -16,7 +16,7 @@ from scripts.research.preheat_feature_cache import _annual_ranges
 
 def _generator(tmp_path: Path, source: str = "source_v1") -> LightGBMSingleLabelGenerator:
     return LightGBMSingleLabelGenerator(
-        feature_list_id="features_v1",
+        feature_list_id="momentum_price_volume_v1",
         use_feature_cache=True,
         feature_cache_root=str(tmp_path),
         source_manifest_hash=source,
@@ -170,6 +170,92 @@ def test_load_data_uses_annual_compose_before_qlib(tmp_path: Path) -> None:
         loaded, features = generator._load_data("2020-06-01", "2021-06-30")
     assert features == ["f1", "f2"]
     assert loaded["instrument"].tolist() == ["A", "B"]
+
+
+def test_annual_superset_cache_serves_distinct_consumed_subsets(
+    tmp_path: Path,
+) -> None:
+    feature_lists = {
+        "shared_frame": ["f1", "f2"],
+        "consumer_one": ["f1"],
+        "consumer_two": ["f2"],
+    }
+
+    def load(feature_list_id: str) -> list[str]:
+        return list(feature_lists[feature_list_id])
+
+    def contract(feature_list_id: str) -> dict[str, object]:
+        features = feature_lists[feature_list_id]
+        return {
+            "feature_list_id": feature_list_id,
+            "feature_count": len(features),
+            "features_sha256": feature_list_id,
+            "features": list(features),
+        }
+
+    writer = LightGBMSingleLabelGenerator(
+        feature_list_id="consumer_one",
+        feature_cache_list_id="shared_frame",
+        use_feature_cache=True,
+        cache_write_scope="annual_shard",
+        feature_cache_root=str(tmp_path),
+        source_manifest_hash="source_v1",
+    )
+    reader = LightGBMSingleLabelGenerator(
+        feature_list_id="consumer_two",
+        feature_cache_list_id="shared_frame",
+        use_feature_cache=True,
+        cache_write_scope="annual_shard",
+        feature_cache_root=str(tmp_path),
+        source_manifest_hash="source_v1",
+    )
+    frame = _frame([("2020-06-01", "A", 1.0)])
+    with patch(
+        "qsys.feature.registry.FeatureListRegistry.load",
+        side_effect=load,
+    ), patch(
+        "qsys.feature.registry.FeatureListRegistry.contract",
+        side_effect=contract,
+    ):
+        writer._write_cache_frame(
+            frame,
+            "2020-01-01",
+            "2020-12-31",
+            ["f1", "f2"],
+            consumed_features=["f1"],
+        )
+        with patch(
+            "qsys.data.adapter.QlibAdapter.get_features",
+            side_effect=AssertionError("shared annual cache should avoid qlib load"),
+        ):
+            loaded, features = reader._load_data("2020-06-01", "2020-12-31")
+
+    assert features == ["f2"]
+    assert loaded.columns.tolist() == ["trade_date", "instrument", "f2"]
+    assert loaded["f2"].tolist() == [10.0]
+
+
+def test_consumed_feature_list_must_preserve_materialized_order(
+    tmp_path: Path,
+) -> None:
+    generator = LightGBMSingleLabelGenerator(
+        feature_list_id="consumer",
+        feature_cache_list_id="shared_frame",
+        use_feature_cache=True,
+        feature_cache_root=str(tmp_path),
+        source_manifest_hash="source_v1",
+    )
+
+    def load(feature_list_id: str) -> list[str]:
+        if feature_list_id == "shared_frame":
+            return ["f1", "f2"]
+        return ["f2", "f1"]
+
+    with patch(
+        "qsys.feature.registry.FeatureListRegistry.load",
+        side_effect=load,
+    ), pytest.raises(ValueError, match="ordered subset"):
+        generator._load_data("2020-01-01", "2020-12-31")
 
 
 def test_missing_annual_shard_does_not_compose_partial_data(tmp_path: Path) -> None:

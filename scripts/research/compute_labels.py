@@ -27,6 +27,26 @@ def main() -> None:
     p.add_argument("--start", default="2023-06-01", help="Start date (YYYY-MM-DD)")
     p.add_argument("--end", default="2026-06-01", help="End date (YYYY-MM-DD)")
     p.add_argument("--horizons", type=int, nargs="+", default=[5, 20], help="Forward return horizons")
+    p.add_argument(
+        "--research-root",
+        default="data/research",
+        help="Research artifact root",
+    )
+    p.add_argument(
+        "--validate-suite",
+        action="store_true",
+        help="Validate the configured suite instead of rebuilding it",
+    )
+    p.add_argument(
+        "--data-root",
+        default=None,
+        help="Source data root required by --validate-suite",
+    )
+    p.add_argument(
+        "--validation-output",
+        default=None,
+        help="Validation report path (defaults beside the suite manifest)",
+    )
     p.add_argument("--overwrite", action="store_true", help="Overwrite existing label data")
     args = p.parse_args()
 
@@ -34,11 +54,52 @@ def main() -> None:
         import yaml
         config = yaml.safe_load(Path(args.config).read_text())
         config.setdefault("date_range", {"start_date": args.start, "end_date": args.end})
-        LabelStore().compute_and_save_from_config(config, overwrite=args.overwrite)
-        print(f"Done: {config['label_id']}")
+        store = LabelStore(args.research_root)
+        if "label_suite" in config:
+            suite_id = str(config["label_suite"]["suite_id"])
+            if args.validate_suite:
+                if not args.data_root:
+                    p.error("--data-root is required with --validate-suite")
+                from qsys.label.validation import (
+                    validate_executable_label_suite,
+                )
+
+                suite_manifest = store.paths.label_suite_manifest(suite_id)
+                validation_output = Path(
+                    args.validation_output
+                    or suite_manifest.with_name("validation.json")
+                )
+                report = validate_executable_label_suite(
+                    suite_manifest_path=suite_manifest,
+                    config_path=args.config,
+                    data_root=args.data_root,
+                    output_path=validation_output,
+                )
+                print(
+                    f"Validated {len(report['outputs'])} labels: "
+                    f"{report['status']} ({validation_output})"
+                )
+                return
+            outputs = store.compute_and_save_suite_from_config(
+                config, overwrite=args.overwrite
+            )
+            for label_id, path in sorted(outputs.items()):
+                print(f"Saved {label_id}: {path}")
+            print(
+                "Suite manifest: "
+                f"{store.paths.label_suite_manifest(suite_id)}"
+            )
+            print(f"Done: {suite_id} ({len(outputs)} labels)")
+        else:
+            if args.validate_suite:
+                p.error("--validate-suite requires a label_suite config")
+            store.compute_and_save_from_config(
+                config, overwrite=args.overwrite
+            )
+            print(f"Done: {config['label_id']}")
         return
 
-    store = LabelStore()
+    store = LabelStore(args.research_root)
     QlibAdapter().init_qlib()
     cal = get_trading_calendar(args.start, args.end)
     n_dates = len(cal) if cal else 0

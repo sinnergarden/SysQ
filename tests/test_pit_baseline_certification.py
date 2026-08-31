@@ -554,6 +554,27 @@ def tiny_project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path,
     return project, request_path, database
 
 
+def _request_with_frozen_evidence(
+    project: Path, request_path: Path, source_result: dict,
+) -> Path:
+    receipt_path = Path(source_result["receipt_path"])
+    snapshot_path = receipt_path.parent / "evidence_snapshot.json"
+    request = yaml.safe_load(request_path.read_text(encoding="utf-8"))
+    request["baseline_id"] = "tiny-frozen-replay"
+    request["frozen_evidence"] = {
+        "audit_receipt": _identity(
+            project, receipt_path.relative_to(project).as_posix(),
+        ),
+        "evidence_snapshot": _identity(
+            project, snapshot_path.relative_to(project).as_posix(),
+        ),
+    }
+    return _write(
+        project / "frozen-request.yaml",
+        yaml.safe_dump(request, sort_keys=False),
+    )
+
+
 def _synthetic_consumed_sidecars(
     project: Path, *, terminal_sha256: str,
 ) -> tuple[dict, dict, dict]:
@@ -921,8 +942,12 @@ def test_real_feature_contract_binds_exact_96_and_multisource_scopes() -> None:
 
 def test_real_checkpoint_set_and_ephemeral_model_identity() -> None:
     research_path = ROOT / REAL_REQUEST["identities"]["research_config"]["path"]
+    checkpoint_root = ROOT / REAL_REQUEST["checkpoints"]["path"]
+    expected_count = int(REAL_REQUEST["checkpoints"]["checkpoint_count"])
+    if len(list(checkpoint_root.glob("**/*.manifest.json"))) != expected_count:
+        pytest.skip("real 68-checkpoint fixture is not available in this checkout")
     scope = load_checkpoint_scope(
-        checkpoint_root=ROOT / REAL_REQUEST["checkpoints"]["path"],
+        checkpoint_root=checkpoint_root,
         request=REAL_REQUEST["checkpoints"], research_config=yaml.safe_load(research_path.read_text()),
     )
     assert scope["checkpoint_count"] == 68
@@ -1349,6 +1374,101 @@ def test_mutation_newer_than_selected_evidence_requires_reaudit(
     assert row["mutation_id"] == "mutation-1"
     receipt = json.loads(Path(result["receipt_path"]).read_text())
     assert receipt["input_identities"]["full_mutation_ledger_sha256"]
+
+
+def test_frozen_evidence_replays_selected_rows_but_rescans_current_mutations(
+    tiny_project: tuple[Path, Path, Path], tmp_path: Path,
+) -> None:
+    project, request, database = tiny_project
+    source = certify_pit_baseline(
+        request_path=request, audit_db=database,
+        output_root=project / "certifications",
+        evidence_run_ids=["evidence-1"], project_root=project,
+    )
+    source_receipt = json.loads(Path(source["receipt_path"]).read_text())
+    source_snapshot = json.loads(
+        (Path(source["output_dir"]) / "evidence_snapshot.json").read_text()
+    )
+    frozen_request = _request_with_frozen_evidence(project, request, source)
+    with sqlite3.connect(database) as connection:
+        for table in (
+            "field_receipt_links", "trusted_watermarks", "audit_journal",
+            "fetch_receipts",
+        ):
+            connection.execute(f"DELETE FROM {table}")
+        connection.execute(
+            "INSERT INTO canonical_mutations VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "mutation-1", "mutation-run", "canonical_daily", "tushare",
+                "daily_bundle", None, "000001.SZ", "20200131", "20200131",
+                json.dumps(["close"]), "update", "d" * 64, "e" * 64,
+                "2020-02-02T00:00:00Z",
+            ),
+        )
+
+    result = certify_pit_baseline(
+        request_path=frozen_request, audit_db=database,
+        output_root=tmp_path / "replay", evidence_run_ids=["evidence-1"],
+        project_root=project,
+    )
+
+    assert result["status"] == "REAUDIT_REQUIRED"
+    receipt = json.loads(Path(result["receipt_path"]).read_text())
+    frozen = receipt["input_identities"]["frozen_evidence"]
+    assert frozen["source_audit_id"] == source["audit_id"]
+    assert receipt["input_identities"]["full_mutation_ledger_sha256"] != (
+        source_receipt["input_identities"]["full_mutation_ledger_sha256"]
+    )
+    replay_snapshot = json.loads(
+        (Path(result["output_dir"]) / "evidence_snapshot.json").read_text()
+    )
+    assert replay_snapshot["audit_db_sha256_at_query"] == (
+        source_snapshot["audit_db_sha256_at_query"]
+    )
+    assert replay_snapshot["certification_audit_db_sha256"] == sha256_file(database)
+    reasons = set(pd.read_parquet(
+        Path(result["output_dir"]) / "exceptions.parquet"
+    )["reason_code"])
+    assert "EVIDENCE_RUN_MISSING" not in reasons
+    assert "CANONICAL_MUTATION_INTERSECTS" in reasons
+
+
+def test_frozen_evidence_requires_receipt_backlink_and_exact_selectors(
+    tiny_project: tuple[Path, Path, Path], tmp_path: Path,
+) -> None:
+    project, request, database = tiny_project
+    source = certify_pit_baseline(
+        request_path=request, audit_db=database,
+        output_root=project / "certifications",
+        evidence_run_ids=["evidence-1"], project_root=project,
+    )
+    frozen_request = _request_with_frozen_evidence(project, request, source)
+    with pytest.raises(CertificationError, match="selectors do not match"):
+        certify_pit_baseline(
+            request_path=frozen_request, audit_db=database,
+            output_root=tmp_path / "selector-mismatch",
+            evidence_run_ids=["different-run"], project_root=project,
+        )
+
+    receipt_path = Path(source["receipt_path"])
+    receipt = json.loads(receipt_path.read_text())
+    receipt["artifacts"]["evidence_snapshot.json"] = "0" * 64
+    receipt_path.write_text(
+        json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8",
+    )
+    request_payload = yaml.safe_load(frozen_request.read_text(encoding="utf-8"))
+    request_payload["frozen_evidence"]["audit_receipt"]["sha256"] = sha256_file(
+        receipt_path
+    )
+    frozen_request.write_text(
+        yaml.safe_dump(request_payload, sort_keys=False), encoding="utf-8",
+    )
+    with pytest.raises(CertificationError, match="does not bind snapshot"):
+        certify_pit_baseline(
+            request_path=frozen_request, audit_db=database,
+            output_root=tmp_path / "backlink-mismatch",
+            evidence_run_ids=["evidence-1"], project_root=project,
+        )
 
 
 def test_validated_evidence_at_mutation_time_accounts_and_certifies(

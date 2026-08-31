@@ -1,0 +1,18 @@
+experiment_id: market_core_5d_stage_a_cache_v1
+title: PIT market-core 5-session Stage-A consumer cache contract
+calendar: {start_date: "2019-01-02", end_date: "2024-12-31", train_window_days: 20, step_days: 20}
+signal: {signal_id: market_core_5d_stage_a, score_column: score}
+feature_list_id: market_core_5d_v1
+source_manifest_hash: 726af9f8c3c91432feb78f1df9520655f3e002c246521bd47245286637bc91ce
+generators:
+  - generator_id: market_core_5d_stage_a
+    type: single_label_lightgbm
+    params:
+      label_id: fwd_ret_5d_open_open_raw_pit_csi1800_v1
+      universe: csi1800_pit_union
+      feature_list_id: market_core_5d_v1
+      feature_cache_list_id: market_core_superset_v1
+      pit_filter_mode: member_as_of
+      pit_universe_artifact: csi1800_pit_v2
+labels:
+  - {label_id: fwd_ret_5d_open_open_raw_pit_csi1800_v1, label_maturity_lag_trading_days: 5}

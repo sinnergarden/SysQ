@@ -164,6 +164,30 @@ class TestLightGBMSingleLabelContract:
         assert result["score"].notna().all()
         assert result["score_model_raw"].notna().all()
 
+    @patch("qsys.signal.alpha_v1.training.train_model", _fake_train_model)
+    @patch("qsys.signal.alpha_v1.training.predict_model", _fake_predict_model)
+    @patch("qsys.label.store.LabelStore.load_labels")
+    def test_generate_carries_declared_pit_exposures(self, mock_labels) -> None:
+        mock_labels.return_value = self._fake_labels()
+        gen = LightGBMSingleLabelGenerator(
+            label_id="fwd_ret_5d_xsz_clip3",
+            signal_exposure_features=("f1",),
+        )
+        with patch.object(gen, "_load_data") as mock_load:
+            mock_load.return_value = self._make_fake_data(), ["f1", "f2"]
+            with patch.object(gen, "_ensure_qlib"):
+                result = gen.generate(
+                    train_start="2026-01-02",
+                    train_end="2026-01-10",
+                    predict_start="2026-01-20",
+                    predict_end="2026-01-22",
+                    signal_id="lgbm_test",
+                    signal_run_id="run1",
+                )
+
+        assert "f1" in result.columns
+        assert result["f1"].notna().all()
+
     @patch("qsys.data.calendar.get_trading_calendar", _fake_calendar)
     @patch("qsys.signal.alpha_v1.training.train_model", _fake_train_model)
     @patch("qsys.signal.alpha_v1.training.predict_model", _fake_predict_model)

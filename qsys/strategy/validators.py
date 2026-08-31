@@ -100,9 +100,11 @@ def validate_candidate_spec(spec: StrategySpec) -> list[str]:
         )
 
     if not spec.paths:
-        errors.append(_missing("paths (model_dir, predictions_dir, ledger_db)"))
+        errors.append(_missing("paths (predictions_dir, ledger_db)"))
     else:
-        for key in ("model_dir", "predictions_dir", "ledger_db"):
+        # Models are resolved from the pinned model_version/manifest identity;
+        # a mutable filesystem model_dir is not a candidate requirement.
+        for key in ("predictions_dir", "ledger_db"):
             if key not in spec.paths:
                 errors.append(_missing(f"paths.{key}"))
 

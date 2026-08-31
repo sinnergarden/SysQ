@@ -14,7 +14,7 @@ import click
 import pandas as pd
 import yaml
 
-project_root = Path(__file__).resolve().parent.parent
+project_root = Path(__file__).resolve().parents[2]
 sys.path.append(str(project_root))
 
 from qsys.research import MAINLINE_OBJECTS
