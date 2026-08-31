@@ -403,6 +403,7 @@ class SignalResearchPipeline:
                 overwrite=overwrite_eval,
                 require_pit_lineage=bool(lcfg.get("require_pit_lineage", False)),
                 research_config_sha256=_research_config_sha256(config),
+                label_maturity_before=lcfg.get("label_maturity_before"),
             )
             eval_refs.append(SignalEvalRef(
                 signal_id=signal_id,
@@ -559,6 +560,32 @@ class SignalResearchPipeline:
                 generator_checkpoint_hashes[gen_id] = (
                     checkpoint_store.checkpoint_set_sha256(checkpoint_refs)
                 )
+                checkpoint_diagnostics = [
+                    ref.model_diagnostics for ref in checkpoint_refs
+                ]
+                require_checkpoint_diagnostics = bool(
+                    config.research_protocol.get(
+                        "require_checkpoint_model_diagnostics", False
+                    )
+                )
+                if require_checkpoint_diagnostics and any(
+                    item is None for item in checkpoint_diagnostics
+                ):
+                    present = sum(
+                        item is not None for item in checkpoint_diagnostics
+                    )
+                    raise ValueError(
+                        "checkpoint model diagnostics incomplete for "
+                        f"{gen_id}: {present}/{len(windows)}"
+                    )
+                if checkpoint_diagnostics and all(
+                    item is not None for item in checkpoint_diagnostics
+                ):
+                    generator_model_diagnostics[gen_id] = {
+                        "schema_version": "rolling_model_diagnostics_v1",
+                        "source": "window_checkpoint_manifests",
+                        "windows": checkpoint_diagnostics,
+                    }
             raw_predictions[gen_id] = pd.concat(all_preds, ignore_index=True)
             # Read this only after every window has been generated.  The
             # lineage property snapshots the accumulated per-window profiles;
@@ -567,9 +594,10 @@ class SignalResearchPipeline:
             generator_shareholder_freshness[gen_id] = getattr(
                 gen, "shareholder_freshness_lineage", None
             )
-            generator_model_diagnostics[gen_id] = getattr(
-                gen, "model_diagnostics_lineage", None
-            )
+            if gen_id not in generator_model_diagnostics:
+                generator_model_diagnostics[gen_id] = getattr(
+                    gen, "model_diagnostics_lineage", None
+                )
             del all_preds
             gc.collect()
 
@@ -600,8 +628,16 @@ class SignalResearchPipeline:
                 "window_count": len(windows),
                 "generator_id": job.generator_id,
                 "transform_id": job.transform_id,
+                "signal_transform": tf_cfg,
                 "train_window_days": config.calendar.get("train_window_days"),
+                "research_config_sha256": _research_config_sha256(config),
             }
+            if config.research_protocol:
+                signal_manifest["research_protocol"] = config.research_protocol
+            if transformed.attrs.get("transform_diagnostics") is not None:
+                signal_manifest["transform_diagnostics"] = transformed.attrs[
+                    "transform_diagnostics"
+                ]
             feature_visibility_contract = generator_visibility_contracts.get(
                 job.generator_id
             )
@@ -660,6 +696,7 @@ class SignalResearchPipeline:
                         lcfg.get("require_pit_lineage", False)
                     ),
                     research_config_sha256=_research_config_sha256(config),
+                    label_maturity_before=lcfg.get("label_maturity_before"),
                 )
                 eval_refs.append(SignalEvalRef(
                     signal_id=job.signal_id,
@@ -724,6 +761,9 @@ class SignalResearchPipeline:
                             lcfg.get("require_pit_lineage", False)
                         ),
                         research_config_sha256=_research_config_sha256(config),
+                        label_maturity_before=lcfg.get(
+                            "label_maturity_before"
+                        ),
                     )
                     combined_eval_refs.append(SignalEvalRef(
                         signal_id=out_sig_id,
@@ -793,6 +833,8 @@ class SignalResearchPipeline:
                 "start": config.calendar.get("start_date"),
                 "end": config.calendar.get("end_date"),
             },
+            "research_config_sha256": _research_config_sha256(config),
+            "research_protocol": config.research_protocol,
         })
         manifest_path = exp_dir / "signal_research_manifest.json"
         write_manifest(manifest_path, manifest)

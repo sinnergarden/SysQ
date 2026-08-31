@@ -1426,6 +1426,7 @@ class BacktestRunner:
         exposure_gate_mode: str = "none",
         exposure_gate_scale: float = 0.5,
         exposure_gate_schedule: dict[str, bool] | None = None,
+        exposure_gate_identity: dict[str, Any] | None = None,
         pit_universe_artifact: str | None = None,
         corporate_action_artifact: str | None = None,
         canonical_data_root: str | Path | None = None,
@@ -1535,6 +1536,23 @@ class BacktestRunner:
             raise ValueError(
                 "holding_policy must be 'target_rebalance' or "
                 "'posterior_confirmed'"
+            )
+        if exposure_gate_mode not in {
+            "none", "market_risk", "model_health", "either",
+        }:
+            raise ValueError(
+                "exposure_gate_mode must be one of "
+                "{none, market_risk, model_health, either}"
+            )
+        if not 0.0 < exposure_gate_scale <= 1.0:
+            raise ValueError("exposure_gate_scale must be within (0, 1]")
+        if exposure_gate_schedule is not None and exposure_gate_mode == "none":
+            raise ValueError(
+                "exposure_gate_schedule requires exposure_gate_mode != 'none'"
+            )
+        if exposure_gate_identity is not None and exposure_gate_schedule is None:
+            raise ValueError(
+                "exposure_gate_identity requires exposure_gate_schedule"
             )
         if top_n < 1:
             raise ValueError("top_n must be positive")
@@ -1758,6 +1776,11 @@ class BacktestRunner:
         if posterior_config is not None:
             hash_payload["holding_policy"] = holding_policy
             hash_payload["posterior_policy"] = posterior_config.to_manifest()
+        elif exposure_gate_mode != "none":
+            hash_payload["exposure_gate"] = {
+                "mode": exposure_gate_mode,
+                "scale": exposure_gate_scale,
+            }
         schedule_digest: str | None = None
         if exposure_gate_schedule is not None:
             schedule_digest = hashlib.sha256(
@@ -1776,6 +1799,8 @@ class BacktestRunner:
                 raise ValueError(
                     "exposure_gate_schedule must map date (YYYY-MM-DD) -> bool"
                 )
+            if exposure_gate_identity is not None:
+                hash_payload["exposure_gate_identity"] = exposure_gate_identity
         hash_input = json.dumps(
             hash_payload, sort_keys=True, separators=(",", ":")
         )
@@ -2196,6 +2221,15 @@ class BacktestRunner:
                 strategy_id=strategy_template_id, signal_id=signal_id,
                 signal_run_id=signal_run_id,
             )
+            gate_active = bool(
+                exposure_gate_schedule is not None
+                and exposure_gate_schedule.get(trade_date, False)
+            )
+            if gate_active and exposure_gate_scale < 1.0:
+                targets["target_weight"] = (
+                    targets["target_weight"].astype(float)
+                    * exposure_gate_scale
+                )
             instruments = sorted(set(targets["instrument"]) | set(account.positions.keys()))
             if accounting_enabled:
                 assert valuation_state is not None
@@ -2464,6 +2498,8 @@ class BacktestRunner:
                 manifest["exposure_gate"]["total_days"] = len(
                     exposure_gate_schedule
                 )
+                if exposure_gate_identity is not None:
+                    manifest["exposure_gate"]["identity"] = exposure_gate_identity
             manifest["allocation_method"] = "equal_weight_entry_hold_drift"
             manifest["allocation_params"] = {
                 "top_n": top_n,
@@ -2491,6 +2527,22 @@ class BacktestRunner:
                     else "disabled"
                 ),
             }
+        elif exposure_gate_mode != "none":
+            manifest["holding_policy"] = holding_policy
+            manifest["exposure_gate"] = {
+                "mode": exposure_gate_mode,
+                "scale": exposure_gate_scale,
+            }
+            if schedule_digest is not None:
+                manifest["exposure_gate"]["schedule_sha256"] = schedule_digest
+                manifest["exposure_gate"]["gated_days"] = sum(
+                    1 for active in exposure_gate_schedule.values() if active
+                )
+                manifest["exposure_gate"]["total_days"] = len(
+                    exposure_gate_schedule
+                )
+                if exposure_gate_identity is not None:
+                    manifest["exposure_gate"]["identity"] = exposure_gate_identity
         write_manifest(output_dir / "manifest.json", manifest)
 
         # ── Write daily_summary + metrics ─────────────────────────────────

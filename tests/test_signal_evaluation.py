@@ -200,6 +200,41 @@ class TestCoverage:
 
 
 class TestSignalEvaluator:
+    def test_maturity_cutoff_excludes_labels_reaching_holdout(
+        self, tmp_path: Path
+    ) -> None:
+        SignalStore(str(tmp_path)).save_signal_run(
+            "s", "r", _signal(signal_id="s", signal_run_id="r"),
+            check_no_lookahead=False,
+        )
+        labels = _labels()
+        labels["maturity_date"] = labels["trade_date"].map(
+            lambda value: "2026-06-30" if value <= "2026-06-17" else "2026-07-10"
+        )
+        labels["return_end_date"] = labels["maturity_date"]
+        LabelStore(str(tmp_path)).save_labels("test_label", labels)
+
+        result = SignalEvaluator(str(tmp_path)).evaluate(
+            signal_id="s",
+            signal_run_id="r",
+            label_id="test_label",
+            label_maturity_before="2026-07-01",
+            overwrite=True,
+        )
+
+        assert result.n_days == 3
+        assert result.n_obs == 30
+        manifest = __import__("json").loads(
+            (
+                tmp_path / "signals" / "s" / "r" / "eval"
+                / "test_label" / "manifest.json"
+            ).read_text()
+        )
+        maturity = manifest["methodology"]["label_maturity_filter"]
+        assert maturity["eligible_rows"] == 30
+        assert maturity["excluded_rows"] == 20
+        assert maturity["cutoff"] == "2026-07-01"
+
     def test_evaluate_writes_artifacts(self, tmp_path: Path) -> None:
         sstore = SignalStore(str(tmp_path))
         sstore.save_signal_run("test_sig", "test_run", _signal(), check_no_lookahead=False)

@@ -1013,6 +1013,7 @@ class SignalEvaluator:
         overwrite: bool = False,
         require_pit_lineage: bool = False,
         research_config_sha256: str | None = None,
+        label_maturity_before: str | None = None,
     ) -> SignalEvaluationResult:
         """Run full evaluation and write artifacts."""
         # 1. Load data
@@ -1069,6 +1070,47 @@ class SignalEvaluator:
             )
         if require_pit_lineage and not research_config_sha256:
             raise ValueError("Formal evaluation requires research config identity")
+        maturity_filter: dict[str, Any] | None = None
+        if label_maturity_before is not None:
+            cutoff = pd.Timestamp(label_maturity_before)
+            required_maturity_columns = {"maturity_date", "return_end_date"}
+            missing_maturity = sorted(
+                required_maturity_columns - set(labels.columns)
+            )
+            if missing_maturity:
+                raise ValueError(
+                    "label_maturity_before requires label columns: "
+                    f"{missing_maturity}"
+                )
+            maturity = pd.to_datetime(labels["maturity_date"], errors="coerce")
+            return_end = pd.to_datetime(
+                labels["return_end_date"], errors="coerce"
+            )
+            eligible = (
+                maturity.notna()
+                & return_end.notna()
+                & (maturity < cutoff)
+                & (return_end < cutoff)
+            )
+            total_label_rows = len(labels)
+            labels = labels.loc[eligible].copy()
+            if labels.empty:
+                raise ValueError(
+                    "label_maturity_before removed every evaluation label"
+                )
+            maturity_filter = {
+                "contract": (
+                    "maturity_and_return_end_strictly_before_cutoff_v1"
+                ),
+                "cutoff": cutoff.strftime("%Y-%m-%d"),
+                "input_rows": total_label_rows,
+                "eligible_rows": len(labels),
+                "excluded_rows": total_label_rows - len(labels),
+                "maximum_maturity_date": str(labels["maturity_date"].max()),
+                "maximum_return_end_date": str(
+                    labels["return_end_date"].max()
+                ),
+            }
         if "horizon" not in labels.columns:
             if require_pit_lineage:
                 raise ValueError("Formal evaluation requires label horizon metadata")
@@ -1197,6 +1239,7 @@ class SignalEvaluator:
             "top_ks": [5, 20, 50],
             "label_horizon_sessions": horizon,
             "research_config_sha256": research_config_sha256,
+            "label_maturity_filter": maturity_filter,
             "ic_decay_lags": list(decay_lags),
             "overlap_inference": (
                 "horizon_block_bootstrap_newey_west_all_offsets_v1"

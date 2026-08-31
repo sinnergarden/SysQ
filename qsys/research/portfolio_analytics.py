@@ -17,7 +17,7 @@ from qsys.research.evaluation import compute_rank_stability
 from qsys.signal.store import SignalStore
 
 
-SCHEMA_VERSION = "portfolio_analytics_v1"
+SCHEMA_VERSION = "portfolio_analytics_v2"
 
 
 def _sha256(path: Path) -> str:
@@ -83,15 +83,23 @@ def _return_metrics(
     end_date: pd.Timestamp,
 ) -> dict[str, Any]:
     returns = pd.to_numeric(daily_returns, errors="coerce").fillna(0.0).astype(float)
-    wealth = (1.0 + returns).cumprod()
-    total_return = float(wealth.iloc[-1] - 1.0) if not wealth.empty else 0.0
+    compounded = (1.0 + returns).cumprod()
+    total_return = (
+        float(compounded.iloc[-1] - 1.0) if not compounded.empty else 0.0
+    )
     elapsed_days = max(1, int((end_date - start_date).days))
     years = elapsed_days / 365.25
     cagr = float((1.0 + total_return) ** (1.0 / years) - 1.0) if total_return > -1.0 else -1.0
     volatility = float(returns.std(ddof=1)) if len(returns) > 1 else 0.0
     sharpe = float(returns.mean() / volatility * math.sqrt(252.0)) if volatility > 0 else 0.0
-    max_drawdown = float((wealth / wealth.cummax() - 1.0).min()) if not wealth.empty else 0.0
+    wealth = pd.Series(
+        np.concatenate(([1.0], compounded.to_numpy(dtype=float)))
+    )
+    max_drawdown = float((wealth / wealth.cummax() - 1.0).min())
     calmar = float(cagr / abs(max_drawdown)) if max_drawdown < 0 else None
+    var_95 = float(returns.quantile(0.05)) if len(returns) else None
+    tail = returns[returns <= var_95] if var_95 is not None else returns.iloc[0:0]
+    cvar_95 = float(tail.mean()) if len(tail) else None
     return {
         "total_return": total_return,
         "cagr": cagr,
@@ -99,8 +107,67 @@ def _return_metrics(
         "max_drawdown": max_drawdown,
         "calmar": calmar,
         "daily_volatility_annualized": volatility * math.sqrt(252.0),
+        "historical_var_95_daily": var_95,
+        "historical_cvar_95_daily": cvar_95,
         "positive_day_ratio": float((returns > 0).mean()) if len(returns) else None,
         "trading_day_count": int(len(returns)),
+    }
+
+
+def _capm_metrics(
+    portfolio_returns: pd.Series,
+    benchmark_returns: pd.Series,
+) -> dict[str, Any]:
+    """Single-factor daily CAPM regression with a zero risk-free rate."""
+    frame = pd.concat(
+        [portfolio_returns.rename("portfolio"), benchmark_returns.rename("benchmark")],
+        axis=1,
+    ).dropna()
+    if len(frame) < 2:
+        return {
+            "observations": int(len(frame)),
+            "beta": None,
+            "alpha_daily": None,
+            "alpha_annualized": None,
+            "residual_volatility_annualized": None,
+            "r_squared": None,
+            "risk_free_rate_daily": 0.0,
+        }
+    benchmark_variance = float(frame["benchmark"].var(ddof=0))
+    if benchmark_variance <= 0:
+        beta = 0.0
+    else:
+        beta = float(
+            np.cov(
+                frame["portfolio"], frame["benchmark"], ddof=0
+            )[0, 1] / benchmark_variance
+        )
+    alpha_daily = float(
+        frame["portfolio"].mean() - beta * frame["benchmark"].mean()
+    )
+    fitted = alpha_daily + beta * frame["benchmark"]
+    residual = frame["portfolio"] - fitted
+    total_ss = float(
+        np.square(frame["portfolio"] - frame["portfolio"].mean()).sum()
+    )
+    residual_ss = float(np.square(residual).sum())
+    alpha_annualized = (
+        float((1.0 + alpha_daily) ** 252.0 - 1.0)
+        if alpha_daily > -1.0 else -1.0
+    )
+    return {
+        "observations": int(len(frame)),
+        "beta": beta,
+        "alpha_daily": alpha_daily,
+        "alpha_annualized": alpha_annualized,
+        "residual_volatility_annualized": (
+            float(residual.std(ddof=1) * math.sqrt(252.0))
+            if len(residual) > 1 else 0.0
+        ),
+        "r_squared": (
+            1.0 - residual_ss / total_ss if total_ss > 0 else 0.0
+        ),
+        "risk_free_rate_daily": 0.0,
     }
 
 
@@ -114,7 +181,7 @@ def _annual_returns(returns: pd.Series) -> pd.DataFrame:
 
 
 def _window_max_drawdown(values: np.ndarray) -> float:
-    wealth = np.cumprod(1.0 + values)
+    wealth = np.concatenate(([1.0], np.cumprod(1.0 + values)))
     return float(np.min(wealth / np.maximum.accumulate(wealth) - 1.0))
 
 
@@ -340,6 +407,7 @@ def write_portfolio_analytics(
             if active_std > 0 else 0.0
         ),
     }
+    capm = _capm_metrics(daily_returns, benchmark_returns)
 
     annual_portfolio = _annual_returns(daily_returns).rename(
         columns={"annual_return": "portfolio_return"}
@@ -464,7 +532,9 @@ def write_portfolio_analytics(
             "id": benchmark_id,
             "performance": benchmark_performance,
             "relative": relative,
+            "capm": capm,
             "return_contract": "first_day_open_to_close_then_close_to_close_v1",
+            "capm_contract": "daily_ols_zero_risk_free_rate_v1",
         },
         "topn_selection_stability": stability_summary,
         "regime_contract": {

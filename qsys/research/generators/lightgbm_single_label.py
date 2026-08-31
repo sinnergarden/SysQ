@@ -122,6 +122,12 @@ class LightGBMSingleLabelGenerator:
     sample_weight_policy: str | None = None
     # Ordered columns consumed by this model.
     feature_list_id: str | None = None
+    # Numeric PIT columns copied into SignalRun rows for same-date score
+    # residualization.  They remain ordinary model inputs and must be present
+    # in ``feature_list_id``; this introduces no second data path.
+    signal_exposure_features: tuple[str, ...] | list[str] = field(
+        default_factory=tuple
+    )
     # Optional ordered superset physically materialized in the cache.  This is
     # independent of label/model horizon so compatible consumers reuse bytes.
     feature_cache_list_id: str | None = None
@@ -214,6 +220,11 @@ class LightGBMSingleLabelGenerator:
         from qsys.signal.alpha_v1.training import validate_sample_weight_policy
 
         validate_sample_weight_policy(self.sample_weight_policy)
+        self.signal_exposure_features = tuple(self.signal_exposure_features)
+        if len(set(self.signal_exposure_features)) != len(
+            self.signal_exposure_features
+        ):
+            raise ValueError("signal_exposure_features contains duplicates")
         if self.cache_write_scope not in {"window", "annual_shard"}:
             raise ValueError(
                 "cache_write_scope must be 'window' or 'annual_shard'"
@@ -1515,6 +1526,14 @@ class LightGBMSingleLabelGenerator:
 
         log.info("Loading data [{}, {}]", train_start, load_end)
         frame, clean_features = self._load_data(train_start, load_end)
+        missing_exposures = sorted(
+            set(self.signal_exposure_features) - set(clean_features)
+        )
+        if missing_exposures:
+            raise ValueError(
+                "signal_exposure_features must be included in the consumed "
+                f"feature list: {missing_exposures}"
+            )
 
         # Historical train rows and current prediction rows can use different
         # PIT artifacts.  Preserve the old single-frame behavior when no exact
@@ -1630,9 +1649,18 @@ class LightGBMSingleLabelGenerator:
                     "signal_run_id": signal_run_id,
                     "score_model_raw": float(r["pred"]),
                     "score": float(z.iloc[i]) if pd.notna(z.iloc[i]) else 0.0,
+                    **{
+                        feature: float(r[feature])
+                        if pd.notna(r[feature]) else None
+                        for feature in self.signal_exposure_features
+                    },
                 })
 
         result = pd.DataFrame(rows)
+        if self._window_model_diagnostics:
+            result.attrs["model_diagnostics"] = dict(
+                self._window_model_diagnostics[-1]
+            )
         log.info("Generated {} rows across {} trade dates", len(result), result["trade_date"].nunique())
         del pred, frame, train_frame, prediction_frame, rows
         gc.collect()

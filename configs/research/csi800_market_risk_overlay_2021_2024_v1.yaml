@@ -1,0 +1,14 @@
+schema_version: market_risk_overlay_config_v1
+overlay_id: csi800_market_risk_overlay_2021_2024_v1
+benchmark_id: csi800
+benchmark_csv: /home/liuming/.openclaw/workspace/SysQ/data/raw/index/000906.SH.csv
+start_date: "2021-01-04"
+end_date: "2024-12-31"
+holdout_start: "2025-01-02"
+information_lag_sessions: 1
+trend_window_sessions: 120
+volatility_window_sessions: 20
+volatility_history_min_periods: 252
+volatility_quantile: 0.80
+combine_rule: any
+exposure_scale: 0.50

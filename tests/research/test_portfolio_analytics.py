@@ -5,14 +5,31 @@ import json
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
-from qsys.research.portfolio_analytics import write_portfolio_analytics
+from qsys.research.portfolio_analytics import (
+    _return_metrics,
+    _window_max_drawdown,
+    write_portfolio_analytics,
+)
 from qsys.research.manifest import write_manifest
 from qsys.signal.store import SignalStore
 
 
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def test_drawdown_is_anchored_at_initial_capital() -> None:
+    returns = pd.Series([-0.10, 0.0])
+    metrics = _return_metrics(
+        returns,
+        start_date=pd.Timestamp("2024-01-02"),
+        end_date=pd.Timestamp("2024-01-03"),
+    )
+    assert metrics["total_return"] == pytest.approx(-0.10)
+    assert metrics["max_drawdown"] == pytest.approx(-0.10)
+    assert _window_max_drawdown(returns.to_numpy()) == pytest.approx(-0.10)
 
 
 def test_portfolio_analytics_binds_sources_and_computes_required_metrics(
@@ -122,11 +139,20 @@ def test_portfolio_analytics_binds_sources_and_computes_required_metrics(
         (output / "portfolio_analytics_manifest.json").read_text()
     )
     assert analytics["performance"]["calmar"] is not None
+    assert (
+        analytics["performance"]["historical_cvar_95_daily"]
+        <= analytics["performance"]["historical_var_95_daily"]
+    )
     assert {row["year"] for row in analytics["annual_returns"]} == {2024}
     assert set(analytics["rolling"]) == {"60", "120"}
     assert analytics["exposure_and_concentration"]["gross_exposure"]["mean"] > 0
     assert set(analytics["topn_selection_stability"]["by_k"]) == {"5"}
     assert analytics["regime_contract"]["information_lag_sessions"] == 1
+    assert analytics["benchmark"]["capm"]["observations"] == len(dates)
+    assert analytics["benchmark"]["capm"]["beta"] is not None
+    assert analytics["benchmark"]["capm_contract"] == (
+        "daily_ols_zero_risk_free_rate_v1"
+    )
     assert analytics["holdout_consumed"] is False
     assert analytics["inputs"]["benchmark_sha256"] == _sha256(benchmark_path)
     assert analytics["inputs"]["predictions_sha256"] == signal_manifest["predictions_sha256"]

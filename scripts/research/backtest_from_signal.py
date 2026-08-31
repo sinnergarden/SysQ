@@ -283,6 +283,17 @@ def main() -> None:
         help="JSON file mapping trade_date (YYYY-MM-DD) -> bool (gate active). "
              "Precomputed point-in-time schedule; data, not config.",
     )
+    parser.add_argument(
+        "--market-risk-overlay-config", type=Path, default=None,
+        help=(
+            "Pre-register and materialize a PIT market-risk schedule, then "
+            "bind its identity into this backtest"
+        ),
+    )
+    parser.add_argument(
+        "--risk-overlay-overwrite", action="store_true",
+        help="Replace matching risk-overlay artifact files after validation",
+    )
     args = parser.parse_args()
 
     if (args.signal_id_2 is None) != (args.signal_run_id_2 is None):
@@ -324,11 +335,48 @@ def main() -> None:
                 "--portfolio-analytics requires --benchmark-id, --benchmark-csv, "
                 "and --holdout-start"
             )
+    if (
+        args.exposure_gate_schedule is not None
+        and args.market_risk_overlay_config is not None
+    ):
+        parser.error(
+            "use either --exposure-gate-schedule or "
+            "--market-risk-overlay-config, not both"
+        )
 
     exposure_gate_schedule: dict[str, bool] | None = None
+    exposure_gate_identity: dict[str, object] | None = None
+    if args.market_risk_overlay_config is not None:
+        if args.exposure_gate_mode not in {"market_risk", "either"}:
+            parser.error(
+                "--market-risk-overlay-config requires "
+                "--exposure-gate-mode market_risk or either"
+            )
+        from qsys.research.risk_overlay import build_market_risk_overlay
+
+        overlay = build_market_risk_overlay(
+            args.market_risk_overlay_config,
+            research_root=args.research_root,
+            overwrite=args.risk_overlay_overwrite,
+        )
+        exposure_gate_schedule = overlay["schedule"]
+        exposure_gate_identity = overlay["identity"]
+        configured_scale = float(exposure_gate_identity["exposure_scale"])
+        if abs(args.exposure_gate_scale - configured_scale) > 1e-12:
+            parser.error(
+                "--exposure-gate-scale must equal the overlay config "
+                f"exposure_scale ({configured_scale})"
+            )
     if args.exposure_gate_schedule is not None:
         raw = json.loads(args.exposure_gate_schedule.read_text())
-        exposure_gate_schedule = {str(d): bool(v) for d, v in raw.items()}
+        if not isinstance(raw, dict) or not all(
+            isinstance(date, str) and isinstance(active, bool)
+            for date, active in raw.items()
+        ):
+            parser.error(
+                "--exposure-gate-schedule must map date strings to booleans"
+            )
+        exposure_gate_schedule = dict(raw)
         if not exposure_gate_schedule:
             parser.error("--exposure-gate-schedule must be a non-empty JSON object")
 
@@ -387,6 +435,7 @@ def main() -> None:
         exposure_gate_mode=args.exposure_gate_mode,
         exposure_gate_scale=args.exposure_gate_scale,
         exposure_gate_schedule=exposure_gate_schedule,
+        exposure_gate_identity=exposure_gate_identity,
         pit_universe_artifact=args.pit_universe_artifact,
         corporate_action_artifact=args.corporate_action_artifact,
         canonical_data_root=args.canonical_data_root,

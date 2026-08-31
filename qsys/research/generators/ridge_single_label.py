@@ -29,12 +29,18 @@ class RidgeSingleLabelGenerator(LightGBMSingleLabelGenerator):
 
     @property
     def checkpoint_code_dependencies(self) -> dict[str, Path]:
-        from qsys.research.generators import lightgbm_single_label
+        from qsys.research.generators import (
+            lightgbm_single_label,
+            temporal_validation,
+        )
 
         return {
             **super().checkpoint_code_dependencies,
             "qsys.research.generators.lightgbm_single_label": Path(
                 lightgbm_single_label.__file__
+            ).resolve(),
+            "qsys.research.generators.temporal_validation": Path(
+                temporal_validation.__file__
             ).resolve(),
         }
 
@@ -46,7 +52,9 @@ class RidgeSingleLabelGenerator(LightGBMSingleLabelGenerator):
         *,
         window_id: str,
     ):
-        del label_dates
+        from qsys.research.generators.temporal_validation import (
+            chronological_tail_partition,
+        )
         from qsys.signal.alpha_v1.labels import (
             robust_zscore_fit,
             robust_zscore_transform,
@@ -54,6 +62,19 @@ class RidgeSingleLabelGenerator(LightGBMSingleLabelGenerator):
         from qsys.signal.alpha_v1.training import resolve_validation_size
 
         validation_size = resolve_validation_size(len(y_train))
+        (
+            X_train,
+            y_train,
+            label_dates,
+            validation_size,
+            validation_start,
+            validation_end,
+        ) = chronological_tail_partition(
+            X_train,
+            y_train,
+            label_dates,
+            target_validation_rows=validation_size,
+        )
         fit_X = X_train.iloc[:-validation_size]
         fit_y = pd.to_numeric(y_train.iloc[:-validation_size], errors="raise")
         center, scale = robust_zscore_fit(fit_X)
@@ -82,6 +103,9 @@ class RidgeSingleLabelGenerator(LightGBMSingleLabelGenerator):
             "ridge_alpha": self.ridge_alpha,
             "train_rows": int(len(fit_y)),
             "validation_rows": validation_size,
+            "validation_start_label_date": validation_start,
+            "validation_end_label_date": validation_end,
+            "validation_split_contract": "strict_later_whole_label_dates_v1",
             "validation_rank_ic": (
                 float(validation_rank_ic) if pd.notna(validation_rank_ic) else None
             ),

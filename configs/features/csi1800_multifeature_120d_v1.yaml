@@ -1,0 +1,102 @@
+feature_list_id: csi1800_multifeature_120d_v1
+description: Fixed union of reviewed market, valuation, structured price-volume, industry-relative, lagged financing, and first-publication financial features for one 120-session absolute-return study.
+feature_count: 97
+contract: pit_a_plus_dependency_pinned_pit_b_120d_union_v1
+features:
+  - ($close*$factor)/(Ref($close*$factor, 40)+1e-12)-1
+  - ($close*$factor)/(Ref($close*$factor, 60)+1e-12)-1
+  - ($close*$factor)/(Ref($close*$factor, 120)+1e-12)-1
+  - ($close*$factor)/(Ref($close*$factor, 180)+1e-12)-1
+  - ($close*$factor)/(Ref($close*$factor, 252)+1e-12)-1
+  - ($close*$factor)/(Mean($close*$factor, 60)+1e-12)-1
+  - ($close*$factor)/(Mean($close*$factor, 120)+1e-12)-1
+  - ($close*$factor)/(Max($close*$factor, 120)+1e-12)-1
+  - ($close*$factor)/(Max($close*$factor, 252)+1e-12)-1
+  - Std(($close*$factor)/(Ref($close*$factor, 1)+1e-12)-1, 20)
+  - Std(($close*$factor)/(Ref($close*$factor, 1)+1e-12)-1, 60)
+  - $volume/(Mean($volume, 60)+1e-12)
+  - $amount/(Mean($amount, 60)+1e-12)
+  - $turnover_rate/(Mean($turnover_rate, 60)+1e-12)
+  - $pe
+  - $pb
+  - Log($circ_mv+1)
+  - ret_5d
+  - ret_20d
+  - ret_60d
+  - rps_20d
+  - rps_60d
+  - rps_20d_minus_rps_60d
+  - up_day_ratio_60d
+  - trend_smoothness_60d
+  - volatility_adjusted_return_60d
+  - price_percentile_252d
+  - distance_to_120d_high
+  - distance_to_250d_high
+  - volume_ratio_20d
+  - volume_ratio_60d
+  - amount_ratio_20d
+  - amount_ratio_60d
+  - volume_up_down_ratio_60d
+  - above_avg_volume_ratio_60d
+  - volume_spike_20d
+  - volume_stability_60d
+  - trend_consistency_60d
+  - low_vol_uptrend_60d
+  - up_volume_down_volume_ratio_60d
+  - quiet_accumulation_60d
+  - amount_stability_60d
+  - breakout_volume_quality_120d
+  - tradability_score
+  - distance_to_limit_up
+  - distance_to_limit_down
+  - illiquidity
+  - turnover_acceleration
+  - industry_ret_20d
+  - industry_ret_60d
+  - industry_ret_120d
+  - industry_breadth_20d
+  - industry_breadth_60d
+  - industry_new_high_ratio
+  - industry_top_stock_momentum
+  - industry_volume_expansion
+  - stock_minus_industry_ret_20d
+  - stock_minus_industry_ret_60d
+  - stock_industry_ret_corr_60d
+  - margin_eligible
+  - margin_balance_to_float_mv
+  - margin_balance_chg_20d
+  - margin_balance_chg_60d
+  - margin_buy_intensity_20d
+  - margin_repay_to_buy_20d
+  - margin_crowding_score
+  - margin_trend_confirm_score
+  - margin_overheat_risk_score
+  - $roe
+  - $grossprofit_margin
+  - $debt_to_assets
+  - $current_ratio
+  - $net_income
+  - $revenue
+  - $total_assets
+  - $equity
+  - $op_cashflow
+  - roe
+  - roa
+  - gross_margin
+  - net_margin
+  - operating_cf_to_profit
+  - debt_to_asset
+  - revenue_yoy
+  - profit_yoy
+  - roe_delta_252d
+  - grossprofit_margin_delta_252d
+  - debt_to_assets_delta_252d
+  - op_cashflow_delta_252d
+  - earnings_yield_proxy
+  - peg_proxy
+  - revenue_yoy_accel
+  - profit_yoy_accel
+  - roe_delta_756d
+  - net_margin_delta_756d
+  - ocf_margin
+  - value_trap_risk_score

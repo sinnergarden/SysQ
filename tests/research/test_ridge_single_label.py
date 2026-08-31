@@ -43,6 +43,15 @@ def test_factory_builds_ridge_and_rejects_irrelevant_tree_params() -> None:
 
     assert isinstance(generator, RidgeSingleLabelGenerator)
     assert generator.ridge_alpha == 2.0
+    exposure_generator = _create_generator_from_config({
+        "generator_id": "ridge",
+        "type": "single_label_ridge",
+        "params": {
+            "label_id": "fwd_ret_120d_raw_pit_csi1800",
+            "signal_exposure_features": ["size", "momentum"],
+        },
+    })
+    assert exposure_generator.signal_exposure_features == ("size", "momentum")
     with pytest.raises(ValueError, match="unknown keys"):
         _create_generator_from_config({
             "generator_id": "ridge",
