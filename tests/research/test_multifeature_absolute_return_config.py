@@ -126,7 +126,10 @@ def test_profitable_ridge_20d_prefix_is_frozen_to_49_preholdout_windows() -> Non
 
 
 def test_terminal_ridge_config_is_exactly_68_windows_and_locked() -> None:
-    config = RollingResearchConfig.from_file(TERMINAL_68W_CONFIG)
+    config = RollingResearchConfig.from_file(
+        TERMINAL_68W_CONFIG,
+        allow_locked_holdout_for_inspection=True,
+    )
     windows = build_rolling_windows(
         config.calendar["start_date"],
         config.calendar["end_date"],

@@ -27,6 +27,7 @@ from qsys.research.matrix_job import (
     apply_signal_transform,
     build_matrix_jobs,
     expand_multi_label_generators,
+    validate_terminal_holdout_authorization,
 )
 from qsys.research.paths import ResearchPaths
 from qsys.research.rolling_window import RollingWindow, build_rolling_windows
@@ -273,18 +274,7 @@ class SignalResearchPipeline:
     @staticmethod
     def _validate_config(config: RollingResearchConfig) -> None:
         """Reject configs that mix strategy/backtest concerns."""
-        holdout = config.research_protocol.get("holdout")
-        if isinstance(holdout, dict) and holdout.get("start_date"):
-            holdout_start = str(holdout["start_date"])
-            calendar_end = str(config.calendar.get("end_date", ""))
-            if calendar_end >= holdout_start and (
-                holdout.get("status") != "authorized_terminal_run"
-                or not str(holdout.get("authorization_ref", "")).strip()
-            ):
-                raise ValueError(
-                    "research calendar overlaps a locked holdout; set "
-                    "status=authorized_terminal_run with an explicit authorization_ref"
-                )
+        validate_terminal_holdout_authorization(config)
         if config.window_checkpoints and not config.source_manifest_hash.strip():
             raise ValueError(
                 "window_checkpoints requires a non-empty source_manifest_hash; "

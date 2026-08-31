@@ -122,7 +122,12 @@ class RollingResearchConfig:
     # each combination: combine_id, type, inputs
 
     @classmethod
-    def from_file(cls, path: Path) -> RollingResearchConfig:
+    def from_file(
+        cls,
+        path: Path,
+        *,
+        allow_locked_holdout_for_inspection: bool = False,
+    ) -> RollingResearchConfig:
         """Load config from YAML or JSON file."""
         text = path.read_text(encoding="utf-8")
         suffix = path.suffix.lower()
@@ -133,7 +138,10 @@ class RollingResearchConfig:
             payload = json.loads(text)
         else:
             raise ValueError(f"Unsupported config format: {path}")
-        return cls.from_dict(payload)
+        config = cls.from_dict(payload)
+        if not allow_locked_holdout_for_inspection:
+            validate_terminal_holdout_authorization(config)
+        return config
 
     @classmethod
     def from_dict(cls, payload: dict) -> RollingResearchConfig:
@@ -166,6 +174,21 @@ class RollingResearchConfig:
             feature_cache_root=payload.get("feature_cache_root", "data/feature_cache"),
             source_manifest_hash=payload.get("source_manifest_hash", ""),
             window_checkpoints=payload.get("window_checkpoints", False),
+        )
+
+
+def validate_terminal_holdout_authorization(config: RollingResearchConfig) -> None:
+    """Reject execution-bound config loads that overlap a locked holdout."""
+    holdout = config.research_protocol.get("holdout")
+    if not isinstance(holdout, dict) or not holdout.get("start_date"):
+        return
+    if str(config.calendar.get("end_date", "")) >= str(holdout["start_date"]) and (
+        holdout.get("status") != "authorized_terminal_run"
+        or not str(holdout.get("authorization_ref", "")).strip()
+    ):
+        raise ValueError(
+            "research calendar overlaps a locked holdout; set "
+            "status=authorized_terminal_run with an explicit authorization_ref"
         )
 
 
