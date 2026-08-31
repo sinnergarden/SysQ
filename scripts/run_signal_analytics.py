@@ -5,9 +5,10 @@ Usage:
     python scripts/run_signal_analytics.py --experiment-id <id>
     python scripts/run_signal_analytics.py --diagnostics-config <path>
     python scripts/run_signal_analytics.py --feature-catalog-config <path>
+    python scripts/run_signal_analytics.py --backtest-validation-config <path>
     python scripts/run_signal_analytics.py --signal-id <id> --signal-run-id <run> --label-id <id>
 """
-import argparse, sys
+import argparse, json, sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -53,6 +54,11 @@ def main():
         help="Write or validate multiple benchmark views over a frozen backtest",
     )
     p.add_argument(
+        "--backtest-validation-config",
+        default=None,
+        help="Independently validate a frozen complete-accounting backtest",
+    )
+    p.add_argument(
         "--stage-c-config",
         default=None,
         help="Freeze or independently validate a Stage-C assessment",
@@ -73,25 +79,47 @@ def main():
         args.alpha_map_config, args.stage_c_config,
         args.pit_benchmark_config,
         args.portfolio_analytics_config,
+        args.backtest_validation_config,
         args.signal_id,
     ))
     if selected_modes != 1:
         p.error(
             "select exactly one mode: --experiment-id, --diagnostics-config, "
             "--feature-catalog-config, --stage-c-config, --alpha-map-config, "
-            "--pit-benchmark-config, --portfolio-analytics-config, or direct "
+            "--pit-benchmark-config, --portfolio-analytics-config, "
+            "--backtest-validation-config, or direct "
             "--signal-id/--signal-run-id/--label-id"
         )
     if args.validate_only and not (
         args.feature_catalog_config or args.diagnostics_config or args.stage_c_config
         or args.alpha_map_config or args.pit_benchmark_config
         or args.portfolio_analytics_config
+        or args.backtest_validation_config
     ):
         p.error(
             "--validate-only requires --feature-catalog-config or "
             "--diagnostics-config, --stage-c-config, --alpha-map-config, or "
             "--pit-benchmark-config/--portfolio-analytics-config"
+            "/--backtest-validation-config"
         )
+    if args.backtest_validation_config:
+        if any((args.signal_run_id, args.label_id)):
+            p.error(
+                "--backtest-validation-config cannot be combined with direct signal arguments"
+            )
+        from qsys.research.backtest_validation import (
+            validate_complete_accounting_backtest,
+        )
+
+        result = validate_complete_accounting_backtest(
+            args.backtest_validation_config
+        )
+        print(
+            "Complete-accounting backtest validation: "
+            f"{result['status']} {result['manifest_sha256']}"
+        )
+        print(json.dumps(result, sort_keys=True))
+        return
     if args.portfolio_analytics_config:
         if any((args.signal_run_id, args.label_id)):
             p.error(

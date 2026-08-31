@@ -1,0 +1,7 @@
+schema_version: complete_accounting_backtest_validation_config_v1
+backtest_dir: data/research/backtests/csi1800_multifeature_ridge_total_return_120d_20d_preholdout_v1/top20_complete_accounting_frozen_market_v2
+research_root: data/research
+expected_manifest_sha256: 39160e6284d07b50c47d0b2a9700027c9e305f40307f7fccfbe68d8d68c734e5
+holdout_start: '2025-01-02'
+terminal_authorization_ref: null
+accounting_identity_tolerance: 1.0e-6

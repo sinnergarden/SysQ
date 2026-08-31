@@ -239,6 +239,13 @@ artifact，但旧 v1 产物不能被宣称为 complete accounting、不能冒充
 market-impact model、order slicing、VWAP/TWAP execution 或 order-book simulation。
 这些不属于 accounting v1 的验收范围。
 
+冻结产物的独立验收通过 canonical `scripts/run_signal_analytics.py
+--backtest-validation-config <yaml>` 只读执行。validation config 必须 pin backtest
+manifest SHA、research root、holdout 边界与（若已消费留出期）同一个 terminal
+authorization ref；验收会重新计算所有 accounting artifact、SignalRun、PIT universe、
+corporate-action raw provenance 与实际使用 market slice 的 hash，并复核逐日账务恒等式。
+进程成功或仅有 metrics 文件不能替代该验收。
+
 ### Financial RC 60d/180d Cache-to-Backtest Runbook
 
 60d 与 180d 必须分别运行研究配置，使训练标签分别使用 61 与 181 个交易日的

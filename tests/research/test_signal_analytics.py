@@ -228,6 +228,41 @@ def test_canonical_cli_runs_diagnostics_validation_mode(
     assert str(validation_path) in output
 
 
+def test_canonical_cli_runs_backtest_validation_mode(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    import qsys.research.backtest_validation as validation_module
+    from scripts.run_signal_analytics import main
+
+    config_path = tmp_path / "backtest-validation.yaml"
+    config_path.write_text("schema_version: fixture\n", encoding="utf-8")
+    monkeypatch.setattr(
+        validation_module,
+        "validate_complete_accounting_backtest",
+        lambda path: {
+            "status": "pass",
+            "manifest_sha256": "b" * 64,
+        },
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_signal_analytics.py",
+            "--backtest-validation-config",
+            str(config_path),
+        ],
+    )
+
+    main()
+
+    output = capsys.readouterr().out
+    assert "Complete-accounting backtest validation: pass" in output
+    assert "b" * 64 in output
+
+
 class SimpleDiagnostics:
     def __init__(self, result: dict[str, str]) -> None:
         self._result = result
