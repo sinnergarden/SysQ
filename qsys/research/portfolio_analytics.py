@@ -13,12 +13,14 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+import yaml
 
 from qsys.research.evaluation import compute_rank_stability
 from qsys.signal.store import SignalStore
 
 
 SCHEMA_VERSION = "portfolio_analytics_v2"
+CONFIG_SCHEMA_VERSION = "portfolio_analytics_config_v1"
 
 
 def _sha256(path: Path) -> str:
@@ -597,3 +599,98 @@ def write_portfolio_analytics(
         "manifest": str(directory / "portfolio_analytics_manifest.json"),
         "analytics": str(directory / "portfolio_analytics.json"),
     }
+
+
+def validate_portfolio_analytics(
+    *,
+    backtest_dir: str | Path,
+    research_root: str | Path,
+    output_name: str,
+) -> dict[str, Any]:
+    """Independently validate one named portfolio-analytics artifact."""
+    source = Path(backtest_dir).resolve()
+    root = Path(research_root).resolve()
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", output_name):
+        raise ValueError("portfolio analytics output_name is not a safe path segment")
+    directory = source / "portfolio_analytics" / output_name
+    manifest_path = directory / "portfolio_analytics_manifest.json"
+    if manifest_path.is_symlink() or not manifest_path.is_file():
+        raise ValueError("portfolio analytics manifest is not a regular file")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    identity = {
+        key: value for key, value in manifest.items()
+        if key not in {"portfolio_analytics_identity_sha256", "outputs"}
+    }
+    if _canonical_hash(identity) != manifest.get(
+        "portfolio_analytics_identity_sha256"
+    ):
+        raise ValueError("portfolio analytics identity hash mismatch")
+    for name, expected in manifest.get("outputs", {}).items():
+        path = directory / name
+        if path.is_symlink() or not path.is_file():
+            raise ValueError(f"portfolio analytics output is not regular: {name}")
+        if _sha256(path) != expected.get("sha256"):
+            raise ValueError(f"portfolio analytics output hash mismatch: {name}")
+    source_files = {
+        "backtest_manifest_sha256": source / "manifest.json",
+        "daily_summary_sha256": source / "daily_summary.csv",
+        "metrics_sha256": source / "metrics.json",
+        "executions_sha256": source / "executions.csv",
+        "valuation_ledger_sha256": source / "valuation_ledger.csv",
+        "benchmark_sha256": Path(str(manifest["benchmark_path"])),
+    }
+    for key, path in source_files.items():
+        if path.is_symlink() or not path.is_file():
+            raise ValueError(f"portfolio analytics source is not regular: {path}")
+        if _sha256(path) != manifest.get(key):
+            raise ValueError(f"portfolio analytics source hash mismatch: {key}")
+    signal = SignalStore(root).validate_backtest_source(
+        str(manifest["signal_id"]), str(manifest["signal_run_id"])
+    )
+    if signal["manifest_sha256"] != manifest.get("signal_manifest_sha256"):
+        raise ValueError("portfolio analytics signal manifest hash mismatch")
+    if signal["predictions_sha256"] != manifest.get("predictions_sha256"):
+        raise ValueError("portfolio analytics predictions hash mismatch")
+    return {
+        "portfolio_analytics_identity_sha256": manifest[
+            "portfolio_analytics_identity_sha256"
+        ],
+        "manifest": str(manifest_path),
+        "analytics": str(directory / "portfolio_analytics.json"),
+        "validation": "passed",
+    }
+
+
+def run_portfolio_analytics_config(
+    config_path: str | Path, *, validate_only: bool = False
+) -> dict[str, Any]:
+    """Write or validate several benchmark views over one frozen backtest."""
+    path = Path(config_path).resolve()
+    if path.is_symlink() or not path.is_file():
+        raise ValueError(f"portfolio analytics config is not a regular file: {path}")
+    config = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    if config.get("schema_version") != CONFIG_SCHEMA_VERSION:
+        raise ValueError("unsupported portfolio analytics config schema")
+    common = {
+        "backtest_dir": config["backtest_dir"],
+        "research_root": config["research_root"],
+    }
+    results: list[dict[str, Any]] = []
+    for benchmark in config.get("benchmarks") or []:
+        output_name = str(benchmark["output_name"])
+        if validate_only:
+            result = validate_portfolio_analytics(
+                **common, output_name=output_name
+            )
+        else:
+            result = write_portfolio_analytics(
+                **common,
+                benchmark_id=str(benchmark["benchmark_id"]),
+                benchmark_csv=benchmark["benchmark_csv"],
+                holdout_start=str(config["holdout_start"]),
+                output_name=output_name,
+            )
+        results.append({"benchmark_id": benchmark["benchmark_id"], **result})
+    if not results:
+        raise ValueError("portfolio analytics config has no benchmarks")
+    return {"config": str(path), "benchmarks": results}

@@ -415,8 +415,16 @@ def run_pit_universe_benchmark_config(
     if config.get("schema_version") != CONFIG_SCHEMA_VERSION:
         raise ValueError("unsupported PIT universe benchmark config schema")
     benchmark_config = dict(config.get("benchmark") or {})
-    if validate_only:
+    reuse_existing = bool(benchmark_config.pop("reuse_existing", False))
+    if validate_only or reuse_existing:
         result = validate_pit_universe_benchmark(benchmark_config["output_dir"])
+        manifest = json.loads(Path(result["manifest"]).read_text(encoding="utf-8"))
+        for key in ("benchmark_id", "start_date", "end_date", "holdout_start"):
+            if str(benchmark_config[key]) != str(manifest[key]):
+                raise ValueError(f"reused benchmark {key} does not match config")
+        result["benchmark"] = str(
+            Path(benchmark_config["output_dir"]).resolve() / "benchmark.csv"
+        )
     else:
         result = write_pit_universe_benchmark(
             **benchmark_config,

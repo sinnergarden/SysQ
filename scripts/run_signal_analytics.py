@@ -48,6 +48,11 @@ def main():
         help="Build or validate a PIT-universe synthetic benchmark and its analytics",
     )
     p.add_argument(
+        "--portfolio-analytics-config",
+        default=None,
+        help="Write or validate multiple benchmark views over a frozen backtest",
+    )
+    p.add_argument(
         "--stage-c-config",
         default=None,
         help="Freeze or independently validate a Stage-C assessment",
@@ -67,23 +72,43 @@ def main():
         args.experiment_id, args.diagnostics_config, args.feature_catalog_config,
         args.alpha_map_config, args.stage_c_config,
         args.pit_benchmark_config,
+        args.portfolio_analytics_config,
         args.signal_id,
     ))
     if selected_modes != 1:
         p.error(
             "select exactly one mode: --experiment-id, --diagnostics-config, "
             "--feature-catalog-config, --stage-c-config, --alpha-map-config, "
-            "--pit-benchmark-config, or direct --signal-id/--signal-run-id/--label-id"
+            "--pit-benchmark-config, --portfolio-analytics-config, or direct "
+            "--signal-id/--signal-run-id/--label-id"
         )
     if args.validate_only and not (
         args.feature_catalog_config or args.diagnostics_config or args.stage_c_config
         or args.alpha_map_config or args.pit_benchmark_config
+        or args.portfolio_analytics_config
     ):
         p.error(
             "--validate-only requires --feature-catalog-config or "
             "--diagnostics-config, --stage-c-config, --alpha-map-config, or "
-            "--pit-benchmark-config"
+            "--pit-benchmark-config/--portfolio-analytics-config"
         )
+    if args.portfolio_analytics_config:
+        if any((args.signal_run_id, args.label_id)):
+            p.error(
+                "--portfolio-analytics-config cannot be combined with direct signal arguments"
+            )
+        from qsys.research.portfolio_analytics import run_portfolio_analytics_config
+
+        result = run_portfolio_analytics_config(
+            args.portfolio_analytics_config, validate_only=args.validate_only
+        )
+        for item in result["benchmarks"]:
+            print(
+                f"Portfolio analytics [{item['benchmark_id']}]: "
+                f"{item['portfolio_analytics_identity_sha256']}"
+            )
+            print(f"Manifest: {item['manifest']}")
+        return
     if args.pit_benchmark_config:
         if any((args.signal_run_id, args.label_id)):
             p.error("--pit-benchmark-config cannot be combined with direct signal arguments")

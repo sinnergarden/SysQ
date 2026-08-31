@@ -8,6 +8,7 @@ import pandas as pd
 import pytest
 
 from qsys.research.pit_universe_benchmark import (
+    run_pit_universe_benchmark_config,
     validate_pit_universe_benchmark,
     write_pit_universe_benchmark,
 )
@@ -120,3 +121,47 @@ def test_pit_benchmark_rejects_holdout_overlap(tmp_path: Path) -> None:
             end_date="2025-01-02",
             holdout_start="2025-01-02",
         )
+
+
+def test_config_can_reuse_a_validated_existing_benchmark(tmp_path: Path) -> None:
+    universe = tmp_path / "universe"
+    market = tmp_path / "market"
+    output = tmp_path / "benchmark"
+    calendar = tmp_path / "calendar.csv"
+    config_path = tmp_path / "benchmark.yaml"
+    _write_universe(universe)
+    _write_market_data(market)
+    pd.DataFrame({"trade_date": ["20240102", "20240103", "20240104"]}).to_csv(
+        calendar, index=False
+    )
+    write_pit_universe_benchmark(
+        benchmark_id="reused_proxy",
+        universe_artifact=universe,
+        canonical_data_root=market,
+        calendar_csv=calendar,
+        output_dir=output,
+        start_date="2024-01-02",
+        end_date="2024-01-04",
+        holdout_start="2025-01-02",
+        min_constituent_coverage=1.0,
+    )
+    config_path.write_text(
+        "\n".join([
+            "schema_version: pit_universe_benchmark_config_v1",
+            "benchmark:",
+            "  benchmark_id: reused_proxy",
+            f"  universe_artifact: {universe}",
+            f"  canonical_data_root: {market}",
+            f"  calendar_csv: {calendar}",
+            f"  output_dir: {output}",
+            "  start_date: '2024-01-02'",
+            "  end_date: '2024-01-04'",
+            "  holdout_start: '2025-01-02'",
+            "  min_constituent_coverage: 1.0",
+            "  reuse_existing: true",
+        ]),
+        encoding="utf-8",
+    )
+    result = run_pit_universe_benchmark_config(config_path)
+    assert result["benchmark"] == str((output / "benchmark.csv").resolve())
+    assert result["validation"] == "passed"

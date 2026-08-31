@@ -10,6 +10,7 @@ import pytest
 from qsys.research.portfolio_analytics import (
     _return_metrics,
     _window_max_drawdown,
+    validate_portfolio_analytics,
     write_portfolio_analytics,
 )
 from qsys.research.manifest import write_manifest
@@ -175,6 +176,15 @@ def test_portfolio_analytics_binds_sources_and_computes_required_metrics(
     assert Path(named["analytics"]) == named_dir / "portfolio_analytics.json"
     assert (named_dir / "portfolio_analytics_manifest.json").is_file()
     assert (output / "portfolio_analytics.json").is_file()
+    validation = validate_portfolio_analytics(
+        backtest_dir=output,
+        research_root=research_root,
+        output_name="csi1800_proxy",
+    )
+    assert validation["validation"] == "passed"
+    assert validation["portfolio_analytics_identity_sha256"] == named[
+        "portfolio_analytics_identity_sha256"
+    ]
 
 
 def test_portfolio_analytics_rejects_unsafe_output_name(tmp_path: Path) -> None:
