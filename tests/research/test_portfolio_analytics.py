@@ -162,3 +162,28 @@ def test_portfolio_analytics_binds_sources_and_computes_required_metrics(
     assert result["portfolio_analytics_identity_sha256"] == analytics_manifest[
         "portfolio_analytics_identity_sha256"
     ]
+
+    named = write_portfolio_analytics(
+        backtest_dir=output,
+        research_root=research_root,
+        benchmark_id="csi1800_proxy",
+        benchmark_csv=benchmark_path,
+        holdout_start="2025-01-02",
+        output_name="csi1800_proxy",
+    )
+    named_dir = output / "portfolio_analytics" / "csi1800_proxy"
+    assert Path(named["analytics"]) == named_dir / "portfolio_analytics.json"
+    assert (named_dir / "portfolio_analytics_manifest.json").is_file()
+    assert (output / "portfolio_analytics.json").is_file()
+
+
+def test_portfolio_analytics_rejects_unsafe_output_name(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="safe path segment"):
+        write_portfolio_analytics(
+            backtest_dir=tmp_path,
+            research_root=tmp_path,
+            benchmark_id="benchmark",
+            benchmark_csv=tmp_path / "benchmark.csv",
+            holdout_start="2025-01-02",
+            output_name="../escape",
+        )

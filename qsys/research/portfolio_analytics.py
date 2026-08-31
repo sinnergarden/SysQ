@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -331,16 +332,25 @@ def write_portfolio_analytics(
     benchmark_csv: str | Path,
     holdout_start: str,
     rolling_windows: tuple[int, ...] = (60, 120),
+    output_name: str | None = None,
 ) -> dict[str, Any]:
     """Compute and persist transparent analytics for one frozen backtest."""
-    directory = Path(backtest_dir).resolve()
+    source_directory = Path(backtest_dir).resolve()
+    if output_name is None:
+        directory = source_directory
+    else:
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", output_name):
+            raise ValueError("portfolio analytics output_name is not a safe path segment")
+        directory = source_directory / "portfolio_analytics" / output_name
+        if directory.is_symlink():
+            raise ValueError("portfolio analytics output directory cannot be a symlink")
     root = Path(research_root).resolve()
     benchmark_path = Path(benchmark_csv).resolve()
-    manifest_path = directory / "manifest.json"
-    metrics_path = directory / "metrics.json"
-    daily_path = directory / "daily_summary.csv"
-    executions_path = directory / "executions.csv"
-    valuation_path = directory / "valuation_ledger.csv"
+    manifest_path = source_directory / "manifest.json"
+    metrics_path = source_directory / "metrics.json"
+    daily_path = source_directory / "daily_summary.csv"
+    executions_path = source_directory / "executions.csv"
+    valuation_path = source_directory / "valuation_ledger.csv"
     for path in (
         manifest_path, metrics_path, daily_path, executions_path, valuation_path,
         benchmark_path,
@@ -562,6 +572,7 @@ def write_portfolio_analytics(
     identity = {
         "schema_version": SCHEMA_VERSION,
         "backtest_id": manifest["backtest_id"],
+        "output_name": output_name,
         "producer_code_sha256": _sha256(Path(__file__)),
         **inputs,
         "holdout_start": holdout_start,

@@ -196,6 +196,11 @@ def main() -> None:
     parser.add_argument("--benchmark-id", default=None)
     parser.add_argument("--benchmark-csv", type=Path, default=None)
     parser.add_argument(
+        "--portfolio-analytics-output-name",
+        default=None,
+        help="Optional safe name for a benchmark-specific analytics subdirectory",
+    )
+    parser.add_argument(
         "--holdout-start",
         default=None,
         help="First untouched holdout date; required for portfolio analytics",
@@ -475,6 +480,7 @@ def main() -> None:
             benchmark_id=args.benchmark_id,
             benchmark_csv=args.benchmark_csv,
             holdout_start=args.holdout_start,
+            output_name=args.portfolio_analytics_output_name,
         )
 
     print(json.dumps({
