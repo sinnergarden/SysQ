@@ -75,6 +75,7 @@ def write_pit_universe_benchmark(
     holdout_start: str,
     min_constituent_coverage: float = 0.95,
     config_path: str | Path | None = None,
+    terminal_authorization_ref: str | None = None,
 ) -> dict[str, Any]:
     """Build a prior-float-cap-weighted total-return proxy without lookahead.
 
@@ -91,8 +92,11 @@ def write_pit_universe_benchmark(
     holdout = pd.Timestamp(holdout_start).normalize()
     if start > end:
         raise ValueError("benchmark start_date is after end_date")
-    if end >= holdout:
-        raise ValueError("benchmark range overlaps declared holdout")
+    holdout_consumed = end >= holdout
+    if holdout_consumed and not str(terminal_authorization_ref or "").strip():
+        raise ValueError(
+            "benchmark range overlaps declared holdout without terminal authorization"
+        )
     if not 0.0 < min_constituent_coverage <= 1.0:
         raise ValueError("min_constituent_coverage must be in (0, 1]")
 
@@ -318,6 +322,8 @@ def write_pit_universe_benchmark(
         "start_date": start.strftime("%Y-%m-%d"),
         "end_date": end.strftime("%Y-%m-%d"),
         "holdout_start": holdout.strftime("%Y-%m-%d"),
+        "holdout_consumed": holdout_consumed,
+        "terminal_authorization_ref": terminal_authorization_ref,
         "weight_contract": (
             "strict_prior_calendar_day_pit_membership_and_strict_prior_circ_mv_"
             "daily_rebalanced_v1"
@@ -395,8 +401,13 @@ def validate_pit_universe_benchmark(output_dir: str | Path) -> dict[str, Any]:
     declared = pd.to_numeric(benchmark["daily_return"], errors="coerce")
     if not (returns - declared).abs().le(1e-12).all():
         raise ValueError("benchmark level and declared return disagree")
-    if dates.max() >= pd.Timestamp(manifest["holdout_start"]):
-        raise ValueError("benchmark consumes declared holdout")
+    overlaps_holdout = dates.max() >= pd.Timestamp(manifest["holdout_start"])
+    if overlaps_holdout != bool(manifest.get("holdout_consumed", False)):
+        raise ValueError("benchmark holdout-consumption declaration mismatch")
+    if overlaps_holdout and not str(
+        manifest.get("terminal_authorization_ref") or ""
+    ).strip():
+        raise ValueError("benchmark consumes holdout without authorization lineage")
     return {
         "benchmark_id": manifest["benchmark_id"],
         "benchmark_identity_sha256": manifest["benchmark_identity_sha256"],

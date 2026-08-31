@@ -10,6 +10,7 @@ import pytest
 from qsys.research.portfolio_analytics import (
     _return_metrics,
     _window_max_drawdown,
+    run_portfolio_analytics_config,
     validate_portfolio_analytics,
     write_portfolio_analytics,
 )
@@ -185,6 +186,56 @@ def test_portfolio_analytics_binds_sources_and_computes_required_metrics(
     assert validation["portfolio_analytics_identity_sha256"] == named[
         "portfolio_analytics_identity_sha256"
     ]
+
+    with pytest.raises(ValueError, match="without terminal authorization"):
+        write_portfolio_analytics(
+            backtest_dir=output,
+            research_root=research_root,
+            benchmark_id="locked_terminal",
+            benchmark_csv=benchmark_path,
+            holdout_start=dates.min().strftime("%Y-%m-%d"),
+            output_name="locked_terminal",
+        )
+    terminal = write_portfolio_analytics(
+        backtest_dir=output,
+        research_root=research_root,
+        benchmark_id="authorized_terminal",
+        benchmark_csv=benchmark_path,
+        holdout_start=dates.min().strftime("%Y-%m-%d"),
+        output_name="authorized_terminal",
+        terminal_authorization_ref="unit-test-explicit-authorization",
+    )
+    terminal_analytics = json.loads(Path(terminal["analytics"]).read_text())
+    assert terminal_analytics["holdout_consumed"] is True
+    assert terminal_analytics["terminal_authorization_ref"] == (
+        "unit-test-explicit-authorization"
+    )
+    assert validate_portfolio_analytics(
+        backtest_dir=output,
+        research_root=research_root,
+        output_name="authorized_terminal",
+    )["validation"] == "passed"
+
+    terminal_config = tmp_path / "terminal_portfolio_analytics.yaml"
+    terminal_config.write_text(json.dumps({
+        "schema_version": "portfolio_analytics_config_v1",
+        "backtest_dir": str(output),
+        "research_root": str(research_root),
+        "holdout_start": dates.min().strftime("%Y-%m-%d"),
+        "terminal_authorization_ref": "unit-test-config-authorization",
+        "benchmarks": [{
+            "benchmark_id": "configured_terminal",
+            "benchmark_csv": str(benchmark_path),
+            "output_name": "configured_terminal",
+        }],
+    }))
+    configured = run_portfolio_analytics_config(terminal_config)
+    configured_analytics = json.loads(
+        Path(configured["benchmarks"][0]["analytics"]).read_text()
+    )
+    assert configured_analytics["terminal_authorization_ref"] == (
+        "unit-test-config-authorization"
+    )
 
 
 def test_portfolio_analytics_rejects_unsafe_output_name(tmp_path: Path) -> None:

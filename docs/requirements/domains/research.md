@@ -130,6 +130,9 @@ Canonical cached-signal backtest 还必须输出 manifest 绑定的
 fail closed。只有配置同时声明 `holdout.status: authorized_terminal_run` 与非空
 `holdout.authorization_ref` 才可启动终端运行；这两个字段只能在取得明确授权后
 写入，并作为 research-config identity 的一部分进入 checkpoint 与 signal lineage。
+终端 benchmark 与 portfolio analytics 同样必须接收并 hash-bind 非空
+`terminal_authorization_ref`，同时把 `holdout_consumed` 明确写为 `true`；未授权时
+仍在读取或写入留出制品前 fail closed。
 
 `run_from_signal_cache` 的 accounting v1 是研究回测的账本边界，不是生产
 ledger，也不改变 signal、feature、model 或 strategy。输入 SignalRun 的内容、

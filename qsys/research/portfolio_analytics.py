@@ -335,6 +335,7 @@ def write_portfolio_analytics(
     holdout_start: str,
     rolling_windows: tuple[int, ...] = (60, 120),
     output_name: str | None = None,
+    terminal_authorization_ref: str | None = None,
 ) -> dict[str, Any]:
     """Compute and persist transparent analytics for one frozen backtest."""
     source_directory = Path(backtest_dir).resolve()
@@ -366,8 +367,12 @@ def write_portfolio_analytics(
         raise ValueError("invalid backtest manifest")
     if manifest.get("accounting", {}).get("schema_version") != "accounting_v1":
         raise ValueError("portfolio analytics requires complete accounting v1")
-    if str(manifest.get("end_date")) >= holdout_start:
-        raise ValueError("portfolio analytics backtest overlaps declared holdout")
+    holdout_consumed = str(manifest.get("end_date")) >= holdout_start
+    if holdout_consumed and not str(terminal_authorization_ref or "").strip():
+        raise ValueError(
+            "portfolio analytics backtest overlaps declared holdout without "
+            "terminal authorization"
+        )
 
     daily = pd.read_csv(daily_path)
     required_daily = {
@@ -381,8 +386,11 @@ def write_portfolio_analytics(
     daily = daily.sort_values("trade_date").reset_index(drop=True)
     if daily["trade_date"].isna().any() or daily["trade_date"].duplicated().any():
         raise ValueError("daily summary dates are invalid or duplicated")
-    if daily.empty or daily["trade_date"].max() >= pd.Timestamp(holdout_start):
-        raise ValueError("daily summary is empty or consumes holdout")
+    if daily.empty:
+        raise ValueError("daily summary is empty")
+    daily_consumes_holdout = daily["trade_date"].max() >= pd.Timestamp(holdout_start)
+    if daily_consumes_holdout != holdout_consumed:
+        raise ValueError("backtest manifest and daily summary disagree on holdout use")
     values = pd.to_numeric(daily["total_value_after"], errors="coerce")
     if values.isna().any() or (values <= 0).any():
         raise ValueError("daily total values must be positive and finite")
@@ -524,7 +532,8 @@ def write_portfolio_analytics(
         "start_date": manifest["start_date"],
         "end_date": manifest["end_date"],
         "holdout_start": holdout_start,
-        "holdout_consumed": False,
+        "holdout_consumed": holdout_consumed,
+        "terminal_authorization_ref": terminal_authorization_ref,
         "inputs": inputs,
         "portfolio_spec": {
             "top_n": int(manifest["allocation_params"]["top_n"]),
@@ -578,6 +587,8 @@ def write_portfolio_analytics(
         "producer_code_sha256": _sha256(Path(__file__)),
         **inputs,
         "holdout_start": holdout_start,
+        "holdout_consumed": holdout_consumed,
+        "terminal_authorization_ref": terminal_authorization_ref,
         "rolling_windows": list(rolling_windows),
     }
     analytics_manifest = {
@@ -689,6 +700,9 @@ def run_portfolio_analytics_config(
                 benchmark_csv=benchmark["benchmark_csv"],
                 holdout_start=str(config["holdout_start"]),
                 output_name=output_name,
+                terminal_authorization_ref=config.get(
+                    "terminal_authorization_ref"
+                ),
             )
         results.append({"benchmark_id": benchmark["benchmark_id"], **result})
     if not results:

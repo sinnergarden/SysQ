@@ -110,7 +110,7 @@ def test_pit_benchmark_uses_strict_prior_caps_and_zero_carries_suspension(
 
 
 def test_pit_benchmark_rejects_holdout_overlap(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="overlaps declared holdout"):
+    with pytest.raises(ValueError, match="without terminal authorization"):
         write_pit_universe_benchmark(
             benchmark_id="blocked",
             universe_artifact=tmp_path / "not_read",
@@ -121,6 +121,34 @@ def test_pit_benchmark_rejects_holdout_overlap(tmp_path: Path) -> None:
             end_date="2025-01-02",
             holdout_start="2025-01-02",
         )
+
+
+def test_pit_benchmark_records_authorized_terminal_holdout(tmp_path: Path) -> None:
+    universe = tmp_path / "universe"
+    market = tmp_path / "market"
+    output = tmp_path / "benchmark"
+    calendar = tmp_path / "calendar.csv"
+    _write_universe(universe)
+    _write_market_data(market)
+    pd.DataFrame({"trade_date": ["20240104"]}).to_csv(calendar, index=False)
+    write_pit_universe_benchmark(
+        benchmark_id="authorized_terminal_proxy",
+        universe_artifact=universe,
+        canonical_data_root=market,
+        calendar_csv=calendar,
+        output_dir=output,
+        start_date="2024-01-04",
+        end_date="2024-01-04",
+        holdout_start="2024-01-04",
+        min_constituent_coverage=1.0,
+        terminal_authorization_ref="unit-test-explicit-authorization",
+    )
+    manifest = json.loads((output / "manifest.json").read_text())
+    assert manifest["holdout_consumed"] is True
+    assert manifest["terminal_authorization_ref"] == (
+        "unit-test-explicit-authorization"
+    )
+    assert validate_pit_universe_benchmark(output)["validation"] == "passed"
 
 
 def test_config_can_reuse_a_validated_existing_benchmark(tmp_path: Path) -> None:
