@@ -9,6 +9,7 @@ from qsys.research.matrix_job import (
     _create_generator_from_config,
     build_matrix_jobs,
 )
+from qsys.research.signal_pipeline import SignalResearchPipeline
 
 
 REPO = Path(__file__).resolve().parents[2]
@@ -61,4 +62,27 @@ def test_models_share_features_and_strict_temporal_validation() -> None:
     )
     assert isinstance(
         generators[1], TemporalValidationLightGBMSingleLabelGenerator
+    )
+    assert (
+        "qsys.research.generators.temporal_validation"
+        not in generators[0].checkpoint_code_dependencies
+    )
+    pipeline = SignalResearchPipeline(REPO / "data/research")
+    ridge_identity = pipeline._window_checkpoint_base_identity(
+        config, config.generators[0], generators[0]
+    )
+    lightgbm_identity = pipeline._window_checkpoint_base_identity(
+        config, config.generators[1], generators[1]
+    )
+    ridge_dependencies = {
+        item["name"] for item in ridge_identity["generator_dependency_code"]
+    }
+    lightgbm_dependencies = {
+        item["name"] for item in lightgbm_identity["generator_dependency_code"]
+    }
+    assert "qsys.research.generators.temporal_validation" in ridge_dependencies
+    assert "qsys.research.generators.lightgbm_single_label" in ridge_dependencies
+    assert (
+        "qsys.research.generators.lightgbm_single_label"
+        in lightgbm_dependencies
     )

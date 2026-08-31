@@ -37,14 +37,13 @@ class RidgeSingleLabelGenerator(LightGBMSingleLabelGenerator):
             raise ValueError("ridge baseline does not support sample weighting")
 
     @property
-    def checkpoint_code_dependencies(self) -> dict[str, Path]:
+    def model_checkpoint_code_dependencies(self) -> dict[str, Path]:
         from qsys.research.generators import (
             lightgbm_single_label,
             temporal_validation,
         )
 
         return {
-            **super().checkpoint_code_dependencies,
             "qsys.research.generators.lightgbm_single_label": Path(
                 lightgbm_single_label.__file__
             ).resolve(),

@@ -61,15 +61,31 @@ def _generator_dependency_code_identity(
     stable name and content hash are persisted, so checkout location does not
     become part of the checkpoint identity.
     """
-    declared = getattr(generator, "checkpoint_code_dependencies", None)
-    if declared is None:
+    declared: dict[str, Any] = {}
+    for attribute in (
+        "checkpoint_code_dependencies",
+        "model_checkpoint_code_dependencies",
+    ):
+        dependency_group = getattr(generator, attribute, None)
+        if dependency_group is None:
+            continue
+        if callable(dependency_group):
+            dependency_group = dependency_group()
+        if not isinstance(dependency_group, dict):
+            raise ValueError(f"{attribute} must be a mapping of name to file path")
+        conflicts = {
+            name
+            for name, path in dependency_group.items()
+            if name in declared and declared[name] != path
+        }
+        if conflicts:
+            raise ValueError(
+                "checkpoint dependency names resolve to conflicting paths: "
+                f"{sorted(conflicts)}"
+            )
+        declared.update(dependency_group)
+    if not declared:
         return []
-    if callable(declared):
-        declared = declared()
-    if not isinstance(declared, dict):
-        raise ValueError(
-            "checkpoint_code_dependencies must be a mapping of name to file path"
-        )
     dependencies: list[dict[str, str]] = []
     for name, raw_path in sorted(declared.items(), key=lambda item: str(item[0])):
         if not isinstance(name, str) or not name.strip():

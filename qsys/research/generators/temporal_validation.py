@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -75,6 +76,16 @@ class TemporalValidationLightGBMSingleLabelGenerator(
     LightGBMSingleLabelGenerator
 ):
     """LightGBM baseline with a strictly later whole-date validation tail."""
+
+    @property
+    def model_checkpoint_code_dependencies(self) -> dict[str, Path]:
+        from qsys.research.generators import lightgbm_single_label
+
+        return {
+            "qsys.research.generators.lightgbm_single_label": Path(
+                lightgbm_single_label.__file__
+            ).resolve(),
+        }
 
     def generate(self, **kwargs) -> pd.DataFrame:
         return attach_latest_model_diagnostics(
