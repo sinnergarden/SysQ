@@ -20,6 +20,7 @@ import argparse
 import hashlib
 import json
 import sys
+from datetime import date
 from pathlib import Path
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -152,6 +153,15 @@ def main() -> None:
         help="Root of immutable canonical daily raw-price files",
     )
     parser.add_argument(
+        "--freeze-canonical-data-to",
+        type=Path,
+        default=None,
+        help=(
+            "Atomically freeze actual rebalance-candidate market files through "
+            "end-date, then execute only from that immutable slice"
+        ),
+    )
+    parser.add_argument(
         "--max-participation-rate", type=float, default=None,
         help="ADV participation cap; baseline uses 0.10 with reject gate",
     )
@@ -204,6 +214,14 @@ def main() -> None:
         "--holdout-start",
         default=None,
         help="First untouched holdout date; required for portfolio analytics",
+    )
+    parser.add_argument(
+        "--terminal-authorization-ref",
+        default=None,
+        help=(
+            "Explicit authorization lineage required when portfolio analytics "
+            "overlap the declared holdout"
+        ),
     )
     parser.add_argument("--accumulate", action="store_true",
                         help="Accumulate mode: never sell based on signal; only buy to fill top_n")
@@ -330,6 +348,15 @@ def main() -> None:
             parser.error(
                 "complete accounting requires --liquidity-gate-mode reject"
             )
+    if args.freeze_canonical_data_to is not None and not args.require_complete_accounting:
+        parser.error(
+            "--freeze-canonical-data-to requires --require-complete-accounting"
+        )
+    if args.freeze_canonical_data_to is not None and not args.holdout_start:
+        parser.error(
+            "--freeze-canonical-data-to requires --holdout-start so terminal "
+            "market data cannot be materialized without authorization"
+        )
     if args.portfolio_analytics:
         if args.accumulate or not args.require_complete_accounting:
             parser.error(
@@ -339,6 +366,18 @@ def main() -> None:
             parser.error(
                 "--portfolio-analytics requires --benchmark-id, --benchmark-csv, "
                 "and --holdout-start"
+            )
+    if args.holdout_start:
+        try:
+            consumes_holdout = date.fromisoformat(args.end_date) >= date.fromisoformat(
+                args.holdout_start
+            )
+        except ValueError:
+            parser.error("--end-date and --holdout-start must be ISO dates")
+        if consumes_holdout and not str(args.terminal_authorization_ref or "").strip():
+            parser.error(
+                "backtest or portfolio analytics overlap the declared holdout; "
+                "--terminal-authorization-ref is required before backtest execution"
             )
     if (
         args.exposure_gate_schedule is not None
@@ -444,6 +483,9 @@ def main() -> None:
         pit_universe_artifact=args.pit_universe_artifact,
         corporate_action_artifact=args.corporate_action_artifact,
         canonical_data_root=args.canonical_data_root,
+        freeze_canonical_data_to=args.freeze_canonical_data_to,
+        holdout_start=args.holdout_start,
+        terminal_authorization_ref=args.terminal_authorization_ref,
         max_participation_rate=args.max_participation_rate,
         liquidity_gate_mode=args.liquidity_gate_mode,
         adv_window=args.adv_window,
@@ -456,6 +498,9 @@ def main() -> None:
         kwargs.pop("pit_universe_artifact", None)
         kwargs.pop("corporate_action_artifact", None)
         kwargs.pop("canonical_data_root", None)
+        kwargs.pop("freeze_canonical_data_to", None)
+        kwargs.pop("holdout_start", None)
+        kwargs.pop("terminal_authorization_ref", None)
         kwargs.pop("max_participation_rate", None)
         kwargs.pop("liquidity_gate_mode", None)
         kwargs.pop("adv_window", None)
@@ -481,6 +526,7 @@ def main() -> None:
             benchmark_csv=args.benchmark_csv,
             holdout_start=args.holdout_start,
             output_name=args.portfolio_analytics_output_name,
+            terminal_authorization_ref=args.terminal_authorization_ref,
         )
 
     print(json.dumps({

@@ -19,7 +19,7 @@ from qsys.research.evaluation import compute_rank_stability
 from qsys.signal.store import SignalStore
 
 
-SCHEMA_VERSION = "portfolio_analytics_v2"
+SCHEMA_VERSION = "portfolio_analytics_v3"
 CONFIG_SCHEMA_VERSION = "portfolio_analytics_config_v1"
 
 
@@ -37,6 +37,20 @@ def _canonical_hash(value: Any) -> str:
             value, sort_keys=True, separators=(",", ":"), ensure_ascii=False
         ).encode("utf-8")
     ).hexdigest()
+
+
+def _text_sha256(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _normalised_date(value: Any, label: str) -> pd.Timestamp:
+    try:
+        parsed = pd.Timestamp(value).normalize()
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{label} is not a valid date") from exc
+    if pd.isna(parsed):
+        raise ValueError(f"{label} is not a valid date")
+    return parsed
 
 
 def _write_text(path: Path, value: str) -> None:
@@ -245,8 +259,11 @@ def _load_benchmark_returns(
     if not math.isfinite(first_open) or first_open <= 0:
         raise ValueError("benchmark first-day open must be positive")
     returns.iloc[0] = first_close / first_open - 1.0
-    trend = indexed["close"].pct_change(60).shift(1)
-    return benchmark, returns.astype(float).rename("benchmark_return")
+    first_position = int(indexed.index.get_loc(trade_dates[0]))
+    last_position = int(indexed.index.get_loc(trade_dates[-1]))
+    context_start = max(0, first_position - 61)
+    history = indexed.iloc[context_start:last_position + 1].reset_index()
+    return history, returns.astype(float).rename("benchmark_return")
 
 
 def _regime_metrics(
@@ -354,25 +371,39 @@ def write_portfolio_analytics(
     daily_path = source_directory / "daily_summary.csv"
     executions_path = source_directory / "executions.csv"
     valuation_path = source_directory / "valuation_ledger.csv"
-    for path in (
-        manifest_path, metrics_path, daily_path, executions_path, valuation_path,
-        benchmark_path,
-    ):
-        if path.is_symlink() or not path.is_file():
-            raise ValueError(f"portfolio analytics input is not a regular file: {path}")
-
+    if manifest_path.is_symlink() or not manifest_path.is_file():
+        raise ValueError(
+            f"portfolio analytics input is not a regular file: {manifest_path}"
+        )
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
     if manifest.get("artifact_type") != "backtest_run":
         raise ValueError("invalid backtest manifest")
     if manifest.get("accounting", {}).get("schema_version") != "accounting_v1":
         raise ValueError("portfolio analytics requires complete accounting v1")
-    holdout_consumed = str(manifest.get("end_date")) >= holdout_start
+    end = _normalised_date(manifest.get("end_date"), "backtest end_date")
+    holdout = _normalised_date(holdout_start, "holdout_start")
+    holdout_consumed = bool(end >= holdout)
+    backtest_holdout = manifest.get("terminal_holdout")
+    if backtest_holdout is not None:
+        if str(backtest_holdout.get("holdout_start")) != holdout_start:
+            raise ValueError("backtest and portfolio analytics holdout boundaries disagree")
+        if backtest_holdout.get("holdout_consumed") is not holdout_consumed:
+            raise ValueError("backtest holdout-consumption declaration mismatch")
+        if backtest_holdout.get("terminal_authorization_ref") != (
+            terminal_authorization_ref
+        ):
+            raise ValueError("backtest and portfolio analytics authorization disagree")
     if holdout_consumed and not str(terminal_authorization_ref or "").strip():
         raise ValueError(
             "portfolio analytics backtest overlaps declared holdout without "
             "terminal authorization"
         )
+    for path in (
+        metrics_path, daily_path, executions_path, valuation_path, benchmark_path,
+    ):
+        if path.is_symlink() or not path.is_file():
+            raise ValueError(f"portfolio analytics input is not a regular file: {path}")
+    metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
 
     daily = pd.read_csv(daily_path)
     required_daily = {
@@ -388,7 +419,7 @@ def write_portfolio_analytics(
         raise ValueError("daily summary dates are invalid or duplicated")
     if daily.empty:
         raise ValueError("daily summary is empty")
-    daily_consumes_holdout = daily["trade_date"].max() >= pd.Timestamp(holdout_start)
+    daily_consumes_holdout = daily["trade_date"].max() >= holdout
     if daily_consumes_holdout != holdout_consumed:
         raise ValueError("backtest manifest and daily summary disagree on holdout use")
     values = pd.to_numeric(daily["total_value_after"], errors="coerce")
@@ -525,6 +556,10 @@ def write_portfolio_analytics(
         "benchmark_path": str(benchmark_path),
         "benchmark_sha256": _sha256(benchmark_path),
     }
+    benchmark_slice_csv = benchmark_history.to_csv(
+        index=False, lineterminator="\n"
+    )
+    inputs["benchmark_slice_sha256"] = _text_sha256(benchmark_slice_csv)
     analytics = _finite({
         "schema_version": SCHEMA_VERSION,
         "backtest_id": manifest["backtest_id"],
@@ -568,6 +603,7 @@ def write_portfolio_analytics(
     })
 
     csv_outputs = {
+        "benchmark_daily.csv": benchmark_history,
         "annual_returns.csv": annual,
         "rolling_metrics.csv": rolling,
         "exposure_daily.csv": exposure,
@@ -642,19 +678,94 @@ def validate_portfolio_analytics(
             raise ValueError(f"portfolio analytics output is not regular: {name}")
         if _sha256(path) != expected.get("sha256"):
             raise ValueError(f"portfolio analytics output hash mismatch: {name}")
+    analytics_path = directory / "portfolio_analytics.json"
+    if "portfolio_analytics.json" not in manifest.get("outputs", {}):
+        raise ValueError("portfolio analytics manifest does not bind analytics JSON")
+    analytics = json.loads(analytics_path.read_text(encoding="utf-8"))
+    if manifest.get("schema_version") != SCHEMA_VERSION:
+        raise ValueError("unsupported portfolio analytics manifest schema")
+    if analytics.get("schema_version") != SCHEMA_VERSION:
+        raise ValueError("unsupported portfolio analytics JSON schema")
     source_files = {
         "backtest_manifest_sha256": source / "manifest.json",
         "daily_summary_sha256": source / "daily_summary.csv",
         "metrics_sha256": source / "metrics.json",
         "executions_sha256": source / "executions.csv",
         "valuation_ledger_sha256": source / "valuation_ledger.csv",
-        "benchmark_sha256": Path(str(manifest["benchmark_path"])),
     }
     for key, path in source_files.items():
         if path.is_symlink() or not path.is_file():
             raise ValueError(f"portfolio analytics source is not regular: {path}")
         if _sha256(path) != manifest.get(key):
             raise ValueError(f"portfolio analytics source hash mismatch: {key}")
+    source_manifest = json.loads(
+        (source / "manifest.json").read_text(encoding="utf-8")
+    )
+    holdout = _normalised_date(manifest.get("holdout_start"), "holdout_start")
+    source_end = _normalised_date(
+        source_manifest.get("end_date"), "backtest end_date"
+    )
+    holdout_consumed = bool(source_end >= holdout)
+    if manifest.get("holdout_consumed") is not holdout_consumed:
+        raise ValueError("portfolio analytics holdout-consumption declaration mismatch")
+    if analytics.get("holdout_consumed") is not holdout_consumed:
+        raise ValueError("portfolio analytics JSON holdout declaration mismatch")
+    if str(analytics.get("holdout_start")) != str(manifest.get("holdout_start")):
+        raise ValueError("portfolio analytics holdout boundary mismatch")
+    authorization_ref = manifest.get("terminal_authorization_ref")
+    if analytics.get("terminal_authorization_ref") != authorization_ref:
+        raise ValueError("portfolio analytics authorization lineage mismatch")
+    if holdout_consumed and not str(authorization_ref or "").strip():
+        raise ValueError("portfolio analytics consumes holdout without authorization lineage")
+    source_holdout = source_manifest.get("terminal_holdout")
+    if source_holdout is not None:
+        if str(source_holdout.get("holdout_start")) != str(
+            manifest.get("holdout_start")
+        ):
+            raise ValueError("backtest and analytics holdout boundaries disagree")
+        if source_holdout.get("holdout_consumed") is not holdout_consumed:
+            raise ValueError("backtest and analytics holdout declarations disagree")
+        if source_holdout.get("terminal_authorization_ref") != authorization_ref:
+            raise ValueError("backtest and analytics authorization lineage mismatch")
+    source_fields = {
+        "backtest_id": "backtest_id",
+        "strategy_run_id": "strategy_run_id",
+        "start_date": "start_date",
+        "end_date": "end_date",
+    }
+    for analytics_key, source_key in source_fields.items():
+        if str(analytics.get(analytics_key)) != str(source_manifest.get(source_key)):
+            raise ValueError(
+                f"portfolio analytics source semantic mismatch: {analytics_key}"
+            )
+    analytics_inputs = analytics.get("inputs") or {}
+    for key in (
+        "backtest_manifest_sha256", "daily_summary_sha256", "metrics_sha256",
+        "executions_sha256", "valuation_ledger_sha256", "signal_id",
+        "signal_run_id", "signal_manifest_sha256", "predictions_sha256",
+        "benchmark_id", "benchmark_path", "benchmark_sha256",
+        "benchmark_slice_sha256",
+    ):
+        if analytics_inputs.get(key) != manifest.get(key):
+            raise ValueError(f"portfolio analytics input semantic mismatch: {key}")
+    benchmark_slice_path = directory / "benchmark_daily.csv"
+    if manifest.get("benchmark_slice_sha256") != _sha256(benchmark_slice_path):
+        raise ValueError("portfolio analytics frozen benchmark hash mismatch")
+    benchmark_slice = pd.read_csv(benchmark_slice_path)
+    if "trade_date" not in benchmark_slice.columns or benchmark_slice.empty:
+        raise ValueError("portfolio analytics frozen benchmark is empty or malformed")
+    benchmark_dates = pd.to_datetime(
+        benchmark_slice["trade_date"].astype(str), errors="coerce"
+    )
+    if benchmark_dates.isna().any() or benchmark_dates.duplicated().any():
+        raise ValueError("portfolio analytics frozen benchmark dates are invalid")
+    if benchmark_dates.max().normalize() != source_end:
+        raise ValueError("portfolio analytics frozen benchmark end date mismatch")
+    source_start = _normalised_date(
+        source_manifest.get("start_date"), "backtest start_date"
+    )
+    if benchmark_dates.min().normalize() > source_start:
+        raise ValueError("portfolio analytics frozen benchmark lacks prior context")
     signal = SignalStore(root).validate_backtest_source(
         str(manifest["signal_id"]), str(manifest["signal_run_id"])
     )
@@ -667,7 +778,7 @@ def validate_portfolio_analytics(
             "portfolio_analytics_identity_sha256"
         ],
         "manifest": str(manifest_path),
-        "analytics": str(directory / "portfolio_analytics.json"),
+        "analytics": str(analytics_path),
         "validation": "passed",
     }
 

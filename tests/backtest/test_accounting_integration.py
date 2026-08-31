@@ -455,6 +455,95 @@ def test_complete_accounting_fails_before_output_on_missing_market_source(
     assert not output.exists()
 
 
+def test_complete_accounting_executes_from_frozen_market_slice(tmp_path) -> None:
+    day = "2026-06-15"
+    SignalStore(str(tmp_path)).save_signal_run(
+        "sig",
+        "run",
+        pd.DataFrame([{
+            "trade_date": day,
+            "data_date": "2026-06-12",
+            "instrument": "A",
+            "signal_id": "sig",
+            "signal_run_id": "run",
+            "score": 1.0,
+        }]),
+        overwrite=True,
+    )
+    _write_raw_bound_empty_actions(tmp_path, "actions")
+    canonical = tmp_path / "canonical"
+    canonical.mkdir()
+    market_dates = pd.bdate_range(end=day, periods=6).strftime("%Y-%m-%d")
+    pd.DataFrame({
+        "trade_date": market_dates,
+        "open": [10.0] * 6,
+        "close": [10.0] * 6,
+        "paused": [0] * 6,
+        "high_limit": [20.0] * 6,
+        "low_limit": [1.0] * 6,
+        "amount": [100_000_000.0] * 6,
+        "factor": [1.0] * 6,
+    }).to_feather(canonical / "A.feather")
+    frozen = tmp_path / "frozen_market"
+    output = tmp_path / "backtest"
+
+    with pytest.raises(ValueError, match="without terminal authorization"):
+        BacktestRunner().run_from_signal_cache(
+            signal_id="sig",
+            signal_run_id="run",
+            start_date=day,
+            end_date=day,
+            research_root=tmp_path,
+            output_dir=tmp_path / "blocked_backtest",
+            top_n=1,
+            corporate_action_artifact="actions",
+            canonical_data_root=canonical,
+            freeze_canonical_data_to=tmp_path / "blocked_market",
+            holdout_start=day,
+            max_participation_rate=0.10,
+            liquidity_gate_mode="reject",
+            require_complete_accounting=True,
+        )
+    assert not (tmp_path / "blocked_market").exists()
+    assert not (tmp_path / "blocked_backtest").exists()
+
+    result = BacktestRunner().run_from_signal_cache(
+        signal_id="sig",
+        signal_run_id="run",
+        start_date=day,
+        end_date=day,
+        research_root=tmp_path,
+        output_dir=output,
+        overwrite=True,
+        top_n=1,
+        commission=0.0,
+        stamp_duty=0.0,
+        min_commission=0.0,
+        slippage=0.0,
+        corporate_action_artifact="actions",
+        canonical_data_root=canonical,
+        freeze_canonical_data_to=frozen,
+        holdout_start=day,
+        terminal_authorization_ref="unit-test-explicit-authorization",
+        max_participation_rate=0.10,
+        liquidity_gate_mode="reject",
+        require_complete_accounting=True,
+    )
+
+    assert result.status == "completed"
+    manifest = json.loads((output / "manifest.json").read_text())
+    assert manifest["accounting_params"]["canonical_data_root"] == str(frozen)
+    assert manifest["market_source_identity"]["market_slice"][
+        "through_date"
+    ] == day
+    assert manifest["terminal_holdout"] == {
+        "holdout_start": day,
+        "holdout_consumed": True,
+        "terminal_authorization_ref": "unit-test-explicit-authorization",
+    }
+    assert pd.read_feather(frozen / "A.feather")["trade_date"].max() == day
+
+
 @pytest.mark.parametrize("missing_kind", ["raw", "manifest_hash"])
 def test_complete_accounting_requires_verified_corporate_source_provenance(
     tmp_path, missing_kind

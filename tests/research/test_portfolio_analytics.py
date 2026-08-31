@@ -157,6 +157,11 @@ def test_portfolio_analytics_binds_sources_and_computes_required_metrics(
     )
     assert analytics["holdout_consumed"] is False
     assert analytics["inputs"]["benchmark_sha256"] == _sha256(benchmark_path)
+    assert analytics["inputs"]["benchmark_slice_sha256"] == _sha256(
+        output / "benchmark_daily.csv"
+    )
+    frozen_benchmark = pd.read_csv(output / "benchmark_daily.csv")
+    assert pd.to_datetime(frozen_benchmark["trade_date"]).max() == dates.max()
     assert analytics["inputs"]["predictions_sha256"] == signal_manifest["predictions_sha256"]
     assert analytics_manifest["outputs"]["portfolio_analytics.json"]["sha256"] == _sha256(
         output / "portfolio_analytics.json"
@@ -215,6 +220,39 @@ def test_portfolio_analytics_binds_sources_and_computes_required_metrics(
         research_root=research_root,
         output_name="authorized_terminal",
     )["validation"] == "passed"
+    terminal_manifest_path = Path(terminal["manifest"])
+    terminal_manifest = json.loads(terminal_manifest_path.read_text())
+    terminal_analytics["terminal_authorization_ref"] = None
+    Path(terminal["analytics"]).write_text(
+        json.dumps(terminal_analytics, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    terminal_manifest["terminal_authorization_ref"] = None
+    terminal_identity = {
+        key: value for key, value in terminal_manifest.items()
+        if key not in {"portfolio_analytics_identity_sha256", "outputs"}
+    }
+    terminal_manifest["portfolio_analytics_identity_sha256"] = hashlib.sha256(
+        json.dumps(
+            terminal_identity,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+    ).hexdigest()
+    terminal_manifest["outputs"]["portfolio_analytics.json"]["sha256"] = _sha256(
+        Path(terminal["analytics"])
+    )
+    terminal_manifest_path.write_text(
+        json.dumps(terminal_manifest, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="without authorization lineage"):
+        validate_portfolio_analytics(
+            backtest_dir=output,
+            research_root=research_root,
+            output_name="authorized_terminal",
+        )
 
     terminal_config = tmp_path / "terminal_portfolio_analytics.yaml"
     terminal_config.write_text(json.dumps({
@@ -236,6 +274,13 @@ def test_portfolio_analytics_binds_sources_and_computes_required_metrics(
     assert configured_analytics["terminal_authorization_ref"] == (
         "unit-test-config-authorization"
     )
+    with benchmark_path.open("a", encoding="utf-8") as handle:
+        handle.write("20990101,999.0,999.0\n")
+    assert validate_portfolio_analytics(
+        backtest_dir=output,
+        research_root=research_root,
+        output_name="configured_terminal",
+    )["validation"] == "passed"
 
 
 def test_portfolio_analytics_rejects_unsafe_output_name(tmp_path: Path) -> None:
@@ -247,4 +292,25 @@ def test_portfolio_analytics_rejects_unsafe_output_name(tmp_path: Path) -> None:
             benchmark_csv=tmp_path / "benchmark.csv",
             holdout_start="2025-01-02",
             output_name="../escape",
+        )
+
+
+def test_terminal_authorization_precedes_performance_artifact_reads(
+    tmp_path: Path,
+) -> None:
+    backtest = tmp_path / "terminal_backtest"
+    backtest.mkdir()
+    write_manifest(backtest / "manifest.json", {
+        "artifact_type": "backtest_run",
+        "end_date": "2025-01-02",
+        "accounting": {"schema_version": "accounting_v1"},
+    })
+
+    with pytest.raises(ValueError, match="without terminal authorization"):
+        write_portfolio_analytics(
+            backtest_dir=backtest,
+            research_root=tmp_path,
+            benchmark_id="locked_terminal",
+            benchmark_csv=tmp_path / "missing_benchmark.csv",
+            holdout_start="2025-01-02",
         )

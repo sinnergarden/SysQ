@@ -147,6 +147,13 @@ identity、strategy/config 参数及所有 accounting 参数。不得用 `latest
 
 Accounting v1 的规范如下：
 
+- **不可变行情切片。** `scripts/research/backtest_from_signal.py` 可通过
+  `--freeze-canonical-data-to` 在回测启动时按实际再平衡候选标的、保留截至
+  `end_date` 的全部历史行，并原子写入不可覆盖的 canonical market slice；本次
+  回测随即只读取该切片。slice manifest 必须同时绑定源文件与冻结文件 SHA-256、
+  截止日、逐文件行数和 producer code hash，backtest manifest 必须继续绑定 slice
+  manifest。终端区间的切片创建仍受同一显式授权门约束。
+
 - **Raw price + event ledger。** 执行与收盘估值只使用 canonical raw price；
   corporate actions 来自不可变的、hash-bound event artifact。artifact 必须绑定
   `events.parquet`、manifest 与 normalized source-row hashes；提供 raw source 时，

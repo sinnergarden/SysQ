@@ -443,6 +443,25 @@ def run_pit_universe_benchmark_config(
         )
     analytics_config = config.get("portfolio_analytics")
     if analytics_config and not validate_only:
+        analytics_config = dict(analytics_config)
+        benchmark_authorization_ref = benchmark_config.get(
+            "terminal_authorization_ref"
+        )
+        analytics_authorization_ref = analytics_config.get(
+            "terminal_authorization_ref"
+        )
+        if (
+            benchmark_authorization_ref
+            and analytics_authorization_ref
+            and analytics_authorization_ref != benchmark_authorization_ref
+        ):
+            raise ValueError(
+                "benchmark and portfolio analytics authorization references disagree"
+            )
+        if benchmark_authorization_ref:
+            analytics_config["terminal_authorization_ref"] = (
+                benchmark_authorization_ref
+            )
         analytics = write_portfolio_analytics(
             benchmark_id=benchmark_config["benchmark_id"],
             benchmark_csv=result["benchmark"],

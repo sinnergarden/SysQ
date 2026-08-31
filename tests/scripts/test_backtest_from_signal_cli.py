@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from qsys.signal.store import SignalStore
 
@@ -164,7 +165,78 @@ def test_materialize_blend_rejects_missing_secondary_date(tmp_path: Path) -> Non
         end_date="2026-06-16",
     )
 
-    import pytest
-
     with pytest.raises(ValueError, match="trade-date coverage mismatch"):
         module._materialize_blend(args)
+
+
+def test_terminal_portfolio_analytics_fails_before_backtest_execution(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = _load_cli_module()
+
+    class MustNotStartRunner:
+        def __init__(self, *args, **kwargs) -> None:
+            raise AssertionError("backtest runner started before terminal authorization")
+
+    monkeypatch.setattr(module, "BacktestRunner", MustNotStartRunner)
+    monkeypatch.setattr(
+        module.sys,
+        "argv",
+        [
+            "backtest_from_signal.py",
+            "--signal-id", "terminal_signal",
+            "--signal-run-id", "terminal_run",
+            "--start-date", "2025-01-02",
+            "--end-date", "2026-07-31",
+            "--require-complete-accounting",
+            "--corporate-action-artifact", "actions",
+            "--canonical-data-root", str(tmp_path / "canonical"),
+            "--liquidity-gate-mode", "reject",
+            "--portfolio-analytics",
+            "--benchmark-id", "csi800",
+            "--benchmark-csv", str(tmp_path / "benchmark.csv"),
+            "--holdout-start", "2025-01-02",
+        ],
+    )
+
+    with pytest.raises(SystemExit) as error:
+        module.main()
+    assert error.value.code == 2
+    assert "--terminal-authorization-ref is required" in capsys.readouterr().err
+
+
+def test_market_slice_requires_declared_holdout_before_runner_start(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = _load_cli_module()
+
+    class MustNotStartRunner:
+        def __init__(self, *args, **kwargs) -> None:
+            raise AssertionError("backtest runner started without a holdout boundary")
+
+    monkeypatch.setattr(module, "BacktestRunner", MustNotStartRunner)
+    monkeypatch.setattr(
+        module.sys,
+        "argv",
+        [
+            "backtest_from_signal.py",
+            "--signal-id", "safe_signal",
+            "--signal-run-id", "safe_run",
+            "--start-date", "2021-01-04",
+            "--end-date", "2024-12-31",
+            "--require-complete-accounting",
+            "--corporate-action-artifact", "actions",
+            "--canonical-data-root", str(tmp_path / "canonical"),
+            "--freeze-canonical-data-to", str(tmp_path / "frozen"),
+            "--liquidity-gate-mode", "reject",
+        ],
+    )
+
+    with pytest.raises(SystemExit) as error:
+        module.main()
+    assert error.value.code == 2
+    assert "requires --holdout-start" in capsys.readouterr().err

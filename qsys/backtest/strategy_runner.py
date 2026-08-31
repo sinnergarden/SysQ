@@ -1430,6 +1430,9 @@ class BacktestRunner:
         pit_universe_artifact: str | None = None,
         corporate_action_artifact: str | None = None,
         canonical_data_root: str | Path | None = None,
+        freeze_canonical_data_to: str | Path | None = None,
+        holdout_start: str | None = None,
+        terminal_authorization_ref: str | None = None,
         max_participation_rate: float | None = None,
         liquidity_gate_mode: str = "warning",
         adv_window: int = 20,
@@ -1516,6 +1519,24 @@ class BacktestRunner:
             raise ValueError("max_participation_rate must be positive")
         if adv_window <= 0 or not 1 <= adv_min_periods <= adv_window:
             raise ValueError("invalid ADV window/min_periods")
+        holdout_consumed = False
+        if holdout_start is not None:
+            try:
+                holdout = pd.Timestamp(holdout_start).normalize()
+                backtest_end = pd.Timestamp(end_date).normalize()
+            except (TypeError, ValueError) as exc:
+                raise ValueError("holdout_start and end_date must be valid dates") from exc
+            if pd.isna(holdout) or pd.isna(backtest_end):
+                raise ValueError("holdout_start and end_date must be valid dates")
+            holdout_consumed = bool(backtest_end >= holdout)
+            if holdout_consumed and not str(
+                terminal_authorization_ref or ""
+            ).strip():
+                raise ValueError(
+                    "backtest overlaps declared holdout without terminal authorization"
+                )
+        elif terminal_authorization_ref is not None:
+            raise ValueError("terminal authorization requires a holdout_start")
         if (corporate_action_artifact is None) != (canonical_data_root is None):
             raise ValueError(
                 "corporate_action_artifact and canonical_data_root must be "
@@ -1532,6 +1553,14 @@ class BacktestRunner:
                     "complete accounting requires max_participation_rate=0.10 "
                     "and liquidity_gate_mode='reject'"
                 )
+        if freeze_canonical_data_to is not None and not require_complete_accounting:
+            raise ValueError(
+                "freezing canonical market data requires complete accounting"
+            )
+        if freeze_canonical_data_to is not None and holdout_start is None:
+            raise ValueError(
+                "freezing canonical market data requires a holdout_start"
+            )
         if holding_policy not in {"target_rebalance", "posterior_confirmed"}:
             raise ValueError(
                 "holding_policy must be 'target_rebalance' or "
@@ -1715,6 +1744,14 @@ class BacktestRunner:
                 candidate_instruments.update(
                     ranked.head(top_n)["instrument"].astype(str).tolist()
                 )
+            if freeze_canonical_data_to is not None:
+                market_data.freeze_sources(
+                    sorted(candidate_instruments),
+                    freeze_canonical_data_to,
+                    through_date=end_date,
+                )
+                canonical_data_root = str(Path(freeze_canonical_data_to).resolve())
+                market_data = MarketDataAdapter(canonical_data_root)
             market_source_identity = market_data.source_identity(
                 sorted(candidate_instruments)
             )
@@ -1764,6 +1801,12 @@ class BacktestRunner:
             "require_complete_accounting": require_complete_accounting,
             "market_source_identity": market_source_identity,
         }
+        if holdout_start is not None:
+            hash_payload["terminal_holdout"] = {
+                "holdout_start": holdout_start,
+                "holdout_consumed": holdout_consumed,
+                "terminal_authorization_ref": terminal_authorization_ref,
+            }
         if corporate_action_store is not None:
             manifest = getattr(corporate_action_store, "manifest", {})
             hash_payload["corporate_action_manifest"] = manifest
@@ -2467,6 +2510,12 @@ class BacktestRunner:
         })
         if market_source_identity is not None:
             manifest["market_source_identity"] = market_source_identity
+        if holdout_start is not None:
+            manifest["terminal_holdout"] = {
+                "holdout_start": holdout_start,
+                "holdout_consumed": holdout_consumed,
+                "terminal_authorization_ref": terminal_authorization_ref,
+            }
         if accounting_enabled:
             manifest["corporate_action_policy"] = "raw_price_event_ledger_v1"
             manifest["accounting_params"] = {
