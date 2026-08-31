@@ -23,6 +23,7 @@ from qsys.research.matrix_job import (
 )
 from qsys.research.generators.lightgbm_single_label import LightGBMSingleLabelGenerator
 from qsys.research.rolling_window import build_rolling_windows
+from qsys.research.signal_pipeline import SignalResearchPipeline
 
 
 def _annual_ranges(start: str, end: str) -> list[tuple[str, str]]:
@@ -99,6 +100,7 @@ def main() -> int:
             flush=True,
         )
         return 0
+    SignalResearchPipeline._validate_config(config)
     if not config.generators:
         raise ValueError("preheat requires a matrix config with generators")
     generators = expand_multi_label_generators(config.generators)

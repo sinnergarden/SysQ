@@ -1,5 +1,6 @@
-from pathlib import Path
+import sys
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
@@ -14,6 +15,7 @@ from qsys.research.matrix_job import (
 )
 from qsys.research.rolling_window import build_rolling_windows
 from qsys.research.signal_pipeline import SignalResearchPipeline
+from scripts.research.preheat_feature_cache import main as preheat_feature_cache
 
 
 REPO = Path(__file__).resolve().parents[2]
@@ -159,3 +161,19 @@ def test_terminal_ridge_config_is_exactly_68_windows_and_locked() -> None:
     SignalResearchPipeline._validate_config(
         replace(config, research_protocol=authorized_protocol)
     )
+
+
+def test_terminal_ridge_preheat_is_locked_before_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cache_root = tmp_path / "feature_cache"
+    monkeypatch.setattr(sys, "argv", [
+        "preheat_feature_cache.py",
+        "--config",
+        str(TERMINAL_68W_CONFIG),
+        "--feature-cache-root",
+        str(cache_root),
+    ])
+    with pytest.raises(ValueError, match="overlaps a locked holdout"):
+        preheat_feature_cache()
+    assert not cache_root.exists()
