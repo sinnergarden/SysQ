@@ -1,0 +1,73 @@
+experiment_id: confirmed_financial_quality_120d_stage_b_v1
+title: Confirmation-period comparison of transparent 120-session financial-quality models
+description: Fixed Ridge and LightGBM comparison using only the Stage-A-confirmed PIT-B input; holdout remains untouched.
+calendar:
+  start_date: "2023-01-03"
+  end_date: "2024-12-31"
+  train_window_days: 504
+  step_days: 60
+signal:
+  signal_id: confirmed_financial_quality_120d
+  score_column: score
+feature_list_id: confirmed_financial_quality_120d_v1
+source_manifest_hash: 726af9f8c3c91432feb78f1df9520655f3e002c246521bd47245286637bc91ce
+window_checkpoints: false
+use_feature_cache: true
+materialize_on_miss: false
+feature_cache_root: data/feature_cache
+generators:
+  - generator_id: ridge_fixed
+    type: single_label_ridge
+    params:
+      label_id: fwd_ret_120d_open_open_raw_pit_csi1800_v1
+      universe: csi1800_pit_union
+      ridge_alpha: 1.0
+      feature_list_id: confirmed_financial_quality_120d_v1
+      pit_filter_mode: member_as_of
+      pit_universe_artifact: csi1800_pit_v2
+      income_source_mode: audited_sidecar_v1
+      income_sidecar_path: /home/liuming/.openclaw/workspace/SysQ/data/research/source_snapshots/income/7775d55750de73d80e1cd30a4cc3fd91d065750867d478a3d9c7f1e8027fbe0b/income.parquet
+      income_sidecar_sha256: 6ef941166aaeed8658ee5dd796056d728303d23e0d28703e5b089ac26214fa42
+      income_sidecar_manifest_path: /home/liuming/.openclaw/workspace/SysQ/data/research/source_snapshots/income/7775d55750de73d80e1cd30a4cc3fd91d065750867d478a3d9c7f1e8027fbe0b/manifest.json
+      income_sidecar_manifest_sha256: 0b549ae0ff2ae82b6a6ed90c242d9a4a46e6227e008ff39e6ef987de21d85bae
+      income_sidecar_required_history_start: "20140313"
+  - generator_id: lightgbm_fixed
+    type: single_label_lightgbm
+    params:
+      label_id: fwd_ret_120d_open_open_raw_pit_csi1800_v1
+      universe: csi1800_pit_union
+      n_estimators: 80
+      lgb_params:
+        objective: regression
+        metric: mse
+        learning_rate: 0.03
+        num_leaves: 7
+        min_data_in_leaf: 1000
+        feature_fraction: 1.0
+        bagging_fraction: 1.0
+        bagging_freq: 0
+        lambda_l2: 1.0
+        verbosity: -1
+        seed: 20260831
+        deterministic: true
+        force_col_wise: true
+        num_threads: 8
+      feature_list_id: confirmed_financial_quality_120d_v1
+      pit_filter_mode: member_as_of
+      pit_universe_artifact: csi1800_pit_v2
+      income_source_mode: audited_sidecar_v1
+      income_sidecar_path: /home/liuming/.openclaw/workspace/SysQ/data/research/source_snapshots/income/7775d55750de73d80e1cd30a4cc3fd91d065750867d478a3d9c7f1e8027fbe0b/income.parquet
+      income_sidecar_sha256: 6ef941166aaeed8658ee5dd796056d728303d23e0d28703e5b089ac26214fa42
+      income_sidecar_manifest_path: /home/liuming/.openclaw/workspace/SysQ/data/research/source_snapshots/income/7775d55750de73d80e1cd30a4cc3fd91d065750867d478a3d9c7f1e8027fbe0b/manifest.json
+      income_sidecar_manifest_sha256: 0b549ae0ff2ae82b6a6ed90c242d9a4a46e6227e008ff39e6ef987de21d85bae
+      income_sidecar_required_history_start: "20140313"
+signal_transforms:
+  - transform_id: identity
+    type: identity
+labels:
+  - label_id: fwd_ret_120d_open_open_raw_pit_csi1800_v1
+    label_maturity_lag_trading_days: 120
+    require_pit_lineage: true
+  - label_id: fwd_ret_120d_close_close_raw_pit_csi1800_v1
+    label_maturity_lag_trading_days: 120
+    require_pit_lineage: true
