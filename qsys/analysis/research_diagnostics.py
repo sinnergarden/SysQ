@@ -252,6 +252,53 @@ class ResearchDiagnostics:
                 protocol["confirmed_count"],
             )
 
+        # 8. Conservative source-availability delay sensitivity.  This uses
+        # the direction learned at the base Stage-A discovery lag and never
+        # re-optimizes direction at longer lags.
+        lag_cfg = self._cfg.get("availability_lag_sensitivity") or {}
+        if lag_cfg.get("enabled", False):
+            from qsys.config import cfg as settings
+            from qsys.research.lag_sensitivity import AvailabilityLagSensitivity
+
+            if not stage_a_cfg.get("enabled", False) or self._feature_frame is None:
+                raise ValueError("availability-lag sensitivity requires Stage-A")
+            primary = [
+                value for value in self._cfg.get("labels", [])
+                if isinstance(value, dict) and value.get("role") == "primary"
+            ]
+            if len(primary) != 1:
+                raise ValueError("availability-lag sensitivity requires one primary label")
+            triage = pd.read_csv(output_dir / "stage_a_triage.csv")
+            directions = {
+                str(row.feature): int(row.locked_direction)
+                for row in triage.itertuples(index=False)
+            }
+            alignment = self._cfg.get("feature_label_alignment") or {}
+            calendar_path = Path(str(alignment.get("calendar_path", "")))
+            if not calendar_path.is_absolute():
+                calendar_path = Path(settings.data_root) / calendar_path
+            calendar_dates = [
+                value.strip()[:10]
+                for value in calendar_path.read_text(encoding="utf-8").splitlines()
+                if value.strip()
+            ]
+            lag_protocol = AvailabilityLagSensitivity(
+                feature_frame=self._feature_frame,
+                features=self._features,
+                label_frame=self._label_data[str(primary[0]["label_id"])],
+                label_id=str(primary[0]["label_id"]),
+                locked_directions=directions,
+                calendar_dates=calendar_dates,
+                config=lag_cfg,
+                output_dir=output_dir,
+            ).run()
+            results["availability_lag_sensitivity"] = lag_protocol
+            log.info(
+                "Availability lag sensitivity: %d features x %d lags",
+                lag_protocol["feature_count"],
+                len(lag_protocol["lags_sessions"]),
+            )
+
         # Summary
         summary = _json_safe(self._build_summary(results))
         with open(output_dir / "summary.json", "w", encoding="utf-8") as f:
@@ -292,6 +339,12 @@ class ResearchDiagnostics:
 
             identity_payload["stage_a_code_sha256"] = _sha256_file(
                 Path(stage_a_module.__file__).resolve()
+            )
+        if lag_cfg.get("enabled", False):
+            import qsys.research.lag_sensitivity as lag_sensitivity_module
+
+            identity_payload["lag_sensitivity_code_sha256"] = _sha256_file(
+                Path(lag_sensitivity_module.__file__).resolve()
             )
         diagnostics_identity_sha256 = hashlib.sha256(
             json.dumps(
@@ -1237,6 +1290,9 @@ class ResearchDiagnostics:
             },
             "top_candidates": results.get("top_candidates", {}),
             "stage_a": results.get("stage_a", {}),
+            "availability_lag_sensitivity": results.get(
+                "availability_lag_sensitivity", {}
+            ),
         }
         return summary
 

@@ -89,3 +89,49 @@ def test_stage_a_locks_direction_and_does_not_consume_holdout(tmp_path, monkeypa
     assert json.loads((tmp_path / "stage_a_protocol.json").read_text())[
         "feature_trial_count"
     ] == 2
+
+
+def test_stage_a_caps_promotion_at_provisional(tmp_path, monkeypatch):
+    frame, labels = _fixture()
+    monkeypatch.setattr(
+        "qsys.research.stage_a.compute_regime_ic",
+        lambda frame: pd.DataFrame(),
+    )
+    evaluator = StageAEvaluator(
+        feature_frame=frame,
+        features=["positive"],
+        label_data=labels,
+        label_configs=[
+            {"label_id": "primary", "role": "primary"},
+            {"label_id": "secondary", "role": "secondary"},
+        ],
+        config={
+            "promotion_eligible": False,
+            "splits": {
+                "discovery": {"start": "2019-01-02", "end": "2022-12-30"},
+                "confirmation": {"start": "2023-01-03", "end": "2024-12-31"},
+                "holdout": {"start": "2025-01-02", "end": "2026-07-31"},
+            },
+            "feature_families": {"path": ["positive"]},
+            "min_count": 5,
+            "top_ks": [5],
+            "criteria": {
+                "minimum_evidence_classes": 1,
+                "minimum_hac_t": 0,
+                "minimum_nonoverlap_ratio": 0.5,
+                "minimum_year_direction_ratio": 1.0,
+                "minimum_discovery_years": 4,
+                "minimum_confirmation_years": 2,
+            },
+        },
+        output_dir=tmp_path,
+    )
+
+    protocol = evaluator.run()
+
+    triage = pd.read_csv(tmp_path / "stage_a_triage.csv")
+    assert triage.loc[0, "research_status"] == "provisional"
+    assert protocol["promotion_eligible"] is False
+    assert protocol["confirmed_count"] == 0
+    assert protocol["provisional_count"] == 1
+    assert protocol["statistical_confirmation_count"] == 1

@@ -123,6 +123,14 @@ class TestAdapterSemanticFeatures(unittest.TestCase):
         self.assertTrue(flags["enable_relative_strength_features"])
         self.assertTrue(flags["enable_v3a_margin_features"])
 
+    def test_shareholder_interactions_enable_return_dependencies(self):
+        flags = QlibAdapter._semantic_feature_flags(
+            ["holder_squeeze_score", "holder_price_confirm_score"]
+        )
+
+        self.assertTrue(flags["enable_relative_strength_features"])
+        self.assertTrue(flags["enable_v3a_shareholder_features"])
+
     def test_path_scores_enable_price_context_dependencies(self):
         flags = QlibAdapter._semantic_feature_flags(
             [

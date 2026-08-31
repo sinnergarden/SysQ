@@ -557,6 +557,10 @@ class QlibAdapter:
         ):
             flags["enable_relative_strength_features"] = True
         if requested.intersection(
+            {"holder_squeeze_score", "holder_price_confirm_score"}
+        ):
+            flags["enable_relative_strength_features"] = True
+        if requested.intersection(
             {
                 "continuation_candidate_score",
                 "repair_candidate_score",

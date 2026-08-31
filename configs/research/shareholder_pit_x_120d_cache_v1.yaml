@@ -1,0 +1,24 @@
+experiment_id: shareholder_pit_x_120d_cache_v1
+title: Provisional announcement-as-of shareholder 120-session consumer cache contract
+calendar: {start_date: "2019-01-02", end_date: "2024-12-31", train_window_days: 20, step_days: 20}
+signal: {signal_id: shareholder_pit_x_120d, score_column: score}
+feature_list_id: shareholder_pit_x_long_v1
+source_manifest_hash: 726af9f8c3c91432feb78f1df9520655f3e002c246521bd47245286637bc91ce
+generators:
+  - generator_id: shareholder_pit_x_120d
+    type: single_label_lightgbm
+    params:
+      label_id: fwd_ret_120d_open_open_raw_pit_csi1800_v1
+      universe: csi1800_pit_union
+      feature_list_id: shareholder_pit_x_long_v1
+      feature_cache_list_id: shareholder_pit_x_superset_v1
+      pit_filter_mode: member_as_of
+      pit_universe_artifact: csi1800_pit_v2
+      shareholder_holder_path: /home/liuming/.openclaw/workspace/SysQ/data/research/source_snapshots/shareholder/0baf4e0fc24e5f95f691fb3f332badb8e8d32ed708118c0f1e019a28ce049800/holder_num.parquet
+      shareholder_holder_sha256: 8bb111f2e9d979bb604c155e4a211dd7087949fa1ecabc317128621c92dc5eb3
+      shareholder_top10_path: /home/liuming/.openclaw/workspace/SysQ/data/research/source_snapshots/shareholder/0baf4e0fc24e5f95f691fb3f332badb8e8d32ed708118c0f1e019a28ce049800/top10_holder_ratio.parquet
+      shareholder_top10_sha256: 8690a233c1bb5daeddd54ad88a7c8bdef68be3f1a9dde25e513a517935fc45fb
+      shareholder_manifest_path: /home/liuming/.openclaw/workspace/SysQ/data/research/source_snapshots/shareholder/0baf4e0fc24e5f95f691fb3f332badb8e8d32ed708118c0f1e019a28ce049800/manifest.json
+      shareholder_manifest_sha256: 87cdfe2e5300028206cacb2afca19c1985936d698818be53e614deeb38acce03
+labels:
+  - {label_id: fwd_ret_120d_open_open_raw_pit_csi1800_v1, label_maturity_lag_trading_days: 120}

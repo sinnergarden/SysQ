@@ -185,6 +185,9 @@ class StageAEvaluator:
         self.n_groups = int(config.get("quantile_groups", 10))
         self.top_ks = tuple(int(value) for value in config.get("top_ks", [5, 20, 50]))
         self.random_reps = int(config.get("random_reps", 50))
+        self.promotion_eligible = config.get("promotion_eligible", True)
+        if type(self.promotion_eligible) is not bool:
+            raise ValueError("Stage-A promotion_eligible must be boolean")
         self.feature_families = self._feature_family_map()
 
     def _feature_family_map(self) -> dict[str, str]:
@@ -587,7 +590,7 @@ class StageAEvaluator:
             if feature not in candidates:
                 status = "rejected"
             elif confirmation_row and confirmation_row["phase_pass"] and secondary_consistent:
-                status = "confirmed"
+                status = "confirmed" if self.promotion_eligible else "provisional"
             elif confirmation_row is not None:
                 status = "rejected"
             else:
@@ -678,6 +681,16 @@ class StageAEvaluator:
             "confirmation_trial_count": len(candidates),
             "secondary_confirmation_diagnostic_count": len(candidates) * len(secondary),
             "confirmed_count": int(triage["research_status"].eq("confirmed").sum()),
+            "provisional_count": int(
+                triage["research_status"].eq("provisional").sum()
+            ),
+            "statistical_confirmation_count": int(
+                (
+                    triage["confirmation_pass"].astype(bool)
+                    & triage["secondary_direction_consistent"].astype(bool)
+                ).sum()
+            ),
+            "promotion_eligible": self.promotion_eligible,
             "rejected_count": int(triage["research_status"].eq("rejected").sum()),
             "random_signal_contract": "exact_finite_population_moments_v1",
             "top_ks": list(self.top_ks),

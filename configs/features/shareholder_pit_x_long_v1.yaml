@@ -1,0 +1,15 @@
+feature_list_id: shareholder_pit_x_long_v1
+description: Provisional shareholder concentration features for 120/180-session research only.
+feature_count: 10
+contract: pit_x_announcement_asof_long_horizon_v1
+features:
+  - holder_num_chg_qoq
+  - holder_num_chg_2q
+  - avg_shares_per_holder_chg_qoq
+  - top10_holder_ratio_chg_qoq
+  - holder_concentration_score
+  - holder_squeeze_score
+  - holder_price_confirm_score
+  - holder_num_stale_days
+  - top10_holder_stale_days
+  - top10_holder_ratio

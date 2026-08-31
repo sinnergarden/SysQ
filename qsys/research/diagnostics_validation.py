@@ -74,6 +74,14 @@ def validate_research_diagnostics(
             Path(stage_a.__file__).resolve()
         ):
             raise ValueError("Stage-A code hash mismatch")
+    lag_config = config.get("availability_lag_sensitivity") or {}
+    if lag_config.get("enabled", False):
+        from qsys.research import lag_sensitivity
+
+        if manifest.get("lag_sensitivity_code_sha256") != _sha256(
+            Path(lag_sensitivity.__file__).resolve()
+        ):
+            raise ValueError("availability-lag code hash mismatch")
 
     outputs = manifest.get("outputs", {})
     for filename, artifact in outputs.items():
@@ -222,7 +230,9 @@ def validate_research_diagnostics(
             raise ValueError("Stage-A confirmation pair count mismatch")
         if int(triage["confirmation_executed"].sum()) != candidate_count:
             raise ValueError("Stage-A candidate/confirmation gate mismatch")
-        allowed = {"candidate", "confirmed", "rejected", "data-blocked"}
+        allowed = {
+            "candidate", "confirmed", "provisional", "rejected", "data-blocked"
+        }
         if not set(triage["research_status"]).issubset(allowed):
             raise ValueError("Stage-A triage contains an invalid research status")
         locked = triage.set_index("feature")["locked_direction"].astype(int)
@@ -237,6 +247,68 @@ def validate_research_diagnostics(
             & confirmed["secondary_direction_consistent"].astype(bool)
         ).all():
             raise ValueError("Stage-A confirmed status bypassed the promotion gate")
+        promotion_eligible = stage_a_config.get("promotion_eligible", True)
+        if protocol.get("promotion_eligible", True) is not promotion_eligible:
+            raise ValueError("Stage-A promotion eligibility mismatch")
+        if not promotion_eligible and (
+            int(protocol.get("confirmed_count", -1)) != 0
+            or triage["research_status"].eq("confirmed").any()
+        ):
+            raise ValueError("promotion-ineligible Stage-A produced a confirmed feature")
+
+    if lag_config.get("enabled", False):
+        required_lag = {
+            "availability_lag_protocol.json",
+            "availability_lag_summary.csv",
+            "availability_lag_coverage_yearly.csv",
+            "availability_lag_stale_days.csv",
+            "availability_lag_yearly_rank_ic.csv",
+        }
+        missing = sorted(required_lag - set(outputs))
+        if missing:
+            raise ValueError(f"availability-lag outputs are incomplete: {missing}")
+        protocol = json.loads(
+            (output_dir / "availability_lag_protocol.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        expected_lags = [int(value) for value in lag_config.get("lags_sessions", [])]
+        if (
+            protocol.get("schema_version") != "availability_lag_sensitivity_v1"
+            or protocol.get("holdout_consumed") is not False
+            or protocol.get("lags_sessions") != expected_lags
+            or int(protocol.get("base_lag_sessions", -1))
+            != int(lag_config.get("base_lag_sessions", 1))
+            or int(protocol.get("feature_count", -1)) != feature_count
+        ):
+            raise ValueError("availability-lag protocol mismatch")
+        if str(protocol.get("loaded_data_end", "")) >= str(
+            stage_a_config["splits"]["holdout"]["start"]
+        ):
+            raise ValueError("availability-lag analysis overlaps the holdout")
+        lag_summary = pd.read_csv(output_dir / "availability_lag_summary.csv")
+        expected_summary_rows = feature_count * len(expected_lags)
+        if (
+            len(lag_summary) != expected_summary_rows
+            or lag_summary.duplicated(["lag_sessions", "feature"]).any()
+            or set(lag_summary["lag_sessions"].astype(int)) != set(expected_lags)
+        ):
+            raise ValueError("availability-lag summary contract mismatch")
+        triage = pd.read_csv(output_dir / "stage_a_triage.csv")
+        locked = triage.set_index("feature")["locked_direction"].astype(int)
+        observed = lag_summary.set_index("feature")["locked_direction"].astype(int)
+        if not observed.eq(locked.reindex(observed.index)).all():
+            raise ValueError("availability-lag analysis changed a locked direction")
+        for filename in (
+            "availability_lag_summary.csv",
+            "availability_lag_coverage_yearly.csv",
+            "availability_lag_stale_days.csv",
+            "availability_lag_yearly_rank_ic.csv",
+        ):
+            frame = pd.read_csv(output_dir / filename)
+            numeric = frame.select_dtypes(include=[np.number])
+            if not numeric.empty and np.isinf(numeric.to_numpy()).any():
+                raise ValueError(f"availability-lag output contains infinity: {filename}")
 
     identity_payload = {
         "config_sha256": config_sha256,
@@ -246,6 +318,10 @@ def validate_research_diagnostics(
     }
     if stage_a_config.get("enabled", False):
         identity_payload["stage_a_code_sha256"] = manifest["stage_a_code_sha256"]
+    if lag_config.get("enabled", False):
+        identity_payload["lag_sensitivity_code_sha256"] = manifest[
+            "lag_sensitivity_code_sha256"
+        ]
     identity = _canonical_sha256(identity_payload)
     if identity != manifest.get("diagnostics_identity_sha256"):
         raise ValueError("diagnostics identity mismatch")
@@ -265,6 +341,7 @@ def validate_research_diagnostics(
             == "pass"
         ),
         "stage_a_validated": bool(stage_a_config.get("enabled", False)),
+        "availability_lag_validated": bool(lag_config.get("enabled", False)),
     }
     output_path = output_dir.parent / "diagnostics_validation.json"
     output_path.write_text(
