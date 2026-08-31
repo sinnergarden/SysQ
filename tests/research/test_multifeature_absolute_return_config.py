@@ -9,12 +9,17 @@ from qsys.research.matrix_job import (
     _create_generator_from_config,
     build_matrix_jobs,
 )
+from qsys.research.rolling_window import build_rolling_windows
 from qsys.research.signal_pipeline import SignalResearchPipeline
 
 
 REPO = Path(__file__).resolve().parents[2]
 CONFIG = (
     REPO / "configs/research/csi1800_multifeature_absolute_return_120d_v2.yaml"
+)
+PREHOLDOUT_20D_CONFIG = (
+    REPO
+    / "configs/research/csi1800_multifeature_ridge_total_return_120d_20d_preholdout_v1.yaml"
 )
 
 
@@ -86,3 +91,26 @@ def test_models_share_features_and_strict_temporal_validation() -> None:
         "qsys.research.generators.lightgbm_single_label"
         in lightgbm_dependencies
     )
+
+
+def test_profitable_ridge_20d_prefix_is_frozen_to_49_preholdout_windows() -> None:
+    config = RollingResearchConfig.from_file(PREHOLDOUT_20D_CONFIG)
+    windows = build_rolling_windows(
+        config.calendar["start_date"],
+        config.calendar["end_date"],
+        train_window_days=config.calendar["train_window_days"],
+        step_days=config.calendar["step_days"],
+        label_maturity_lag_trading_days=121,
+    )
+    assert len(windows) == 49
+    assert len(config.generators) == len(config.transforms) == 1
+    assert len(build_matrix_jobs(config)) == 1
+    assert config.generators[0]["generator_id"] == "ridge_fixed"
+    assert config.transforms[0]["transform_id"] == "identity"
+    assert config.research_protocol["holdout"] == {
+        "start_date": "2025-01-02",
+        "status": "untouched",
+        "terminal_extension_end_date": "2026-07-31",
+        "terminal_extension_window_count": 68,
+        "unlock_rule": "explicit authorization to consume the one-time terminal holdout",
+    }
