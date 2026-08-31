@@ -17,6 +17,7 @@ from qsys.backtest.strategy_runner import (
     FACTOR_ROUNDING_REL_TOLERANCE,
     _adjust_posterior_corporate_action_state,
     _adjust_valuation_corporate_action_reference,
+    _enrich_accounting_day,
     _load_corporate_action_store,
     _prune_factor_completeness_state,
     _update_factor_completeness_guard,
@@ -57,6 +58,37 @@ def test_missing_close_carries_and_resumes() -> None:
     resumed = valuation.mark_to_market(account, "2026-01-03").iloc[0]
     assert resumed["last_price"] == 11
     assert not bool(resumed["stale_price"])
+
+
+def test_accounting_enrichment_fills_receivable_fields_on_no_trade_day() -> None:
+    account = BacktestAccount(10_000.0)
+    account.start_day("2026-01-02")
+    valuation = ValuationState()
+    day_result = {"total_value_after": 10_000.0}
+    attribution = {
+        "_previous": {
+            "realized_pnl": 0.0,
+            "unrealized_pnl": 0.0,
+            "corporate_action_income": 0.0,
+        },
+        "missing_price": {
+            "stale_position_days": 0,
+            "stale_market_value_day_sum": 0.0,
+            "stale_position_count_day_sum": 0,
+        },
+    }
+
+    _enrich_accounting_day(
+        day_result,
+        account,
+        valuation,
+        "2026-01-02",
+        [],
+        attribution,
+    )
+
+    assert day_result["receivable_before"] == 0.0
+    assert day_result["receivable_after"] == 0.0
 
 
 def test_raw_cash_and_share_events_preserve_economic_value() -> None:

@@ -341,6 +341,8 @@ def _enrich_accounting_day(
     valuation_ledger_rows: list[dict[str, Any]],
     attribution: dict[str, Any],
 ) -> None:
+    day_result.setdefault("receivable_before", float(account.total_receivable))
+    day_result.setdefault("receivable_after", float(account.total_receivable))
     marks = valuation_state.mark_to_market(account, trade_date)
     stale = marks[marks["stale_price"]] if not marks.empty else marks
     stale_mv = float(stale["market_value"].sum()) if not stale.empty else 0.0
