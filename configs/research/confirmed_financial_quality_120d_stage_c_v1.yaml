@@ -1,0 +1,52 @@
+schema_version: stage_c_assessment_request_v1
+assessment_id: confirmed_financial_quality_120d_stage_c_v1
+stage_b_validation_path: data/research/experiments/confirmed_financial_quality_120d_stage_b_v1/stage_b_validation.json
+holdout_start: "2025-01-02"
+
+promoted_signal:
+  signal_id: confirmed_financial_quality_120d__ridge_fixed__identity
+  signal_run_id: rolling__confirmed_financial_quality_120d_stage_b_v1__ridge_fixed__identity__2023-01-03_2024-12-31
+  predictions_sha256: a06a78aa6b7fc38bf6e1c7c987070be64d6a8ed2174bfdafd96e681f022fb093
+
+portfolio_sizes: [5, 20, 50]
+strict_protocol:
+  start_date: "2023-01-03"
+  end_date: "2024-12-31"
+  rebalance_frequency: 20d
+  execution_price: open
+  mark_to_market_price: close
+  pit_execution_universe: csi1800_pit_v2
+  commission_rate: 0.0003
+  stamp_duty_rate: 0.001
+  slippage_rate: 0.001
+  max_prior_adv_participation: 0.10
+  liquidity_gate_mode: reject
+  complete_accounting_required: true
+
+accounting_evidence:
+  corporate_action_artifact: csi1800_pit_20210104_20260731_v3
+  canonical_data_root: /home/liuming/.openclaw/workspace/SysQ/data/canonical/daily
+  instrument: 000049.SZ
+  previous_trade_date: "20231129"
+  detection_trade_date: "20231208"
+  factor_rounding_relative_tolerance: 0.0005
+  guard_error: uncovered corporate-action factor jump for 000049.SZ on 2023-12-08
+  missing_capability: rights-event coverage plus an explicit portfolio participation and cash-accounting policy
+
+exploratory_runs:
+  - top_n: 5
+    path: data/research/backtests/confirmed_financial_quality_120d_stage_c_v1/top5_exploratory
+  - top_n: 20
+    path: data/research/backtests/confirmed_financial_quality_120d_stage_c_v1/top20_exploratory
+  - top_n: 50
+    path: data/research/backtests/confirmed_financial_quality_120d_stage_c_v1/top50_exploratory
+
+external_evidence:
+  - title: 2023 rights offering announcement
+    issuer: Shenzhen Desay Battery Technology Co., Ltd.
+    url: https://static.cninfo.com.cn/finalpage/2023-12-04/1218493835.PDF
+  - title: 2023 rights offering result announcement
+    issuer: Shenzhen Desay Battery Technology Co., Ltd.
+    url: https://static.cninfo.com.cn/finalpage/2023-12-08/1218545401.PDF
+
+next_gate: add an immutable rights-event source and approve a portfolio participation policy before rerunning complete-accounting Stage C

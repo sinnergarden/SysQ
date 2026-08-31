@@ -43,6 +43,11 @@ def main():
         help="Aggregate validated Stage-A artifacts into an Alpha Map",
     )
     p.add_argument(
+        "--stage-c-config",
+        default=None,
+        help="Freeze or independently validate a Stage-C assessment",
+    )
+    p.add_argument(
         "--validate-only",
         action="store_true",
         help="Independently validate the selected feature-catalog artifact",
@@ -55,21 +60,22 @@ def main():
     args = p.parse_args()
     selected_modes = sum(bool(value) for value in (
         args.experiment_id, args.diagnostics_config, args.feature_catalog_config,
-        args.alpha_map_config,
+        args.alpha_map_config, args.stage_c_config,
         args.signal_id,
     ))
     if selected_modes != 1:
         p.error(
             "select exactly one mode: --experiment-id, --diagnostics-config, "
-            "--feature-catalog-config, --alpha-map-config, or direct "
+            "--feature-catalog-config, --stage-c-config, --alpha-map-config, or direct "
             "--signal-id/--signal-run-id/--label-id"
         )
     if args.validate_only and not (
-        args.feature_catalog_config or args.diagnostics_config or args.alpha_map_config
+        args.feature_catalog_config or args.diagnostics_config or args.stage_c_config
+        or args.alpha_map_config
     ):
         p.error(
             "--validate-only requires --feature-catalog-config or "
-            "--diagnostics-config or --alpha-map-config"
+            "--diagnostics-config, --stage-c-config, or --alpha-map-config"
         )
     if args.diagnostics_config and any(
         (args.signal_run_id, args.label_id)
@@ -101,6 +107,29 @@ def main():
                 args.feature_catalog_config, root=args.research_root
             ).run()
             print(f"Feature catalog: {result['catalog_identity_sha256']}")
+            print(f"Manifest: {result['manifest']}")
+        return
+    if args.stage_c_config:
+        if any((args.signal_run_id, args.label_id)):
+            p.error("--stage-c-config cannot be combined with direct signal arguments")
+        if args.validate_only:
+            from qsys.research.stage_c_validation import validate_stage_c_assessment
+
+            result = validate_stage_c_assessment(
+                args.stage_c_config, root=args.research_root
+            )
+            print(f"Stage-C validation: {result['stage_c_identity_sha256']}")
+            print(
+                "Validation: "
+                f"{Path(args.research_root) / 'stage_c_assessments' / result['assessment_id'] / 'validation.json'}"
+            )
+        else:
+            from qsys.research.stage_c import StageCAssessment
+
+            result = StageCAssessment.from_config(
+                args.stage_c_config, root=args.research_root
+            ).run()
+            print(f"Stage-C assessment: {result['stage_c_identity_sha256']}")
             print(f"Manifest: {result['manifest']}")
         return
     if args.alpha_map_config:

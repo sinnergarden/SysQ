@@ -71,6 +71,7 @@ def validate_alpha_map(
             "schema_version", "alpha_map_id", "config_sha256",
             "producer_code_sha256", "catalog_identity_sha256",
             "label_suite_identity_sha256", "diagnostics_identities",
+            "confirmation_lineage",
         )
     }
     if manifest.get("alpha_map_identity_sha256") != _canonical_hash(identity):
@@ -111,7 +112,10 @@ def validate_alpha_map(
     label_validation = json.loads(
         (label_dir / "validation.json").read_text(encoding="utf-8")
     )
-    if label_validation.get("status") != "PASS" or label_validation.get("failures"):
+    if (
+        str(label_validation.get("status", "")).lower() not in {"pass", "passed"}
+        or label_validation.get("failures")
+    ):
         raise ValueError("Alpha Map label suite validation is not passing")
 
     expected_identities = []
@@ -148,11 +152,63 @@ def validate_alpha_map(
         raise ValueError("Alpha Map JSON/CSV row count mismatch")
     if any(row["pit_tier"] == "PIT-X" and row["promotion_eligible_count"] for row in rows):
         raise ValueError("PIT-X row is promotion eligible")
-    if any(row["stage_c_status"] != "not_entered" for row in rows):
-        raise ValueError("Stage C entered without a validated portfolio artifact")
     summary = artifact["summary"]
-    if summary.get("holdout_consumed") or summary.get("stage_c_entered"):
+    if summary.get("holdout_consumed"):
         raise ValueError("Alpha Map terminal-state contract violated")
+    confirmation = config.get("confirmation")
+    if confirmation:
+        stage_b_path = (
+            repo_root / str(confirmation["stage_b_validation_path"])
+        ).resolve()
+        stage_c_dir = root / "stage_c_assessments" / str(
+            confirmation["stage_c_assessment_id"]
+        )
+        stage_c_manifest_path = stage_c_dir / "manifest.json"
+        stage_c_validation_path = stage_c_dir / "validation.json"
+        stage_c_artifact_path = stage_c_dir / "stage_c_assessment.json"
+        lineage = manifest.get("confirmation_lineage", {})
+        if (
+            _sha256(stage_b_path) != lineage.get("stage_b_validation_sha256")
+            or _sha256(stage_c_manifest_path)
+            != lineage.get("stage_c_manifest_sha256")
+            or _sha256(stage_c_validation_path)
+            != lineage.get("stage_c_validation_sha256")
+        ):
+            raise ValueError("Alpha Map confirmation lineage changed")
+        stage_b = json.loads(stage_b_path.read_text(encoding="utf-8"))
+        stage_c_manifest = json.loads(
+            stage_c_manifest_path.read_text(encoding="utf-8")
+        )
+        stage_c_validation = json.loads(
+            stage_c_validation_path.read_text(encoding="utf-8")
+        )
+        stage_c = json.loads(stage_c_artifact_path.read_text(encoding="utf-8"))
+        if (
+            stage_b.get("status") != "pass"
+            or stage_b.get("holdout_consumed")
+            or not stage_c_validation.get("validated")
+            or stage_c_validation.get("holdout_consumed")
+            or stage_c.get("formal_status") != "accounting_data_blocked"
+            or stage_c.get("promotion_eligible")
+            or stage_c_manifest.get("stage_c_identity_sha256")
+            != lineage.get("stage_c_identity_sha256")
+        ):
+            raise ValueError("Alpha Map confirmation contract is not passing")
+        entered = [row for row in rows if row["stage_c_status"] != "not_entered"]
+        if (
+            len(entered) != 1
+            or entered[0]["stage_b_status"] != "confirmed_model"
+            or entered[0]["stage_c_status"] != "accounting_data_blocked"
+            or entered[0]["portfolio_extractability"] != "not_established"
+            or not summary.get("stage_c_entered")
+            or summary.get("stage_c_formal_status") != "accounting_data_blocked"
+            or summary.get("portfolio_extractability_established")
+        ):
+            raise ValueError("Alpha Map Stage-C row/summary mismatch")
+    elif any(row["stage_c_status"] != "not_entered" for row in rows) or summary.get(
+        "stage_c_entered"
+    ):
+        raise ValueError("Stage C entered without a validated assessment")
     if summary["confirmed_count"] != sum(row["promotion_eligible_count"] for row in rows):
         raise ValueError("Alpha Map confirmed count mismatch")
     required_ablations = set(config.get("required_ablation_ids", []))

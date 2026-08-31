@@ -1,0 +1,105 @@
+schema_version: alpha_map_request_v1
+alpha_map_id: csi1800_pit_full_feature_universe_alpha_map_v1
+catalog_id: csi1800_pit_full_feature_universe_v1
+label_suite_id: csi1800_pit_executable_label_suite_v1
+
+experiments:
+  - {experiment_id: csi1800_pit_market_core_5d_stage_a_v1, diagnostics_config: configs/diagnostics/csi1800_pit_market_core_5d_stage_a_v1.yaml, pit_tier: PIT-A, track: market_core}
+  - {experiment_id: csi1800_pit_market_core_10d_stage_a_v1, diagnostics_config: configs/diagnostics/csi1800_pit_market_core_10d_stage_a_v1.yaml, pit_tier: PIT-A, track: market_core}
+  - {experiment_id: csi1800_pit_market_core_20d_stage_a_v1, diagnostics_config: configs/diagnostics/csi1800_pit_market_core_20d_stage_a_v1.yaml, pit_tier: PIT-A, track: market_core}
+  - {experiment_id: csi1800_pit_market_core_60d_stage_a_v1, diagnostics_config: configs/diagnostics/csi1800_pit_market_core_60d_stage_a_v1.yaml, pit_tier: PIT-A, track: market_core}
+  - {experiment_id: csi1800_pit_market_core_120d_stage_a_v1, diagnostics_config: configs/diagnostics/csi1800_pit_market_core_120d_stage_a_v1.yaml, pit_tier: PIT-A, track: market_core}
+  - {experiment_id: csi1800_pit_market_core_180d_stage_a_v1, diagnostics_config: configs/diagnostics/csi1800_pit_market_core_180d_stage_a_v1.yaml, pit_tier: PIT-A, track: market_core}
+  - {experiment_id: csi1800_pit_valuation_size_120d_stage_a_v1, diagnostics_config: configs/diagnostics/csi1800_pit_valuation_size_120d_stage_a_v1.yaml, pit_tier: PIT-A, track: valuation_size}
+  - {experiment_id: csi1800_pit_valuation_size_180d_stage_a_v1, diagnostics_config: configs/diagnostics/csi1800_pit_valuation_size_180d_stage_a_v1.yaml, pit_tier: PIT-A, track: valuation_size}
+  - {experiment_id: csi1800_pit_structured_price_volume_60d_stage_a_v1, diagnostics_config: configs/diagnostics/csi1800_pit_structured_price_volume_60d_stage_a_v1.yaml, pit_tier: PIT-A, track: structured_price_volume}
+  - {experiment_id: csi1800_pit_industry_relative_120d_stage_a_v1, diagnostics_config: configs/diagnostics/csi1800_pit_industry_relative_120d_stage_a_v1.yaml, pit_tier: PIT-A, track: industry_relative}
+  - {experiment_id: csi1800_pit_industry_relative_180d_stage_a_v1, diagnostics_config: configs/diagnostics/csi1800_pit_industry_relative_180d_stage_a_v1.yaml, pit_tier: PIT-A, track: industry_relative}
+  - {experiment_id: csi1800_pit_financing_crowding_20d_stage_a_v1, diagnostics_config: configs/diagnostics/csi1800_pit_financing_crowding_20d_stage_a_v1.yaml, pit_tier: PIT-A, track: financing_crowding}
+  - {experiment_id: csi1800_pit_financing_crowding_60d_stage_a_v1, diagnostics_config: configs/diagnostics/csi1800_pit_financing_crowding_60d_stage_a_v1.yaml, pit_tier: PIT-A, track: financing_crowding}
+  - {experiment_id: csi1800_pit_financial_pit_b_5d_stage_a_v1, diagnostics_config: configs/diagnostics/csi1800_pit_financial_pit_b_5d_stage_a_v1.yaml, pit_tier: PIT-B, track: financial, availability_lag_sessions: 1}
+  - {experiment_id: csi1800_pit_financial_pit_b_10d_stage_a_v1, diagnostics_config: configs/diagnostics/csi1800_pit_financial_pit_b_10d_stage_a_v1.yaml, pit_tier: PIT-B, track: financial, availability_lag_sessions: 1}
+  - {experiment_id: csi1800_pit_financial_pit_b_20d_stage_a_v1, diagnostics_config: configs/diagnostics/csi1800_pit_financial_pit_b_20d_stage_a_v1.yaml, pit_tier: PIT-B, track: financial, availability_lag_sessions: 1}
+  - {experiment_id: csi1800_pit_financial_pit_b_60d_stage_a_v1, diagnostics_config: configs/diagnostics/csi1800_pit_financial_pit_b_60d_stage_a_v1.yaml, pit_tier: PIT-B, track: financial, availability_lag_sessions: 1}
+  - {experiment_id: csi1800_pit_financial_pit_b_120d_stage_a_v1, diagnostics_config: configs/diagnostics/csi1800_pit_financial_pit_b_120d_stage_a_v1.yaml, pit_tier: PIT-B, track: financial, availability_lag_sessions: 1}
+  - {experiment_id: csi1800_pit_financial_pit_b_180d_stage_a_v1, diagnostics_config: configs/diagnostics/csi1800_pit_financial_pit_b_180d_stage_a_v1.yaml, pit_tier: PIT-B, track: financial, availability_lag_sessions: 1}
+  - {experiment_id: csi1800_pit_shareholder_pit_x_120d_stage_a_v1, diagnostics_config: configs/diagnostics/csi1800_pit_shareholder_pit_x_120d_stage_a_v1.yaml, pit_tier: PIT-X, track: shareholder, availability_lag_sessions: 1}
+  - {experiment_id: csi1800_pit_shareholder_pit_x_180d_stage_a_v1, diagnostics_config: configs/diagnostics/csi1800_pit_shareholder_pit_x_180d_stage_a_v1.yaml, pit_tier: PIT-X, track: shareholder, availability_lag_sessions: 1}
+
+confirmation:
+  stage_a_experiment_id: csi1800_pit_financial_pit_b_120d_stage_a_v1
+  feature_family: normalized_quality_levels
+  horizon_sessions: 120
+  stage_b_validation_path: data/research/experiments/confirmed_financial_quality_120d_stage_b_v1/stage_b_validation.json
+  stage_c_assessment_id: confirmed_financial_quality_120d_stage_c_v1
+  primary_label_id: fwd_ret_120d_open_open_raw_pit_csi1800_v1
+  promoted_signal:
+    signal_id: confirmed_financial_quality_120d__ridge_fixed__identity
+    signal_run_id: rolling__confirmed_financial_quality_120d_stage_b_v1__ridge_fixed__identity__2023-01-03_2024-12-31
+    predictions_sha256: a06a78aa6b7fc38bf6e1c7c987070be64d6a8ed2174bfdafd96e681f022fb093
+
+required_ablation_ids: [core, core_financial, core_shareholder, full]
+ablations:
+  - ablation_id: core
+    components: [market, valuation_size, structured_price_volume, industry_relative, financing_crowding]
+    experiment_ids: &core_experiments
+      - csi1800_pit_market_core_5d_stage_a_v1
+      - csi1800_pit_market_core_10d_stage_a_v1
+      - csi1800_pit_market_core_20d_stage_a_v1
+      - csi1800_pit_market_core_60d_stage_a_v1
+      - csi1800_pit_market_core_120d_stage_a_v1
+      - csi1800_pit_market_core_180d_stage_a_v1
+      - csi1800_pit_valuation_size_120d_stage_a_v1
+      - csi1800_pit_valuation_size_180d_stage_a_v1
+      - csi1800_pit_structured_price_volume_60d_stage_a_v1
+      - csi1800_pit_industry_relative_120d_stage_a_v1
+      - csi1800_pit_industry_relative_180d_stage_a_v1
+      - csi1800_pit_financing_crowding_20d_stage_a_v1
+      - csi1800_pit_financing_crowding_60d_stage_a_v1
+  - ablation_id: core_financial
+    components: [market, valuation_size, structured_price_volume, industry_relative, financing_crowding, financial]
+    confirmation_component: true
+    experiment_ids:
+      - *core_experiments
+      - csi1800_pit_financial_pit_b_5d_stage_a_v1
+      - csi1800_pit_financial_pit_b_10d_stage_a_v1
+      - csi1800_pit_financial_pit_b_20d_stage_a_v1
+      - csi1800_pit_financial_pit_b_60d_stage_a_v1
+      - csi1800_pit_financial_pit_b_120d_stage_a_v1
+      - csi1800_pit_financial_pit_b_180d_stage_a_v1
+  - ablation_id: core_shareholder
+    components: [market, valuation_size, structured_price_volume, industry_relative, financing_crowding, shareholder]
+    experiment_ids:
+      - *core_experiments
+      - csi1800_pit_shareholder_pit_x_120d_stage_a_v1
+      - csi1800_pit_shareholder_pit_x_180d_stage_a_v1
+  - ablation_id: full
+    components: [market, valuation_size, structured_price_volume, industry_relative, financing_crowding, financial, shareholder]
+    confirmation_component: true
+    experiment_ids:
+      - *core_experiments
+      - csi1800_pit_financial_pit_b_5d_stage_a_v1
+      - csi1800_pit_financial_pit_b_10d_stage_a_v1
+      - csi1800_pit_financial_pit_b_20d_stage_a_v1
+      - csi1800_pit_financial_pit_b_60d_stage_a_v1
+      - csi1800_pit_financial_pit_b_120d_stage_a_v1
+      - csi1800_pit_financial_pit_b_180d_stage_a_v1
+      - csi1800_pit_shareholder_pit_x_120d_stage_a_v1
+      - csi1800_pit_shareholder_pit_x_180d_stage_a_v1
+
+future_directions:
+  - rank: 1
+    direction: Complete rights-event sourcing and approve portfolio participation accounting, then rerun the existing Stage-C protocol unchanged.
+    evidence: The confirmed candidate is held across an uncovered material factor discontinuity in all three portfolio sizes.
+  - rank: 2
+    direction: Test a fixed, low-capacity financial-quality blend with explicit orthogonalization against valuation, size, industry, and recent return exposures.
+    evidence: The transparent linear model confirmed while the tree model did not, favoring constrained structure over added complexity.
+  - rank: 3
+    direction: Measure refresh cadence and decay for the confirmed 120-session financial-quality signal before any holdout use.
+    evidence: Confirmation RankIC declined from 0.1063 in 2023 to 0.0248 in 2024.
+  - rank: 4
+    direction: Expand immutable first-publication coverage for the catalogued financial fields that remain data-blocked, then re-enter them through the same Stage-A gates.
+    evidence: The full catalog identifies source-coverage gaps separately from rejected definitions.
+  - rank: 5
+    direction: Establish first-publication archives for shareholder disclosures and repeat lag sensitivity before promotion eligibility is considered.
+    evidence: Shareholder features remain provisional by construction under the current PIT-X contract.

@@ -92,7 +92,10 @@ class AlphaMap:
         validation_path = directory / "validation.json"
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         validation = json.loads(validation_path.read_text(encoding="utf-8"))
-        if validation.get("status") != "PASS" or validation.get("failures"):
+        if (
+            str(validation.get("status", "")).lower() not in {"pass", "passed"}
+            or validation.get("failures")
+        ):
             raise ValueError(f"label suite is not validated: {suite_id}")
         if validation.get("input_suite_manifest_sha256") != _sha256(manifest_path):
             raise ValueError("label suite validation manifest hash mismatch")
@@ -116,7 +119,7 @@ class AlphaMap:
             raise ValueError(f"diagnostics are not validated: {diagnostics_id}")
         if receipt.get("manifest_sha256") != _sha256(manifest_path):
             raise ValueError(f"diagnostics manifest hash mismatch: {diagnostics_id}")
-        if manifest.get("config_sha256") != _sha256(config_path):
+        if manifest.get("config_sha256") != _canonical_hash(config):
             raise ValueError(f"diagnostics config hash mismatch: {diagnostics_id}")
         for name, output in manifest.get("outputs", {}).items():
             if _sha256(directory / name) != output["sha256"]:
@@ -214,6 +217,111 @@ class AlphaMap:
         }
         return rows, lineage
 
+    def _validated_confirmation(
+        self, rows: list[dict[str, Any]]
+    ) -> tuple[dict[str, Any], dict[str, Any], dict[str, str]]:
+        spec = self.config.get("confirmation")
+        if not spec:
+            return {}, {}, {}
+        stage_b_path = (
+            self.repo_root / str(spec["stage_b_validation_path"])
+        ).resolve()
+        stage_c_dir = (
+            self.root / "stage_c_assessments" / str(spec["stage_c_assessment_id"])
+        )
+        stage_c_manifest_path = stage_c_dir / "manifest.json"
+        stage_c_validation_path = stage_c_dir / "validation.json"
+        stage_c_artifact_path = stage_c_dir / "stage_c_assessment.json"
+        stage_b = json.loads(stage_b_path.read_text(encoding="utf-8"))
+        stage_c_manifest = json.loads(
+            stage_c_manifest_path.read_text(encoding="utf-8")
+        )
+        stage_c_validation = json.loads(
+            stage_c_validation_path.read_text(encoding="utf-8")
+        )
+        stage_c = json.loads(stage_c_artifact_path.read_text(encoding="utf-8"))
+        if stage_b.get("status") != "pass" or stage_b.get("holdout_consumed"):
+            raise ValueError("Stage-B confirmation is not independently validated")
+        if (
+            not stage_c_validation.get("validated")
+            or stage_c_validation.get("holdout_consumed")
+            or stage_c_validation.get("stage_c_identity_sha256")
+            != stage_c_manifest.get("stage_c_identity_sha256")
+            or stage_c_manifest.get("outputs", {}).get(
+                "stage_c_assessment.json", {}
+            ).get("sha256") != _sha256(stage_c_artifact_path)
+            or stage_c.get("formal_status") != "accounting_data_blocked"
+            or stage_c.get("promotion_eligible")
+        ):
+            raise ValueError("Stage-C assessment is not independently validated")
+        promoted = spec["promoted_signal"]
+        signals = [
+            value for value in stage_b.get("signals", [])
+            if value.get("signal_id") == promoted["signal_id"]
+            and value.get("signal_run_id") == promoted["signal_run_id"]
+            and value.get("predictions_sha256") == promoted["predictions_sha256"]
+        ]
+        if len(signals) != 1:
+            raise ValueError("Alpha Map promoted signal does not match Stage-B")
+        signal = signals[0]
+        evaluations = [
+            value for value in signal.get("evaluations", [])
+            if value.get("label_id") == spec["primary_label_id"]
+        ]
+        if len(evaluations) != 1:
+            raise ValueError("Alpha Map primary Stage-B evaluation is not unique")
+        matching_rows = [
+            row for row in rows
+            if row["experiment_id"] == spec["stage_a_experiment_id"]
+            and row["feature_family"] == spec["feature_family"]
+            and int(row["horizon_sessions"]) == int(spec["horizon_sessions"])
+        ]
+        if (
+            len(matching_rows) != 1
+            or matching_rows[0]["promotion_eligible_count"] <= 0
+        ):
+            raise ValueError("Alpha Map Stage-A confirmation row is not uniquely eligible")
+        matching_rows[0]["stage_b_status"] = "confirmed_model"
+        matching_rows[0]["stage_c_status"] = "accounting_data_blocked"
+        matching_rows[0]["portfolio_extractability"] = "not_established"
+        evaluation = evaluations[0]
+        stage_b_summary = {
+            "experiment_id": stage_b["experiment_id"],
+            "validation_sha256": _sha256(stage_b_path),
+            "status": "confirmed_model",
+            "holdout_consumed": False,
+            "signal_id": signal["signal_id"],
+            "signal_run_id": signal["signal_run_id"],
+            "predictions_sha256": signal["predictions_sha256"],
+            "row_count": int(signal["row_count"]),
+            "primary_label_id": evaluation["label_id"],
+            "ic_mean": float(evaluation["ic_mean"]),
+            "rank_ic_mean": float(evaluation["rank_ic_mean"]),
+            "yearly": evaluation["yearly"],
+        }
+        stage_c_summary = {
+            "assessment_id": stage_c["assessment_id"],
+            "stage_c_identity_sha256": stage_c_manifest["stage_c_identity_sha256"],
+            "manifest_sha256": _sha256(stage_c_manifest_path),
+            "validation_sha256": _sha256(stage_c_validation_path),
+            "status": stage_c["formal_status"],
+            "portfolio_extractability": stage_c["portfolio_extractability"],
+            "promotion_eligible": False,
+            "holdout_consumed": False,
+            "accounting_evidence": stage_c["accounting_evidence"],
+            "exploratory_portfolio_comparison": stage_c[
+                "exploratory_portfolio_comparison"
+            ],
+            "next_gate": stage_c["decision"]["next_gate"],
+        }
+        lineage = {
+            "stage_b_validation_sha256": _sha256(stage_b_path),
+            "stage_c_manifest_sha256": _sha256(stage_c_manifest_path),
+            "stage_c_validation_sha256": _sha256(stage_c_validation_path),
+            "stage_c_identity_sha256": stage_c_manifest["stage_c_identity_sha256"],
+        }
+        return stage_b_summary, stage_c_summary, lineage
+
     def run(self) -> dict[str, Any]:
         catalog_manifest, catalog_rows, catalog_validation_sha = self._validated_catalog()
         label_manifest, label_validation_sha = self._validated_label_suite()
@@ -226,10 +334,19 @@ class AlphaMap:
         if not rows:
             raise ValueError("Alpha Map requires at least one validated experiment")
 
+        stage_b_summary, stage_c_summary, confirmation_lineage = (
+            self._validated_confirmation(rows)
+        )
+
         by_experiment = {item["experiment_id"]: item for item in experiments}
         ablations = []
         for spec in self.config.get("ablations", []):
-            ids = list(spec.get("experiment_ids", []))
+            ids: list[str] = []
+            for value in spec.get("experiment_ids", []):
+                if isinstance(value, list):
+                    ids.extend(str(item) for item in value)
+                else:
+                    ids.append(str(value))
             missing = sorted(set(ids) - set(by_experiment))
             if missing:
                 raise ValueError(f"ablation references unknown experiments: {missing}")
@@ -246,10 +363,20 @@ class AlphaMap:
                 "experiment_ids": ids,
                 "promotion_eligible_feature_count": eligible,
                 "provisional_supported_feature_count": provisional,
-                "stage_b_status": "eligible" if eligible else "not_entered",
-                "stage_c_status": "not_entered",
+                "stage_b_status": (
+                    "confirmed_model"
+                    if stage_b_summary and spec.get("confirmation_component")
+                    else "eligible" if eligible else "not_entered"
+                ),
+                "stage_c_status": (
+                    "accounting_data_blocked"
+                    if stage_c_summary and spec.get("confirmation_component")
+                    else "not_entered"
+                ),
                 "reason": (
-                    "confirmed_stage_a_inputs_available"
+                    "complete_accounting_input_and_policy_gap"
+                    if stage_c_summary and spec.get("confirmation_component")
+                    else "confirmed_stage_a_inputs_available"
                     if eligible else "no_confirmed_stage_a_inputs"
                 ),
             })
@@ -275,8 +402,14 @@ class AlphaMap:
             "rejected_count": sum(item["rejected_count"] for item in experiments),
             "data_blocked_feature_count": len(blocked),
             "holdout_consumed": False,
-            "stage_b_entered": any(row["stage_b_status"] == "eligible" for row in rows),
-            "stage_c_entered": False,
+            "stage_b_entered": any(
+                row["stage_b_status"] in {"eligible", "confirmed_model"} for row in rows
+            ),
+            "stage_c_entered": bool(stage_c_summary),
+            "stage_c_formal_status": (
+                stage_c_summary.get("status") if stage_c_summary else "not_entered"
+            ),
+            "portfolio_extractability_established": False,
         }
         artifact = {
             "schema_version": SCHEMA_VERSION,
@@ -285,7 +418,10 @@ class AlphaMap:
                 "catalog_id": catalog_manifest["catalog_id"],
                 "catalog_identity_sha256": catalog_manifest["catalog_identity_sha256"],
                 "manifest_sha256": _sha256(
-                    self.root / "feature_catalogs" / catalog_manifest["catalog_id"] / "manifest.json"
+                    self.root
+                    / "feature_catalogs"
+                    / catalog_manifest["catalog_id"]
+                    / "manifest.json"
                 ),
                 "validation_sha256": catalog_validation_sha,
                 "unique_feature_count": catalog_manifest["summary"]["unique_feature_count"],
@@ -310,6 +446,10 @@ class AlphaMap:
             "ablations": ablations,
             "future_directions": list(self.config.get("future_directions", [])),
         }
+        if stage_b_summary:
+            artifact["stage_b_confirmation"] = stage_b_summary
+        if stage_c_summary:
+            artifact["stage_c_assessment"] = stage_c_summary
         _write(
             self.output_dir / "alpha_map.json",
             json.dumps(artifact, indent=2, ensure_ascii=False) + "\n",
@@ -333,6 +473,7 @@ class AlphaMap:
             "diagnostics_identities": sorted(
                 item["diagnostics_identity_sha256"] for item in experiments
             ),
+            "confirmation_lineage": confirmation_lineage,
         }
         manifest = {
             **identity,

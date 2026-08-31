@@ -188,6 +188,18 @@ def main() -> None:
     parser.add_argument("--output-dir", type=Path, default=None)
     parser.add_argument("--artifact-mode", choices=["summary", "debug"], default="summary")
     parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument(
+        "--portfolio-analytics",
+        action="store_true",
+        help="Write hash-bound portfolio analytics after a complete backtest",
+    )
+    parser.add_argument("--benchmark-id", default=None)
+    parser.add_argument("--benchmark-csv", type=Path, default=None)
+    parser.add_argument(
+        "--holdout-start",
+        default=None,
+        help="First untouched holdout date; required for portfolio analytics",
+    )
     parser.add_argument("--accumulate", action="store_true",
                         help="Accumulate mode: never sell based on signal; only buy to fill top_n")
     parser.add_argument("--stop-loss", type=float, default=None,
@@ -302,6 +314,16 @@ def main() -> None:
             parser.error(
                 "complete accounting requires --liquidity-gate-mode reject"
             )
+    if args.portfolio_analytics:
+        if args.accumulate or not args.require_complete_accounting:
+            parser.error(
+                "--portfolio-analytics requires a non-accumulate complete-accounting backtest"
+            )
+        if not all((args.benchmark_id, args.benchmark_csv, args.holdout_start)):
+            parser.error(
+                "--portfolio-analytics requires --benchmark-id, --benchmark-csv, "
+                "and --holdout-start"
+            )
 
     exposure_gate_schedule: dict[str, bool] | None = None
     if args.exposure_gate_schedule is not None:
@@ -394,6 +416,18 @@ def main() -> None:
         kwargs["max_weight"] = args.max_weight
         result = runner.run_from_signal_cache(**kwargs)
 
+    portfolio_analytics = None
+    if args.portfolio_analytics:
+        from qsys.research.portfolio_analytics import write_portfolio_analytics
+
+        portfolio_analytics = write_portfolio_analytics(
+            backtest_dir=Path(result.artifacts["manifest"]).parent,
+            research_root=args.research_root,
+            benchmark_id=args.benchmark_id,
+            benchmark_csv=args.benchmark_csv,
+            holdout_start=args.holdout_start,
+        )
+
     print(json.dumps({
         "status": result.status,
         "backtest_id": result.backtest_id,
@@ -403,6 +437,7 @@ def main() -> None:
         "trading_dates": len(result.daily_summary),
         "notes": result.notes,
         "combined_signal_manifest": str(blend_manifest) if blend_manifest else None,
+        "portfolio_analytics": portfolio_analytics,
     }, indent=2, ensure_ascii=False))
 
 
