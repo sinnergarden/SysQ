@@ -9,7 +9,7 @@ from click.testing import CliRunner
 
 from qsys.research.mainline import MAINLINE_OBJECTS
 from qsys.research.rolling import canonical_model_path
-from scripts.run_mainline_rolling_eval import main as rolling_eval_main
+from scripts.dev.run_mainline_rolling_eval import main as rolling_eval_main
 
 
 class _FakeBacktestEngine:
@@ -87,10 +87,10 @@ def test_mainline_rolling_eval_resumes_from_existing_metrics(tmp_path: Path) -> 
             calls.append((kwargs["start_date"], kwargs["end_date"]))
             super().__init__(*args, **kwargs)
 
-    with patch("scripts.run_mainline_rolling_eval.project_root", tmp_path), \
-         patch("scripts.run_mainline_rolling_eval.BacktestEngine", _ResumeEngine), \
-         patch("scripts.run_mainline_rolling_eval.load_training_snapshot", return_value=snapshot), \
-         patch("scripts.run_mainline_rolling_eval.build_backtest_lineage", return_value={"lineage_status": "ok"}):
+    with patch("scripts.dev.run_mainline_rolling_eval.project_root", tmp_path), \
+         patch("scripts.dev.run_mainline_rolling_eval.BacktestEngine", _ResumeEngine), \
+         patch("scripts.dev.run_mainline_rolling_eval.load_training_snapshot", return_value=snapshot), \
+         patch("scripts.dev.run_mainline_rolling_eval.build_backtest_lineage", return_value={"lineage_status": "ok"}):
         result = runner.invoke(
             rolling_eval_main,
             [
@@ -122,10 +122,10 @@ def test_mainline_rolling_eval_writes_required_outputs(tmp_path: Path) -> None:
         "feature_set": "extended",
         "bundle_id": "bundle_feature_173",
     }
-    with patch("scripts.run_mainline_rolling_eval.project_root", tmp_path), \
-         patch("scripts.run_mainline_rolling_eval.BacktestEngine", _FakeBacktestEngine), \
-         patch("scripts.run_mainline_rolling_eval.load_training_snapshot", return_value=snapshot), \
-         patch("scripts.run_mainline_rolling_eval.build_backtest_lineage", return_value={"lineage_status": "ok"}):
+    with patch("scripts.dev.run_mainline_rolling_eval.project_root", tmp_path), \
+         patch("scripts.dev.run_mainline_rolling_eval.BacktestEngine", _FakeBacktestEngine), \
+         patch("scripts.dev.run_mainline_rolling_eval.load_training_snapshot", return_value=snapshot), \
+         patch("scripts.dev.run_mainline_rolling_eval.build_backtest_lineage", return_value={"lineage_status": "ok"}):
         result = runner.invoke(
             rolling_eval_main,
             [

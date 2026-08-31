@@ -15,7 +15,7 @@ from pathlib import Path
 import click
 import pandas as pd
 
-project_root = Path(__file__).resolve().parent.parent
+project_root = Path(__file__).resolve().parents[2]
 sys.path.append(str(project_root))
 
 from qsys.research import MAINLINE_OBJECTS, decision_payload, resolve_subject_decision

@@ -50,7 +50,8 @@ class TestLoadStrategyConfig:
         assert cfg["account_id"] == "shadow_alpha_v1"
         assert cfg["universe"] == "csi300"
         assert cfg["portfolio"]["top_n"] == 20
-        assert cfg["paths"]["model_dir"] == "experiments/alpha_v1_models/latest"
+        assert cfg["model_version"] == "alpha_v1_candidate_202605"
+        assert "model_dir" not in cfg["paths"]
 
     def test_explicit_config_path_overrides(self, tmp_path):
         custom = tmp_path / "custom.yaml"

@@ -72,8 +72,8 @@ class TestMarginBatch1:
         assert hasattr(collector, "margin_cols"), "collector missing margin_cols"
         assert len(collector.margin_cols) > 0, "margin_cols is empty"
         
-        # Check _margin_interfaces
-        assert hasattr(collector, "_margin_interfaces"), "collector missing _margin_interfaces"
+        # Margin is resolved through the unified interface registry.
+        assert collector._get_interface_config("margin"), "collector missing margin interface"
         
     def test_collector_get_margin_fields(self):
         """Verify collector can get margin interface fields"""

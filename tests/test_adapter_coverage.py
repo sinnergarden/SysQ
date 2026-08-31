@@ -9,8 +9,9 @@ from qsys.data.health import inspect_qlib_data_health
 
 
 class TestAdapterCoverage(unittest.TestCase):
+    @patch.object(QlibAdapter, "touch_qlib_mtime")
     @patch("qsys.data.adapter.subprocess.run")
-    def test_run_dump_script_forwards_max_workers(self, mock_run):
+    def test_run_dump_script_forwards_max_workers(self, mock_run, _mock_touch):
         adapter = QlibAdapter()
         adapter._run_dump_script(
             adapter.qlib_dir.parent / "qlib_csv_tmp_missing",

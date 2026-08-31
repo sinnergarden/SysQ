@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 from click.testing import CliRunner
 
-from scripts.run_mainline_rolling_pipeline import main as rolling_pipeline_main
+from scripts.dev.run_mainline_rolling_pipeline import main as rolling_pipeline_main
 
 
 def test_mainline_rolling_pipeline_keeps_stable_entry_contract(tmp_path: Path) -> None:
@@ -18,10 +18,10 @@ def test_mainline_rolling_pipeline_keeps_stable_entry_contract(tmp_path: Path) -
             return None
         return _inner
 
-    with patch("scripts.run_mainline_rolling_pipeline.rolling_eval_main.main", side_effect=_record("rolling_eval")), \
-         patch("scripts.run_mainline_rolling_pipeline.comparison_main.main", side_effect=_record("comparison")), \
-         patch("scripts.run_mainline_rolling_pipeline.update_decision_main.main", side_effect=_record("decision")), \
-         patch("scripts.run_mainline_rolling_pipeline.publish_ui_main.main", side_effect=_record("publish")):
+    with patch("scripts.dev.run_mainline_rolling_pipeline.rolling_eval_main.main", side_effect=_record("rolling_eval")), \
+         patch("scripts.dev.run_mainline_rolling_pipeline.comparison_main.main", side_effect=_record("comparison")), \
+         patch("scripts.dev.run_mainline_rolling_pipeline.update_decision_main.main", side_effect=_record("decision")), \
+         patch("scripts.dev.run_mainline_rolling_pipeline.publish_ui_main.main", side_effect=_record("publish")):
         result = runner.invoke(
             rolling_pipeline_main,
             [

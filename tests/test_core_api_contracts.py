@@ -104,7 +104,8 @@ class TestCoreAPIContracts(unittest.TestCase):
         sig = inspect.signature(BacktestEngine.__init__)
         params = list(sig.parameters.keys())
         self.assertIn('account', params, "BacktestEngine must accept 'account' injection")
-        self.assertIn('daily_predictions', params, "BacktestEngine must accept 'daily_predictions'")
+        self.assertIn('matcher', params, "BacktestEngine must accept 'matcher' injection")
+        self.assertIn('order_gen', params, "BacktestEngine must accept 'order_gen' injection")
 
     def test_real_account_contract(self):
         """Verify RealAccount API Contract (Live Persistence)"""

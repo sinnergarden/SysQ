@@ -14,11 +14,19 @@ from qsys.research_ui.assembler import ResearchCockpitRepository
 class TestResearchUiApi(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        if os.environ.get("QSYS_RUN_RESEARCH_UI_INTEGRATION") != "1":
+            raise unittest.SkipTest(
+                "research UI real-artifact integration requires explicit opt-in"
+            )
         project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
         cls.project_root = project_root
         cls.client = TestClient(create_app(project_root))
         daily_root = os.path.join(project_root, 'daily')
+        if not os.path.isdir(daily_root):
+            raise unittest.SkipTest("research UI daily fixture is unavailable")
         available_dates = sorted([name for name in os.listdir(daily_root) if os.path.isdir(os.path.join(daily_root, name))])
+        if not available_dates:
+            raise unittest.SkipTest("research UI daily fixture has no dated runs")
         preferred_date = '2025-01-03'
         cls.execution_date = preferred_date if preferred_date in available_dates else available_dates[-1]
         cls.case_instrument = '600219.SH'

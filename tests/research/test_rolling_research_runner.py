@@ -361,7 +361,7 @@ class TestRollingResearchRunner:
     def test_windows_built_and_signal_saved(self, tmp_path: Path) -> None:
         config = RollingResearchConfig(
             experiment_id="e1",
-            calendar={"start_date": "2026-05-08", "end_date": "2026-05-25", "train_window_days": 5},
+            calendar={"start_date": "2026-05-08", "end_date": "2026-05-25", "train_window_days": 20},
             signal={"signal_id": "sig1", "signal_run_id": "run1"},
             labels=[{"label_id": "l1"}],
             backtests=[{"strategy_template_id": "bt1", "top_n": 5}],
@@ -405,7 +405,7 @@ class TestRollingResearchRunner:
     def test_eval_failure_raises(self, tmp_path: Path) -> None:
         config = RollingResearchConfig(
             experiment_id="e3",
-            calendar={"start_date": "2026-05-08", "end_date": "2026-05-25", "train_window_days": 5},
+            calendar={"start_date": "2026-05-08", "end_date": "2026-05-25", "train_window_days": 20},
             signal={"signal_id": "s1", "signal_run_id": "r1"},
             labels=[{"label_id": "l1"}],
         )
@@ -420,7 +420,7 @@ class TestRollingResearchRunner:
     def test_backtest_missing_manifest_raises(self, tmp_path: Path) -> None:
         config = RollingResearchConfig(
             experiment_id="e4",
-            calendar={"start_date": "2026-05-08", "end_date": "2026-05-25", "train_window_days": 5},
+            calendar={"start_date": "2026-05-08", "end_date": "2026-05-25", "train_window_days": 20},
             signal={"signal_id": "s1", "signal_run_id": "r1"},
             backtests=[{"strategy_template_id": "bt1"}],
         )
@@ -434,7 +434,8 @@ class TestRollingResearchRunner:
             runner = RollingResearchRunner(str(tmp_path))
             with pytest.raises(RuntimeError, match="missing artifacts"):
                 runner.run(config=config, signal_generator=FixtureSignalGenerator(),
-                           overwrite_signal=True, overwrite_eval=True)
+                           overwrite_signal=True, overwrite_eval=True,
+                           overwrite_experiment=True)
 
     def test_backtest_distinct_manifest_ids(self, tmp_path: Path) -> None:
         bt_manifest = tmp_path / "bt_distinct" / "manifest.json"
@@ -442,7 +443,7 @@ class TestRollingResearchRunner:
         bt_manifest.write_text(json.dumps({"strategy_run_id": "real_sr1", "backtest_id": "real_bt1"}))
         config = RollingResearchConfig(
             experiment_id="e5",
-            calendar={"start_date": "2026-05-08", "end_date": "2026-05-25", "train_window_days": 5},
+            calendar={"start_date": "2026-05-08", "end_date": "2026-05-25", "train_window_days": 20},
             signal={"signal_id": "s1", "signal_run_id": "r1"},
             backtests=[{"strategy_template_id": "bt1"}],
         )
@@ -474,7 +475,7 @@ class TestRollingResearchRunner:
 
         config = RollingResearchConfig(
             experiment_id="e2",
-            calendar={"start_date": "2026-05-08", "end_date": "2026-05-25", "train_window_days": 5},
+            calendar={"start_date": "2026-05-08", "end_date": "2026-05-25", "train_window_days": 20},
             signal={"signal_id": "s1", "signal_run_id": "r1"},
         )
 
@@ -499,7 +500,7 @@ class TestMatrixExperiment:
     def matrix_config(self) -> RollingResearchConfig:
         return RollingResearchConfig(
             experiment_id="matrix_test",
-            calendar={"start_date": "2026-05-08", "end_date": "2026-05-25", "train_window_days": 5},
+            calendar={"start_date": "2026-05-08", "end_date": "2026-05-25", "train_window_days": 20},
             signal={"signal_id": "base_sig", "score_column": "score"},
             labels=[{"label_id": "l1"}],
             generators=[
@@ -558,12 +559,12 @@ class TestMatrixExperiment:
             })()
 
             runner = RollingResearchRunner(str(tmp_path))
-            from qsys.research import rolling_runner as rr_mod
-            orig_factory = rr_mod._create_generator_from_config
+            from qsys.research import signal_pipeline as pipeline_mod
+            orig_factory = pipeline_mod._create_generator_from_config
 
-            def counting_factory(cfg):
+            def counting_factory(cfg, **_kwargs):
                 return CountingGenerator(cfg["generator_id"])
-            rr_mod._create_generator_from_config = counting_factory
+            pipeline_mod._create_generator_from_config = counting_factory
 
             try:
                 result = runner.run(
@@ -572,7 +573,7 @@ class TestMatrixExperiment:
                     overwrite_backtest=True, overwrite_experiment=True,
                 )
             finally:
-                rr_mod._create_generator_from_config = orig_factory
+                pipeline_mod._create_generator_from_config = orig_factory
 
         # gen_a and gen_b called same number of times (per window)
         assert call_count["gen_a"] == call_count["gen_b"], "generators called different times"
@@ -795,7 +796,7 @@ class TestMatrixExperiment:
 
         manifest = json.loads(mf_path.read_text())
         assert manifest["mode"] == "matrix"
-        assert manifest.get("matrix_purpose") == "framework_boundary_smoke"
+        assert manifest["artifact_type"] == "rolling_research"
         assert manifest["generator_count"] == 2
         assert manifest["transform_count"] == 2
         assert manifest["strategy_count"] == 2
@@ -807,7 +808,7 @@ class TestMatrixExperiment:
         """Old v1 single-signal config still works unchanged."""
         config = RollingResearchConfig(
             experiment_id="e_v1_still",
-            calendar={"start_date": "2026-05-08", "end_date": "2026-05-25", "train_window_days": 5},
+            calendar={"start_date": "2026-05-08", "end_date": "2026-05-25", "train_window_days": 20},
             signal={"signal_id": "sig1", "signal_run_id": "run1"},
             labels=[{"label_id": "l1"}],
             backtests=[{"strategy_template_id": "bt1", "top_n": 5}],
@@ -834,7 +835,7 @@ class TestMatrixExperiment:
             )
 
         assert result["status"] == "passed"
-        assert "mode" not in result  # v1 has no mode
+        assert result["mode"] == "single"
 
     def test_fail_fast_remains(self, matrix_config, tmp_path) -> None:
         """Matrix mode still fails fast on backtest errors."""
@@ -1569,7 +1570,7 @@ class TestMatrixWithCombinations:
         from qsys.research.signal_combine import build_cross_signal_index
         matrix_config = RollingResearchConfig(
             experiment_id="matrix_comb",
-            calendar={"start_date": "2026-05-08", "end_date": "2026-05-25", "train_window_days": 5},
+            calendar={"start_date": "2026-05-08", "end_date": "2026-05-25", "train_window_days": 20},
             signal={"signal_id": "base", "score_column": "score"},
             labels=[{"label_id": "l1"}],
             generators=[
@@ -1864,6 +1865,9 @@ class TestMultiHeadRunnerSupport:
         gen = MultiHeadFixtureGenerator(
             head_signal_ids=("task_dir", "task_mag"), seed=42,
         )
+        runner._paths.experiment_dir(config.experiment_id).mkdir(
+            parents=True, exist_ok=True
+        )
 
         with patch("qsys.data.calendar.get_trading_calendar",
                    return_value=["2026-01-12", "2026-01-13", "2026-01-14", "2026-01-15", "2026-01-16"]), \
@@ -1875,14 +1879,13 @@ class TestMultiHeadRunnerSupport:
                 "artifacts": {"manifest": "/tmp/dummy"},
             })()
 
-            result = runner._run_matrix(
+            result = runner._signal_pipeline._run_matrix(
                 config, windows,
                 signal_generator=gen,
                 overwrite_signal=True, overwrite_eval=True,
-                overwrite_backtest=True, overwrite_experiment=True,
             )
 
-        assert result["signal_run_count"] == 2
+        assert len(result.signal_runs) == 2
 
         store = SignalStore(str(tmp_path))
         all_runs = store.list_signal_runs()

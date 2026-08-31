@@ -15,7 +15,7 @@ class TestPreopenWorkflowAdapter(unittest.TestCase):
         manager = LiveManager(model_path="demo")
         self.assertEqual(manager.strategy.top_k, 5)
 
-    @patch("scripts.run_daily_trading.run_preopen_workflow")
+    @patch("scripts.deprecated.run_daily_trading.run_preopen_workflow")
     def test_adapter_returns_ready_contract(self, mock_workflow):
         mock_workflow.return_value = {
             "signal_date": "2026-04-03",
@@ -43,7 +43,7 @@ class TestPreopenWorkflowAdapter(unittest.TestCase):
         self.assertEqual(result["summary"]["order_intents"]["real"], "/tmp/real.json")
         self.assertFalse(result["risk_flags"])
 
-    @patch("scripts.run_daily_trading.run_preopen_workflow")
+    @patch("scripts.deprecated.run_daily_trading.run_preopen_workflow")
     def test_adapter_marks_blocked_result(self, mock_workflow):
         mock_workflow.return_value = {
             "signal_date": "2026-04-03",
@@ -66,9 +66,9 @@ class TestPreopenWorkflowAdapter(unittest.TestCase):
         self.assertEqual(result["blocker"], "Data health check failed")
         self.assertIn("data_not_ready", result["risk_flags"])
 
-    @patch("scripts.run_daily_trading.run_preopen_workflow")
+    @patch("scripts.deprecated.run_daily_trading.run_preopen_workflow")
     def test_cli_default_top_k_is_5(self, mock_workflow):
-        import scripts.run_daily_trading as run_daily_trading
+        from scripts.deprecated import run_daily_trading
 
         mock_workflow.return_value = {
             "signal_date": "2026-04-03",

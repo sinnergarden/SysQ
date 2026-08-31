@@ -298,6 +298,7 @@ class RollingResearchRunner:
                 research_root=str(self.root),
             )
             bt_job_rows_v2.extend(v1_job_rows)
+            all_bt_refs.extend(v1_bt_refs)
             bt_count += len(v1_bt_refs)
             for _, _, _sid, _bid in v1_bt_refs:
                 self._experiment_index.add_backtest_run(
@@ -326,9 +327,24 @@ class RollingResearchRunner:
 
         # ── Rolling research manifest ──
         refs_key = "backtest_refs"
+        is_matrix = bool(config.generators)
+        combined_signal_run_count = sum(
+            ref.transform_id == "combined"
+            for ref in pipeline_result.signal_runs
+        )
         manifest = with_standard_metadata({
             "artifact_type": "rolling_research",
             "experiment_id": config.experiment_id,
+            "mode": "matrix" if is_matrix else "single",
+            "generator_count": len(config.generators),
+            "transform_count": len(config.transforms),
+            "strategy_count": len(_saved_strategies or _saved_backtests),
+            "combination_count": len(config.signal_combinations),
+            "combined_signal_run_count": combined_signal_run_count,
+            "job_count": len([
+                ref for ref in pipeline_result.signal_runs
+                if ref.transform_id != "combined"
+            ]),
             "signal_runs": [
                 {"generator_id": s.generator_id, "transform_id": s.transform_id,
                  "signal_id": s.signal_id, "signal_run_id": s.signal_run_id}
@@ -359,13 +375,24 @@ class RollingResearchRunner:
         return {
             "status": "passed",
             "experiment_id": config.experiment_id,
-            "mode": "matrix" if config.generators else "single",
+            "mode": "matrix" if is_matrix else "single",
             "window_count": manifest.get("window_count", 0),
             "signal_run_count": len(pipeline_result.signal_runs),
             "signal_eval_count": eval_count,
             "backtest_count": bt_count,
+            "combination_count": len(config.signal_combinations),
+            "combined_signal_run_count": combined_signal_run_count,
+            **(
+                {
+                    "signal_id": config.signal.get("signal_id", "rolling_signal"),
+                    "signal_run_id": config.signal.get(
+                        "signal_run_id", "rolling_run"
+                    ),
+                }
+                if not is_matrix
+                else {}
+            ),
             "output_dir": str(exp_dir),
         }
-
 
 

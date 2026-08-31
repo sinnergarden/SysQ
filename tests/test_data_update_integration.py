@@ -107,50 +107,19 @@ class DummyPro:
 
     def income(self, ts_code, start_date, end_date, fields=None):
         self.calls.append(("income", start_date, end_date))
-        return pd.DataFrame({
-            "ts_code": [ts_code],
-            "ann_date": [end_date],
-            "end_date": [end_date],
-            "n_income": [0.0],
-            "revenue": [0.0],
-            "oper_cost": [0.0],
-        })
+        return pd.DataFrame()
 
     def balancesheet(self, ts_code, start_date, end_date, fields=None):
         self.calls.append(("balancesheet", start_date, end_date))
-        return pd.DataFrame({
-            "ts_code": [ts_code],
-            "ann_date": [end_date],
-            "end_date": [end_date],
-            "total_hldr_eqy_exc_min_int": [0.0],
-            "total_assets": [0.0],
-            "total_cur_assets": [0.0],
-            "total_cur_liab": [1.0],
-        })
+        return pd.DataFrame()
 
     def cashflow(self, ts_code, start_date, end_date, fields=None):
         self.calls.append(("cashflow", start_date, end_date))
-        return pd.DataFrame({
-            "ts_code": [ts_code],
-            "ann_date": [end_date],
-            "end_date": [end_date],
-            "n_cashflow_act": [0.0]
-        })
+        return pd.DataFrame()
 
     def fina_indicator(self, ts_code, start_date, end_date, fields=None):
         self.calls.append(("fina_indicator", start_date, end_date))
-        return pd.DataFrame({
-            "ts_code": [ts_code],
-            "ann_date": [end_date],
-            "end_date": [end_date],
-            "roe": [0.0],
-            "roe_ttm": [0.0],
-            "grossprofit_margin": [0.0],
-            "debt_to_assets": [0.0],
-            "current_ratio": [0.0],
-            "q_dt_profit": [0.0],
-            "q_gr_yoy": [0.0]
-        })
+        return pd.DataFrame()
 
 
 class TestDataUpdateIntegration(unittest.TestCase):

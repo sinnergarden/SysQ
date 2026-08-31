@@ -14,7 +14,7 @@ from pathlib import Path
 import click
 import pandas as pd
 
-project_root = Path(__file__).resolve().parent.parent
+project_root = Path(__file__).resolve().parents[2]
 sys.path.append(str(project_root))
 
 from qsys.research.rolling import best_and_worst, build_comparison_summary, comparison_markdown, resolve_mainline_specs

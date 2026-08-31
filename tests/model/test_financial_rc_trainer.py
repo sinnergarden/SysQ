@@ -274,6 +274,7 @@ def test_legacy_financial_rc_engine_still_accepts_two_models(tmp_path) -> None:
     assert len(settings["models"]) == 2
     assert settings["income_feature_source"] == {
         "mode": "legacy_unverified_global_v0",
+        "artifact_id": "",
         "artifact_path": "",
         "artifact_sha256": "",
         "manifest_path": "",

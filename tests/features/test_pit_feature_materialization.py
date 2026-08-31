@@ -84,7 +84,6 @@ def test_pit_mask_survives_phase1_until_final_standardization() -> None:
         flags={
             **{key: False for key in RESEARCH_FEATURE_FLAGS},
             "enable_liquidity_features": True,
-            "enable_relative_strength_features": True,
         },
     )
 

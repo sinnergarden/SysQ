@@ -2,6 +2,7 @@
 
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -52,7 +53,7 @@ class TestBackfillCli(unittest.TestCase):
 
         result = subprocess.run(
             [
-                "python", str(REPO / "scripts" / "dev" / "backfill_feature_cache.py"),
+                sys.executable, str(REPO / "scripts" / "dev" / "backfill_feature_cache.py"),
                 "--feature-set", str(yaml_path),
                 "--source-panel", str(panel_path),
                 "--source-manifest-hash", "test_cli",
@@ -84,7 +85,7 @@ class TestBackfillCli(unittest.TestCase):
 
         result = subprocess.run(
             [
-                "python", str(REPO / "scripts" / "dev" / "backfill_feature_cache.py"),
+                sys.executable, str(REPO / "scripts" / "dev" / "backfill_feature_cache.py"),
                 "--feature-set", str(yaml_path),
                 "--source-panel", str(panel_path),
                 "--source-manifest-hash", "test_cli",

@@ -14,7 +14,7 @@ from pathlib import Path
 import click
 import pandas as pd
 
-project_root = Path(__file__).resolve().parent.parent
+project_root = Path(__file__).resolve().parents[2]
 sys.path.append(str(project_root))
 
 from qsys.backtest import BacktestEngine
@@ -31,7 +31,7 @@ from qsys.research.rolling import (
 )
 from qsys.research.spec import V1_IMPL1_FIXED_LABEL_HORIZON
 from qsys.strategy.engine import DEFAULT_TOP_K
-from scripts.run_backtest import build_backtest_lineage, load_training_snapshot
+from scripts.research.run_backtest import build_backtest_lineage, load_training_snapshot
 
 
 @click.command(name="run_mainline_rolling_eval")

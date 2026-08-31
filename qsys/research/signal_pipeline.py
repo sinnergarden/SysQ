@@ -434,7 +434,11 @@ class SignalResearchPipeline:
                 signal_id=signal_id,
                 signal_run_id=signal_run_id,
                 label_id=lcfg["label_id"],
-                eval_id=str(result.output_dir) if result.output_dir else None,
+                eval_id=(
+                    str(result.output_dir)
+                    if getattr(result, "output_dir", None)
+                    else None
+                ),
             ))
 
         # ── Manifest ──
@@ -734,7 +738,11 @@ class SignalResearchPipeline:
                     signal_id=job.signal_id,
                     signal_run_id=job.signal_run_id,
                     label_id=lcfg["label_id"],
-                    eval_id=str(result.output_dir) if result.output_dir else None,
+                    eval_id=(
+                        str(result.output_dir)
+                        if getattr(result, "output_dir", None)
+                        else None
+                    ),
                 ))
 
         # ── 5. Signal combinations ──
@@ -808,7 +816,11 @@ class SignalResearchPipeline:
                         signal_id=out_sig_id,
                         signal_run_id=out_run_id,
                         label_id=lcfg["label_id"],
-                        eval_id=str(result.output_dir) if result.output_dir else None,
+                        eval_id=(
+                            str(result.output_dir)
+                            if getattr(result, "output_dir", None)
+                            else None
+                        ),
                     ))
 
             build_cross_signal_index(

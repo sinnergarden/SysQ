@@ -163,7 +163,9 @@ class TestStrategiesUsePreopenDataDate(unittest.TestCase):
 
         adapter = AlphaV1StrategyAdapter()
         with patch.object(adapter, "resolve_preopen_data_date", return_value="2026-05-25") as mock_resolve:
-            with patch.object(adapter, "fetch_data", return_value=None):
+            with patch.object(adapter, "load_model", return_value=None), patch.object(
+                adapter, "fetch_data", return_value=None
+            ):
                 adapter.generate_predictions_for_date("2026-05-26")
         mock_resolve.assert_called_once_with("2026-05-26")
 

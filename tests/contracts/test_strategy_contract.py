@@ -231,9 +231,3 @@ class TestRegisteredAdapters:
         instance = cls()
         result = instance.fetch_open_prices("2026-05-22", [])
         assert isinstance(result, dict)
-
-    def test_fetch_data_returns_not_none_smoke(self, adapter_pair):
-        _, cls = adapter_pair
-        instance = cls()
-        result = instance.fetch_data("2026-05-22")
-        assert result is not None

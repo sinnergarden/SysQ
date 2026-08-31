@@ -17,6 +17,7 @@ Key args:
 - --no_report: skip JSON run report
 """
 
+import json
 import warnings
 warnings.warn(
     "DEPRECATED: run_strict_eval.py is superseded by UC-standard entrypoints. Scheduled for removal.",
